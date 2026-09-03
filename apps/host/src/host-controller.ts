@@ -68,6 +68,11 @@ export class HostController {
     }, intervalMs);
   }
 
+  /** 立即读取一次 Maestro 状态（HTTP 路由用） */
+  async readMaestroStateNow() {
+    return this.maestroReader.readState();
+  }
+
   stopMaestroPoll(): void {
     if (this.maestroPollTimer) {
       clearInterval(this.maestroPollTimer);
@@ -114,10 +119,11 @@ export class HostController {
     return runner.respondToExtensionUi(requestId, response);
   }
 
-  /** 刷新 Maestro 状态 */
+  /** 刷新 Maestro 状态（仅状态变化时推送） */
   private async refreshMaestroState(): Promise<void> {
     try {
-      const state = await this.maestroReader.readState();
+      const state = await this.maestroReader.readStateChanged();
+      if (state === null) return;
       this.emitToListeners(this.eventLog.record({
         type: "maestro_state",
         state,

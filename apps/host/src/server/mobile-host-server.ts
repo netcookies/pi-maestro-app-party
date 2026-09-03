@@ -132,7 +132,8 @@ export class MobileHostServer {
       }
 
       if (request.method === "GET" && url.pathname === "/api/maestro") {
-        writeJson(response, 200, { schedules: [] });
+        const state = await this.controller.readMaestroStateNow();
+        writeJson(response, 200, state);
         return;
       }
 

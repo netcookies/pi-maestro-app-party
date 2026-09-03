@@ -33,6 +33,7 @@ export class MaestroStateReader {
   private readonly schedulesDir: string;
   private readonly dispatchesDir: string;
   private lastReadAt = 0;
+  private lastStateJson: string | undefined;
 
   constructor(options: MaestroReaderOptions = {}) {
     this.projectRoot = options.projectRoot ?? process.cwd();
@@ -53,6 +54,23 @@ export class MaestroStateReader {
     } catch {
       return false;
     }
+  }
+
+  /** 读取所有活跃的调度快照（带变更检测：状态未变时返回 null）
+   *  只比较 schedules 内容，observedAt 每次不同不参与变更检测 */
+  async readStateChanged(): Promise<MaestroState | null> {
+    const state = await this.readState();
+    const json = JSON.stringify(state.schedules);
+    if (json === this.lastStateJson) {
+      return null;
+    }
+    this.lastStateJson = json;
+    return state;
+  }
+
+  /** 重置变更检测缓存（会话切换/重连时调用） */
+  resetChangeDetection(): void {
+    this.lastStateJson = undefined;
   }
 
   /** 读取所有活跃的调度快照 */

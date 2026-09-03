@@ -2,7 +2,7 @@ import { describe, expect, it, beforeEach, afterEach } from "vitest";
 import { MobileHostServer } from "../src/server/mobile-host-server.js";
 import { HostController } from "../src/host-controller.js";
 import { MaestroStateReader } from "../src/maestro-state.js";
-import { mkdir, rm } from "node:fs/promises";
+import { mkdir, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { randomUUID } from "node:crypto";
@@ -61,6 +61,33 @@ describe("MobileHostServer", () => {
     expect(res.status).toBe(200);
     const body = (await res.json()) as unknown[];
     expect(Array.isArray(body)).toBe(true);
+  });
+
+  it("serves /api/maestro with real state", async () => {
+    const scheduleDir = join(ctx.tmpDir, ".pi", "flow-schedule", "v1", "schedules");
+    await mkdir(scheduleDir, { recursive: true });
+    await writeFile(
+      join(scheduleDir, "sch-api.json"),
+      JSON.stringify({
+        scheduleId: "sch-api",
+        state: "active",
+        stepIds: ["s1"],
+        steps: { s1: { stepId: "s1", prompt: "Test", state: "pending", attempts: [] } },
+        createdAt: Date.now(),
+        updatedAt: Date.now(),
+      }),
+    );
+    const res = await fetch(`${ctx.url}/api/maestro`);
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { schedules: { scheduleId: string; state: string }[] };
+    expect(body.schedules.length).toBe(1);
+    expect(body.schedules[0].scheduleId).toBe("sch-api");
+    expect(body.schedules[0].state).toBe("active");
+  });
+
+  it("serves /api/extension-ui/pending", async () => {
+    const res = await fetch(`${ctx.url}/api/extension-ui/pending`);
+    expect(res.status).toBe(200);
   });
 
   it("rejects unauthorized with token", async () => {
