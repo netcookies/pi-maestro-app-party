@@ -7,7 +7,7 @@
  * - 暴露 connect / disconnect / sendPrompt / answerDialog 等动作
  */
 import React, { createContext, useContext, useMemo, useReducer, useRef, useState, useCallback } from "react";
-import type { ExtensionUiRequest, HostEvent, HostSessionList, LiveSessionList } from "@maestro-mobile/shared";
+import type { ExtensionUiRequest, HostEvent, HostSessionList, LiveSessionList, TimelineItem } from "@maestro-mobile/shared";
 import { HostClient, type ConnectionState } from "./host-client";
 import { ExtensionUiQueue } from "./extension-ui-queue";
 import {
@@ -29,6 +29,7 @@ export interface HostStoreValue {
   listHostSessions(cwd?: string): Promise<HostSessionList>;
   listLiveSessions(): Promise<LiveSessionList>;
   loadSessionHistory(sessionId: string): Promise<void>;
+  loadMoreHistory(sessionId: string): Promise<{ items: TimelineItem[]; hasMore: boolean; totalEntries: number }>;
   sendPrompt(sessionId: string, message: string): Promise<void>;
   sendSteer(sessionId: string, message: string): Promise<void>;
   sendAbort(sessionId: string): Promise<void>;
@@ -125,6 +126,15 @@ export function HostStoreProvider({ children }: { children: React.ReactNode }) {
     }
   }, [getClient]);
 
+  const loadMoreHistory = useCallback(async (sessionId: string): Promise<{ items: TimelineItem[]; hasMore: boolean; totalEntries: number }> => {
+    const result = await getClient().sendCommand({ type: "load_more_history", sessionId });
+    const r = result as { items: TimelineItem[]; hasMore: boolean; totalEntries: number };
+    if (r.items?.length > 0) {
+      dispatch({ type: "__history_prepend", sessionId, items: r.items, seq: 0 } as never);
+    }
+    return r;
+  }, [getClient]);
+
   const actions = useMemo(
     () =>
       createAppActions(
@@ -160,6 +170,7 @@ export function HostStoreProvider({ children }: { children: React.ReactNode }) {
       listHostSessions,
       listLiveSessions,
       loadSessionHistory,
+      loadMoreHistory,
       sendPrompt,
       sendSteer,
       sendAbort,
@@ -167,7 +178,7 @@ export function HostStoreProvider({ children }: { children: React.ReactNode }) {
       cancelDialog,
       lastError: state.lastError,
     }),
-    [state, connectionState, hostUrl, connect, disconnect, openSession, openExistingSession, listHostSessions, listLiveSessions, loadSessionHistory, sendPrompt, sendSteer, sendAbort, answerDialog, cancelDialog],
+    [state, connectionState, hostUrl, connect, disconnect, openSession, openExistingSession, listHostSessions, listLiveSessions, loadSessionHistory, loadMoreHistory, sendPrompt, sendSteer, sendAbort, answerDialog, cancelDialog],
   );
 
   return <HostStoreContext.Provider value={value}>{children}</HostStoreContext.Provider>;

@@ -10,7 +10,10 @@ import type { MobileAgentRuntime, MobileAgentSession } from "./mobile-agent.js";
 import type { SessionRunner, RuntimeFactory } from "./types.js";
 import { EventLog } from "./event-log.js";
 import { replayFromJsonl } from "./jsonl-replay.js";
+import { replayTailFromJsonl, replayPageFromJsonl } from "./jsonl-pager.js";
 import { MobileExtensionUiBridge } from "./mobile-ui-context.js";
+
+const HISTORY_PAGE_SIZE = 80;
 
 /**
  * SdkSessionRunner — 管理一个 AgentSession 的生命周期
@@ -23,6 +26,9 @@ export class SdkSessionRunner implements SessionRunner {
   private unsubscribe: (() => void) | undefined;
   private session: MobileAgentSession;
   private _state: SessionState;
+  private historyCursor = 0;
+  private historyTotalEntries = 0;
+  private hasMoreHistoryFlag = false;
 
   private constructor(
     private readonly runtime: MobileAgentRuntime,
@@ -61,6 +67,7 @@ export class SdkSessionRunner implements SessionRunner {
       session: this._state,
       timeline: [...this.timeline],
       nextSeq: this.eventLog.nextSequence,
+      hasMoreHistory: this.hasMoreHistoryFlag,
     };
   }
 
@@ -126,18 +133,23 @@ export class SdkSessionRunner implements SessionRunner {
     this.unsubscribe?.();
     this.session = this.runtime.session;
     this._state = this.createState(this.session);
-    // 回放历史消息为 timeline（打开已有会话时能看到过往对话）
-    // 优先从 jsonl 文件直接解析（SDK messages 会裁剪 tool 输出等）
+    // 懒加载：只回放尾部 N 条（长会话不一次性解析全部），滚动到顶再加载更早
+    let hasMoreTail = false;
+    this.historyCursor = 0;
     let replayed: TimelineItem[] = [];
     if (this.session.sessionFile) {
-      const result = await replayFromJsonl(this.session.sessionFile);
-      if (result.items.length > 0) {
-        replayed = result.items;
+      const tail = await replayTailFromJsonl(this.session.sessionFile, HISTORY_PAGE_SIZE);
+      if (tail.items.length > 0) {
+        replayed = tail.items;
+        hasMoreTail = tail.hasMore;
+        this.historyCursor = tail.cursor;
+        this.historyTotalEntries = tail.totalEntries;
       }
     }
     if (replayed.length === 0) {
       replayed = this.restoreTimelineFromMessages(this.session.messages);
     }
+    this.hasMoreHistoryFlag = hasMoreTail;
     this.timeline.splice(0, this.timeline.length, ...replayed);
     // 告知客户端历史已就绪（App 侧收到后拉取 snapshot 完整渲染）
     if (replayed.length > 0) {
@@ -154,6 +166,28 @@ export class SdkSessionRunner implements SessionRunner {
       },
     });
     this.unsubscribe = this.session.subscribe((event: unknown) => this.handleSessionEvent(event));
+  }
+
+  /** 是否还有更早的历史可加载 */
+  get hasMoreHistory(): boolean {
+    return this.hasMoreHistoryFlag;
+  }
+  /** 加载更早的一页历史，返回新增的 timeline 条目（追加到最前面） */
+  async loadMoreHistory(): Promise<{ items: TimelineItem[]; hasMore: boolean; totalEntries: number }> {
+    if (!this.session.sessionFile || this.historyCursor <= 0) {
+      return { items: [], hasMore: false, totalEntries: this.historyTotalEntries };
+    }
+    const page = await replayPageFromJsonl(this.session.sessionFile, this.historyCursor, HISTORY_PAGE_SIZE);
+    if (page.items.length === 0) {
+      this.hasMoreHistoryFlag = false;
+      return { items: [], hasMore: false, totalEntries: this.historyTotalEntries };
+    }
+    // 追加到 timeline 最前面（更早的内容）
+    this.timeline.unshift(...page.items);
+    this.hasMoreHistoryFlag = page.hasMore;
+    this.historyCursor = page.cursor;
+    if (page.totalEntries > 0) this.historyTotalEntries = page.totalEntries;
+    return { items: page.items, hasMore: page.hasMore, totalEntries: this.historyTotalEntries };
   }
 
   /** 将 session.messages（AgentMessage[]）投影为 TimelineItem[] */

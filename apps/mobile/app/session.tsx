@@ -1,6 +1,6 @@
 import React, { useEffect, useRef, useState, useMemo } from "react";
 import {
-  View, Text, StyleSheet, FlatList, TextInput, TouchableOpacity, KeyboardAvoidingView, Platform,
+  View, Text, StyleSheet, FlatList, TextInput, TouchableOpacity, KeyboardAvoidingView, Platform, ActivityIndicator,
 } from "react-native";
 import { useLocalSearchParams } from "expo-router";
 import { useHost } from "../src/store";
@@ -14,10 +14,12 @@ import { splitImageSegments } from "../src/image-paths";
 
 export default function SessionScreen() {
   const { id } = useLocalSearchParams<{ id: string }>();
-  const { state, sendPrompt, sendAbort, answerDialog, cancelDialog } = useHost();
+  const { state, sendPrompt, sendAbort, answerDialog, cancelDialog, loadMoreHistory } = useHost();
   const { theme } = useTheme();
   const [input, setInput] = useState("");
   const [sending, setSending] = useState(false);
+  const [loadingMore, setLoadingMore] = useState(false);
+  const [hasMore, setHasMore] = useState(true);
   const listRef = useRef<FlatList<TimelineItem>>(null);
 
   const styles = useMemo(() => makeStyles(theme), [theme]);
@@ -45,6 +47,27 @@ export default function SessionScreen() {
       setSending(false);
     }
   };
+
+  const handleLoadMore = async () => {
+    if (loadingMore || !hasMore || !id) return;
+    setLoadingMore(true);
+    try {
+      const r = await loadMoreHistory(id);
+      setHasMore(r.hasMore);
+    } catch {
+      // 失败静默
+    } finally {
+      setLoadingMore(false);
+    }
+  };
+
+  // 触发一次初始 hasMore 探测（tail 返回时 snapshot 后 service 有值）
+  useEffect(() => {
+    if (timeline.length > 0) {
+      // 滚动到底部（初始位置展示最新消息）
+      setTimeout(() => listRef.current?.scrollToEnd({ animated: false }), 50);
+    }
+  }, []);
 
   const renderItem = ({ item }: { item: TimelineItem }) => {
     const isUser = item.kind === "user";
@@ -131,6 +154,27 @@ export default function SessionScreen() {
         style={styles.list}
         contentContainerStyle={styles.listContent}
         onContentSizeChange={() => listRef.current?.scrollToEnd({ animated: false })}
+        // 顶部懒加载：接近顶部时拉取更早历史
+        onScroll={(e) => {
+          const y = e.nativeEvent.contentOffset.y;
+          if (y < 40 && hasMore && !loadingMore) {
+            void handleLoadMore();
+          }
+        }}
+        scrollEventThrottle={200}
+        ListHeaderComponent={
+          hasMore ? (
+            <View style={styles.loadMoreWrap}>
+              {loadingMore ? (
+                <ActivityIndicator size="small" color={theme.accent} />
+              ) : (
+                <TouchableOpacity onPress={() => void handleLoadMore()} style={styles.loadMoreBtn}>
+                  <Text style={[styles.loadMoreText, { color: theme.accent }]}>⬆ 加载更早消息</Text>
+                </TouchableOpacity>
+              )}
+            </View>
+          ) : null
+        }
       />
 
       {session?.runState === "streaming" && (
@@ -199,6 +243,15 @@ function makeStyles(theme: ReturnType<typeof useTheme>["theme"]) {
       borderRadius: 8,
     },
     toolImages: { marginTop: 8 },
+    loadMoreWrap: { alignItems: "center", paddingVertical: 10 },
+    loadMoreBtn: {
+      paddingHorizontal: 16,
+      paddingVertical: 8,
+      borderRadius: 16,
+      borderWidth: 1,
+      borderColor: theme.border,
+    },
+    loadMoreText: { fontSize: 13, fontWeight: "600" },
     textTool: {
       fontFamily: Platform.OS === "ios" ? "Menlo" : "monospace",
       fontSize: 12,

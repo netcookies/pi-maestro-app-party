@@ -50,6 +50,8 @@ export interface SessionSnapshot {
   session: SessionState;
   timeline: TimelineItem[];
   nextSeq: number;
+  /** 是否还有更早的历史可懒加载 */
+  hasMoreHistory?: boolean;
 }
 
 /** Host 端 Pi 已存在会话的摘要（移动端只读列表用，不携带大字段） */
@@ -261,6 +263,7 @@ export type ClientCommand =
   | { type: "open_session"; cwd: string; mode?: "create" | "continue"; sessionFile?: string }
   | { type: "list_host_sessions"; cwd?: string }
   | { type: "list_live_sessions" }
+  | { type: "load_more_history"; sessionId: string; count?: number }
   | { type: "close_session"; sessionId: string }
   | { type: "list_sessions"; cwd?: string }
   | { type: "list_directories"; path: string }

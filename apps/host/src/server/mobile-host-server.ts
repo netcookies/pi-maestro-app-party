@@ -223,6 +223,13 @@ export class MobileHostServer {
           this.sendAck(client, command, list);
           break;
         }
+        case "load_more_history": {
+          const runner = this.controller.getSession(command.sessionId);
+          if (!runner) { this.sendError(client, "session_not_found"); break; }
+          const result = await runner.loadMoreHistory();
+          this.sendAck(client, command, result);
+          break;
+        }
         case "list_host_sessions": {
           const sessions = await this.controller.listSessions(command.cwd);
           const list = toSessionSummaryList(sessions);

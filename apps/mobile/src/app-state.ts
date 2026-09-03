@@ -50,13 +50,30 @@ export interface InternalEvent {
   seq: number;
 }
 
+/** 内部事件：向前追加更早的历史（懒加载翻页） */
+export interface HistoryPrependEvent {
+  type: "__history_prepend";
+  sessionId: string;
+  items: TimelineItem[];
+  seq: number;
+}
+
 /** 纯 reducer：处理一个 HostEvent，返回新状态（不可变更新）
  * 额外支持内部事件 __history_load（批量替换 timeline） */
-export function reduceEvent(state: AppState, event: HostEvent | InternalEvent, deps: AppStateDeps = {}): AppState {
+export function reduceEvent(state: AppState, event: HostEvent | InternalEvent | HistoryPrependEvent, deps: AppStateDeps = {}): AppState {
   const queue = deps.dialogQueue;
   if (event.type === "__history_load") {
     const timelines = new Map(state.timelines);
     timelines.set(event.sessionId, event.items.length > 0 ? event.items : []);
+    return { ...state, timelines };
+  }
+  if (event.type === "__history_prepend") {
+    const timelines = new Map(state.timelines);
+    const existing = timelines.get(event.sessionId) ?? [];
+    // 去重：跳过已存在的 id
+    const existingIds = new Set(existing.map((t) => t.id));
+    const fresh = event.items.filter((t) => !existingIds.has(t.id));
+    timelines.set(event.sessionId, [...fresh, ...existing]);
     return { ...state, timelines };
   }
   switch (event.type) {

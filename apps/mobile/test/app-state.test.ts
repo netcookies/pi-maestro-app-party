@@ -101,6 +101,22 @@ describe("AppState reducer", () => {
 });
 
 describe("createAppActions", () => {
+  it("prepends older history via __history_prepend with dedup", () => {
+    const t1: TimelineItem = { id: "a", kind: "user", text: "旧消息", createdAt: "" };
+    const t2: TimelineItem = { id: "b", kind: "assistant", text: "新消息", createdAt: "" };
+    let state = reduceEvent(createInitialState(), { type: "__history_load", sessionId: "s1", items: [t2], seq: 1 });
+    // 加载更早的一页（含重复的 b 应去重）
+    state = reduceEvent(state, { type: "__history_prepend", sessionId: "s1", items: [t1, t2], seq: 2 });
+    const items = state.timelines.get("s1")!;
+    expect(items.map((i) => i.id)).toEqual(["a", "b"]); // t1 在最前, b 不重复
+  });
+
+  it("prepends to empty timeline", () => {
+    const t1: TimelineItem = { id: "x", kind: "user", text: "唯一", createdAt: "" };
+    const state = reduceEvent(createInitialState(), { type: "__history_prepend", sessionId: "s1", items: [t1], seq: 1 });
+    expect(state.timelines.get("s1")!.map((i) => i.id)).toEqual(["x"]);
+  });
+
   it("answerDialog sends response via queue and responder", () => {
     let responded = false;
     const queue = new ExtensionUiQueue();
