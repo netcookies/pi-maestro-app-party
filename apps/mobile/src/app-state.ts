@@ -14,7 +14,7 @@ import type {
   SessionState,
   TimelineItem,
 } from "@maestro-mobile/shared";
-import { ExtensionUiQueue, type DialogEntry } from "./extension-ui-queue.js";
+import { ExtensionUiQueue, type DialogEntry } from "./extension-ui-queue";
 
 export interface AppState {
   connectionStatus: string;

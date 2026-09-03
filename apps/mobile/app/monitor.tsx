@@ -1,6 +1,6 @@
 import React from "react";
 import { View, Text, StyleSheet, FlatList, ScrollView } from "react-native";
-import { useHost } from "../src/store.js";
+import { useHost } from "../src/store";
 import type { MonitorWindowSummary, MonitorAttentionSummary } from "@maestro-mobile/shared";
 
 export default function MonitorScreen() {

@@ -1,14 +1,14 @@
-import React, { useState } from "react";
+import React, { useState, useEffect } from "react";
 import {
   View, Text, StyleSheet, TextInput, TouchableOpacity, ScrollView, Alert,
 } from "react-native";
 import { useRouter } from "expo-router";
-import { useHost } from "../src/store.js";
+import { useHost } from "../src/store";
 
 export default function HomeScreen() {
   const router = useRouter();
   const { isConnected, connectionState, connect, disconnect, state, lastError } = useHost();
-  const [hostUrl, setHostUrl] = useState("ws://192.168.1.100:4739/ws");
+  const [hostUrl, setHostUrl] = useState("ws://127.0.0.1:4739/ws");
   const [token, setToken] = useState("");
 
   const handleConnect = () => {
@@ -20,6 +20,17 @@ export default function HomeScreen() {
   };
 
   const statusColor = isConnected ? "#3fb950" : connectionState === "reconnecting" ? "#d29922" : "#f85149";
+
+  // 开发模式：启动时自动连接默认 Host（模拟器验证用）
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      if (!isConnected && hostUrl.trim()) {
+        connect(hostUrl.trim(), token.trim() || undefined);
+      }
+    }, 800);
+    return () => clearTimeout(timer);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   return (
     <View style={styles.container}>

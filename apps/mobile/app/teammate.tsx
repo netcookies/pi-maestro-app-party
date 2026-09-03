@@ -1,6 +1,6 @@
 import React from "react";
 import { View, Text, StyleSheet, FlatList, TouchableOpacity } from "react-native";
-import { useHost } from "../src/store.js";
+import { useHost } from "../src/store";
 import type { MaestroScheduleSummary, MaestroStepSummary, MaestroDispatchSummary } from "@maestro-mobile/shared";
 
 export default function TeammateScreen() {

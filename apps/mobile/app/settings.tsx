@@ -1,6 +1,6 @@
 import React from "react";
 import { View, Text, StyleSheet, ScrollView, Linking } from "react-native";
-import { useHost } from "../src/store.js";
+import { useHost } from "../src/store";
 
 export default function SettingsScreen() {
   const { connectionState, isConnected, state } = useHost();

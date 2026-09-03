@@ -3,9 +3,9 @@ import {
   View, Text, StyleSheet, FlatList, TextInput, TouchableOpacity, KeyboardAvoidingView, Platform,
 } from "react-native";
 import { useLocalSearchParams } from "expo-router";
-import { useHost } from "../src/store.js";
+import { useHost } from "../src/store";
 import type { TimelineItem } from "@maestro-mobile/shared";
-import { ExtensionUiDialog } from "../src/components/ExtensionUiDialog.js";
+import { ExtensionUiDialog } from "../src/components/ExtensionUiDialog";
 
 export default function SessionScreen() {
   const { id } = useLocalSearchParams<{ id: string }>();

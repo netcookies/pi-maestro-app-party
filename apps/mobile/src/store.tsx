@@ -8,14 +8,14 @@
  */
 import React, { createContext, useContext, useMemo, useReducer, useRef, useState, useCallback } from "react";
 import type { ExtensionUiRequest, HostEvent } from "@maestro-mobile/shared";
-import { HostClient, type ConnectionState } from "./host-client.js";
-import { ExtensionUiQueue } from "./extension-ui-queue.js";
+import { HostClient, type ConnectionState } from "./host-client";
+import { ExtensionUiQueue } from "./extension-ui-queue";
 import {
   createInitialState,
   reduceEvent,
   createAppActions,
   type AppState,
-} from "./app-state.js";
+} from "./app-state";
 
 export interface HostStoreValue {
   state: AppState;
@@ -35,15 +35,15 @@ export interface HostStoreValue {
 const HostStoreContext = createContext<HostStoreValue | null>(null);
 
 export function HostStoreProvider({ children }: { children: React.ReactNode }) {
+  const queueRef = useRef(new ExtensionUiQueue());
+  const clientRef = useRef<HostClient | null>(null);
+  const [connectionState, setConnectionState] = useState<ConnectionState>("disconnected");
+
   const [state, dispatch] = useReducer(
     (s: AppState, e: HostEvent) => reduceEvent(s, e, { dialogQueue: queueRef.current }),
     undefined,
     createInitialState,
   );
-  const [connectionState, setConnectionState] = useState<ConnectionState>("disconnected");
-
-  const queueRef = useRef(new ExtensionUiQueue());
-  const clientRef = useRef<HostClient | null>(null);
   const stateRef = useRef(state);
   stateRef.current = state;
 
