@@ -106,6 +106,44 @@ pnpm typecheck     # 类型检查
 
 `open_session` / `close_session` / `prompt` / `steer` / `follow_up` / `abort` / `extension_ui_response` / `get_snapshot` / `set_model` / `set_thinking` / `compact`
 
+## 构建安装包（APK / IPA）
+
+### Android APK
+
+```bash
+# 方式一：Expo 一键构建（推荐，自动生成 android/ 并编译）
+pnpm --filter @maestro-mobile/app prebuild --platform android
+cd apps/mobile/android
+./gradlew assembleDebug
+# 产物：apps/mobile/android/app/build/outputs/apk/debug/app-debug.apk
+```
+
+### iOS（模拟器）
+
+```bash
+# 方式一：Expo 一键构建
+pnpm --filter @maestro-mobile/app prebuild --platform ios
+cd apps/mobile/ios
+pod install
+xcodebuild -workspace MaestroMobile.xcworkspace -scheme MaestroMobile \
+  -configuration Debug -sdk iphonesimulator -derivedDataPath build \
+  CODE_SIGNING_ALLOWED=NO build
+# 产物：apps/mobile/ios/build/Build/Products/Debug-iphonesimulator/MaestroMobile.app
+```
+
+### iOS 真机（需要 Apple Developer 账号签名）
+
+```bash
+cd apps/mobile/ios
+xcodebuild -workspace MaestroMobile.xcworkspace -scheme MaestroMobile \
+  -configuration Release -sdk iphoneos -derivedDataPath build \
+  -allowProvisioningUpdates CODE_SIGN_STYLE=Automatic build
+# 产物：build/Build/Products/Release-iphoneos/MaestroMobile.app
+# 用 Xcode Organizer / Apple Configurator 安装到设备
+```
+
+> 首次 prebuild 后 ios/ 和 android/ 已生成并提交，之后无需重复 prebuild。
+
 ## 常驻部署
 
 - **macOS**: `deploy/com.maestro-mobile.host.plist`（launchd）
