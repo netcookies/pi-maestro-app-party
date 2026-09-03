@@ -4,7 +4,7 @@
  * 基于 react-native-markdown-display，通过 style 对象走主题色。
  */
 import React, { useMemo } from "react";
-import { StyleSheet } from "react-native";
+import { StyleSheet, View } from "react-native";
 import Markdown, { MarkdownIt } from "react-native-markdown-display";
 import { useTheme } from "../../src/theme";
 import { MarkdownErrorBoundary } from "./MarkdownErrorBoundary";
@@ -13,10 +13,8 @@ export function MarkdownText({ text }: { text: string }) {
   const { theme } = useTheme();
 
   const mdStyle = useMemo(() => ({
-    body: { color: theme.text, fontSize: 15, lineHeight: 22, flexShrink: 1 },
+    body: { color: theme.text, fontSize: 15, lineHeight: 22 },
     paragraph: { marginVertical: 4 },
-    textgroup: { flexShrink: 1 },
-    text: { flexShrink: 1 },
     heading1: { ...heading, color: theme.mdHeading, fontSize: 22 },
     heading2: { ...heading, color: theme.mdHeading, fontSize: 19 },
     heading3: { ...heading, color: theme.mdHeading, fontSize: 16 },
@@ -31,7 +29,6 @@ export function MarkdownText({ text }: { text: string }) {
       backgroundColor: "rgba(127,127,127,0.18)",
       paddingHorizontal: 4,
       borderRadius: 4,
-      flexShrink: 1,
     },
     fence: {
       color: theme.mdCodeBlock,
@@ -42,7 +39,6 @@ export function MarkdownText({ text }: { text: string }) {
       backgroundColor: theme.mdCodeBlockBg,
       borderRadius: 6,
       marginVertical: 6,
-      flexShrink: 1,
     },
     blockquote: {
       color: theme.mdQuote,
@@ -67,9 +63,11 @@ export function MarkdownText({ text }: { text: string }) {
 
   return (
     <MarkdownErrorBoundary text={text}>
-      <Markdown style={mdStyle} markdownit={MarkdownIt({ typographer: true, html: false })}>
-        {text}
-      </Markdown>
+      <View style={{ flexShrink: 1, minHeight: 1 }}>
+        <Markdown style={mdStyle} markdownit={MarkdownIt({ typographer: true, html: false })}>
+          {text}
+        </Markdown>
+      </View>
     </MarkdownErrorBoundary>
   );
 }

@@ -85,6 +85,20 @@ export default function SessionScreen() {
   }, []);
 
   const renderItem = ({ item }: { item: TimelineItem }) => {
+    // 虚拟行：顶部“加载更早”按钮（参与正常 cell 测量，避免 header 高度错乱）
+    if (item.id === "__load_more__") {
+      return hasMore ? (
+        <View style={styles.loadMoreWrap}>
+          {loadingMore ? (
+            <ActivityIndicator size="small" color={theme.accent} />
+          ) : (
+            <TouchableOpacity onPress={() => void handleLoadMore()} style={styles.loadMoreBtn}>
+              <Text style={[styles.loadMoreText, { color: theme.accent }]}>⬆ 加载更早消息</Text>
+            </TouchableOpacity>
+          )}
+        </View>
+      ) : null;
+    }
     const isUser = item.kind === "user";
     const isTool = item.kind === "tool";
     const isThinking = item.kind === "thinking";
@@ -163,7 +177,7 @@ export default function SessionScreen() {
 
       <FlatList
         ref={listRef}
-        data={timeline}
+        data={hasMore ? [{ id: "__load_more__" } as TimelineItem, ...timeline] : timeline}
         keyExtractor={(item) => item.id}
         renderItem={renderItem}
         style={styles.list}
@@ -182,19 +196,6 @@ export default function SessionScreen() {
           }
         }}
         scrollEventThrottle={100}
-        ListHeaderComponent={
-          hasMore ? (
-            <View style={styles.loadMoreWrap}>
-              {loadingMore ? (
-                <ActivityIndicator size="small" color={theme.accent} />
-              ) : (
-                <TouchableOpacity onPress={() => void handleLoadMore()} style={styles.loadMoreBtn}>
-                  <Text style={[styles.loadMoreText, { color: theme.accent }]}>⬆ 加载更早消息</Text>
-                </TouchableOpacity>
-              )}
-            </View>
-          ) : null
-        }
       />
 
       {showFab && (
