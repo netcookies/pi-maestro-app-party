@@ -1,0 +1,20 @@
+{
+  "expo": {
+    "name": "Maestro Mobile",
+    "slug": "maestro-mobile",
+    "version": "0.1.0",
+    "orientation": "portrait",
+    "icon": "./assets/icon.png",
+    "userInterfaceStyle": "dark",
+    "splash": {
+      "backgroundColor": "#0a0a0f"
+    },
+    "ios": {
+      "supportsTablet": true,
+      "bundleIdentifier": "dev.maestromobile.app"
+    },
+    "android": {
+      "package": "dev.maestromobile.app"
+    }
+  }
+}
