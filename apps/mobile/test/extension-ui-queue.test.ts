@@ -87,10 +87,33 @@ describe("ExtensionUiQueue", () => {
   });
 
   it("notifies notify method fire-and-forget (no dialog)", () => {
-    // notify 类型不需要排队，但协议会推送；这里验证不崩
+    // notify 类型不需要排队，但协议会推送；验证不入队
     const req = makeRequest({ method: "notify", message: "hi" });
     queue.enqueue(req);
-    // notify 也应作为 pending 显示（简单通知）
-    expect(queue.count).toBe(1);
+    expect(queue.count).toBe(0);
+  });
+
+  it("ignores setStatus/setTitle fire-and-forget requests", () => {
+    const status = makeRequest({ method: "setStatus", statusKey: "k", statusText: "v" });
+    const title = makeRequest({ method: "setTitle", title: "t" });
+    const widget = makeRequest({ method: "setWidget", widgetKey: "w" });
+    queue.enqueue(status);
+    queue.enqueue(title);
+    queue.enqueue(widget);
+    expect(queue.count).toBe(0);
+  });
+
+  it("only queues interactive methods", () => {
+    const select = makeRequest({ method: "select" });
+    const input = makeRequest({ method: "input" });
+    const confirm = makeRequest({ method: "confirm" });
+    const editor = makeRequest({ method: "editor" });
+    const notify = makeRequest({ method: "notify" });
+    queue.enqueue(select);
+    queue.enqueue(input);
+    queue.enqueue(confirm);
+    queue.enqueue(editor);
+    queue.enqueue(notify);
+    expect(queue.count).toBe(4);
   });
 });

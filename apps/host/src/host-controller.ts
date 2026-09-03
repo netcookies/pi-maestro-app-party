@@ -2,6 +2,7 @@ import type { HostEvent, SessionSnapshot, ExtensionUiResponse } from "@maestro-m
 import type { RuntimeFactory, SessionRunner, OpenSessionRequest, HostEventListener } from "./types.js";
 import { SdkSessionRunner } from "./session-runner.js";
 import { MaestroStateReader } from "./maestro-state.js";
+import { LiveSessionsService } from "./live-sessions.js";
 import { EventLog } from "./event-log.js";
 
 /**
@@ -18,6 +19,7 @@ export class HostController {
   private readonly eventLog = new EventLog();
   private readonly listeners = new Set<HostEventListener>();
   private readonly maestroReader: MaestroStateReader;
+  private readonly liveSessions: LiveSessionsService;
   private readonly emitToListeners: (event: HostEvent) => void;
   private maestroPollTimer: ReturnType<typeof setInterval> | null = null;
   private _startedAt = Date.now();
@@ -27,6 +29,7 @@ export class HostController {
     maestroReader?: MaestroStateReader,
   ) {
     this.maestroReader = maestroReader ?? new MaestroStateReader();
+    this.liveSessions = new LiveSessionsService();
     this.emitToListeners = (event: HostEvent) => {
       for (const listener of this.listeners) {
         try { listener(event); } catch { /* ignore */ }
@@ -40,6 +43,11 @@ export class HostController {
 
   get activeSessionIds(): string[] {
     return [...this.sessions.keys()];
+  }
+
+  /** 读取活跃会话列表（只读，不 claim owner） */
+  async listLiveSessions() {
+    return this.liveSessions.list();
   }
 
   /** 注册事件监听（WebSocket 层订阅） */

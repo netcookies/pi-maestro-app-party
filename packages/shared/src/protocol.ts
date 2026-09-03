@@ -69,6 +69,25 @@ export interface HostSessionList {
   observedAt: string;
 }
 
+/** 活跃会话（vibe coding 中）摘要 */
+export interface LiveSessionInfo {
+  sessionId: string;
+  cwdName: string;
+  path: string;
+  firstMessage: string;
+  entryCount: number;
+  messageCount: number;
+  updatedAt: number;
+  live: boolean;
+  liveAgeMs: number;
+}
+
+export interface LiveSessionList {
+  sessions: LiveSessionInfo[];
+  observedAt: string;
+  liveCount: number;
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Maestro 状态投影（flow-schedule store 的只读投影）
 // ─────────────────────────────────────────────────────────────────────────────
@@ -241,6 +260,7 @@ export type HostEvent =
 export type ClientCommand =
   | { type: "open_session"; cwd: string; mode?: "create" | "continue"; sessionFile?: string }
   | { type: "list_host_sessions"; cwd?: string }
+  | { type: "list_live_sessions" }
   | { type: "close_session"; sessionId: string }
   | { type: "list_sessions"; cwd?: string }
   | { type: "list_directories"; path: string }

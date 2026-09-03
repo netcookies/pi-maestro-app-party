@@ -13,6 +13,7 @@ import type {
 } from "@maestro-mobile/shared";
 import type { HostController } from "../host-controller.js";
 import type { RuntimeFactory } from "../types.js";
+import type { LiveSessionList } from "../live-sessions.js";
 
 export interface MobileHostServerOptions {
   token?: string;
@@ -140,6 +141,12 @@ export class MobileHostServer {
         return;
       }
 
+      if (request.method === "GET" && url.pathname === "/api/live-sessions") {
+        const list = await this.controller.listLiveSessions();
+        writeJson(response, 200, list satisfies LiveSessionList);
+        return;
+      }
+
       if (request.method === "GET" && url.pathname === "/api/extension-ui/pending") {
         writeJson(response, 200, { pending: 0 });
         return;
@@ -191,6 +198,11 @@ export class MobileHostServer {
 
     try {
       switch (command.type) {
+        case "list_live_sessions": {
+          const list = await this.controller.listLiveSessions();
+          this.sendAck(client, command, list);
+          break;
+        }
         case "list_host_sessions": {
           const sessions = await this.controller.listSessions(command.cwd);
           const list = toSessionSummaryList(sessions);

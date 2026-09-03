@@ -7,7 +7,7 @@
  * - 暴露 connect / disconnect / sendPrompt / answerDialog 等动作
  */
 import React, { createContext, useContext, useMemo, useReducer, useRef, useState, useCallback } from "react";
-import type { ExtensionUiRequest, HostEvent, HostSessionList } from "@maestro-mobile/shared";
+import type { ExtensionUiRequest, HostEvent, HostSessionList, LiveSessionList } from "@maestro-mobile/shared";
 import { HostClient, type ConnectionState } from "./host-client";
 import { ExtensionUiQueue } from "./extension-ui-queue";
 import {
@@ -26,6 +26,7 @@ export interface HostStoreValue {
   openSession(cwd: string): Promise<string>;
   openExistingSession(sessionFile: string, cwd: string): Promise<string>;
   listHostSessions(cwd?: string): Promise<HostSessionList>;
+  listLiveSessions(): Promise<LiveSessionList>;
   loadSessionHistory(sessionId: string): Promise<void>;
   sendPrompt(sessionId: string, message: string): Promise<void>;
   sendSteer(sessionId: string, message: string): Promise<void>;
@@ -95,6 +96,11 @@ export function HostStoreProvider({ children }: { children: React.ReactNode }) {
     return result as HostSessionList;
   }, [getClient]);
 
+  const listLiveSessions = useCallback(async (): Promise<LiveSessionList> => {
+    const result = await getClient().sendCommand({ type: "list_live_sessions" });
+    return result as LiveSessionList;
+  }, [getClient]);
+
   const sendPrompt = useCallback(async (sessionId: string, message: string) => {
     await getClient().sendCommand({ type: "prompt", sessionId, message });
   }, [getClient]);
@@ -148,6 +154,7 @@ export function HostStoreProvider({ children }: { children: React.ReactNode }) {
       openSession,
       openExistingSession,
       listHostSessions,
+      listLiveSessions,
       loadSessionHistory,
       sendPrompt,
       sendSteer,
@@ -156,7 +163,7 @@ export function HostStoreProvider({ children }: { children: React.ReactNode }) {
       cancelDialog,
       lastError: state.lastError,
     }),
-    [state, connectionState, connect, disconnect, openSession, openExistingSession, listHostSessions, loadSessionHistory, sendPrompt, sendSteer, sendAbort, answerDialog, cancelDialog],
+    [state, connectionState, connect, disconnect, openSession, openExistingSession, listHostSessions, listLiveSessions, loadSessionHistory, sendPrompt, sendSteer, sendAbort, answerDialog, cancelDialog],
   );
 
   return <HostStoreContext.Provider value={value}>{children}</HostStoreContext.Provider>;

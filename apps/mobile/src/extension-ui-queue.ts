@@ -8,6 +8,13 @@ import type { ExtensionUiRequest, ExtensionUiResponse, DistributiveOmitUiRespons
 
 export type DialogStatus = "pending" | "answered" | "cancelled" | "expired";
 
+/** 交互类方法：需要用户响应，作为弹窗显示 */
+const INTERACTIVE_METHODS = new Set(["select", "confirm", "input", "editor"]);
+
+export function isInteractiveMethod(method: string): boolean {
+  return INTERACTIVE_METHODS.has(method);
+}
+
 export interface DialogEntry {
   request: ExtensionUiRequest;
   receivedAt: number;
@@ -49,8 +56,11 @@ export class ExtensionUiQueue {
     return this.pendingDialogs.length;
   }
 
-  /** 入队新弹窗（同一 session 的请求） */
-  enqueue(request: ExtensionUiRequest): DialogEntry {
+  /** 入队新弹窗（同一 session 的请求）
+   *  只有交互类方法（select/confirm/input/editor）需要用户响应；
+   *  setStatus/setTitle/notify/setWidget 等 fire-and-forget 通知不入队。 */
+  enqueue(request: ExtensionUiRequest): DialogEntry | undefined {
+    if (!isInteractiveMethod(request.method)) return undefined;
     const entry: DialogEntry = {
       request,
       receivedAt: this.now(),

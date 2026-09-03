@@ -4,12 +4,13 @@ import {
 } from "react-native";
 import { useRouter } from "expo-router";
 import { useHost } from "../src/store";
-import type { HostSessionSummary } from "@maestro-mobile/shared";
+import type { HostSessionSummary, LiveSessionInfo } from "@maestro-mobile/shared";
 
 export default function HostSessionsScreen() {
   const router = useRouter();
-  const { listHostSessions, openExistingSession, loadSessionHistory } = useHost();
+  const { listHostSessions, listLiveSessions, openExistingSession, loadSessionHistory } = useHost();
   const [sessions, setSessions] = useState<HostSessionSummary[]>([]);
+  const [liveSessions, setLiveSessions] = useState<Map<string, LiveSessionInfo>>(new Map());
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [opening, setOpening] = useState<string | null>(null);
@@ -27,9 +28,26 @@ export default function HostSessionsScreen() {
     }
   }, [listHostSessions]);
 
+  const loadLive = useCallback(async () => {
+    try {
+      const list = await listLiveSessions();
+      const m = new Map<string, LiveSessionInfo>();
+      for (const s of list.sessions) {
+        if (s.live) m.set(s.sessionId, s);
+      }
+      setLiveSessions(m);
+    } catch {
+      // 轮询失败静默
+    }
+  }, [listLiveSessions]);
+
   useEffect(() => {
     void load();
-  }, [load]);
+    void loadLive();
+    // 每 5 秒刷新活跃状态（vibe coding 感知）
+    const timer = setInterval(() => void loadLive(), 5000);
+    return () => clearInterval(timer);
+  }, [load, loadLive]);
 
   const handleOpen = async (s: HostSessionSummary) => {
     if (opening) return;
@@ -58,24 +76,30 @@ export default function HostSessionsScreen() {
     return tB - tA;
   });
 
-  const renderSession = ({ item }: { item: HostSessionSummary }) => (
-    <TouchableOpacity
-      style={styles.sessionItem}
-      onPress={() => void handleOpen(item)}
-      disabled={opening === item.id}
-    >
-      <View style={styles.sessionHeader}>
-        <Text style={styles.sessionTitle}>
-          {item.title || "(无首条消息)"}
-        </Text>
-        {opening === item.id && <ActivityIndicator size="small" color="#3fb950" />}
-      </View>
-      <View style={styles.sessionMeta}>
-        <Text style={styles.sessionCount}>{item.messageCount} 条消息</Text>
-        <Text style={styles.sessionTime}>{formatTime(item.updatedAt)}</Text>
-      </View>
-    </TouchableOpacity>
-  );
+  const renderSession = ({ item }: { item: HostSessionSummary }) => {
+    const live = liveSessions.has(item.id);
+    return (
+      <TouchableOpacity
+        style={[styles.sessionItem, live && styles.sessionItemLive]}
+        onPress={() => void handleOpen(item)}
+        disabled={opening === item.id}
+      >
+        <View style={styles.sessionHeader}>
+          {live && <View style={styles.liveDot} />}
+          <Text style={styles.sessionTitle} numberOfLines={2}>
+            {item.title || "(无首条消息)"}
+          </Text>
+          {opening === item.id && <ActivityIndicator size="small" color="#3fb950" />}
+        </View>
+        <View style={styles.sessionMeta}>
+          <Text style={styles.sessionCount}>
+            {item.messageCount} 条消息{live ? " · 🟢 运行中" : ""}
+          </Text>
+          <Text style={styles.sessionTime}>{formatTime(item.updatedAt)}</Text>
+        </View>
+      </TouchableOpacity>
+    );
+  };
 
   const renderGroup = ({ item }: { item: [string, HostSessionSummary[]] }) => {
     const [cwd, group] = item;
@@ -113,8 +137,11 @@ export default function HostSessionsScreen() {
   return (
     <View style={styles.container}>
       <View style={styles.toolbar}>
-        <Text style={styles.toolbarText}>{sessions.length} 个会话 / {rows.length} 个项目</Text>
-        <TouchableOpacity onPress={() => void load()}>
+        <Text style={styles.toolbarText}>
+          {sessions.length} 个会话 / {rows.length} 个项目
+          {liveSessions.size > 0 ? ` · 🟢 ${liveSessions.size} 运行中` : ""}
+        </Text>
+        <TouchableOpacity onPress={() => { void load(); void loadLive(); }}>
           <Text style={styles.refreshText}>刷新</Text>
         </TouchableOpacity>
       </View>
@@ -190,6 +217,18 @@ const styles = StyleSheet.create({
     marginBottom: 8,
     borderWidth: 1,
     borderColor: "#21262d",
+  },
+  sessionItemLive: {
+    borderColor: "#238636",
+    backgroundColor: "#0d2816",
+  },
+  liveDot: {
+    width: 8,
+    height: 8,
+    borderRadius: 4,
+    backgroundColor: "#3fb950",
+    marginRight: 6,
+    alignSelf: "center",
   },
   sessionHeader: { flexDirection: "row", justifyContent: "space-between", alignItems: "center" },
   sessionTitle: { color: "#e6edf3", fontSize: 14, fontWeight: "600", flex: 1, marginRight: 8 },
