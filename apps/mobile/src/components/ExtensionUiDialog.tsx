@@ -3,6 +3,7 @@ import {
   Modal, View, Text, StyleSheet, TouchableOpacity, ScrollView, TextInput, Platform,
 } from "react-native";
 import type { ExtensionUiRequest } from "@maestro-mobile/shared";
+import { useTheme } from "../../src/theme";
 
 interface Props {
   request: ExtensionUiRequest;
@@ -11,6 +12,7 @@ interface Props {
 }
 
 export function ExtensionUiDialog({ request, onAnswer, onCancel }: Props) {
+  const { theme } = useTheme();
   const [selected, setSelected] = React.useState<string[]>([]);
   const [freeText, setFreeText] = React.useState("");
 
@@ -48,18 +50,18 @@ export function ExtensionUiDialog({ request, onAnswer, onCancel }: Props) {
   return (
     <Modal transparent animationType="fade" visible>
       <View style={styles.overlay}>
-        <View style={styles.dialog}>
-          <Text style={styles.title}>{request.title ?? "询问"}</Text>
-          {request.message ? <Text style={styles.message}>{request.message}</Text> : null}
+        <View style={[styles.dialog, { backgroundColor: theme.cardBg, borderColor: theme.border }]}>
+          <Text style={[styles.title, { color: theme.text }]}>{request.title ?? "询问"}</Text>
+          {request.message ? <Text style={[styles.message, { color: theme.muted }]}>{request.message}</Text> : null}
 
           <ScrollView style={styles.optionsList}>
             {request.options?.map((option) => (
               <TouchableOpacity
                 key={option}
-                style={[styles.option, selected.includes(option) && styles.optionSelected]}
+                style={[styles.option, { backgroundColor: theme.bg, borderColor: theme.border }, selected.includes(option) && { borderColor: theme.success, backgroundColor: theme.mdCodeBlockBg }]}
                 onPress={() => handleSelect(option)}
               >
-                <Text style={[styles.optionText, selected.includes(option) && styles.optionTextSelected]}>
+                <Text style={[styles.optionText, { color: theme.text }, selected.includes(option) && { color: theme.success }]}>
                   {selected.includes(option) ? "✓ " : "  "}
                   {option}
                 </Text>
@@ -69,20 +71,20 @@ export function ExtensionUiDialog({ request, onAnswer, onCancel }: Props) {
 
           {request.placeholder ? (
             <TextInput
-              style={styles.input}
+              style={[styles.input, { backgroundColor: theme.bg, color: theme.text, borderColor: theme.border }]}
               value={freeText}
               onChangeText={setFreeText}
               placeholder={request.placeholder}
-              placeholderTextColor="#484f58"
+              placeholderTextColor={theme.dim}
               autoFocus
             />
           ) : null}
 
           <View style={styles.buttonRow}>
-            <TouchableOpacity style={styles.cancelButton} onPress={onCancel}>
-              <Text style={styles.cancelText}>取消</Text>
+            <TouchableOpacity style={[styles.cancelButton, { backgroundColor: theme.border }]} onPress={onCancel}>
+              <Text style={[styles.cancelText, { color: theme.muted }]}>取消</Text>
             </TouchableOpacity>
-            <TouchableOpacity style={styles.confirmButton} onPress={handleConfirm}>
+            <TouchableOpacity style={[styles.confirmButton, { backgroundColor: theme.buttonPrimary }]} onPress={handleConfirm}>
               <Text style={styles.confirmText}>确认</Text>
             </TouchableOpacity>
           </View>
@@ -100,49 +102,38 @@ const styles = StyleSheet.create({
     padding: 24,
   },
   dialog: {
-    backgroundColor: "#161b22",
     borderRadius: 14,
     padding: 20,
     borderWidth: 1,
-    borderColor: "#30363d",
     maxHeight: "80%",
   },
-  title: { fontSize: 17, fontWeight: "600", color: "#e6edf3", marginBottom: 8 },
-  message: { fontSize: 14, color: "#8b949e", marginBottom: 12 },
+  title: { fontSize: 17, fontWeight: "600", marginBottom: 8 },
+  message: { fontSize: 14, marginBottom: 12 },
   optionsList: { maxHeight: 250, marginBottom: 12 },
   option: {
-    backgroundColor: "#0d1117",
     borderRadius: 8,
     padding: 12,
     marginBottom: 6,
     borderWidth: 1,
-    borderColor: "#21262d",
   },
-  optionSelected: { borderColor: "#238636", backgroundColor: "#0d2816" },
-  optionText: { color: "#e6edf3", fontSize: 15 },
-  optionTextSelected: { color: "#3fb950" },
+  optionText: { fontSize: 15 },
   input: {
-    backgroundColor: "#0d1117",
     borderRadius: 8,
     paddingHorizontal: 12,
     paddingVertical: 10,
-    color: "#e6edf3",
     marginBottom: 12,
     borderWidth: 1,
-    borderColor: "#30363d",
   },
   buttonRow: { flexDirection: "row", gap: 10 },
   cancelButton: {
     flex: 1,
-    backgroundColor: "#21262d",
     borderRadius: 8,
     paddingVertical: 12,
     alignItems: "center",
   },
-  cancelText: { color: "#8b949e", fontWeight: "600" },
+  cancelText: { fontWeight: "600" },
   confirmButton: {
     flex: 1,
-    backgroundColor: "#238636",
     borderRadius: 8,
     paddingVertical: 12,
     alignItems: "center",

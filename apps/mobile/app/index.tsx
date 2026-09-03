@@ -1,13 +1,16 @@
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useMemo } from "react";
 import {
   View, Text, StyleSheet, TextInput, TouchableOpacity, ScrollView, Alert,
 } from "react-native";
 import { useRouter } from "expo-router";
 import { useHost } from "../src/store";
+import { useTheme } from "../src/theme";
 
 export default function HomeScreen() {
   const router = useRouter();
   const { isConnected, connectionState, connect, disconnect, state, lastError } = useHost();
+  const { theme } = useTheme();
+  const styles = useMemo(() => makeStyles(theme), [theme]);
   const [hostUrl, setHostUrl] = useState("ws://127.0.0.1:4739/ws");
   const [token, setToken] = useState("");
 
@@ -19,7 +22,7 @@ export default function HomeScreen() {
     connect(hostUrl.trim(), token.trim() || undefined);
   };
 
-  const statusColor = isConnected ? "#3fb950" : connectionState === "reconnecting" ? "#d29922" : "#f85149";
+  const statusColor = isConnected ? theme.success : connectionState === "reconnecting" ? theme.warning : theme.error;
 
   // 开发模式：启动时自动连接默认 Host（模拟器验证用）
   useEffect(() => {
@@ -113,52 +116,54 @@ export default function HomeScreen() {
   );
 }
 
-const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: "#0d1117" },
-  header: {
-    paddingTop: 60,
-    paddingHorizontal: 20,
-    paddingBottom: 16,
-    backgroundColor: "#161b22",
-    borderBottomWidth: 1,
-    borderBottomColor: "#21262d",
-  },
-  title: { fontSize: 24, fontWeight: "700", color: "#e6edf3" },
-  status: { marginTop: 4, fontSize: 13 },
-  body: { flex: 1, padding: 16 },
-  card: {
-    backgroundColor: "#161b22",
-    borderRadius: 12,
-    padding: 16,
-    marginBottom: 16,
-    borderWidth: 1,
-    borderColor: "#21262d",
-  },
-  cardTitle: { fontSize: 16, fontWeight: "600", color: "#e6edf3", marginBottom: 12 },
-  input: {
-    backgroundColor: "#0d1117",
-    borderRadius: 8,
-    paddingHorizontal: 12,
-    paddingVertical: 10,
-    color: "#e6edf3",
-    marginBottom: 10,
-    borderWidth: 1,
-    borderColor: "#30363d",
-  },
-  buttonRow: { flexDirection: "row", gap: 10 },
-  button: { flex: 1, borderRadius: 8, paddingVertical: 12, alignItems: "center" },
-  buttonPrimary: { backgroundColor: "#238636" },
-  buttonDanger: { backgroundColor: "#da3633" },
-  buttonText: { color: "#fff", fontWeight: "600", fontSize: 15 },
-  error: { color: "#f85149", marginTop: 8, fontSize: 13 },
-  navItem: {
-    backgroundColor: "#0d1117",
-    borderRadius: 8,
-    padding: 14,
-    marginBottom: 10,
-    borderWidth: 1,
-    borderColor: "#21262d",
-  },
-  navTitle: { fontSize: 15, fontWeight: "600", color: "#e6edf3" },
-  navDesc: { fontSize: 12, color: "#8b949e", marginTop: 4 },
-});
+function makeStyles(theme: ReturnType<typeof useTheme>["theme"]) {
+  return StyleSheet.create({
+    container: { flex: 1, backgroundColor: theme.bg },
+    header: {
+      paddingTop: 60,
+      paddingHorizontal: 20,
+      paddingBottom: 16,
+      backgroundColor: theme.headerBg,
+      borderBottomWidth: 1,
+      borderBottomColor: theme.border,
+    },
+    title: { fontSize: 24, fontWeight: "700", color: theme.text },
+    status: { marginTop: 4, fontSize: 13 },
+    body: { flex: 1, padding: 16 },
+    card: {
+      backgroundColor: theme.cardBg,
+      borderRadius: 12,
+      padding: 16,
+      marginBottom: 16,
+      borderWidth: 1,
+      borderColor: theme.border,
+    },
+    cardTitle: { fontSize: 16, fontWeight: "600", color: theme.text, marginBottom: 12 },
+    input: {
+      backgroundColor: theme.inputBg,
+      borderRadius: 8,
+      paddingHorizontal: 12,
+      paddingVertical: 10,
+      color: theme.text,
+      marginBottom: 10,
+      borderWidth: 1,
+      borderColor: theme.border,
+    },
+    buttonRow: { flexDirection: "row", gap: 10 },
+    button: { flex: 1, borderRadius: 8, paddingVertical: 12, alignItems: "center" },
+    buttonPrimary: { backgroundColor: theme.buttonPrimary },
+    buttonDanger: { backgroundColor: theme.buttonDanger },
+    buttonText: { color: "#fff", fontWeight: "600", fontSize: 15 },
+    error: { color: theme.error, marginTop: 8, fontSize: 13 },
+    navItem: {
+      backgroundColor: theme.inputBg,
+      borderRadius: 8,
+      padding: 14,
+      marginBottom: 10,
+      borderWidth: 1,
+      borderColor: theme.border,
+    },
+    navTitle: { fontSize: 15, fontWeight: "600", color: theme.text },
+    navDesc: { fontSize: 12, color: theme.muted, marginTop: 4 },
+  });
+}

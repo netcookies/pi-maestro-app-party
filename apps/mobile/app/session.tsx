@@ -1,21 +1,26 @@
-import React, { useEffect, useRef, useState } from "react";
+import React, { useEffect, useRef, useState, useMemo } from "react";
 import {
   View, Text, StyleSheet, FlatList, TextInput, TouchableOpacity, KeyboardAvoidingView, Platform,
 } from "react-native";
 import { useLocalSearchParams } from "expo-router";
 import { useHost } from "../src/store";
+import { useTheme } from "../src/theme";
 import type { TimelineItem } from "@maestro-mobile/shared";
 import { ExtensionUiDialog } from "../src/components/ExtensionUiDialog";
 import { InlineImage } from "../src/components/InlineImage";
+import { CollapsibleTool } from "../src/components/CollapsibleTool";
+import { MarkdownText } from "../src/components/MarkdownText";
 import { splitImageSegments } from "../src/image-paths";
 
 export default function SessionScreen() {
   const { id } = useLocalSearchParams<{ id: string }>();
   const { state, sendPrompt, sendAbort, answerDialog, cancelDialog } = useHost();
+  const { theme } = useTheme();
   const [input, setInput] = useState("");
   const [sending, setSending] = useState(false);
   const listRef = useRef<FlatList<TimelineItem>>(null);
 
+  const styles = useMemo(() => makeStyles(theme), [theme]);
   const timeline = state.timelines.get(id ?? "") ?? [];
   const session = state.sessions.get(id ?? "");
   const pendingDialog = state.dialogs[0];
@@ -45,24 +50,41 @@ export default function SessionScreen() {
     const isUser = item.kind === "user";
     const isTool = item.kind === "tool";
     const isThinking = item.kind === "thinking";
+    const isAssistant = item.kind === "assistant";
     // 所有消息类型都做图片分段（user 贴图、assistant 引用、tool 输出）
     const segments = splitImageSegments(item.text);
     const hasImages = segments.some((s) => s.type === "image");
+
+    // tool 消息：折叠/展开/全屏卡片（图片路径由 InlineImage 在展开区显示）
+    if (isTool) {
+      return (
+        <View style={[styles.bubble, styles.bubbleTool]}>
+          <CollapsibleTool
+            toolName={item.toolName ?? "tool"}
+            text={item.text}
+            isError={item.isError}
+          />
+          {hasImages && (
+            <View style={styles.toolImages}>
+              {segments.filter((s) => s.type === "image").map((seg, i) => (
+                <InlineImage key={`img-${i}`} path={seg.path} />
+              ))}
+            </View>
+          )}
+        </View>
+      );
+    }
+
+    // 非 tool：普通气泡（assistant 走 markdown）
     return (
       <View
         style={[
           styles.bubble,
-          isUser ? styles.bubbleUser : isTool ? styles.bubbleTool : styles.bubbleAgent,
+          isUser ? styles.bubbleUser : styles.bubbleAgent,
         ]}
       >
         {isThinking && <Text style={styles.thinkingLabel}>🧠 思考</Text>}
-        {isTool && (
-          <View style={styles.toolHeader}>
-            <Text style={styles.toolLabel}>🔧 {item.toolName ?? "tool"}</Text>
-            {item.isError ? <Text style={styles.toolError}>⚠ 失败</Text> : null}
-          </View>
-        )}
-        {segments && hasImages ? (
+        {hasImages ? (
           <View>
             {segments.map((seg, i) =>
               seg.type === "image" ? (
@@ -70,7 +92,7 @@ export default function SessionScreen() {
               ) : (
                 <Text
                   key={`txt-${i}`}
-                  style={[isUser ? styles.textUser : styles.textAgent, isTool && styles.textTool]}
+                  style={[isUser ? styles.textUser : styles.textAgent]}
                   selectable
                 >
                   {seg.text}
@@ -78,11 +100,10 @@ export default function SessionScreen() {
               ),
             )}
           </View>
+        ) : isAssistant ? (
+          <MarkdownText text={item.text} />
         ) : (
-          <Text
-            style={[isUser ? styles.textUser : styles.textAgent, isTool && styles.textTool]}
-            selectable
-          >
+          <Text style={[isUser ? styles.textUser : styles.textAgent]} selectable>
             {item.text}
           </Text>
         )}
@@ -144,84 +165,86 @@ export default function SessionScreen() {
   );
 }
 
-const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: "#0d1117" },
-  header: {
-    flexDirection: "row",
-    justifyContent: "space-between",
-    alignItems: "center",
-    paddingHorizontal: 16,
-    paddingTop: Platform.OS === "ios" ? 60 : 16,
-    paddingBottom: 12,
-    backgroundColor: "#161b22",
-    borderBottomWidth: 1,
-    borderBottomColor: "#21262d",
-  },
-  headerTitle: { fontSize: 17, fontWeight: "600", color: "#e6edf3", flex: 1 },
-  headerStatus: { fontSize: 12, color: "#8b949e" },
-  list: { flex: 1 },
-  listContent: { padding: 16 },
-  bubble: {
-    borderRadius: 12,
-    padding: 12,
-    marginBottom: 10,
-    maxWidth: "90%",
-  },
-  bubbleUser: { backgroundColor: "#1f6feb", alignSelf: "flex-end" },
-  bubbleAgent: { backgroundColor: "#161b22", alignSelf: "flex-start", borderWidth: 1, borderColor: "#21262d" },
-  bubbleTool: {
-    backgroundColor: "#0d1117",
-    alignSelf: "stretch",
-    borderWidth: 1,
-    borderColor: "#30363d",
-    borderRadius: 8,
-  },
-  toolHeader: { flexDirection: "row", justifyContent: "space-between", marginBottom: 6 },
-  textTool: {
-    fontFamily: Platform.OS === "ios" ? "Menlo" : "monospace",
-    fontSize: 12,
-    lineHeight: 17,
-    color: "#c9d1d9",
-  },
-  textUser: { color: "#fff", fontSize: 15, lineHeight: 21 },
-  textAgent: { color: "#e6edf3", fontSize: 15, lineHeight: 21 },
-  thinkingLabel: { color: "#d29922", fontSize: 11, marginBottom: 4, fontWeight: "600" },
-  toolLabel: { color: "#58a6ff", fontSize: 11, marginBottom: 4, fontWeight: "600" },
-  toolError: { color: "#f85149", fontSize: 12, marginTop: 4 },
-  composer: {
-    flexDirection: "row",
-    padding: 12,
-    backgroundColor: "#161b22",
-    borderTopWidth: 1,
-    borderTopColor: "#21262d",
-    alignItems: "flex-end",
-    gap: 8,
-  },
-  input: {
-    flex: 1,
-    backgroundColor: "#0d1117",
-    borderRadius: 8,
-    paddingHorizontal: 12,
-    paddingVertical: 10,
-    color: "#e6edf3",
-    borderWidth: 1,
-    borderColor: "#30363d",
-    maxHeight: 120,
-  },
-  sendButton: {
-    backgroundColor: "#238636",
-    borderRadius: 8,
-    paddingHorizontal: 16,
-    paddingVertical: 12,
-  },
-  sendText: { color: "#fff", fontWeight: "600" },
-  abortButton: {
-    alignSelf: "center",
-    backgroundColor: "#da3633",
-    borderRadius: 16,
-    paddingHorizontal: 20,
-    paddingVertical: 6,
-    marginBottom: 8,
-  },
-  abortText: { color: "#fff", fontSize: 13, fontWeight: "600" },
-});
+function makeStyles(theme: ReturnType<typeof useTheme>["theme"]) {
+  return StyleSheet.create({
+    container: { flex: 1, backgroundColor: theme.bg },
+    header: {
+      flexDirection: "row",
+      justifyContent: "space-between",
+      alignItems: "center",
+      paddingHorizontal: 16,
+      paddingTop: Platform.OS === "ios" ? 60 : 16,
+      paddingBottom: 12,
+      backgroundColor: theme.headerBg,
+      borderBottomWidth: 1,
+      borderBottomColor: theme.border,
+    },
+    headerTitle: { fontSize: 17, fontWeight: "600", color: theme.text, flex: 1 },
+    headerStatus: { fontSize: 12, color: theme.muted },
+    list: { flex: 1 },
+    listContent: { padding: 16 },
+    bubble: {
+      borderRadius: 12,
+      padding: 12,
+      marginBottom: 10,
+      maxWidth: "90%",
+    },
+    bubbleUser: { backgroundColor: theme.userBubble, alignSelf: "flex-end" },
+    bubbleAgent: { backgroundColor: theme.agentBubble, alignSelf: "flex-start", borderWidth: 1, borderColor: theme.border },
+    bubbleTool: {
+      backgroundColor: theme.toolBubble,
+      alignSelf: "stretch",
+      borderWidth: 1,
+      borderColor: theme.border,
+      borderRadius: 8,
+    },
+    toolImages: { marginTop: 8 },
+    textTool: {
+      fontFamily: Platform.OS === "ios" ? "Menlo" : "monospace",
+      fontSize: 12,
+      lineHeight: 17,
+      color: theme.toolOutput,
+    },
+    textUser: { color: theme.userText, fontSize: 15, lineHeight: 21 },
+    textAgent: { color: theme.text, fontSize: 15, lineHeight: 21 },
+    thinkingLabel: { color: theme.warning, fontSize: 11, marginBottom: 4, fontWeight: "600" },
+    toolLabel: { color: theme.accent, fontSize: 11, marginBottom: 4, fontWeight: "600" },
+    toolError: { color: theme.error, fontSize: 12, marginTop: 4 },
+    composer: {
+      flexDirection: "row",
+      padding: 12,
+      backgroundColor: theme.headerBg,
+      borderTopWidth: 1,
+      borderTopColor: theme.border,
+      alignItems: "flex-end",
+      gap: 8,
+    },
+    input: {
+      flex: 1,
+      backgroundColor: theme.inputBg,
+      borderRadius: 8,
+      paddingHorizontal: 12,
+      paddingVertical: 10,
+      color: theme.text,
+      borderWidth: 1,
+      borderColor: theme.border,
+      maxHeight: 120,
+    },
+    sendButton: {
+      backgroundColor: theme.buttonPrimary,
+      borderRadius: 8,
+      paddingHorizontal: 16,
+      paddingVertical: 12,
+    },
+    sendText: { color: "#fff", fontWeight: "600" },
+    abortButton: {
+      alignSelf: "center",
+      backgroundColor: theme.buttonDanger,
+      borderRadius: 16,
+      paddingHorizontal: 20,
+      paddingVertical: 6,
+      marginBottom: 8,
+    },
+    abortText: { color: "#fff", fontSize: 13, fontWeight: "600" },
+  });
+}

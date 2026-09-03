@@ -4,10 +4,13 @@ import {
 } from "react-native";
 import { useRouter } from "expo-router";
 import { useHost } from "../src/store";
+import { useTheme } from "../src/theme";
 import type { HostSessionSummary, LiveSessionInfo } from "@maestro-mobile/shared";
 
 export default function HostSessionsScreen() {
   const router = useRouter();
+  const { theme } = useTheme();
+  const styles = React.useMemo(() => makeStyles(theme), [theme]);
   const { listHostSessions, listLiveSessions, openExistingSession, loadSessionHistory } = useHost();
   const [sessions, setSessions] = useState<HostSessionSummary[]>([]);
   const [liveSessions, setLiveSessions] = useState<Map<string, LiveSessionInfo>>(new Map());
@@ -89,7 +92,7 @@ export default function HostSessionsScreen() {
           <Text style={styles.sessionTitle} numberOfLines={2}>
             {item.title || "(无首条消息)"}
           </Text>
-          {opening === item.id && <ActivityIndicator size="small" color="#3fb950" />}
+          {opening === item.id && <ActivityIndicator size="small" color={theme.success} />}
         </View>
         <View style={styles.sessionMeta}>
           <Text style={styles.sessionCount}>
@@ -117,7 +120,7 @@ export default function HostSessionsScreen() {
   if (loading) {
     return (
       <View style={styles.center}>
-        <ActivityIndicator size="large" color="#3fb950" />
+        <ActivityIndicator size="large" color={theme.success} />
         <Text style={styles.centerText}>加载 Host 会话...</Text>
       </View>
     );
@@ -180,14 +183,15 @@ function formatTime(iso: string): string {
   }
 }
 
-const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: "#0d1117" },
+function makeStyles(theme: ReturnType<typeof useTheme>["theme"]) {
+  return StyleSheet.create({
+  container: { flex: 1, backgroundColor: theme.bg },
   center: { flex: 1, justifyContent: "center", alignItems: "center", padding: 24 },
-  centerText: { color: "#8b949e", fontSize: 14, marginTop: 12 },
-  errorText: { color: "#f85149", fontSize: 14 },
+  centerText: { color: theme.muted, fontSize: 14, marginTop: 12 },
+  errorText: { color: theme.error, fontSize: 14 },
   retryButton: {
     marginTop: 12,
-    backgroundColor: "#238636",
+    backgroundColor: theme.buttonPrimary,
     paddingHorizontal: 24,
     paddingVertical: 8,
     borderRadius: 8,
@@ -200,39 +204,40 @@ const styles = StyleSheet.create({
     paddingHorizontal: 16,
     paddingTop: 60,
     paddingBottom: 10,
-    backgroundColor: "#161b22",
+    backgroundColor: theme.cardBg,
     borderBottomWidth: 1,
-    borderBottomColor: "#21262d",
+    borderBottomColor: theme.border,
   },
-  toolbarText: { color: "#8b949e", fontSize: 13 },
-  refreshText: { color: "#58a6ff", fontSize: 14, fontWeight: "600" },
+  toolbarText: { color: theme.muted, fontSize: 13 },
+  refreshText: { color: theme.accent, fontSize: 14, fontWeight: "600" },
   list: { padding: 12 },
   group: { marginBottom: 16 },
-  groupTitle: { color: "#e6edf3", fontSize: 15, fontWeight: "700" },
-  groupPath: { color: "#484f58", fontSize: 11, marginBottom: 8 },
+  groupTitle: { color: theme.text, fontSize: 15, fontWeight: "700" },
+  groupPath: { color: theme.dim, fontSize: 11, marginBottom: 8 },
   sessionItem: {
-    backgroundColor: "#161b22",
+    backgroundColor: theme.cardBg,
     borderRadius: 10,
     padding: 12,
     marginBottom: 8,
     borderWidth: 1,
-    borderColor: "#21262d",
+    borderColor: theme.border,
   },
   sessionItemLive: {
-    borderColor: "#238636",
-    backgroundColor: "#0d2816",
+    borderColor: theme.buttonPrimary,
+    backgroundColor: theme.mdCodeBlockBg,
   },
   liveDot: {
     width: 8,
     height: 8,
     borderRadius: 4,
-    backgroundColor: "#3fb950",
+    backgroundColor: theme.success,
     marginRight: 6,
     alignSelf: "center",
   },
   sessionHeader: { flexDirection: "row", justifyContent: "space-between", alignItems: "center" },
-  sessionTitle: { color: "#e6edf3", fontSize: 14, fontWeight: "600", flex: 1, marginRight: 8 },
+  sessionTitle: { color: theme.text, fontSize: 14, fontWeight: "600", flex: 1, marginRight: 8 },
   sessionMeta: { flexDirection: "row", justifyContent: "space-between", marginTop: 6 },
-  sessionCount: { color: "#8b949e", fontSize: 12 },
-  sessionTime: { color: "#484f58", fontSize: 12 },
-});
+  sessionCount: { color: theme.muted, fontSize: 12 },
+  sessionTime: { color: theme.dim, fontSize: 12 },
+  });
+}

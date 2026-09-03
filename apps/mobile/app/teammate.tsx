@@ -1,16 +1,19 @@
 import React from "react";
 import { View, Text, StyleSheet, FlatList, TouchableOpacity } from "react-native";
 import { useHost } from "../src/store";
+import { useTheme } from "../src/theme";
 import type { MaestroScheduleSummary, MaestroStepSummary, MaestroDispatchSummary } from "@maestro-mobile/shared";
 
 export default function TeammateScreen() {
   const { state } = useHost();
+  const { theme } = useTheme();
+  const styles = React.useMemo(() => makeStyles(theme), [theme]);
   const schedules = state.maestro?.schedules ?? [];
 
   const renderDispatch = ({ item }: { item: MaestroDispatchSummary }) => (
     <View style={styles.dispatch}>
       <Text style={styles.dispatchId}>{item.dispatchId.slice(0, 16)}...</Text>
-      <Text style={[styles.dispatchState, statusColor(item.state)]}>{item.state}</Text>
+      <Text style={[styles.dispatchState, statusColor(item.state, theme)]}>{item.state}</Text>
       {item.task ? <Text style={styles.dispatchTask}>{item.task}</Text> : null}
       {item.error ? <Text style={styles.errorText}>{item.error}</Text> : null}
     </View>
@@ -20,7 +23,7 @@ export default function TeammateScreen() {
     <View style={styles.step}>
       <View style={styles.stepHeader}>
         <Text style={styles.stepId}>{item.stepId}</Text>
-        <Text style={[styles.stepState, statusColor(item.state)]}>{item.state}</Text>
+        <Text style={[styles.stepState, statusColor(item.state, theme)]}>{item.state}</Text>
       </View>
       {item.title ? <Text style={styles.stepTitle}>{item.title}</Text> : null}
       {item.dispatches.length > 0 && (
@@ -38,7 +41,7 @@ export default function TeammateScreen() {
     <View style={styles.schedule}>
       <View style={styles.scheduleHeader}>
         <Text style={styles.scheduleTitle}>{item.title || item.scheduleId}</Text>
-        <Text style={[styles.scheduleState, statusColor(item.state)]}>{item.state}</Text>
+        <Text style={[styles.scheduleState, statusColor(item.state, theme)]}>{item.state}</Text>
       </View>
       <Text style={styles.progress}>
         进度: {item.progress.completed}/{item.progress.total}
@@ -73,49 +76,51 @@ export default function TeammateScreen() {
   );
 }
 
-function statusColor(state: string) {
+function statusColor(state: string, theme: ReturnType<typeof useTheme>["theme"]) {
   switch (state) {
-    case "completed": return { color: "#3fb950" };
-    case "failed": case "timeout": return { color: "#f85149" };
-    case "active": case "published": case "accepted": return { color: "#58a6ff" };
-    case "pending": case "prepared": return { color: "#8b949e" };
-    default: return { color: "#d29922" };
+    case "completed": return { color: theme.success };
+    case "failed": case "timeout": return { color: theme.error };
+    case "active": case "published": case "accepted": return { color: theme.accent };
+    case "pending": case "prepared": return { color: theme.muted };
+    default: return { color: theme.warning };
   }
 }
 
-const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: "#0d1117" },
+function makeStyles(theme: ReturnType<typeof useTheme>["theme"]) {
+  return StyleSheet.create({
+  container: { flex: 1, backgroundColor: theme.bg },
   list: { padding: 16 },
   empty: { flex: 1, justifyContent: "center", alignItems: "center", padding: 24 },
-  emptyText: { fontSize: 16, color: "#8b949e", fontWeight: "600" },
-  emptyDesc: { fontSize: 13, color: "#484f58", marginTop: 8, textAlign: "center" },
+  emptyText: { fontSize: 16, color: theme.muted, fontWeight: "600" },
+  emptyDesc: { fontSize: 13, color: theme.dim, marginTop: 8, textAlign: "center" },
   schedule: {
-    backgroundColor: "#161b22",
+    backgroundColor: theme.cardBg,
     borderRadius: 12,
     padding: 14,
     marginBottom: 12,
     borderWidth: 1,
-    borderColor: "#21262d",
+    borderColor: theme.border,
   },
   scheduleHeader: { flexDirection: "row", justifyContent: "space-between", alignItems: "center", marginBottom: 6 },
-  scheduleTitle: { fontSize: 16, fontWeight: "600", color: "#e6edf3", flex: 1 },
+  scheduleTitle: { fontSize: 16, fontWeight: "600", color: theme.text, flex: 1 },
   scheduleState: { fontSize: 12, fontWeight: "600" },
-  progress: { fontSize: 12, color: "#8b949e", marginBottom: 10 },
+  progress: { fontSize: 12, color: theme.muted, marginBottom: 10 },
   step: {
-    backgroundColor: "#0d1117",
+    backgroundColor: theme.bg,
     borderRadius: 8,
     padding: 10,
     marginBottom: 8,
     borderWidth: 1,
-    borderColor: "#21262d",
+    borderColor: theme.border,
   },
   stepHeader: { flexDirection: "row", justifyContent: "space-between", marginBottom: 4 },
-  stepId: { fontSize: 12, fontWeight: "600", color: "#e6edf3" },
+  stepId: { fontSize: 12, fontWeight: "600", color: theme.text },
   stepState: { fontSize: 11, fontWeight: "600" },
-  stepTitle: { fontSize: 12, color: "#8b949e", marginBottom: 6 },
-  dispatch: { backgroundColor: "#0d1117", borderRadius: 6, padding: 8, marginBottom: 4 },
-  dispatchId: { fontSize: 11, color: "#484f58" },
+  stepTitle: { fontSize: 12, color: theme.muted, marginBottom: 6 },
+  dispatch: { backgroundColor: theme.bg, borderRadius: 6, padding: 8, marginBottom: 4 },
+  dispatchId: { fontSize: 11, color: theme.dim },
   dispatchState: { fontSize: 11, fontWeight: "600" },
-  dispatchTask: { fontSize: 12, color: "#8b949e", marginTop: 2 },
-  errorText: { fontSize: 11, color: "#f85149", marginTop: 2 },
+  dispatchTask: { fontSize: 12, color: theme.muted, marginTop: 2 },
+  errorText: { fontSize: 11, color: theme.error, marginTop: 2 },
 });
+}

@@ -1,12 +1,39 @@
-import React from "react";
-import { View, Text, StyleSheet, ScrollView, Linking } from "react-native";
+import React, { useMemo } from "react";
+import { View, Text, StyleSheet, ScrollView, TouchableOpacity } from "react-native";
 import { useHost } from "../src/store";
+import { useTheme, THEMES } from "../src/theme";
 
 export default function SettingsScreen() {
   const { connectionState, isConnected, state } = useHost();
+  const { theme, themeName, setTheme, themeNames } = useTheme();
+  const styles = useMemo(() => makeStyles(theme), [theme]);
 
   return (
     <ScrollView style={styles.container} contentContainerStyle={styles.content}>
+      <View style={styles.card}>
+        <Text style={styles.cardTitle}>🎨 主题</Text>
+        <View style={styles.themeRow}>
+          {themeNames.map((name) => {
+            const t = THEMES[name];
+            const active = name === themeName;
+            return (
+              <TouchableOpacity
+                key={name}
+                style={[
+                  styles.themeItem,
+                  active && { borderColor: t.accent, borderWidth: 2 },
+                  { backgroundColor: t.cardBg },
+                ]}
+                onPress={() => setTheme(name)}
+              >
+                <View style={[styles.swatch, { backgroundColor: t.accent }]} />
+                <Text style={[styles.themeName, { color: t.text }]}>{t.name}</Text>
+              </TouchableOpacity>
+            );
+          })}
+        </View>
+      </View>
+
       <View style={styles.card}>
         <Text style={styles.cardTitle}>Maestro Mobile</Text>
         <Text style={styles.version}>版本 0.1.0</Text>
@@ -20,7 +47,7 @@ export default function SettingsScreen() {
         <Text style={styles.cardTitle}>连接状态</Text>
         <View style={styles.row}>
           <Text style={styles.label}>状态</Text>
-          <Text style={[styles.value, { color: isConnected ? "#3fb950" : "#f85149" }]}>
+          <Text style={[styles.value, { color: isConnected ? theme.success : theme.error }]}>
             {connectionState}
           </Text>
         </View>
@@ -58,21 +85,35 @@ export default function SettingsScreen() {
   );
 }
 
-const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: "#0d1117" },
-  content: { padding: 16 },
-  card: {
-    backgroundColor: "#161b22",
-    borderRadius: 12,
-    padding: 16,
-    marginBottom: 16,
-    borderWidth: 1,
-    borderColor: "#21262d",
-  },
-  cardTitle: { fontSize: 16, fontWeight: "600", color: "#e6edf3", marginBottom: 8 },
-  version: { fontSize: 13, color: "#8b949e", marginBottom: 12 },
-  desc: { fontSize: 13, color: "#8b949e", lineHeight: 20 },
-  row: { flexDirection: "row", justifyContent: "space-between", marginBottom: 8 },
-  label: { fontSize: 14, color: "#8b949e" },
-  value: { fontSize: 14, fontWeight: "600", color: "#e6edf3" },
-});
+function makeStyles(theme: ReturnType<typeof useTheme>["theme"]) {
+  return StyleSheet.create({
+    container: { flex: 1, backgroundColor: theme.bg },
+    content: { padding: 16 },
+    card: {
+      backgroundColor: theme.cardBg,
+      borderRadius: 12,
+      padding: 16,
+      marginBottom: 16,
+      borderWidth: 1,
+      borderColor: theme.border,
+    },
+    cardTitle: { fontSize: 16, fontWeight: "600", color: theme.text, marginBottom: 8 },
+    version: { fontSize: 13, color: theme.muted, marginBottom: 12 },
+    desc: { fontSize: 13, color: theme.muted, lineHeight: 20 },
+    row: { flexDirection: "row", justifyContent: "space-between", marginBottom: 8 },
+    label: { fontSize: 14, color: theme.muted },
+    value: { fontSize: 14, fontWeight: "600", color: theme.text },
+    themeRow: { flexDirection: "row", flexWrap: "wrap", gap: 10 },
+    themeItem: {
+      borderRadius: 10,
+      paddingHorizontal: 14,
+      paddingVertical: 12,
+      borderWidth: 1,
+      borderColor: "transparent",
+      alignItems: "center",
+      minWidth: 80,
+    },
+    swatch: { width: 22, height: 22, borderRadius: 11, marginBottom: 6 },
+    themeName: { fontSize: 13, fontWeight: "600" },
+  });
+}
