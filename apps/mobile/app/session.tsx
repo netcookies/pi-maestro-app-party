@@ -21,6 +21,10 @@ export default function SessionScreen() {
   const [loadingMore, setLoadingMore] = useState(false);
   const [hasMore, setHasMore] = useState(true);
   const listRef = useRef<FlatList<TimelineItem>>(null);
+  // 是否跟随底部（新消息到达时自动滚到底）。用户向上滚动后置 false。
+  const stickToBottom = useRef(true);
+  // 最近一次 onScroll 的 offset（懒加载 prepend 后恢复位置用）
+  const lastScrollY = useRef(0);
 
   const styles = useMemo(() => makeStyles(theme), [theme]);
   const timeline = state.timelines.get(id ?? "") ?? [];
@@ -28,12 +32,11 @@ export default function SessionScreen() {
   const pendingDialog = state.dialogs[0];
 
   useEffect(() => {
-    // 新消息时滚动到底部
-    if (timeline.length > 0) {
+    // 新消息时滚动到底部（仅在用户位于底部附近时跟随）
+    if (timeline.length > 0 && stickToBottom.current) {
       setTimeout(() => listRef.current?.scrollToEnd({ animated: true }), 100);
     }
   }, [timeline.length]);
-
   const handleSend = async () => {
     const text = input.trim();
     if (!text || !id) return;
@@ -51,9 +54,15 @@ export default function SessionScreen() {
   const handleLoadMore = async () => {
     if (loadingMore || !hasMore || !id) return;
     setLoadingMore(true);
+    // 记录当前滚动位置（prepend 后恢复，避免被新内容顶下去）
+    const anchorY = lastScrollY.current;
     try {
       const r = await loadMoreHistory(id);
       setHasMore(r.hasMore);
+      // 恢复滚动位置（顶部加载更早后内容向前扩展，保持视觉锚点）
+      requestAnimationFrame(() => {
+        listRef.current?.scrollToOffset({ offset: anchorY, animated: false });
+      });
     } catch {
       // 失败静默
     } finally {
@@ -153,15 +162,18 @@ export default function SessionScreen() {
         renderItem={renderItem}
         style={styles.list}
         contentContainerStyle={styles.listContent}
-        onContentSizeChange={() => listRef.current?.scrollToEnd({ animated: false })}
-        // 顶部懒加载：接近顶部时拉取更早历史
         onScroll={(e) => {
           const y = e.nativeEvent.contentOffset.y;
+          lastScrollY.current = y;
+          const maxY = e.nativeEvent.contentSize.height - e.nativeEvent.layoutMeasurement.height;
+          // 底部附近 → 跟随底部；离开底部 → 停止跟随
+          stickToBottom.current = y >= maxY - 80;
+          // 顶部懒加载：接近顶部且有更多时拉取更早历史
           if (y < 40 && hasMore && !loadingMore) {
             void handleLoadMore();
           }
         }}
-        scrollEventThrottle={200}
+        scrollEventThrottle={100}
         ListHeaderComponent={
           hasMore ? (
             <View style={styles.loadMoreWrap}>
