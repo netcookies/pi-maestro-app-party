@@ -3,6 +3,14 @@ import {
   Image, Modal, View, Text, TouchableOpacity, StyleSheet, ActivityIndicator,
 } from "react-native";
 import { useHost } from "../store";
+import { imageUrlFor } from "../image-url";
+
+/**
+ * InlineImage — 渲染 tool 输出中的图片（缩略图 + 点击全屏预览）
+ *
+ * 图片通过 host 的 /api/file?path= 接口读取（安全校验：绝对路径+扩展名）。
+ * 需要 host 地址构建 URL。
+ */
 
 /**
  * InlineImage — 渲染 tool 输出中的图片（缩略图 + 点击全屏预览）
@@ -19,8 +27,7 @@ export function InlineImage({ path }: Props) {
   const [failed, setFailed] = useState(false);
   const [loading, setLoading] = useState(true);
   const host = useHost();
-  const baseUrl = host.hostUrl;
-  const imageUrl = baseUrl ? `${baseUrl.replace(/\/ws$/, "")}/api/file?path=${encodeURIComponent(path)}` : "";
+  const imageUrl = imageUrlFor(host.hostUrl, path);
 
   if (!imageUrl) return null;
 
