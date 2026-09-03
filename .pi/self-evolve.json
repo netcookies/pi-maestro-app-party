@@ -1,0 +1,12 @@
+{
+  "enabled": true,
+  "mode": "dry-run",
+  "cooldownMs": 300000,
+  "maxSignalsPerSession": 20,
+  "maxTraceChars": 8000,
+  "maxTraceMessages": 12,
+  "maxEvidence": 8,
+  "maxFiles": 14,
+  "reviewScoreThreshold": 0.6,
+  "maxReviewFiles": 28
+}

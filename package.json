@@ -1,0 +1,19 @@
+{
+  "name": "maestro-mobile",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Maestro Mobile — 在移动端使用 Pi Agent + pi-maestro-flow",
+  "type": "module",
+  "scripts": {
+    "build": "pnpm -r build",
+    "typecheck": "pnpm -r typecheck",
+    "test": "pnpm -r test",
+    "test:coverage": "pnpm -r test:coverage",
+    "dev:host": "pnpm --filter @maestro-mobile/host dev",
+    "dev:app": "pnpm --filter @maestro-mobile/app dev"
+  },
+  "engines": {
+    "node": ">=22.19.0"
+  },
+  "packageManager": "pnpm@10.8.1"
+}
