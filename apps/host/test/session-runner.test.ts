@@ -96,4 +96,68 @@ describe("SdkSessionRunner history replay", () => {
     expect(items[0].text).toContain("第二段");
     await runner.dispose();
   });
+
+  it("replays toolResult messages as tool timeline items", async () => {
+    const runtime = makeSessionWithHistory([
+      {
+        role: "user",
+        content: "跑一下 ls",
+        timestamp: 1756800000000,
+      },
+      {
+        role: "toolResult",
+        toolCallId: "call_123",
+        toolName: "bash",
+        content: [{ type: "text", text: "total 0\ndrwxr-xr-x 3 isulewli staff 96 .pi\n" }],
+        isError: false,
+        timestamp: 1756800001000,
+      },
+      {
+        role: "assistant",
+        content: "结果如上",
+        timestamp: 1756800002000,
+      },
+    ]);
+    const runner = await SdkSessionRunner.open(
+      { createRuntime: async () => runtime.runtime, listSessions: async () => [] },
+      { cwd: "/tmp", mode: "create" },
+      () => {},
+    );
+    const items = runner.snapshot().timeline;
+    expect(items).toHaveLength(3);
+
+    const tool = items[1];
+    expect(tool.kind).toBe("tool");
+    expect(tool.toolName).toBe("bash");
+    expect(tool.text).toContain("drwxr-xr-x");
+    await runner.dispose();
+  });
+
+  it("deduplicates toolResult by toolCallId", async () => {
+    const runtime = makeSessionWithHistory([
+      {
+        role: "toolResult",
+        toolCallId: "call_same",
+        toolName: "read",
+        content: [{ type: "text", text: "内容A" }],
+        timestamp: 1756800000000,
+      },
+      {
+        role: "toolResult",
+        toolCallId: "call_same",
+        toolName: "read",
+        content: [{ type: "text", text: "内容B" }],
+        timestamp: 1756800001000,
+      },
+    ]);
+    const runner = await SdkSessionRunner.open(
+      { createRuntime: async () => runtime.runtime, listSessions: async () => [] },
+      { cwd: "/tmp", mode: "create" },
+      () => {},
+    );
+    const items = runner.snapshot().timeline;
+    expect(items).toHaveLength(1);
+    expect(items[0].text).toBe("内容A");
+    await runner.dispose();
+  });
 });

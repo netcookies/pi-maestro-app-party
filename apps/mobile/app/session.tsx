@@ -41,12 +41,31 @@ export default function SessionScreen() {
 
   const renderItem = ({ item }: { item: TimelineItem }) => {
     const isUser = item.kind === "user";
+    const isTool = item.kind === "tool";
+    const isThinking = item.kind === "thinking";
     return (
-      <View style={[styles.bubble, isUser ? styles.bubbleUser : styles.bubbleAgent]}>
-        {item.kind === "thinking" && <Text style={styles.thinkingLabel}>🧠 思考</Text>}
-        {item.kind === "tool" && <Text style={styles.toolLabel}>🔧 {item.toolName}</Text>}
-        <Text style={isUser ? styles.textUser : styles.textAgent}>{item.text}</Text>
-        {item.kind === "tool" && item.isError ? <Text style={styles.toolError}>⚠ 执行失败</Text> : null}
+      <View
+        style={[
+          styles.bubble,
+          isUser ? styles.bubbleUser : isTool ? styles.bubbleTool : styles.bubbleAgent,
+        ]}
+      >
+        {isThinking && <Text style={styles.thinkingLabel}>🧠 思考</Text>}
+        {isTool && (
+          <View style={styles.toolHeader}>
+            <Text style={styles.toolLabel}>🔧 {item.toolName ?? "tool"}</Text>
+            {item.isError ? <Text style={styles.toolError}>⚠ 失败</Text> : null}
+          </View>
+        )}
+        <Text
+          style={[
+            isUser ? styles.textUser : styles.textAgent,
+            isTool && styles.textTool,
+          ]}
+          selectable
+        >
+          {item.text}
+        </Text>
       </View>
     );
   };
@@ -130,6 +149,20 @@ const styles = StyleSheet.create({
   },
   bubbleUser: { backgroundColor: "#1f6feb", alignSelf: "flex-end" },
   bubbleAgent: { backgroundColor: "#161b22", alignSelf: "flex-start", borderWidth: 1, borderColor: "#21262d" },
+  bubbleTool: {
+    backgroundColor: "#0d1117",
+    alignSelf: "stretch",
+    borderWidth: 1,
+    borderColor: "#30363d",
+    borderRadius: 8,
+  },
+  toolHeader: { flexDirection: "row", justifyContent: "space-between", marginBottom: 6 },
+  textTool: {
+    fontFamily: Platform.OS === "ios" ? "Menlo" : "monospace",
+    fontSize: 12,
+    lineHeight: 17,
+    color: "#c9d1d9",
+  },
   textUser: { color: "#fff", fontSize: 15, lineHeight: 21 },
   textAgent: { color: "#e6edf3", fontSize: 15, lineHeight: 21 },
   thinkingLabel: { color: "#d29922", fontSize: 11, marginBottom: 4, fontWeight: "600" },

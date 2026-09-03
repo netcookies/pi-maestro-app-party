@@ -148,20 +148,59 @@ export class SdkSessionRunner implements SessionRunner {
   /** 将 session.messages（AgentMessage[]）投影为 TimelineItem[] */
   private restoreTimelineFromMessages(messages: unknown[]): TimelineItem[] {
     const items: TimelineItem[] = [];
+    const seenToolResults = new Set<string>();
     for (const raw of messages ?? []) {
       const msg = raw as Record<string, unknown>;
       const role = String(msg.role ?? "");
-      const content = extractText(msg.content);
-      if (!content) continue;
       const createdAt = typeof msg.timestamp === "number"
         ? new Date(msg.timestamp).toISOString()
         : new Date().toISOString();
+
+      if (role === "toolResult") {
+        // 工具结果（bash 输出/表格/路径提示等）——去重后展示
+        const toolCallId = String(msg.toolCallId ?? "");
+        if (toolCallId && seenToolResults.has(toolCallId)) continue;
+        if (toolCallId) seenToolResults.add(toolCallId);
+        const toolName = String(msg.toolName ?? "tool");
+        const text = extractText(msg.content) || (msg.text as string | undefined) || "";
+        if (!text) continue;
+        items.push({
+          id: `replay-tool-${items.length}`,
+          kind: "tool",
+          text,
+          createdAt,
+          toolName,
+          toolCallId,
+          isError: msg.isError === true,
+        });
+        continue;
+      }
+
+      if (role === "tool" || role === "toolCall") {
+        // 工具调用描述（toolName + args）
+        const toolName = String(msg.toolName ?? "tool");
+        const text = extractText(msg.content) || (msg.text as string | undefined) || "";
+        items.push({
+          id: `replay-toolcall-${items.length}`,
+          kind: "tool",
+          text: text || `调用 ${toolName}`,
+          createdAt,
+          toolName,
+        });
+        continue;
+      }
+
+      const content = extractText(msg.content);
+      if (!content && role !== "thinking" && role !== "system") continue;
+
       if (role === "user") {
         items.push({ id: `replay-user-${items.length}`, kind: "user", text: content, createdAt });
       } else if (role === "assistant" || role === "system") {
         items.push({ id: `replay-assistant-${items.length}`, kind: "assistant", text: content, createdAt });
+      } else if (role === "thinking") {
+        items.push({ id: `replay-thinking-${items.length}`, kind: "thinking", text: content, createdAt });
       }
-      // tool 消息等暂不展开（移动端先保证能看对话）
+      // 其余类型（compactionSummary 等）暂不展开
     }
     return items;
   }
