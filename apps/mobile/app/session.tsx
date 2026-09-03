@@ -45,7 +45,9 @@ export default function SessionScreen() {
     const isUser = item.kind === "user";
     const isTool = item.kind === "tool";
     const isThinking = item.kind === "thinking";
-    const segments = isTool ? splitImageSegments(item.text) : null;
+    // 所有消息类型都做图片分段（user 贴图、assistant 引用、tool 输出）
+    const segments = splitImageSegments(item.text);
+    const hasImages = segments.some((s) => s.type === "image");
     return (
       <View
         style={[
@@ -60,13 +62,17 @@ export default function SessionScreen() {
             {item.isError ? <Text style={styles.toolError}>⚠ 失败</Text> : null}
           </View>
         )}
-        {segments ? (
+        {segments && hasImages ? (
           <View>
             {segments.map((seg, i) =>
               seg.type === "image" ? (
                 <InlineImage key={`img-${i}`} path={seg.path} />
               ) : (
-                <Text key={`txt-${i}`} style={styles.textTool} selectable>
+                <Text
+                  key={`txt-${i}`}
+                  style={[isUser ? styles.textUser : styles.textAgent, isTool && styles.textTool]}
+                  selectable
+                >
                   {seg.text}
                 </Text>
               ),
@@ -74,7 +80,7 @@ export default function SessionScreen() {
           </View>
         ) : (
           <Text
-            style={[isUser ? styles.textUser : styles.textAgent]}
+            style={[isUser ? styles.textUser : styles.textAgent, isTool && styles.textTool]}
             selectable
           >
             {item.text}

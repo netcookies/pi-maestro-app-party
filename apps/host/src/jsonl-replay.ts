@@ -84,6 +84,11 @@ export async function replayFromJsonl(filePath: string): Promise<JsonlReplayResu
     } else if (role === "assistant" || role === "system") {
       if (!text) continue;
       items.push({ id: `replay-assistant-${items.length}`, kind: "assistant", text, createdAt });
+      // assistant 消息里可能嵌 toolCall（read 图片等）——提取图片参数渲染为 tool 项
+      const callItems = toolCallImageItems(msg.content);
+      for (const callItem of callItems) {
+        items.push({ ...callItem, id: `replay-toolcall-${items.length}` });
+      }
     } else if (role === "thinking") {
       if (!text) continue;
       items.push({ id: `replay-thinking-${items.length}`, kind: "thinking", text, createdAt });
@@ -92,6 +97,35 @@ export async function replayFromJsonl(filePath: string): Promise<JsonlReplayResu
   }
 
   return { items, totalEntries };
+}
+
+const TOOL_IMAGE_EXT = /\.(png|jpe?g|gif|webp|bmp)$/i;
+
+/** 从 assistant content 里提取 toolCall 中读图片的调用，转为 tool 项（文本=图片路径） */
+function toolCallImageItems(content: unknown): TimelineItem[] {
+  if (!Array.isArray(content)) return [];
+  const items: TimelineItem[] = [];
+  for (const block of content) {
+    const b = block as Record<string, unknown>;
+    if (b.type !== "toolCall") continue;
+    const name = String(b.name ?? "");
+    const args = b.arguments;
+    if (!args || typeof args !== "object") continue;
+    // read 工具的 path 参数；若为图片路径则渲染
+    if (name === "read") {
+      const path = (args as Record<string, unknown>).path;
+      if (typeof path === "string" && TOOL_IMAGE_EXT.test(path.trim())) {
+        items.push({
+          id: "",
+          kind: "tool",
+          text: path.trim(),
+          createdAt: "",
+          toolName: "read",
+        });
+      }
+    }
+  }
+  return items;
 }
 
 function extractText(content: unknown): string {

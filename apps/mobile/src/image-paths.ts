@@ -18,10 +18,23 @@ export function extractImagePaths(text: string): string[] {
   const seen = new Set<string>();
   const result: string[] = [];
 
+  // 先处理 file:// 前缀（如 file:///tmp/x.png → /tmp/x.png）
+  const fileUriRe = /file:\/\/(\/[^\s"']+\.(?:png|jpe?g|gif|webp|bmp))/gi;
+  let fm: RegExpExecArray | null;
+  while ((fm = fileUriRe.exec(text)) !== null) {
+    const cleaned = fm[1].trim();
+    if (!seen.has(cleaned)) {
+      seen.add(cleaned);
+      result.push(cleaned);
+    }
+  }
+  // 从 file:// 之后的位置继续找裸路径（避免重复匹配已提取的）
+  const textWithoutFileUri = text.replace(/file:\/\/[^\s"']+\.(?:png|jpe?g|gif|webp|bmp)/gi, "");
+
   // 找所有可能含绝对路径的片段：以 / 开头，到扩展名结束
   const re = /(\/(?:[A-Za-z0-9._~\-/:]|%20|\\ )+?(?:\.(?:png|jpe?g|gif|webp|bmp)(?=["')\s,<]|$)))/gi;
   let m: RegExpExecArray | null;
-  while ((m = re.exec(text)) !== null) {
+  while ((m = re.exec(textWithoutFileUri)) !== null) {
     const raw = m[1].trim();
     // 去掉行首装饰符（> | : 等）
     const cleaned = raw.replace(POSSIBLE_CHARS, "").trim();

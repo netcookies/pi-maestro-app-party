@@ -89,4 +89,42 @@ describe("replayFromJsonl", () => {
     expect(items).toHaveLength(1);
     expect(items[0].text).toBe("ok");
   });
+
+  it("extracts read-image toolCall into image items", async () => {
+    const path = join(dir, "readimg.jsonl");
+    const lines = [
+      JSON.stringify({
+        type: "message",
+        message: {
+          role: "assistant",
+          content: [
+            { type: "text", text: "我来看图" },
+            {
+              type: "toolCall",
+              id: "call_1",
+              name: "read",
+              arguments: { path: "/tmp/pi-clipboard-abc.png" },
+            },
+          ],
+          timestamp: 1756800000000,
+        },
+      }),
+      JSON.stringify({
+        type: "message",
+        message: {
+          role: "toolResult",
+          toolCallId: "call_1",
+          toolName: "read",
+          content: [{ type: "text", text: "read image file [image/png]" }],
+          timestamp: 1756800001000,
+        },
+      }),
+    ];
+    await writeFile(path, lines.join("\n") + "\n");
+    const { items } = await replayFromJsonl(path);
+    // assistant 文本 + read 图片 tool 项 + toolResult（内容无路径，跳过？不，保留）
+    const toolItems = items.filter((t) => t.kind === "tool" && t.toolName === "read");
+    expect(toolItems.length).toBeGreaterThan(0);
+    expect(toolItems[0].text).toBe("/tmp/pi-clipboard-abc.png");
+  });
 });

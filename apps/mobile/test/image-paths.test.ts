@@ -31,6 +31,18 @@ describe("extractImagePaths", () => {
     expect(extractImagePaths("relative.png 和 /tmp/readme.md")).toEqual([]);
     expect(extractImagePaths("no image here")).toEqual([]);
   });
+
+  it("extracts file:// URIs", () => {
+    const text = "✓ resource file:///tmp/pi-clipboard-4cc668d5-bf2b-42dd-a95a-bf7d41ff5336.png · Unsupported scheme";
+    expect(extractImagePaths(text)).toEqual([
+      "/tmp/pi-clipboard-4cc668d5-bf2b-42dd-a95a-bf7d41ff5336.png",
+    ]);
+  });
+
+  it("keeps both file:// and bare paths deduped", () => {
+    const text = "file:///tmp/a.png 同 /tmp/a.png";
+    expect(extractImagePaths(text)).toEqual(["/tmp/a.png"]);
+  });
 });
 
 describe("isImagePath", () => {
