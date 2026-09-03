@@ -1,22 +1,34 @@
-import React, { useEffect, useState, useCallback } from "react";
+import React, { useEffect, useState, useCallback, useMemo } from "react";
 import {
-  View, Text, StyleSheet, FlatList, TouchableOpacity, ActivityIndicator, Alert,
+  View, Text, StyleSheet, FlatList, TouchableOpacity, ActivityIndicator, Alert, TextInput,
 } from "react-native";
 import { useRouter } from "expo-router";
 import { useHost } from "../src/store";
 import { useTheme } from "../src/theme";
+import { getConfig } from "../src/config";
 import type { HostSessionSummary, LiveSessionInfo } from "@maestro-mobile/shared";
+
+type TabKey = "all" | "active" | "history";
+
+const TABS: { key: TabKey; label: string }[] = [
+  { key: "all", label: "全部" },
+  { key: "active", label: "活跃" },
+  { key: "history", label: "历史" },
+];
 
 export default function HostSessionsScreen() {
   const router = useRouter();
   const { theme } = useTheme();
-  const styles = React.useMemo(() => makeStyles(theme), [theme]);
+  const styles = useMemo(() => makeStyles(theme), [theme]);
   const { listHostSessions, listLiveSessions, openExistingSession, loadSessionHistory } = useHost();
+  const cfg = getConfig();
   const [sessions, setSessions] = useState<HostSessionSummary[]>([]);
   const [liveSessions, setLiveSessions] = useState<Map<string, LiveSessionInfo>>(new Map());
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [opening, setOpening] = useState<string | null>(null);
+  const [tab, setTab] = useState<TabKey>("all");
+  const [query, setQuery] = useState("");
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -48,7 +60,7 @@ export default function HostSessionsScreen() {
     void load();
     void loadLive();
     // 每 5 秒刷新活跃状态（vibe coding 感知）
-    const timer = setInterval(() => void loadLive(), 5000);
+    const timer = setInterval(() => void loadLive(), cfg.livePollIntervalMs);
     return () => clearInterval(timer);
   }, [load, loadLive]);
 
@@ -67,17 +79,37 @@ export default function HostSessionsScreen() {
     }
   };
 
-  // 按项目分组
-  const grouped = sessions.reduce<Record<string, HostSessionSummary[]>>((acc, s) => {
-    (acc[s.cwd] ??= []).push(s);
-    return acc;
-  }, {});
+  // 过滤：Tab + 搜索
+  const filtered = useMemo(() => {
+    const q = query.trim().toLowerCase();
+    return sessions.filter((s) => {
+      // Tab 过滤
+      if (tab === "active" && !liveSessions.has(s.id)) return false;
+      if (tab === "history" && liveSessions.has(s.id)) return false;
+      // 搜索：标题/id/cwd/模型/名称
+      if (!q) return true;
+      return (
+        s.title.toLowerCase().includes(q)
+        || s.id.toLowerCase().includes(q)
+        || s.cwd.toLowerCase().includes(q)
+        || (s.model ?? "").toLowerCase().includes(q)
+        || (s.name ?? "").toLowerCase().includes(q)
+      );
+    });
+  }, [sessions, tab, query, liveSessions]);
 
-  const rows = Object.entries(grouped).sort((a, b) => {
-    const tA = Math.max(...a[1].map((s) => new Date(s.updatedAt).getTime()));
-    const tB = Math.max(...b[1].map((s) => new Date(s.updatedAt).getTime()));
-    return tB - tA;
-  });
+  // 按项目分组
+  const rows = useMemo(() => {
+    const grouped = filtered.reduce<Record<string, HostSessionSummary[]>>((acc, s) => {
+      (acc[s.cwd] ??= []).push(s);
+      return acc;
+    }, {});
+    return Object.entries(grouped).sort((a, b) => {
+      const tA = Math.max(...a[1].map((s) => new Date(s.updatedAt).getTime()));
+      const tB = Math.max(...b[1].map((s) => new Date(s.updatedAt).getTime()));
+      return tB - tA;
+    });
+  }, [filtered]);
 
   const renderSession = ({ item }: { item: HostSessionSummary }) => {
     const live = liveSessions.has(item.id);
@@ -90,16 +122,22 @@ export default function HostSessionsScreen() {
         <View style={styles.sessionHeader}>
           {live && <View style={styles.liveDot} />}
           <Text style={styles.sessionTitle} numberOfLines={2}>
-            {item.title || "(无首条消息)"}
+            {item.name ?? item.title ?? "(无首条消息)"}
           </Text>
           {opening === item.id && <ActivityIndicator size="small" color={theme.success} />}
         </View>
-        <View style={styles.sessionMeta}>
-          <Text style={styles.sessionCount}>
-            {item.messageCount} 条消息{live ? " · 🟢 运行中" : ""}
-          </Text>
-          <Text style={styles.sessionTime}>{formatTime(item.updatedAt)}</Text>
+        {/* 详情行：模型 / 消息数 / 时间 */}
+        <View style={styles.detailRow}>
+          {item.model ? (
+            <Text style={styles.detailItem}>🧠 {item.model}</Text>
+          ) : null}
+          <Text style={styles.detailItem}>💬 {item.messageCount}</Text>
+          <Text style={styles.detailItem}>{live ? "🟢 运行中" : formatTime(item.updatedAt)}</Text>
         </View>
+        {/* 详情行：会话 id */}
+        <Text style={styles.sessionId} numberOfLines={1}>
+          #{item.id.slice(0, 12)} · {cwdName(item.cwd)}
+        </Text>
       </TouchableOpacity>
     );
   };
@@ -109,7 +147,7 @@ export default function HostSessionsScreen() {
     return (
       <View style={styles.group}>
         <Text style={styles.groupTitle}>{cwdName(cwd)}</Text>
-        <Text style={styles.groupPath}>{cwd}</Text>
+        <Text style={styles.groupPath} numberOfLines={1}>{cwd}</Text>
         {group.map((s) => (
           <View key={s.id}>{renderSession({ item: s })}</View>
         ))}
@@ -137,20 +175,53 @@ export default function HostSessionsScreen() {
     );
   }
 
+  const liveCount = sessions.filter((s) => liveSessions.has(s.id)).length;
+
   return (
     <View style={styles.container}>
-      <View style={styles.toolbar}>
-        <Text style={styles.toolbarText}>
-          {sessions.length} 个会话 / {rows.length} 个项目
-          {liveSessions.size > 0 ? ` · 🟢 ${liveSessions.size} 运行中` : ""}
-        </Text>
-        <TouchableOpacity onPress={() => { void load(); void loadLive(); }}>
-          <Text style={styles.refreshText}>刷新</Text>
+      {/* Tab 栏 */}
+      <View style={styles.tabBar}>
+        {TABS.map((t) => {
+          const active = tab === t.key;
+          return (
+            <TouchableOpacity
+              key={t.key}
+              style={[styles.tabItem, active && { borderBottomColor: theme.accent, borderBottomWidth: 2 }]}
+              onPress={() => setTab(t.key)}
+            >
+              <Text style={[styles.tabText, { color: active ? theme.accent : theme.muted }]}>
+                {t.label}
+              </Text>
+            </TouchableOpacity>
+          );
+        })}
+        <View style={styles.tabRight}>
+          <Text style={styles.toolbarText}>
+            {filtered.length} 个{tabsuffix(tab)}
+            {liveCount > 0 ? ` · 🟢 ${liveCount}` : ""}
+          </Text>
+        </View>
+      </View>
+
+      {/* 搜索框 + 刷新 */}
+      <View style={styles.searchRow}>
+        <TextInput
+          style={[styles.searchInput, { backgroundColor: theme.inputBg, color: theme.text, borderColor: theme.border }]}
+          value={query}
+          onChangeText={setQuery}
+          placeholder="搜索标题 / ID / 模型 / 路径..."
+          placeholderTextColor={theme.dim}
+          autoCapitalize="none"
+          autoCorrect={false}
+        />
+        <TouchableOpacity onPress={() => { void load(); void loadLive(); }} style={styles.refreshBtn}>
+          <Text style={[styles.refreshText, { color: theme.accent }]}>刷新</Text>
         </TouchableOpacity>
       </View>
-      {sessions.length === 0 ? (
+
+      {filtered.length === 0 ? (
         <View style={styles.center}>
-          <Text style={styles.centerText}>Host 上没有已存在的会话</Text>
+          <Text style={styles.centerText}>没有匹配的会话</Text>
         </View>
       ) : (
         <FlatList
@@ -158,10 +229,15 @@ export default function HostSessionsScreen() {
           keyExtractor={(r) => r[0]}
           renderItem={renderGroup}
           contentContainerStyle={styles.list}
+          keyboardShouldPersistTaps="handled"
         />
       )}
     </View>
   );
+}
+
+function tabsuffix(tab: TabKey): string {
+  return tab === "all" ? "" : tab === "active" ? "活跃会话" : "历史会话";
 }
 
 function cwdName(cwd: string): string {
@@ -185,59 +261,52 @@ function formatTime(iso: string): string {
 
 function makeStyles(theme: ReturnType<typeof useTheme>["theme"]) {
   return StyleSheet.create({
-  container: { flex: 1, backgroundColor: theme.bg },
-  center: { flex: 1, justifyContent: "center", alignItems: "center", padding: 24 },
-  centerText: { color: theme.muted, fontSize: 14, marginTop: 12 },
-  errorText: { color: theme.error, fontSize: 14 },
-  retryButton: {
-    marginTop: 12,
-    backgroundColor: theme.buttonPrimary,
-    paddingHorizontal: 24,
-    paddingVertical: 8,
-    borderRadius: 8,
-  },
-  retryText: { color: "#fff", fontWeight: "600" },
-  toolbar: {
-    flexDirection: "row",
-    justifyContent: "space-between",
-    alignItems: "center",
-    paddingHorizontal: 16,
-    paddingTop: 60,
-    paddingBottom: 10,
-    backgroundColor: theme.cardBg,
-    borderBottomWidth: 1,
-    borderBottomColor: theme.border,
-  },
-  toolbarText: { color: theme.muted, fontSize: 13 },
-  refreshText: { color: theme.accent, fontSize: 14, fontWeight: "600" },
-  list: { padding: 12 },
-  group: { marginBottom: 16 },
-  groupTitle: { color: theme.text, fontSize: 15, fontWeight: "700" },
-  groupPath: { color: theme.dim, fontSize: 11, marginBottom: 8 },
-  sessionItem: {
-    backgroundColor: theme.cardBg,
-    borderRadius: 10,
-    padding: 12,
-    marginBottom: 8,
-    borderWidth: 1,
-    borderColor: theme.border,
-  },
-  sessionItemLive: {
-    borderColor: theme.buttonPrimary,
-    backgroundColor: theme.mdCodeBlockBg,
-  },
-  liveDot: {
-    width: 8,
-    height: 8,
-    borderRadius: 4,
-    backgroundColor: theme.success,
-    marginRight: 6,
-    alignSelf: "center",
-  },
-  sessionHeader: { flexDirection: "row", justifyContent: "space-between", alignItems: "center" },
-  sessionTitle: { color: theme.text, fontSize: 14, fontWeight: "600", flex: 1, marginRight: 8 },
-  sessionMeta: { flexDirection: "row", justifyContent: "space-between", marginTop: 6 },
-  sessionCount: { color: theme.muted, fontSize: 12 },
-  sessionTime: { color: theme.dim, fontSize: 12 },
+    container: { flex: 1, backgroundColor: theme.bg },
+    center: { flex: 1, justifyContent: "center", alignItems: "center", padding: 24 },
+    centerText: { color: theme.muted, fontSize: 14, marginTop: 12 },
+    errorText: { color: theme.error, fontSize: 14 },
+    retryButton: {
+      marginTop: 12,
+      backgroundColor: theme.buttonPrimary,
+      paddingHorizontal: 24,
+      paddingVertical: 8,
+      borderRadius: 8,
+    },
+    retryText: { color: "#fff", fontWeight: "600" },
+    tabBar: { flexDirection: "row", alignItems: "center", paddingHorizontal: 12 },
+    tabItem: { paddingVertical: 10, paddingHorizontal: 14, borderBottomWidth: 2, borderBottomColor: "transparent" },
+    tabText: { fontSize: 15, fontWeight: "600" },
+    tabRight: { flex: 1, alignItems: "flex-end", paddingRight: 4 },
+    toolbarText: { color: theme.muted, fontSize: 12 },
+    searchRow: { flexDirection: "row", alignItems: "center", paddingHorizontal: 12, paddingVertical: 8, gap: 8 },
+    searchInput: {
+      flex: 1,
+      borderRadius: 8,
+      paddingHorizontal: 12,
+      paddingVertical: 8,
+      borderWidth: 1,
+      fontSize: 14,
+    },
+    refreshBtn: { paddingHorizontal: 8, paddingVertical: 6 },
+    refreshText: { fontSize: 14, fontWeight: "600" },
+    list: { padding: 12 },
+    group: { marginBottom: 16 },
+    groupTitle: { color: theme.text, fontSize: 15, fontWeight: "700" },
+    groupPath: { color: theme.dim, fontSize: 11, marginBottom: 8 },
+    sessionItem: {
+      backgroundColor: theme.cardBg,
+      borderRadius: 10,
+      padding: 12,
+      marginBottom: 8,
+      borderWidth: 1,
+      borderColor: theme.border,
+    },
+    sessionItemLive: { borderColor: theme.success, backgroundColor: theme.mdCodeBlockBg },
+    sessionHeader: { flexDirection: "row", alignItems: "center" },
+    liveDot: { width: 8, height: 8, borderRadius: 4, backgroundColor: theme.success, marginRight: 6 },
+    sessionTitle: { color: theme.text, fontSize: 14, fontWeight: "600", flex: 1, marginRight: 8 },
+    detailRow: { flexDirection: "row", flexWrap: "wrap", gap: 10, marginTop: 6 },
+    detailItem: { color: theme.muted, fontSize: 12 },
+    sessionId: { color: theme.dim, fontSize: 11, marginTop: 4 },
   });
 }

@@ -132,7 +132,7 @@ export class MobileHostServer {
       if (request.method === "GET" && url.pathname === "/api/sessions") {
         const cwd = url.searchParams.get("cwd") ?? undefined;
         const sessions = await this.controller.listSessions(cwd);
-        const list = toSessionSummaryList(sessions);
+        const list = await toSessionSummaryList(sessions);
         writeJson(response, 200, list);
         return;
       }
@@ -230,9 +230,16 @@ export class MobileHostServer {
           this.sendAck(client, command, result);
           break;
         }
+        case "search_history": {
+          const runner = this.controller.getSession(command.sessionId);
+          if (!runner) { this.sendError(client, "session_not_found"); break; }
+          const result = await runner.searchHistory(command.keyword, command.maxResults);
+          this.sendAck(client, command, result);
+          break;
+        }
         case "list_host_sessions": {
           const sessions = await this.controller.listSessions(command.cwd);
-          const list = toSessionSummaryList(sessions);
+          const list = await toSessionSummaryList(sessions);
           this.sendAck(client, command, list);
           break;
         }
@@ -351,25 +358,55 @@ function applyCorsHeaders(response: ServerResponse, origin?: string): void {
  * 将 SessionManager 返回的完整 SessionInfo 裁剪为移动端友好的摘要。
  * 关键：不携带 allMessagesText 等大字段，避免移动端流量/内存浪费。
  */
-function toSessionSummaryList(records: unknown[]): HostSessionList {
-  const sessions: HostSessionSummary[] = records.map((raw) => {
+async function toSessionSummaryList(records: unknown[]): Promise<HostSessionList> {
+  const sessions: HostSessionSummary[] = [];
+  for (const raw of records) {
     const r = raw as Record<string, unknown>;
     const cwd = String(r.cwd ?? "");
     const title = String(r.firstMessage ?? r.title ?? "");
     const id = String(r.id ?? "");
-    return {
+    const path = String(r.path ?? r.sessionFile ?? "");
+    sessions.push({
       id,
       cwd,
       cwdName: cwd.split("/").filter(Boolean).pop() ?? cwd,
-      path: String(r.path ?? r.sessionFile ?? ""),
+      path,
       title: title.length > 80 ? `${title.slice(0, 80)}…` : title,
+      name: typeof r.name === "string" && r.name ? r.name : undefined,
+      model: await latestModelFromJsonl(path),
       messageCount: typeof r.messageCount === "number" ? r.messageCount : 0,
       // 规范化为 ISO 字符串：Hermes（iOS）解析不了 "Thu Sep 03 2026 ..." 这种本地化格式
       updatedAt: normalizeIso(String(r.modified ?? r.updatedAt ?? "")),
       ...(r.created ? { createdAt: normalizeIso(String(r.created)) } : {}),
-    };
-  });
+    });
+  }
   return { sessions, observedAt: new Date().toISOString() };
+}
+
+/** 从 jsonl 里找最近的 model_change，返回 provider/modelId 精简名 */
+async function latestModelFromJsonl(path: string): Promise<string | undefined> {
+  if (!path || !path.endsWith(".jsonl")) return undefined;
+  try {
+    const content = await readFile(path, "utf8");
+    // 从尾部向前找最近的 model_change
+    const lines = content.split("\n");
+    for (let i = lines.length - 1; i >= 0; i--) {
+      const line = lines[i];
+      if (!line.includes("model_change")) continue;
+      try {
+        const o = JSON.parse(line) as { provider?: string; modelId?: string };
+        if (o.modelId) {
+          const provider = o.provider ? `${o.provider}/` : "";
+          return `${provider}${o.modelId}`;
+        }
+      } catch {
+        // ignore malformed
+      }
+    }
+    return undefined;
+  } catch {
+    return undefined;
+  }
 }
 
 /** 尝试解析为 ISO；无法解析时保留原字符串（App 端需兜底） */

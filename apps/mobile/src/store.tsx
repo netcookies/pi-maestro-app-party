@@ -30,6 +30,7 @@ export interface HostStoreValue {
   listLiveSessions(): Promise<LiveSessionList>;
   loadSessionHistory(sessionId: string): Promise<void>;
   loadMoreHistory(sessionId: string): Promise<{ items: TimelineItem[]; hasMore: boolean; totalEntries: number }>;
+  searchHistory(sessionId: string, keyword: string, maxResults?: number): Promise<{ matches: { index: number; text: string; kind: string }[]; totalEntries: number }>;
   sendPrompt(sessionId: string, message: string): Promise<void>;
   sendSteer(sessionId: string, message: string): Promise<void>;
   sendAbort(sessionId: string): Promise<void>;
@@ -135,6 +136,11 @@ export function HostStoreProvider({ children }: { children: React.ReactNode }) {
     return r;
   }, [getClient]);
 
+  const searchHistory = useCallback(async (sessionId: string, keyword: string, maxResults?: number) => {
+    const result = await getClient().sendCommand({ type: "search_history", sessionId, keyword, maxResults });
+    return result as { matches: { index: number; text: string; kind: string }[]; totalEntries: number };
+  }, [getClient]);
+
   const actions = useMemo(
     () =>
       createAppActions(
@@ -171,6 +177,7 @@ export function HostStoreProvider({ children }: { children: React.ReactNode }) {
       listLiveSessions,
       loadSessionHistory,
       loadMoreHistory,
+      searchHistory,
       sendPrompt,
       sendSteer,
       sendAbort,
@@ -178,7 +185,7 @@ export function HostStoreProvider({ children }: { children: React.ReactNode }) {
       cancelDialog,
       lastError: state.lastError,
     }),
-    [state, connectionState, hostUrl, connect, disconnect, openSession, openExistingSession, listHostSessions, listLiveSessions, loadSessionHistory, loadMoreHistory, sendPrompt, sendSteer, sendAbort, answerDialog, cancelDialog],
+    [state, connectionState, hostUrl, connect, disconnect, openSession, openExistingSession, listHostSessions, listLiveSessions, loadSessionHistory, loadMoreHistory, searchHistory, sendPrompt, sendSteer, sendAbort, answerDialog, cancelDialog],
   );
 
   return <HostStoreContext.Provider value={value}>{children}</HostStoreContext.Provider>;

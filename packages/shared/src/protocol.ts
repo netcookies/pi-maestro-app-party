@@ -61,6 +61,10 @@ export interface HostSessionSummary {
   cwdName: string;
   path: string;
   title: string;
+  /** 用户自定义会话名（session_info） */
+  name?: string;
+  /** 最近使用的模型（provider/modelId） */
+  model?: string;
   messageCount: number;
   updatedAt: string;
   createdAt?: string;
@@ -264,6 +268,7 @@ export type ClientCommand =
   | { type: "list_host_sessions"; cwd?: string }
   | { type: "list_live_sessions" }
   | { type: "load_more_history"; sessionId: string; count?: number }
+  | { type: "search_history"; sessionId: string; keyword: string; maxResults?: number }
   | { type: "close_session"; sessionId: string }
   | { type: "list_sessions"; cwd?: string }
   | { type: "list_directories"; path: string }

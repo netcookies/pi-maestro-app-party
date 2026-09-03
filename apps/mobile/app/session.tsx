@@ -2,9 +2,11 @@ import React, { useEffect, useRef, useState, useMemo } from "react";
 import {
   View, Text, StyleSheet, FlatList, TextInput, TouchableOpacity, KeyboardAvoidingView, Platform, ActivityIndicator,
 } from "react-native";
-import { useLocalSearchParams } from "expo-router";
+import { useLocalSearchParams, useRouter } from "expo-router";
 import { useHost } from "../src/store";
 import { useTheme } from "../src/theme";
+import { getConfig } from "../src/config";
+import { SafeAreaView } from "react-native-safe-area-context";
 import type { TimelineItem } from "@maestro-mobile/shared";
 import { ExtensionUiDialog } from "../src/components/ExtensionUiDialog";
 import { InlineImage } from "../src/components/InlineImage";
@@ -14,8 +16,10 @@ import { splitImageSegments } from "../src/image-paths";
 
 export default function SessionScreen() {
   const { id } = useLocalSearchParams<{ id: string }>();
-  const { state, sendPrompt, sendAbort, answerDialog, cancelDialog, loadMoreHistory } = useHost();
+  const router = useRouter();
+  const { state, sendPrompt, sendAbort, answerDialog, cancelDialog, loadMoreHistory, searchHistory } = useHost();
   const { theme } = useTheme();
+  const cfg = getConfig();
   const [input, setInput] = useState("");
   const [sending, setSending] = useState(false);
   const [loadingMore, setLoadingMore] = useState(false);
@@ -29,6 +33,38 @@ export default function SessionScreen() {
   const loadCooldownUntil = useRef(0);
   // FAB 显示状态（不在底部附近时显示）
   const [showFab, setShowFab] = useState(false);
+  // 搜索状态
+  const [searchOpen, setSearchOpen] = useState(false);
+  const [searchQuery, setSearchQuery] = useState("");
+  const [searchResults, setSearchResults] = useState<{ index: number; text: string; kind: string }[]>([]);
+  const [searching, setSearching] = useState(false);
+  const [searchTotal, setSearchTotal] = useState(0);
+  const contentHeightBefore = useRef(0);
+  const pendingOffsetRestore = useRef(false);
+
+  const handleSearch = async () => {
+    const q = searchQuery.trim();
+    if (!q || !id) return;
+    setSearching(true);
+    try {
+      const r = await searchHistory(id, q, cfg.searchMaxResults);
+      setSearchResults(r.matches);
+      setSearchTotal(r.totalEntries);
+    } catch {
+      setSearchResults([]);
+    } finally {
+      setSearching(false);
+    }
+  };
+
+  const jumpToResult = async (index: number) => {
+    // 粗略定位：按匹配序号在全文中的比例滚动（精确跳转需按需加载，后续迭代）
+    if (searchTotal <= 0) return;
+    const ratio = Math.min(1, index / searchTotal);
+    const maxY = 100000; // 大数近似（内容高动态）
+    listRef.current?.scrollToOffset({ offset: ratio * maxY, animated: false });
+    setSearchOpen(false);
+  };
 
   const styles = useMemo(() => makeStyles(theme), [theme]);
   const timeline = state.timelines.get(id ?? "") ?? [];
@@ -58,19 +94,15 @@ export default function SessionScreen() {
   const handleLoadMore = async () => {
     if (loadingMore || !hasMore || !id) return;
     if (Date.now() < loadCooldownUntil.current) return; // 冷却中跳过
-    loadCooldownUntil.current = Date.now() + 800;
+    loadCooldownUntil.current = Date.now() + cfg.loadCooldownMs;
     setLoadingMore(true);
-    // 记录当前滚动位置（prepend 后恢复，避免被新内容顶下去）
-    const anchorY = lastScrollY.current;
+    // 记录当前滚动位置（prepend 后按新增高度修正，使视口停在新段落底部）
+    pendingOffsetRestore.current = true;
     try {
       const r = await loadMoreHistory(id);
       setHasMore(r.hasMore);
-      // 恢复滚动位置（顶部加载更早后内容向前扩展，保持视觉锚点）
-      requestAnimationFrame(() => {
-        listRef.current?.scrollToOffset({ offset: anchorY, animated: false });
-      });
     } catch {
-      // 失败静默
+      pendingOffsetRestore.current = false;
     } finally {
       setLoadingMore(false);
     }
@@ -164,16 +196,68 @@ export default function SessionScreen() {
   };
 
   return (
+    <SafeAreaView style={styles.container} edges={["top", "bottom"]}>
     <KeyboardAvoidingView
       style={styles.container}
       behavior={Platform.OS === "ios" ? "padding" : undefined}
     >
       <View style={styles.header}>
-        <Text style={styles.headerTitle}>{session?.title ?? "会话"}</Text>
+        <TouchableOpacity onPress={() => router.back()} style={styles.backBtn}>
+          <Text style={[styles.backText, { color: theme.accent }]}>‹ 返回</Text>
+        </TouchableOpacity>
+        <Text style={styles.headerTitle} numberOfLines={1}>{session?.title ?? "会话"}</Text>
         <Text style={styles.headerStatus}>
-          {session?.runState === "streaming" ? "● 运行中" : session?.runState === "compacting" ? "● 压缩中" : "空闲"}
+          {session?.runState === "streaming" ? "● 运行中" : session?.runState === "compacting" ? "● 压缩中" : "·"}
         </Text>
+        <TouchableOpacity onPress={() => setSearchOpen((v) => !v)} style={styles.searchToggle}>
+          <Text style={[styles.backText, { color: theme.accent }]}>🔍</Text>
+        </TouchableOpacity>
       </View>
+
+      {/* 搜索条 */}
+      {searchOpen && (
+        <View style={[styles.searchBar, { backgroundColor: theme.headerBg, borderBottomColor: theme.border }]}>
+          <TextInput
+            style={[styles.searchInput, { backgroundColor: theme.inputBg, color: theme.text, borderColor: theme.border }]}
+            value={searchQuery}
+            onChangeText={setSearchQuery}
+            placeholder="搜索会话内容..."
+            placeholderTextColor={theme.dim}
+            autoCapitalize="none"
+            autoFocus
+            onSubmitEditing={() => void handleSearch()}
+          />
+          <TouchableOpacity onPress={() => void handleSearch()} style={styles.searchGo}>
+            {searching ? <ActivityIndicator size="small" color={theme.accent} /> : <Text style={[styles.backText, { color: theme.accent }]}>搜索</Text>}
+          </TouchableOpacity>
+        </View>
+      )}
+
+      {/* 搜索结果浮层 */}
+      {searchOpen && searchResults.length > 0 && (
+        <View style={[styles.searchResults, { backgroundColor: theme.cardBg, borderColor: theme.border }]}>
+          <Text style={[styles.searchResultsTitle, { color: theme.muted }]}>
+            找到 {searchResults.length} 条（共 {searchTotal} 消息）
+          </Text>
+          <FlatList
+            data={searchResults}
+            keyExtractor={(m, i) => `${m.index}-${i}`}
+            keyboardShouldPersistTaps="handled"
+            renderItem={({ item, index }) => (
+              <TouchableOpacity
+                style={[styles.searchResultItem, { borderBottomColor: theme.border }]}
+                onPress={() => void jumpToResult(item.index)}
+              >
+                <Text style={[styles.searchResultIndex, { color: theme.accent }]}>#{index + 1}</Text>
+                <Text style={[styles.searchResultText, { color: theme.text }]} numberOfLines={2}>
+                  {item.text}
+                </Text>
+              </TouchableOpacity>
+            )}
+            style={{ maxHeight: 260 }}
+          />
+        </View>
+      )}
 
       <FlatList
         ref={listRef}
@@ -182,16 +266,29 @@ export default function SessionScreen() {
         renderItem={renderItem}
         style={styles.list}
         contentContainerStyle={styles.listContent}
+        onContentSizeChange={(w, h) => {
+          // prepend 完成后：锚点 = 原 offset + 新增高度（停在新段落底部）
+          if (pendingOffsetRestore.current) {
+            pendingOffsetRestore.current = false;
+            const prev = contentHeightBefore.current;
+            const delta = prev > 0 ? h - prev : 0;
+            listRef.current?.scrollToOffset({
+              offset: Math.max(0, lastScrollY.current + delta),
+              animated: false,
+            });
+          }
+        }}
         onScroll={(e) => {
           const y = e.nativeEvent.contentOffset.y;
           lastScrollY.current = y;
+          contentHeightBefore.current = e.nativeEvent.contentSize.height;
           const maxY = e.nativeEvent.contentSize.height - e.nativeEvent.layoutMeasurement.height;
           // 底部附近 → 跟随底部；离开底部 → 停止跟随
-          const atBottom = y >= maxY - 80;
+          const atBottom = y >= maxY - cfg.stickBottomTolerance;
           stickToBottom.current = atBottom;
           setShowFab(!atBottom && maxY > 0);
           // 顶部懒加载：接近顶部且有更多时拉取更早历史（带冷却防连环）
-          if (y < 40 && hasMore && !loadingMore && Date.now() >= loadCooldownUntil.current) {
+          if (y < cfg.loadMoreThreshold && hasMore && !loadingMore && Date.now() >= loadCooldownUntil.current) {
             void handleLoadMore();
           }
         }}
@@ -240,6 +337,7 @@ export default function SessionScreen() {
         />
       )}
     </KeyboardAvoidingView>
+    </SafeAreaView>
   );
 }
 
@@ -251,14 +349,47 @@ function makeStyles(theme: ReturnType<typeof useTheme>["theme"]) {
       justifyContent: "space-between",
       alignItems: "center",
       paddingHorizontal: 16,
-      paddingTop: Platform.OS === "ios" ? 60 : 16,
-      paddingBottom: 12,
+      paddingVertical: 8,
       backgroundColor: theme.headerBg,
       borderBottomWidth: 1,
       borderBottomColor: theme.border,
     },
-    headerTitle: { fontSize: 17, fontWeight: "600", color: theme.text, flex: 1 },
-    headerStatus: { fontSize: 12, color: theme.muted },
+    headerTitle: { fontSize: 17, fontWeight: "600", color: theme.text, flex: 1, textAlign: "center" },
+    headerStatus: { fontSize: 12, color: theme.muted, minWidth: 56, textAlign: "right" },
+    backBtn: { paddingVertical: 4, paddingRight: 8 },
+    backText: { fontSize: 15, fontWeight: "600" },
+    searchToggle: { paddingVertical: 4, paddingLeft: 8 },
+    searchBar: {
+      flexDirection: "row",
+      alignItems: "center",
+      paddingHorizontal: 12,
+      paddingVertical: 8,
+      borderBottomWidth: 1,
+      gap: 8,
+    },
+    searchInput: {
+      flex: 1,
+      borderRadius: 8,
+      paddingHorizontal: 12,
+      paddingVertical: 6,
+      borderWidth: 1,
+      fontSize: 14,
+    },
+    searchGo: { paddingHorizontal: 10, paddingVertical: 6 },
+    searchResults: {
+      borderBottomWidth: 1,
+      padding: 12,
+      maxHeight: 280,
+    },
+    searchResultsTitle: { fontSize: 12, marginBottom: 8 },
+    searchResultItem: {
+      flexDirection: "row",
+      paddingVertical: 8,
+      borderBottomWidth: StyleSheet.hairlineWidth,
+      gap: 8,
+    },
+    searchResultIndex: { fontSize: 12, fontWeight: "700", width: 30 },
+    searchResultText: { fontSize: 13, flex: 1, lineHeight: 18 },
     list: { flex: 1 },
     listContent: { padding: 16 },
     bubble: {

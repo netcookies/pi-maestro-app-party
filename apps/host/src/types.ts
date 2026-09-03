@@ -16,6 +16,7 @@ export interface SessionRunner {
   snapshot(): SessionSnapshot;
   eventsSince(seq: number): HostEvent[];
   loadMoreHistory(): Promise<{ items: TimelineItem[]; hasMore: boolean; totalEntries: number }>;
+  searchHistory(keyword: string, maxResults?: number): Promise<{ matches: { index: number; text: string; kind: string }[]; totalEntries: number }>;
   prompt(message: string, streamingBehavior?: "steer" | "followUp"): Promise<void>;
   steer(message: string): Promise<void>;
   followUp(message: string): Promise<void>;

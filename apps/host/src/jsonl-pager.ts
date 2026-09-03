@@ -179,6 +179,65 @@ export function parseMessageLine(
   return undefined;
 }
 
+/**
+ * 搜索 jsonl 中匹配关键词的消息（返回文件顺序中的匹配项 + 其 timeline 下标范围）
+ * 返回匹配消息的序号（从 0 开始，按文件 message 顺序）和文本片段。
+ */
+export async function searchInJsonl(
+  filePath: string,
+  keyword: string,
+  maxResults = 50,
+): Promise<{ matches: { index: number; text: string; kind: string }[]; totalEntries: number }> {
+  if (!keyword.trim()) return { matches: [], totalEntries: 0 };
+  const kw = keyword.toLowerCase();
+  let fd: Awaited<ReturnType<typeof open>> | undefined;
+  try {
+    fd = await open(filePath, "r");
+    const { size } = await fd.stat();
+    const matches: { index: number; text: string; kind: string }[] = [];
+    let totalEntries = 0;
+    let buf = "";
+    const handleLine = (line: string) => {
+      if (!line.trim() || !line.includes('"type":"message"')) return;
+      totalEntries++;
+      if (matches.length >= maxResults) return;
+      try {
+        const entry = JSON.parse(line) as {
+          message?: { role?: string; content?: unknown };
+        };
+        const role = entry.message?.role ?? "";
+        const text = extractText(entry.message?.content ?? "");
+        if (text.toLowerCase().includes(kw)) {
+          matches.push({
+            index: totalEntries - 1,
+            text: text.slice(0, 120),
+            kind: role,
+          });
+        }
+      } catch {
+        // ignore
+      }
+    };
+    let pos = 0;
+    while (pos < size) {
+      const readLen = Math.min(READ_CHUNK, size - pos);
+      const chunk = Buffer.alloc(readLen);
+      await fd.read(chunk, 0, readLen, pos);
+      pos += readLen;
+      buf += chunk.toString("utf8");
+      let nl: number;
+      while ((nl = buf.indexOf("\n")) !== -1) {
+        handleLine(buf.slice(0, nl));
+        buf = buf.slice(nl + 1);
+      }
+    }
+    if (buf.trim()) handleLine(buf);
+    return { matches, totalEntries };
+  } finally {
+    await fd?.close();
+  }
+}
+
 function extractText(content: unknown): string {
   if (typeof content === "string") return content;
   if (!Array.isArray(content)) return "";

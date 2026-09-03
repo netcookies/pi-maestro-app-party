@@ -10,7 +10,7 @@ import type { MobileAgentRuntime, MobileAgentSession } from "./mobile-agent.js";
 import type { SessionRunner, RuntimeFactory } from "./types.js";
 import { EventLog } from "./event-log.js";
 import { replayFromJsonl } from "./jsonl-replay.js";
-import { replayTailFromJsonl, replayPageFromJsonl } from "./jsonl-pager.js";
+import { replayTailFromJsonl, replayPageFromJsonl, searchInJsonl } from "./jsonl-pager.js";
 import { MobileExtensionUiBridge } from "./mobile-ui-context.js";
 
 const HISTORY_PAGE_SIZE = 80;
@@ -172,6 +172,14 @@ export class SdkSessionRunner implements SessionRunner {
   get hasMoreHistory(): boolean {
     return this.hasMoreHistoryFlag;
   }
+  /** 搜索会话历史消息 */
+  async searchHistory(keyword: string, maxResults?: number): Promise<{ matches: { index: number; text: string; kind: string }[]; totalEntries: number }> {
+    if (!this.session.sessionFile) {
+      return { matches: [], totalEntries: 0 };
+    }
+    return searchInJsonl(this.session.sessionFile, keyword, maxResults);
+  }
+
   /** 加载更早的一页历史，返回新增的 timeline 条目（追加到最前面） */
   async loadMoreHistory(): Promise<{ items: TimelineItem[]; hasMore: boolean; totalEntries: number }> {
     if (!this.session.sessionFile || this.historyCursor <= 0) {

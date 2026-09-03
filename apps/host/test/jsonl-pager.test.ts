@@ -96,4 +96,22 @@ describe("jsonl-pager", () => {
     expect(tail.items).toEqual([]);
     expect(tail.hasMore).toBe(false);
   });
+
+  it("searchInJsonl finds matching messages with indexes", async () => {
+    const { searchInJsonl } = await import("../src/jsonl-pager.js");
+    const lines = [
+      msg("user", "你好世界"),
+      msg("assistant", "这是回复"),
+      msg("user", "再问世界好"),
+    ];
+    await writeLines(lines);
+
+    const r = await searchInJsonl(path, "世界");
+    expect(r.totalEntries).toBe(3);
+    expect(r.matches).toHaveLength(2);
+    expect(r.matches[0].index).toBe(0);
+    expect(r.matches[0].kind).toBe("user");
+    expect(r.matches[0].text).toContain("你好世界");
+    expect(r.matches[1].index).toBe(2);
+  });
 });

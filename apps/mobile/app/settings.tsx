@@ -1,12 +1,35 @@
-import React, { useMemo } from "react";
-import { View, Text, StyleSheet, ScrollView, TouchableOpacity } from "react-native";
+import React, { useMemo, useState, useEffect } from "react";
+import { View, Text, StyleSheet, ScrollView, TouchableOpacity, TextInput } from "react-native";
 import { useHost } from "../src/store";
 import { useTheme, THEMES } from "../src/theme";
+import { DEFAULT_CONFIG, getConfig, updateConfig, loadConfig, type AppConfig } from "../src/config";
+
+const configFields: { key: keyof AppConfig; label: string; default: number }[] = [
+  { key: "historyPageSize", label: "每页消息数", default: DEFAULT_CONFIG.historyPageSize },
+  { key: "loadMoreThreshold", label: "自动加载阈值(px)", default: DEFAULT_CONFIG.loadMoreThreshold },
+  { key: "loadCooldownMs", label: "加载冷却(ms)", default: DEFAULT_CONFIG.loadCooldownMs },
+  { key: "stickBottomTolerance", label: "底部跟随距离(px)", default: DEFAULT_CONFIG.stickBottomTolerance },
+  { key: "livePollIntervalMs", label: "活跃轮询(ms)", default: DEFAULT_CONFIG.livePollIntervalMs },
+  { key: "searchMaxResults", label: "搜索最大结果", default: DEFAULT_CONFIG.searchMaxResults },
+  { key: "previewLength", label: "消息预览长度", default: DEFAULT_CONFIG.previewLength },
+];
 
 export default function SettingsScreen() {
   const { connectionState, isConnected, state } = useHost();
   const { theme, themeName, setTheme, themeNames } = useTheme();
   const styles = useMemo(() => makeStyles(theme), [theme]);
+  const [config, setConfig] = useState<AppConfig>(getConfig());
+  const [configDraft, setConfigDraft] = useState<Partial<AppConfig>>({});
+
+  useEffect(() => {
+    void loadConfig().then((c) => setConfig(c));
+  }, []);
+
+  const saveConfig = async () => {
+    const next = await updateConfig(configDraft);
+    setConfig(next);
+    setConfigDraft({});
+  };
 
   return (
     <ScrollView style={styles.container} contentContainerStyle={styles.content}>
@@ -32,6 +55,30 @@ export default function SettingsScreen() {
             );
           })}
         </View>
+      </View>
+
+      {/* 参数设置 */}
+      <View style={styles.card}>
+        <Text style={styles.cardTitle}>⚙️ 参数设置</Text>
+        {configFields.map((f) => (
+          <View key={f.key} style={styles.row}>
+            <Text style={styles.label}>{f.label}</Text>
+            <TextInput
+              style={[styles.configInput, { backgroundColor: theme.inputBg, color: theme.text, borderColor: theme.border }]}
+              value={String(config[f.key] ?? "")}
+              onChangeText={(v) => setConfigDraft({ ...configDraft, [f.key]: Number(v) || 0 })}
+              keyboardType="numeric"
+              placeholder={String(f.default)}
+              placeholderTextColor={theme.dim}
+            />
+          </View>
+        ))}
+        <TouchableOpacity style={[styles.saveBtn, { backgroundColor: theme.buttonPrimary }]} onPress={saveConfig}>
+          <Text style={styles.saveText}>保存参数</Text>
+        </TouchableOpacity>
+        <Text style={[styles.configHint, { color: theme.dim }]}>
+          已保存值：{config.historyPageSize} 条/页 · 冷却 {config.loadCooldownMs}ms
+        </Text>
       </View>
 
       <View style={styles.card}>
@@ -115,5 +162,17 @@ function makeStyles(theme: ReturnType<typeof useTheme>["theme"]) {
     },
     swatch: { width: 22, height: 22, borderRadius: 11, marginBottom: 6 },
     themeName: { fontSize: 13, fontWeight: "600" },
+    configInput: {
+      borderRadius: 6,
+      borderWidth: 1,
+      paddingHorizontal: 8,
+      paddingVertical: 4,
+      fontSize: 13,
+      width: 90,
+      textAlign: "right",
+    },
+    saveBtn: { borderRadius: 8, paddingVertical: 10, alignItems: "center", marginTop: 8 },
+    saveText: { color: "#fff", fontWeight: "600", fontSize: 14 },
+    configHint: { fontSize: 11, marginTop: 8 },
   });
 }
