@@ -192,6 +192,13 @@ export type ExtensionUiResponse =
   | { id: string; cancelled?: false; confirmed: boolean }
   | { id: string; cancelled?: false; selected: string[] };
 
+/** 不含 id 的 ExtensionUiResponse 联合类型（分布式 Omit） */
+export type DistributiveOmitUiResponse = 
+  | { cancelled: true }
+  | { cancelled?: false; value: string }
+  | { cancelled?: false; confirmed: boolean }
+  | { cancelled?: false; selected: string[] };
+
 // ─────────────────────────────────────────────────────────────────────────────
 // HostEvent — host 推送给客户端的统一事件流
 // ─────────────────────────────────────────────────────────────────────────────

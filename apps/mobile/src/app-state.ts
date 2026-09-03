@@ -114,8 +114,8 @@ export function createAppActions(
       const entry = queue.get(requestId);
       if (!entry) return;
       const response = Array.isArray(value)
-        ? queue.answer(requestId, { selected: value })
-        : queue.answer(requestId, { value });
+        ? queue.answer(requestId, { selected: value as string[] })
+        : queue.answer(requestId, { value: value as string });
       if (response) {
         responder(entry.request.sessionId, requestId, response);
       }

@@ -4,7 +4,7 @@
  * 这是解决 maestro ask 在移动端可用的核心：
  * host 推送 extension_ui_request → 这里排队 → UI 渲染弹窗 → 用户作答 → 返回响应
  */
-import type { ExtensionUiRequest, ExtensionUiResponse } from "@maestro-mobile/shared";
+import type { ExtensionUiRequest, ExtensionUiResponse, DistributiveOmitUiResponse } from "@maestro-mobile/shared";
 
 export type DialogStatus = "pending" | "answered" | "cancelled" | "expired";
 
@@ -66,7 +66,7 @@ export class ExtensionUiQueue {
   }
 
   /** 用户作答 → 构造响应并移除 */
-  answer(requestId: string, response: Omit<ExtensionUiResponse, "id">): ExtensionUiResponse | undefined {
+  answer(requestId: string, response: DistributiveOmitUiResponse): ExtensionUiResponse | undefined {
     const entry = this.dialogs.get(requestId);
     if (!entry || entry.status !== "pending") return undefined;
     const full: ExtensionUiResponse = { id: requestId, ...response } as ExtensionUiResponse;
