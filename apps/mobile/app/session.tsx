@@ -5,7 +5,7 @@ import {
 import { useLocalSearchParams, useRouter } from "expo-router";
 import { useHost } from "../src/store";
 import { useTheme } from "../src/theme";
-import { getConfig } from "../src/config";
+import { getConfig, loadConfig } from "../src/config";
 import { SafeAreaView } from "react-native-safe-area-context";
 import type { TimelineItem } from "@maestro-mobile/shared";
 import { ExtensionUiDialog } from "../src/components/ExtensionUiDialog";
@@ -20,6 +20,11 @@ export default function SessionScreen() {
   const { state, sendPrompt, sendAbort, answerDialog, cancelDialog, loadMoreHistory, searchHistory } = useHost();
   const { theme } = useTheme();
   const cfg = getConfig();
+
+  // 确保配置加载（冷启动直接进本页时）
+  useEffect(() => {
+    void loadConfig();
+  }, []);
   const [input, setInput] = useState("");
   const [sending, setSending] = useState(false);
   const [loadingMore, setLoadingMore] = useState(false);
@@ -47,7 +52,7 @@ export default function SessionScreen() {
     if (!q || !id) return;
     setSearching(true);
     try {
-      const r = await searchHistory(id, q, cfg.searchMaxResults);
+      const r = await searchHistory(id, q, cfg.searchMaxResults, cfg.previewLength);
       setSearchResults(r.matches);
       setSearchTotal(r.totalEntries);
     } catch {
@@ -58,10 +63,14 @@ export default function SessionScreen() {
   };
 
   const jumpToResult = async (index: number) => {
-    // 粗略定位：按匹配序号在全文中的比例滚动（精确跳转需按需加载，后续迭代）
+    // 粗略定位：按匹配序号在全文中的比例滚动到已加载窗口的对应位置
+    // （精确跳转需按需加载到目标页，见后续迭代；此处用真实内容高度保证短会话也正确）
     if (searchTotal <= 0) return;
     const ratio = Math.min(1, index / searchTotal);
-    const maxY = 100000; // 大数近似（内容高动态）
+    const native = listRef.current?.getNativeScrollRef();
+    const contentH = (native as unknown as { contentSize?: { height: number } } | null)?.contentSize?.height;
+    const maxY = contentH ?? 0;
+    if (maxY <= 0) return;
     listRef.current?.scrollToOffset({ offset: ratio * maxY, animated: false });
     setSearchOpen(false);
   };
@@ -96,13 +105,16 @@ export default function SessionScreen() {
     if (Date.now() < loadCooldownUntil.current) return; // 冷却中跳过
     loadCooldownUntil.current = Date.now() + cfg.loadCooldownMs;
     setLoadingMore(true);
-    // 记录当前滚动位置（prepend 后按新增高度修正，使视口停在新段落底部）
-    pendingOffsetRestore.current = true;
     try {
-      const r = await loadMoreHistory(id);
+      const r = await loadMoreHistory(id, cfg.historyPageSize);
       setHasMore(r.hasMore);
+      // 仅当确实返回了新 items 才 arm 锚点恢复
+      // （loading 指示器高度变化也会触发 onContentSizeChange，必须排除）
+      if (r.items && r.items.length > 0) {
+        pendingOffsetRestore.current = true;
+      }
     } catch {
-      pendingOffsetRestore.current = false;
+      // 失败静默
     } finally {
       setLoadingMore(false);
     }
@@ -269,13 +281,16 @@ export default function SessionScreen() {
         onContentSizeChange={(w, h) => {
           // prepend 完成后：锚点 = 原 offset + 新增高度（停在新段落底部）
           if (pendingOffsetRestore.current) {
-            pendingOffsetRestore.current = false;
             const prev = contentHeightBefore.current;
             const delta = prev > 0 ? h - prev : 0;
-            listRef.current?.scrollToOffset({
-              offset: Math.max(0, lastScrollY.current + delta),
-              animated: false,
-            });
+            // 增量过小（loading 指示器高度变化/测量噪声）不消费，等待真正 prepend 的高度
+            if (delta >= 24) {
+              pendingOffsetRestore.current = false;
+              listRef.current?.scrollToOffset({
+                offset: Math.max(0, lastScrollY.current + delta),
+                animated: false,
+              });
+            }
           }
         }}
         onScroll={(e) => {

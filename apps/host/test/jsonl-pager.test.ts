@@ -114,4 +114,32 @@ describe("jsonl-pager", () => {
     expect(r.matches[0].text).toContain("你好世界");
     expect(r.matches[1].index).toBe(2);
   });
+
+  it("pagination cursor counts messages (not rendered items) — duplicate toolResult preserved hasMore", async () => {
+    // RV-003 回归：150 user + 50 duplicate toolResult；tail(80) 必须仍 hasMore=true
+    const lines: string[] = [];
+    for (let i = 0; i < 150; i++) lines.push(msg("user", `u${i}`, 1000 + i));
+    for (let i = 0; i < 50; i++) {
+      lines.push(msg("toolResult", `dup${i}`, 2000 + i, { toolCallId: "same", toolName: "bash" }));
+    }
+    await writeLines(lines);
+
+    const tail = await replayTailFromJsonl(path, 80);
+    // cursor 按 message 数 = 80（tail 返回 80 条 message 窗口，最先的 30 条 toolResult 被去重为 0 item）
+    expect(tail.cursor).toBe(80);
+    // 窗口含 50 条 dup（仅 1 条产生 item——最后一条）+ 30 条 user → items = 31
+    expect(tail.items.length).toBe(31);
+    // 仍有更早的 120 条 user 未返回 → hasMore 必须 true
+    expect(tail.hasMore).toBe(true);
+    // 末条是去重后保留的 toolResult（窗口内第一条 dup0 被保留；dup1-49 去重为 null）
+    expect(tail.items[tail.items.length - 1].text).toBe("dup0");
+    // 首条应是 u120（150-30）
+    expect(tail.items[0].text).toBe("u120");
+
+    // 翻页到更早：cursor=80 → 返回 [u40, u119] 之类的窗口（40 条 user）
+    const page = await replayPageFromJsonl(path, 80, 80);
+    expect(page.items.length).toBe(80);
+    expect(page.items[0].text).toBe("u40");
+    expect(page.hasMore).toBe(true);
+  });
 });

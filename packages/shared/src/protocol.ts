@@ -268,7 +268,7 @@ export type ClientCommand =
   | { type: "list_host_sessions"; cwd?: string }
   | { type: "list_live_sessions" }
   | { type: "load_more_history"; sessionId: string; count?: number }
-  | { type: "search_history"; sessionId: string; keyword: string; maxResults?: number }
+  | { type: "search_history"; sessionId: string; keyword: string; maxResults?: number; previewLength?: number }
   | { type: "close_session"; sessionId: string }
   | { type: "list_sessions"; cwd?: string }
   | { type: "list_directories"; path: string }

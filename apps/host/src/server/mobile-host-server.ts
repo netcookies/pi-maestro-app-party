@@ -3,7 +3,7 @@ import type { Duplex } from "node:stream";
 import type { RawData } from "ws";
 import { URL } from "node:url";
 import { WebSocketServer, type WebSocket } from "ws";
-import { readFile } from "node:fs/promises";
+import { readFile, open } from "node:fs/promises";
 import { isAbsolute, normalize } from "node:path";
 import type {
   ClientCommand,
@@ -225,14 +225,14 @@ export class MobileHostServer {
         }
         case "load_more_history": {
           const runner = this.controller.getSession(command.sessionId);
-          if (!runner) { this.sendError(client, "session_not_found"); break; }
-          const result = await runner.loadMoreHistory();
+          if (!runner) { this.sendError(client, "session_not_found", (command as { id?: string }).id ?? ""); break; }
+          const result = await runner.loadMoreHistory(command.count);
           this.sendAck(client, command, result);
           break;
         }
         case "search_history": {
           const runner = this.controller.getSession(command.sessionId);
-          if (!runner) { this.sendError(client, "session_not_found"); break; }
+          if (!runner) { this.sendError(client, "session_not_found", (command as { id?: string }).id ?? ""); break; }
           const result = await runner.searchHistory(command.keyword, command.maxResults);
           this.sendAck(client, command, result);
           break;
@@ -259,28 +259,28 @@ export class MobileHostServer {
         }
         case "prompt": {
           const runner = this.controller.getSession(command.sessionId);
-          if (!runner) { this.sendError(client, "session_not_found"); break; }
+          if (!runner) { this.sendError(client, "session_not_found", (command as { id?: string }).id ?? ""); break; }
           await runner.prompt(command.message);
           this.sendAck(client, command, {});
           break;
         }
         case "steer": {
           const runner = this.controller.getSession(command.sessionId);
-          if (!runner) { this.sendError(client, "session_not_found"); break; }
+          if (!runner) { this.sendError(client, "session_not_found", (command as { id?: string }).id ?? ""); break; }
           await runner.steer(command.message);
           this.sendAck(client, command, {});
           break;
         }
         case "follow_up": {
           const runner = this.controller.getSession(command.sessionId);
-          if (!runner) { this.sendError(client, "session_not_found"); break; }
+          if (!runner) { this.sendError(client, "session_not_found", (command as { id?: string }).id ?? ""); break; }
           await runner.followUp(command.message);
           this.sendAck(client, command, {});
           break;
         }
         case "abort": {
           const runner = this.controller.getSession(command.sessionId);
-          if (!runner) { this.sendError(client, "session_not_found"); break; }
+          if (!runner) { this.sendError(client, "session_not_found", (command as { id?: string }).id ?? ""); break; }
           await runner.abort();
           this.sendAck(client, command, {});
           break;
@@ -294,13 +294,13 @@ export class MobileHostServer {
           if (ok) {
             this.sendAck(client, command, {});
           } else {
-            this.sendError(client, "request_not_found");
+            this.sendError(client, "request_not_found", (command as { id?: string }).id ?? "");
           }
           break;
         }
         case "get_snapshot": {
           const runner = this.controller.getSession(command.sessionId);
-          if (!runner) { this.sendError(client, "session_not_found"); break; }
+          if (!runner) { this.sendError(client, "session_not_found", (command as { id?: string }).id ?? ""); break; }
           const snapshot = runner.snapshot() satisfies SessionSnapshot;
           client.ws.send(JSON.stringify({
             type: "command_result",
@@ -311,7 +311,7 @@ export class MobileHostServer {
           break;
         }
         default:
-          this.sendError(client, "unsupported_command");
+          this.sendError(client, "unsupported_command", (command as { id?: string }).id ?? "");
       }
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
@@ -328,10 +328,10 @@ export class MobileHostServer {
     }));
   }
 
-  private sendError(client: ClientSocket, code: string, message?: string): void {
+  private sendError(client: ClientSocket, code: string, message?: string, replyTo = ""): void {
     client.ws.send(JSON.stringify({
       type: "command_result",
-      in_reply_to: "",
+      in_reply_to: replyTo,
       ok: false,
       error: { code, message: message ?? code },
     }));
@@ -387,27 +387,38 @@ async function toSessionSummaryList(records: unknown[]): Promise<HostSessionList
 async function latestModelFromJsonl(path: string): Promise<string | undefined> {
   if (!path || !path.endsWith(".jsonl")) return undefined;
   try {
-    const content = await readFile(path, "utf8");
-    // 从尾部向前找最近的 model_change
-    const lines = content.split("\n");
-    for (let i = lines.length - 1; i >= 0; i--) {
-      const line = lines[i];
-      if (!line.includes("model_change")) continue;
-      try {
-        const o = JSON.parse(line) as { provider?: string; modelId?: string };
-        if (o.modelId) {
-          const provider = o.provider ? `${o.provider}/` : "";
-          return `${provider}${o.modelId}`;
+    // 只读尾部 256KB（model_change 通常在会话活跃期靠后出现），避免整文件扫描
+    const handle = await open(path, "r");
+    try {
+      const { size } = await handle.stat();
+      const readLen = Math.min(TRAIL_READ_BYTES, size);
+      const buf = Buffer.alloc(readLen);
+      await handle.read(buf, 0, readLen, size - readLen);
+      const tail = buf.toString("utf8");
+      const lines = tail.split("\n");
+      for (let i = lines.length - 1; i >= 0; i--) {
+        const line = lines[i];
+        if (!line.includes("model_change")) continue;
+        try {
+          const o = JSON.parse(line) as { provider?: string; modelId?: string };
+          if (o.modelId) {
+            const provider = o.provider ? `${o.provider}/` : "";
+            return `${provider}${o.modelId}`;
+          }
+        } catch {
+          // ignore malformed
         }
-      } catch {
-        // ignore malformed
       }
+      return undefined;
+    } finally {
+      await handle.close();
     }
-    return undefined;
   } catch {
     return undefined;
   }
 }
+
+const TRAIL_READ_BYTES = 256 * 1024;
 
 /** 尝试解析为 ISO；无法解析时保留原字符串（App 端需兜底） */
 function normalizeIso(raw: string): string {

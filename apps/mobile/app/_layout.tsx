@@ -5,6 +5,8 @@ import { GestureHandlerRootView } from "react-native-gesture-handler";
 import { StyleSheet } from "react-native";
 import { HostStoreProvider } from "../src/store";
 import { ThemeProvider, useTheme } from "../src/theme";
+import { loadConfig } from "../src/config";
+import { useEffect } from "react";
 
 function RootNavigator() {
   const { theme } = useTheme();
@@ -31,6 +33,11 @@ function RootNavigator() {
 }
 
 export default function RootLayout() {
+  // 启动即加载持久化配置（设置页参数 / 主题共享加载时机）
+  useEffect(() => {
+    void loadConfig();
+  }, []);
+
   return (
     <GestureHandlerRootView style={styles.root}>
       <SafeAreaProvider>

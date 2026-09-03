@@ -5,7 +5,7 @@ import {
 import { useRouter } from "expo-router";
 import { useHost } from "../src/store";
 import { useTheme } from "../src/theme";
-import { getConfig } from "../src/config";
+import { getConfig, loadConfig } from "../src/config";
 import type { HostSessionSummary, LiveSessionInfo } from "@maestro-mobile/shared";
 
 type TabKey = "all" | "active" | "history";
@@ -22,6 +22,11 @@ export default function HostSessionsScreen() {
   const styles = useMemo(() => makeStyles(theme), [theme]);
   const { listHostSessions, listLiveSessions, openExistingSession, loadSessionHistory } = useHost();
   const cfg = getConfig();
+
+  // 确保配置加载（冷启动直接进本页时）
+  useEffect(() => {
+    void loadConfig();
+  }, []);
   const [sessions, setSessions] = useState<HostSessionSummary[]>([]);
   const [liveSessions, setLiveSessions] = useState<Map<string, LiveSessionInfo>>(new Map());
   const [loading, setLoading] = useState(true);
@@ -175,7 +180,7 @@ export default function HostSessionsScreen() {
     );
   }
 
-  const liveCount = sessions.filter((s) => liveSessions.has(s.id)).length;
+  const liveCount = filtered.filter((s) => liveSessions.has(s.id)).length;
 
   return (
     <View style={styles.container}>

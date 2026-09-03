@@ -54,7 +54,7 @@ interface WindowOptions {
 }
 
 async function scanWindow(filePath: string, opts: WindowOptions): Promise<PageResult> {
-  // ring 容量 = 需要返回的窗口 + 1 条前瞻（判断是否还有更早）
+  // ring 容量（按 message 数计，与 cursor 语义一致）：需要返回窗口 + 1 前瞻
   const want = opts.limit + opts.skip + 1;
   let fd: Awaited<ReturnType<typeof open>> | undefined;
   try {
@@ -67,7 +67,9 @@ async function scanWindow(filePath: string, opts: WindowOptions): Promise<PageRe
     if (!opened || !fd) {
       return { items: [], hasMore: false, cursor: 0, totalEntries: 0 };
     }
-    const ring: TimelineItem[] = [];
+    // ring 保存 TimelineItem | null（null = message 未产生可渲染 item，如重复 toolResult）；
+    // 长度按 message 数维护，cursor/hasMore 因此与 message 序号一致。
+    const ring: (TimelineItem | null)[] = [];
     const seenToolResults = new Set<string>();
     let totalEntries = 0;
     let buf = "";
@@ -78,12 +80,12 @@ async function scanWindow(filePath: string, opts: WindowOptions): Promise<PageRe
       // 只有 message 类型计入总数（session/model_change 等忽略）
       if (!line.includes('"type":"message"')) return;
       totalEntries++;
-      // ring 只保留最后 want 个 ITEM（以 item 数为准；message 可能不产生 item）
+      // ring 按 message 数保留最后 want 条（含 null 占位）
       if (ring.length >= want) {
         ring.shift();
       }
       const item = parseMessageLine(line, totalEntries - 1, seenToolResults);
-      if (item) ring.push(item);
+      ring.push(item ?? null);
     };
 
     const { size } = await fd.stat();
@@ -105,13 +107,15 @@ async function scanWindow(filePath: string, opts: WindowOptions): Promise<PageRe
     }
     if (buf.trim()) handleLine(buf); // 最后无换行的行
 
-    // ring 现在 = 最后 want 条（文件顺序）。要返回 [skip, skip+limit)
-    // start>0 表示 ring 里还有比窗口更早的 item（= hasMore）
+    // ring 现在 = 最后 want 条 message（含 null 占位）。返回窗口 [skip, skip+limit) 的 item
     const end = Math.max(0, ring.length - opts.skip);
     const start = Math.max(0, end - opts.limit);
-    const items = ring.slice(start, end);
+    const items: TimelineItem[] = ring
+      .slice(start, end)
+      .filter((x): x is TimelineItem => x !== null);
+    // hasMore：ring 里还有比窗口更早的 message（含占位）
     const hasMore = start > 0;
-    const cursor = opts.skip + items.length;
+    const cursor = opts.skip + (end - start);
 
     return { items, hasMore, cursor, totalEntries };
   } finally {

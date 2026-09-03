@@ -35,26 +35,51 @@ export const DEFAULT_CONFIG: AppConfig = {
 
 const CONFIG_STORAGE_KEY = "maestro-mobile.config";
 
+/** 各字段合法范围（有限正整数约束；clamp 防 0/负/小数/NaN） */
+const CONFIG_LIMITS: Record<keyof AppConfig, { min: number; max: number }> = {
+  historyPageSize: { min: 5, max: 500 },
+  loadMoreThreshold: { min: 4, max: 500 },
+  loadCooldownMs: { min: 100, max: 10000 },
+  stickBottomTolerance: { min: 8, max: 500 },
+  livePollIntervalMs: { min: 1000, max: 120000 },
+  searchMaxResults: { min: 1, max: 200 },
+  previewLength: { min: 10, max: 1000 },
+};
+
+/** 清洗非法配置：非有限数/越界回退默认 */
+function sanitizeConfig(patch: Partial<AppConfig>): Partial<AppConfig> {
+  const clean: Partial<AppConfig> = {};
+  for (const key of Object.keys(CONFIG_LIMITS) as (keyof AppConfig)[]) {
+    const v = patch[key];
+    if (typeof v !== "number" || !Number.isFinite(v)) continue;
+    const { min, max } = CONFIG_LIMITS[key];
+    clean[key] = Math.min(max, Math.max(min, Math.round(v)));
+  }
+  return clean;
+}
+
 let currentConfig: AppConfig = { ...DEFAULT_CONFIG };
 
 export function getConfig(): AppConfig {
   return currentConfig;
 }
 
-/** 更新单值配置（合并 + 持久化） */
+/** 更新单值配置（清洗 + 合并 + 持久化） */
 export async function updateConfig(patch: Partial<AppConfig>): Promise<AppConfig> {
-  currentConfig = { ...currentConfig, ...patch };
+  const clean = sanitizeConfig(patch);
+  currentConfig = { ...currentConfig, ...clean };
   await AsyncStorage.setItem(CONFIG_STORAGE_KEY, JSON.stringify(currentConfig)).catch(() => {});
   return currentConfig;
 }
 
-/** 启动时加载持久化配置 */
+/** 启动时加载持久化配置（清洗非法存储值） */
 export async function loadConfig(): Promise<AppConfig> {
   try {
     const raw = await AsyncStorage.getItem(CONFIG_STORAGE_KEY);
     if (raw) {
       const parsed = JSON.parse(raw) as Partial<AppConfig>;
-      currentConfig = { ...DEFAULT_CONFIG, ...parsed };
+      const clean = sanitizeConfig(parsed);
+      currentConfig = { ...DEFAULT_CONFIG, ...clean };
     }
   } catch {
     // 默认配置

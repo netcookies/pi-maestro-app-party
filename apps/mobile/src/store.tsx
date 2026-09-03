@@ -29,8 +29,8 @@ export interface HostStoreValue {
   listHostSessions(cwd?: string): Promise<HostSessionList>;
   listLiveSessions(): Promise<LiveSessionList>;
   loadSessionHistory(sessionId: string): Promise<void>;
-  loadMoreHistory(sessionId: string): Promise<{ items: TimelineItem[]; hasMore: boolean; totalEntries: number }>;
-  searchHistory(sessionId: string, keyword: string, maxResults?: number): Promise<{ matches: { index: number; text: string; kind: string }[]; totalEntries: number }>;
+  loadMoreHistory(sessionId: string, count?: number): Promise<{ items: TimelineItem[]; hasMore: boolean; totalEntries: number }>;
+  searchHistory(sessionId: string, keyword: string, maxResults?: number, previewLength?: number): Promise<{ matches: { index: number; text: string; kind: string }[]; totalEntries: number }>;
   sendPrompt(sessionId: string, message: string): Promise<void>;
   sendSteer(sessionId: string, message: string): Promise<void>;
   sendAbort(sessionId: string): Promise<void>;
@@ -127,8 +127,8 @@ export function HostStoreProvider({ children }: { children: React.ReactNode }) {
     }
   }, [getClient]);
 
-  const loadMoreHistory = useCallback(async (sessionId: string): Promise<{ items: TimelineItem[]; hasMore: boolean; totalEntries: number }> => {
-    const result = await getClient().sendCommand({ type: "load_more_history", sessionId });
+  const loadMoreHistory = useCallback(async (sessionId: string, count?: number): Promise<{ items: TimelineItem[]; hasMore: boolean; totalEntries: number }> => {
+    const result = await getClient().sendCommand({ type: "load_more_history", sessionId, count });
     const r = result as { items: TimelineItem[]; hasMore: boolean; totalEntries: number };
     if (r.items?.length > 0) {
       dispatch({ type: "__history_prepend", sessionId, items: r.items, seq: 0 } as never);
@@ -136,8 +136,8 @@ export function HostStoreProvider({ children }: { children: React.ReactNode }) {
     return r;
   }, [getClient]);
 
-  const searchHistory = useCallback(async (sessionId: string, keyword: string, maxResults?: number) => {
-    const result = await getClient().sendCommand({ type: "search_history", sessionId, keyword, maxResults });
+  const searchHistory = useCallback(async (sessionId: string, keyword: string, maxResults?: number, previewLength?: number) => {
+    const result = await getClient().sendCommand({ type: "search_history", sessionId, keyword, maxResults, previewLength });
     return result as { matches: { index: number; text: string; kind: string }[]; totalEntries: number };
   }, [getClient]);
 

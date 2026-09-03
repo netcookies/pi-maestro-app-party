@@ -51,7 +51,7 @@ export class LiveSessionsService {
   constructor(options: LiveSessionsOptions = {}) {
     this.sessionsRoot = options.sessionsRoot ?? join(homedir(), ".pi", "agent", "sessions");
     this.liveThresholdMs = options.liveThresholdMs ?? 60_000;
-    this.maxPerCwd = options.maxPerCwd ?? 20;
+    this.maxPerCwd = options.maxPerCwd ?? 50;
     this.now = options.now ?? Date.now;
   }
 

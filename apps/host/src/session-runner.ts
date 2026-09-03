@@ -173,29 +173,48 @@ export class SdkSessionRunner implements SessionRunner {
     return this.hasMoreHistoryFlag;
   }
   /** 搜索会话历史消息 */
-  async searchHistory(keyword: string, maxResults?: number): Promise<{ matches: { index: number; text: string; kind: string }[]; totalEntries: number }> {
+  async searchHistory(keyword: string, maxResults?: number, previewLength = 120): Promise<{ matches: { index: number; text: string; kind: string }[]; totalEntries: number }> {
     if (!this.session.sessionFile) {
       return { matches: [], totalEntries: 0 };
     }
-    return searchInJsonl(this.session.sessionFile, keyword, maxResults);
+    const result = await searchInJsonl(this.session.sessionFile, keyword, maxResults);
+    // 按配置的预览长度截断
+    const truncated = result.matches.map((m) => ({
+      ...m,
+      text: m.text.length > previewLength ? `${m.text.slice(0, previewLength)}…` : m.text,
+    }));
+    return { matches: truncated, totalEntries: result.totalEntries };
   }
 
-  /** 加载更早的一页历史，返回新增的 timeline 条目（追加到最前面） */
-  async loadMoreHistory(): Promise<{ items: TimelineItem[]; hasMore: boolean; totalEntries: number }> {
-    if (!this.session.sessionFile || this.historyCursor <= 0) {
-      return { items: [], hasMore: false, totalEntries: this.historyTotalEntries };
+  /** 加载更早的一页历史（count 可配，默认 HISTORY_PAGE_SIZE），返回新增的 timeline 条目；加锁防并发重复 */
+  private historyLoadLock: Promise<void> | null = null;
+  async loadMoreHistory(count?: number): Promise<{ items: TimelineItem[]; hasMore: boolean; totalEntries: number }> {
+    // 并发互斥：避免多个客户端同时 unshift 同一页
+    if (this.historyLoadLock) {
+      await this.historyLoadLock;
     }
-    const page = await replayPageFromJsonl(this.session.sessionFile, this.historyCursor, HISTORY_PAGE_SIZE);
-    if (page.items.length === 0) {
-      this.hasMoreHistoryFlag = false;
-      return { items: [], hasMore: false, totalEntries: this.historyTotalEntries };
+    let release!: () => void;
+    this.historyLoadLock = new Promise<void>((r) => { release = r; });
+    try {
+      if (!this.session.sessionFile || this.historyCursor <= 0) {
+        return { items: [], hasMore: false, totalEntries: this.historyTotalEntries };
+      }
+      const pageSize = Number.isInteger(count) && (count as number) > 0 ? (count as number) : HISTORY_PAGE_SIZE;
+      const page = await replayPageFromJsonl(this.session.sessionFile, this.historyCursor, pageSize);
+      if (page.items.length === 0) {
+        this.hasMoreHistoryFlag = false;
+        return { items: [], hasMore: false, totalEntries: this.historyTotalEntries };
+      }
+      // 追加到 timeline 最前面（更早的内容）
+      this.timeline.unshift(...page.items);
+      this.hasMoreHistoryFlag = page.hasMore;
+      this.historyCursor = page.cursor;
+      if (page.totalEntries > 0) this.historyTotalEntries = page.totalEntries;
+      return { items: page.items, hasMore: page.hasMore, totalEntries: this.historyTotalEntries };
+    } finally {
+      release();
+      this.historyLoadLock = null;
     }
-    // 追加到 timeline 最前面（更早的内容）
-    this.timeline.unshift(...page.items);
-    this.hasMoreHistoryFlag = page.hasMore;
-    this.historyCursor = page.cursor;
-    if (page.totalEntries > 0) this.historyTotalEntries = page.totalEntries;
-    return { items: page.items, hasMore: page.hasMore, totalEntries: this.historyTotalEntries };
   }
 
   /** 将 session.messages（AgentMessage[]）投影为 TimelineItem[] */

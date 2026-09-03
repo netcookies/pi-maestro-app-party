@@ -65,8 +65,11 @@ export default function SettingsScreen() {
             <Text style={styles.label}>{f.label}</Text>
             <TextInput
               style={[styles.configInput, { backgroundColor: theme.inputBg, color: theme.text, borderColor: theme.border }]}
-              value={String(config[f.key] ?? "")}
-              onChangeText={(v) => setConfigDraft({ ...configDraft, [f.key]: Number(v) || 0 })}
+              value={String(configDraft[f.key] ?? config[f.key] ?? "")}
+              onChangeText={(v) => {
+                const n = Number(v);
+                setConfigDraft({ ...configDraft, [f.key]: Number.isFinite(n) ? n : 0 });
+              }}
               keyboardType="numeric"
               placeholder={String(f.default)}
               placeholderTextColor={theme.dim}
