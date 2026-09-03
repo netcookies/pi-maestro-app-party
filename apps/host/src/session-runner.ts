@@ -125,6 +125,16 @@ export class SdkSessionRunner implements SessionRunner {
     this.unsubscribe?.();
     this.session = this.runtime.session;
     this._state = this.createState(this.session);
+    // 回放历史消息为 timeline（打开已有会话时能看到过往对话）
+    const replayed = this.restoreTimelineFromMessages(this.session.messages);
+    this.timeline.splice(0, this.timeline.length, ...replayed);
+    // 告知客户端历史已就绪（App 侧收到后拉取 snapshot 完整渲染）
+    if (replayed.length > 0) {
+      this.emit(this.eventLog.record({
+        type: "host_status",
+        status: `replayed ${replayed.length} history messages`,
+      }));
+    }
     await this.session.bindExtensions({
       uiContext: this.uiBridge.createContext(),
       onError: (error: unknown) => {
@@ -133,6 +143,27 @@ export class SdkSessionRunner implements SessionRunner {
       },
     });
     this.unsubscribe = this.session.subscribe((event: unknown) => this.handleSessionEvent(event));
+  }
+
+  /** 将 session.messages（AgentMessage[]）投影为 TimelineItem[] */
+  private restoreTimelineFromMessages(messages: unknown[]): TimelineItem[] {
+    const items: TimelineItem[] = [];
+    for (const raw of messages ?? []) {
+      const msg = raw as Record<string, unknown>;
+      const role = String(msg.role ?? "");
+      const content = extractText(msg.content);
+      if (!content) continue;
+      const createdAt = typeof msg.timestamp === "number"
+        ? new Date(msg.timestamp).toISOString()
+        : new Date().toISOString();
+      if (role === "user") {
+        items.push({ id: `replay-user-${items.length}`, kind: "user", text: content, createdAt });
+      } else if (role === "assistant" || role === "system") {
+        items.push({ id: `replay-assistant-${items.length}`, kind: "assistant", text: content, createdAt });
+      }
+      // tool 消息等暂不展开（移动端先保证能看对话）
+    }
+    return items;
   }
 
   private handleSessionEvent(event: unknown): void {
@@ -192,4 +223,16 @@ export class SdkSessionRunner implements SessionRunner {
 
 function toJsonValue(value: unknown): JsonValue {
   return JSON.parse(JSON.stringify(value)) as JsonValue;
+}
+
+/** 从 AgentMessage.content（string 或 content block 数组）提取纯文本 */
+function extractText(content: unknown): string {
+  if (typeof content === "string") return content;
+  if (!Array.isArray(content)) return "";
+  const parts: string[] = [];
+  for (const block of content) {
+    const b = block as Record<string, unknown>;
+    if (typeof b.text === "string") parts.push(b.text);
+  }
+  return parts.join("\n");
 }

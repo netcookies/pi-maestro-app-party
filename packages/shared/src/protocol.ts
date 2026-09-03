@@ -52,6 +52,23 @@ export interface SessionSnapshot {
   nextSeq: number;
 }
 
+/** Host 端 Pi 已存在会话的摘要（移动端只读列表用，不携带大字段） */
+export interface HostSessionSummary {
+  id: string;
+  cwd: string;
+  cwdName: string;
+  path: string;
+  title: string;
+  messageCount: number;
+  updatedAt: string;
+  createdAt?: string;
+}
+
+export interface HostSessionList {
+  sessions: HostSessionSummary[];
+  observedAt: string;
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Maestro 状态投影（flow-schedule store 的只读投影）
 // ─────────────────────────────────────────────────────────────────────────────
@@ -223,6 +240,7 @@ export type HostEvent =
 
 export type ClientCommand =
   | { type: "open_session"; cwd: string; mode?: "create" | "continue"; sessionFile?: string }
+  | { type: "list_host_sessions"; cwd?: string }
   | { type: "close_session"; sessionId: string }
   | { type: "list_sessions"; cwd?: string }
   | { type: "list_directories"; path: string }

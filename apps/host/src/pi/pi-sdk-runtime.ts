@@ -24,7 +24,18 @@ export class PiSdkRuntimeFactory implements RuntimeFactory {
   async createRuntime(request: OpenSessionRequest): Promise<MobileAgentRuntime> {
     const sessionManager = createSessionManager(request);
     const createRuntime: CreateAgentSessionRuntimeFactory = async ({ cwd, sessionManager: sm, sessionStartEvent }) => {
-      const services = await createAgentSessionServices({ cwd });
+      const services = await createAgentSessionServices({
+        cwd,
+        // 过滤 pi-maestro-teammate：host 进程与真实 Pi 会话共享工作区时
+        // 会触发 workspace owner claim 冲突（同一 cwd 只能有一个 live owner）。
+        // host 只做只读会话浏览/驱动，不需要 teammate 的 peer 运行时。
+        resourceLoaderOptions: {
+          extensionsOverride: (base) => ({
+            ...base,
+            extensions: base.extensions.filter((e) => !isTeammateExtension(e.path)),
+          }),
+        },
+      });
       return {
         ...(await createAgentSessionFromServices({
           services,
@@ -59,4 +70,9 @@ function createSessionManager(request: OpenSessionRequest): SessionManager {
     return SessionManager.open(request.sessionFile, undefined, request.cwd);
   }
   return SessionManager.create(request.cwd);
+}
+
+/** 判断扩展路径是否属于 pi-maestro-teammate（其 workspace peer 会与真实 Pi 冲突） */
+function isTeammateExtension(path: string): boolean {
+  return path.includes("pi-maestro-teammate");
 }

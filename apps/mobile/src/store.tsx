@@ -7,7 +7,7 @@
  * - 暴露 connect / disconnect / sendPrompt / answerDialog 等动作
  */
 import React, { createContext, useContext, useMemo, useReducer, useRef, useState, useCallback } from "react";
-import type { ExtensionUiRequest, HostEvent } from "@maestro-mobile/shared";
+import type { ExtensionUiRequest, HostEvent, HostSessionList } from "@maestro-mobile/shared";
 import { HostClient, type ConnectionState } from "./host-client";
 import { ExtensionUiQueue } from "./extension-ui-queue";
 import {
@@ -24,6 +24,9 @@ export interface HostStoreValue {
   connect(url: string, token?: string): void;
   disconnect(): void;
   openSession(cwd: string): Promise<string>;
+  openExistingSession(sessionFile: string, cwd: string): Promise<string>;
+  listHostSessions(cwd?: string): Promise<HostSessionList>;
+  loadSessionHistory(sessionId: string): Promise<void>;
   sendPrompt(sessionId: string, message: string): Promise<void>;
   sendSteer(sessionId: string, message: string): Promise<void>;
   sendAbort(sessionId: string): Promise<void>;
@@ -81,6 +84,17 @@ export function HostStoreProvider({ children }: { children: React.ReactNode }) {
     return r.sessionId ?? "";
   }, [getClient]);
 
+  const openExistingSession = useCallback(async (sessionFile: string, cwd: string): Promise<string> => {
+    const result = await getClient().sendCommand({ type: "open_session", cwd, mode: "create", sessionFile });
+    const r = result as { sessionId?: string };
+    return r.sessionId ?? "";
+  }, [getClient]);
+
+  const listHostSessions = useCallback(async (cwd?: string): Promise<HostSessionList> => {
+    const result = await getClient().sendCommand({ type: "list_host_sessions", cwd });
+    return result as HostSessionList;
+  }, [getClient]);
+
   const sendPrompt = useCallback(async (sessionId: string, message: string) => {
     await getClient().sendCommand({ type: "prompt", sessionId, message });
   }, [getClient]);
@@ -91,6 +105,15 @@ export function HostStoreProvider({ children }: { children: React.ReactNode }) {
 
   const sendAbort = useCallback(async (sessionId: string) => {
     await getClient().sendCommand({ type: "abort", sessionId });
+  }, [getClient]);
+
+  const loadSessionHistory = useCallback(async (sessionId: string): Promise<void> => {
+    try {
+      const snapshot = await getClient().getSnapshot(sessionId);
+      dispatch({ type: "__history_load", sessionId, items: snapshot.timeline, seq: snapshot.nextSeq } as never);
+    } catch {
+      // snapshot 失败静默（历史不可见但不阻塞）
+    }
   }, [getClient]);
 
   const actions = useMemo(
@@ -123,6 +146,9 @@ export function HostStoreProvider({ children }: { children: React.ReactNode }) {
       connect,
       disconnect,
       openSession,
+      openExistingSession,
+      listHostSessions,
+      loadSessionHistory,
       sendPrompt,
       sendSteer,
       sendAbort,
@@ -130,7 +156,7 @@ export function HostStoreProvider({ children }: { children: React.ReactNode }) {
       cancelDialog,
       lastError: state.lastError,
     }),
-    [state, connectionState, connect, disconnect, openSession, sendPrompt, sendSteer, sendAbort, answerDialog, cancelDialog],
+    [state, connectionState, connect, disconnect, openSession, openExistingSession, listHostSessions, loadSessionHistory, sendPrompt, sendSteer, sendAbort, answerDialog, cancelDialog],
   );
 
   return <HostStoreContext.Provider value={value}>{children}</HostStoreContext.Provider>;

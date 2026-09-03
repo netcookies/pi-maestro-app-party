@@ -56,11 +56,12 @@ describe("MobileHostServer", () => {
     expect(body.sessions).toBe(0);
   });
 
-  it("serves /api/sessions", async () => {
+  it("serves /api/sessions as summary list", async () => {
     const res = await fetch(`${ctx.url}/api/sessions`);
     expect(res.status).toBe(200);
-    const body = (await res.json()) as unknown[];
-    expect(Array.isArray(body)).toBe(true);
+    const body = (await res.json()) as { sessions: unknown[]; observedAt: string };
+    expect(Array.isArray(body.sessions)).toBe(true);
+    expect(body.observedAt).toBeTruthy();
   });
 
   it("serves /api/maestro with real state", async () => {

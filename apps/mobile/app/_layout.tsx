@@ -20,6 +20,7 @@ export default function RootLayout() {
           >
             <Stack.Screen name="index" options={{ headerShown: false }} />
             <Stack.Screen name="connect" options={{ title: "连接 Host" }} />
+            <Stack.Screen name="host-sessions" options={{ title: "Host 会话列表" }} />
             <Stack.Screen name="session" options={{ title: "会话" }} />
             <Stack.Screen name="teammate" options={{ title: "Teammate 调度" }} />
             <Stack.Screen name="monitor" options={{ title: "Monitor 窗口" }} />

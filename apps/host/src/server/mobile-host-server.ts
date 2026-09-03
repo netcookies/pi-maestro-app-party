@@ -6,6 +6,8 @@ import { WebSocketServer, type WebSocket } from "ws";
 import type {
   ClientCommand,
   HostEvent,
+  HostSessionList,
+  HostSessionSummary,
   HostStatus,
   SessionSnapshot,
 } from "@maestro-mobile/shared";
@@ -127,7 +129,8 @@ export class MobileHostServer {
       if (request.method === "GET" && url.pathname === "/api/sessions") {
         const cwd = url.searchParams.get("cwd") ?? undefined;
         const sessions = await this.controller.listSessions(cwd);
-        writeJson(response, 200, sessions);
+        const list = toSessionSummaryList(sessions);
+        writeJson(response, 200, list);
         return;
       }
 
@@ -188,6 +191,12 @@ export class MobileHostServer {
 
     try {
       switch (command.type) {
+        case "list_host_sessions": {
+          const sessions = await this.controller.listSessions(command.cwd);
+          const list = toSessionSummaryList(sessions);
+          this.sendAck(client, command, list);
+          break;
+        }
         case "open_session": {
           const runner = await this.controller.openSession({
             cwd: command.cwd,
@@ -247,7 +256,12 @@ export class MobileHostServer {
           const runner = this.controller.getSession(command.sessionId);
           if (!runner) { this.sendError(client, "session_not_found"); break; }
           const snapshot = runner.snapshot() satisfies SessionSnapshot;
-          client.ws.send(JSON.stringify({ type: "snapshot", snapshot }));
+          client.ws.send(JSON.stringify({
+            type: "command_result",
+            in_reply_to: (command as { id?: string }).id ?? "",
+            ok: true,
+            result: snapshot,
+          }));
           break;
         }
         default:
@@ -292,4 +306,36 @@ function applyCorsHeaders(response: ServerResponse, origin?: string): void {
     response.setHeader("Access-Control-Allow-Methods", "GET,POST,OPTIONS");
     response.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization");
   }
+}
+
+/**
+ * 将 SessionManager 返回的完整 SessionInfo 裁剪为移动端友好的摘要。
+ * 关键：不携带 allMessagesText 等大字段，避免移动端流量/内存浪费。
+ */
+function toSessionSummaryList(records: unknown[]): HostSessionList {
+  const sessions: HostSessionSummary[] = records.map((raw) => {
+    const r = raw as Record<string, unknown>;
+    const cwd = String(r.cwd ?? "");
+    const title = String(r.firstMessage ?? r.title ?? "");
+    const id = String(r.id ?? "");
+    return {
+      id,
+      cwd,
+      cwdName: cwd.split("/").filter(Boolean).pop() ?? cwd,
+      path: String(r.path ?? r.sessionFile ?? ""),
+      title: title.length > 80 ? `${title.slice(0, 80)}…` : title,
+      messageCount: typeof r.messageCount === "number" ? r.messageCount : 0,
+      // 规范化为 ISO 字符串：Hermes（iOS）解析不了 "Thu Sep 03 2026 ..." 这种本地化格式
+      updatedAt: normalizeIso(String(r.modified ?? r.updatedAt ?? "")),
+      ...(r.created ? { createdAt: normalizeIso(String(r.created)) } : {}),
+    };
+  });
+  return { sessions, observedAt: new Date().toISOString() };
+}
+
+/** 尝试解析为 ISO；无法解析时保留原字符串（App 端需兜底） */
+function normalizeIso(raw: string): string {
+  if (!raw) return "";
+  const t = Date.parse(raw);
+  return Number.isFinite(t) ? new Date(t).toISOString() : raw;
 }

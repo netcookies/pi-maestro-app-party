@@ -42,9 +42,23 @@ export interface AppStateDeps {
   dialogQueue?: ExtensionUiQueue;
 }
 
-/** 纯 reducer：处理一个 HostEvent，返回新状态（不可变更新） */
-export function reduceEvent(state: AppState, event: HostEvent, deps: AppStateDeps = {}): AppState {
+/** 内部事件：批量替换 timeline（App 打开会话后拉取 snapshot 触发） */
+export interface InternalEvent {
+  type: "__history_load";
+  sessionId: string;
+  items: TimelineItem[];
+  seq: number;
+}
+
+/** 纯 reducer：处理一个 HostEvent，返回新状态（不可变更新）
+ * 额外支持内部事件 __history_load（批量替换 timeline） */
+export function reduceEvent(state: AppState, event: HostEvent | InternalEvent, deps: AppStateDeps = {}): AppState {
   const queue = deps.dialogQueue;
+  if (event.type === "__history_load") {
+    const timelines = new Map(state.timelines);
+    timelines.set(event.sessionId, event.items.length > 0 ? event.items : []);
+    return { ...state, timelines };
+  }
   switch (event.type) {
     case "host_status":
       return { ...state, connectionStatus: event.status };

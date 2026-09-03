@@ -86,12 +86,7 @@ export default function HomeScreen() {
             style={styles.navItem}
             onPress={() => {
               if (!isConnected) { Alert.alert("提示", "请先连接 Host"); return; }
-              const sessions = [...state.sessions.values()];
-              if (sessions.length === 0) {
-                Alert.alert("提示", "还没有会话，请先在 Host 端用 Pi 打开项目");
-                return;
-              }
-              router.push({ pathname: "/session", params: { id: sessions[0].id } });
+              router.push("/host-sessions");
             }}
           >
             <Text style={styles.navTitle}>💬 Chat 会话</Text>
