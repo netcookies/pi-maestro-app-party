@@ -25,6 +25,10 @@ export default function SessionScreen() {
   const stickToBottom = useRef(true);
   // 最近一次 onScroll 的 offset（懒加载 prepend 后恢复位置用）
   const lastScrollY = useRef(0);
+  // 懒加载冷却：scrollToOffset 恢复会再次触发 scroll，防止连环加载
+  const loadCooldownUntil = useRef(0);
+  // FAB 显示状态（不在底部附近时显示）
+  const [showFab, setShowFab] = useState(false);
 
   const styles = useMemo(() => makeStyles(theme), [theme]);
   const timeline = state.timelines.get(id ?? "") ?? [];
@@ -53,6 +57,8 @@ export default function SessionScreen() {
 
   const handleLoadMore = async () => {
     if (loadingMore || !hasMore || !id) return;
+    if (Date.now() < loadCooldownUntil.current) return; // 冷却中跳过
+    loadCooldownUntil.current = Date.now() + 800;
     setLoadingMore(true);
     // 记录当前滚动位置（prepend 后恢复，避免被新内容顶下去）
     const anchorY = lastScrollY.current;
@@ -167,9 +173,11 @@ export default function SessionScreen() {
           lastScrollY.current = y;
           const maxY = e.nativeEvent.contentSize.height - e.nativeEvent.layoutMeasurement.height;
           // 底部附近 → 跟随底部；离开底部 → 停止跟随
-          stickToBottom.current = y >= maxY - 80;
-          // 顶部懒加载：接近顶部且有更多时拉取更早历史
-          if (y < 40 && hasMore && !loadingMore) {
+          const atBottom = y >= maxY - 80;
+          stickToBottom.current = atBottom;
+          setShowFab(!atBottom && maxY > 0);
+          // 顶部懒加载：接近顶部且有更多时拉取更早历史（带冷却防连环）
+          if (y < 40 && hasMore && !loadingMore && Date.now() >= loadCooldownUntil.current) {
             void handleLoadMore();
           }
         }}
@@ -188,6 +196,19 @@ export default function SessionScreen() {
           ) : null
         }
       />
+
+      {showFab && (
+        <TouchableOpacity
+          style={[styles.fab, { backgroundColor: theme.accent }]}
+          onPress={() => {
+            stickToBottom.current = true;
+            setShowFab(false);
+            listRef.current?.scrollToEnd({ animated: true });
+          }}
+        >
+          <Text style={styles.fabText}>↓</Text>
+        </TouchableOpacity>
+      )}
 
       {session?.runState === "streaming" && (
         <TouchableOpacity style={styles.abortButton} onPress={() => id && sendAbort(id)}>
@@ -311,5 +332,21 @@ function makeStyles(theme: ReturnType<typeof useTheme>["theme"]) {
       marginBottom: 8,
     },
     abortText: { color: "#fff", fontSize: 13, fontWeight: "600" },
+    fab: {
+      position: "absolute",
+      right: 18,
+      bottom: 90,
+      width: 46,
+      height: 46,
+      borderRadius: 23,
+      alignItems: "center",
+      justifyContent: "center",
+      shadowColor: "#000",
+      shadowOpacity: 0.3,
+      shadowRadius: 6,
+      shadowOffset: { width: 0, height: 2 },
+      elevation: 5,
+    },
+    fabText: { color: "#fff", fontSize: 22, fontWeight: "700", lineHeight: 26 },
   });
 }
