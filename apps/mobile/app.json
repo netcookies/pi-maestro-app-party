@@ -7,14 +7,30 @@
     "icon": "./assets/icon.png",
     "userInterfaceStyle": "dark",
     "splash": {
-      "backgroundColor": "#0a0a0f"
+      "image": "./assets/splash.png",
+      "backgroundColor": "#0d1117",
+      "resizeMode": "contain"
     },
     "ios": {
+      "bundleIdentifier": "dev.maestromobile.app",
       "supportsTablet": true,
-      "bundleIdentifier": "dev.maestromobile.app"
+      "buildNumber": "1",
+      "infoPlist": {
+        "NSAppTransportSecurity": {
+          "NSAllowsArbitraryLoads": true
+        }
+      }
     },
     "android": {
-      "package": "dev.maestromobile.app"
-    }
+      "package": "dev.maestromobile.app",
+      "versionCode": 1,
+      "adaptiveIcon": {
+        "backgroundColor": "#0d1117"
+      }
+    },
+    "scheme": "maestro-mobile",
+    "plugins": [
+      "expo-router"
+    ]
   }
 }

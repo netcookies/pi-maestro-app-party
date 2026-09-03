@@ -10,17 +10,25 @@
     "test:coverage": "vitest run --coverage",
     "dev": "expo start",
     "start": "expo start",
-    "android": "expo start --android",
-    "ios": "expo start --ios",
-    "web": "expo start --web"
+    "android": "expo run:android",
+    "ios": "expo run:ios",
+    "web": "expo start --web",
+    "prebuild": "expo prebuild",
+    "build:android": "expo prebuild --platform android && cd android && ./gradlew assembleDebug",
+    "build:ios": "expo prebuild --platform ios && cd ios && pod install && xcodebuild -workspace MaestroMobile.xcworkspace -scheme MaestroMobile -configuration Debug -sdk iphonesimulator -derivedDataPath build"
   },
   "dependencies": {
     "@maestro-mobile/shared": "workspace:*",
     "expo": "~53.0.0",
-    "expo-status-bar": "~2.2.0",
+    "expo-constants": "~17.1.8",
+    "expo-linking": "~7.1.7",
+    "expo-router": "~5.1.11",
+    "expo-status-bar": "~2.2.3",
     "react": "19.0.0",
-    "react-native": "0.79.2",
-    "react-native-safe-area-context": "~5.4.0"
+    "react-native": "0.79.6",
+    "react-native-gesture-handler": "~2.24.0",
+    "react-native-safe-area-context": "5.4.0",
+    "react-native-screens": "~4.11.1"
   },
   "devDependencies": {
     "@types/react": "~19.0.0",
