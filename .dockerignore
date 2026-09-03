@@ -1,0 +1,9 @@
+node_modules
+dist
+.git
+.pia
+.turbo
+*.log
+.DS_Store
+deploy
+apps/mobile

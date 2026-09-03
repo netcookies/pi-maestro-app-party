@@ -1,0 +1,50 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  macOS launchd 服务 — Maestro Mobile Host
+  安装：
+    cp deploy/com.maestro-mobile.host.plist ~/Library/LaunchAgents/
+    launchctl load ~/Library/LaunchAgents/com.maestro-mobile.host.plist
+  卸载：
+    launchctl unload ~/Library/LaunchAgents/com.maestro-mobile.host.plist
+  日志：/tmp/maestro-mobile-host.{out,err}.log
+-->
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.maestro-mobile.host</string>
+
+  <key>ProgramArguments</key>
+  <array>
+    <string>/usr/local/bin/node</string>
+    <string>/path/to/maestro-mobile/apps/host/dist/cli.js</string>
+    <string>--host</string>
+    <string>0.0.0.0</string>
+    <string>--port</string>
+    <string>4739</string>
+  </array>
+
+  <key>WorkingDirectory</key>
+  <string>/path/to/your/project</string>
+
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>PATH</key>
+    <string>/usr/local/bin:/usr/bin:/bin:/opt/homebrew/bin</string>
+    <key>MAESTRO_MOBILE_TOKEN</key>
+    <string>REPLACE_WITH_A_RANDOM_SECRET</string>
+  </dict>
+
+  <key>RunAtLoad</key>
+  <true/>
+  <key>KeepAlive</key>
+  <true/>
+  <key>ProcessType</key>
+  <string>Background</string>
+
+  <key>StandardOutPath</key>
+  <string>/tmp/maestro-mobile-host.out.log</string>
+  <key>StandardErrorPath</key>
+  <string>/tmp/maestro-mobile-host.err.log</string>
+</dict>
+</plist>

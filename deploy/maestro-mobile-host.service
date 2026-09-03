@@ -1,0 +1,30 @@
+# systemd 服务 — Maestro Mobile Host（Linux）
+# 安装：
+#   sudo cp deploy/maestro-mobile-host.service /etc/systemd/system/
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable --now maestro-mobile-host
+# 日志：
+#   journalctl -u maestro-mobile-host -f
+
+[Unit]
+Description=Maestro Mobile Host — Pi agent mobile bridge
+After=network.target
+
+[Service]
+Type=simple
+# 修改为你的安装路径
+WorkingDirectory=/opt/maestro-mobile
+ExecStart=/usr/bin/node /opt/maestro-mobile/apps/host/dist/cli.js --host 0.0.0.0 --port 4739
+Restart=always
+RestartSec=5
+# 安全加固
+NoNewPrivileges=true
+PrivateTmp=true
+
+# 环境变量（token 鉴权）
+Environment=MAESTRO_MOBILE_TOKEN=REPLACE_WITH_A_RANDOM_SECRET
+# 指向你的项目根（包含 .pi/flow-schedule 的目录）
+Environment=MAESTRO_MOBILE_PROJECT_ROOT=/srv/pi-workspace
+
+[Install]
+WantedBy=multi-user.target
