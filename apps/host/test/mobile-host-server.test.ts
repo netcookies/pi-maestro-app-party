@@ -64,6 +64,39 @@ describe("MobileHostServer", () => {
     expect(body.observedAt).toBeTruthy();
   });
 
+  it("serves image file via /api/file", async () => {
+    // 构造一个最小 PNG
+    const png = Buffer.from(
+      "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==",
+      "base64",
+    );
+    const imgPath = join(ctx.tmpDir, "test.png");
+    await writeFile(imgPath, png);
+
+    const res = await fetch(`${ctx.url}/api/file?path=${encodeURIComponent(imgPath)}`);
+    expect(res.status).toBe(200);
+    expect(res.headers.get("content-type")).toBe("image/png");
+    const body = Buffer.from(await res.arrayBuffer());
+    expect(body.length).toBe(png.length);
+  });
+
+  it("rejects non-image or unsafe paths via /api/file", async () => {
+    const txtPath = join(ctx.tmpDir, "test.txt");
+    await writeFile(txtPath, "hello");
+
+    // 非图片扩展名
+    let res = await fetch(`${ctx.url}/api/file?path=${encodeURIComponent(txtPath)}`);
+    expect(res.status).toBe(400);
+
+    // 相对路径
+    res = await fetch(`${ctx.url}/api/file?path=relative.png`);
+    expect(res.status).toBe(400);
+
+    // 不存在的文件
+    res = await fetch(`${ctx.url}/api/file?path=${encodeURIComponent(join(ctx.tmpDir, "missing.png"))}`);
+    expect(res.status).toBe(400);
+  });
+
   it("serves /api/maestro with real state", async () => {
     const scheduleDir = join(ctx.tmpDir, ".pi", "flow-schedule", "v1", "schedules");
     await mkdir(scheduleDir, { recursive: true });

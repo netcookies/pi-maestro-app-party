@@ -3,6 +3,8 @@ import type { Duplex } from "node:stream";
 import type { RawData } from "ws";
 import { URL } from "node:url";
 import { WebSocketServer, type WebSocket } from "ws";
+import { readFile } from "node:fs/promises";
+import { isAbsolute, normalize } from "node:path";
 import type {
   ClientCommand,
   HostEvent,
@@ -144,6 +146,24 @@ export class MobileHostServer {
       if (request.method === "GET" && url.pathname === "/api/live-sessions") {
         const list = await this.controller.listLiveSessions();
         writeJson(response, 200, list satisfies LiveSessionList);
+        return;
+      }
+
+      // 图片/文件只读预览：绝对路径 + 图片扩展名 + 大小限制
+      if (request.method === "GET" && url.pathname === "/api/file") {
+        const filePath = url.searchParams.get("path") ?? "";
+        const result = await serveImageFile(filePath);
+        if (!result) {
+          writeJson(response, 400, { error: "Invalid or unsupported file path" });
+          return;
+        }
+        const { data, mime } = result;
+        response.writeHead(200, {
+          "Content-Type": mime,
+          "Content-Length": data.length,
+          "Cache-Control": "private, max-age=300",
+        });
+        response.end(data);
         return;
       }
 
@@ -350,4 +370,36 @@ function normalizeIso(raw: string): string {
   if (!raw) return "";
   const t = Date.parse(raw);
   return Number.isFinite(t) ? new Date(t).toISOString() : raw;
+}
+
+const IMAGE_EXTENSIONS = new Set([".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp"]);
+const MAX_IMAGE_BYTES = 20 * 1024 * 1024; // 20MB
+
+const IMAGE_MIME: Record<string, string> = {
+  ".png": "image/png",
+  ".jpg": "image/jpeg",
+  ".jpeg": "image/jpeg",
+  ".gif": "image/gif",
+  ".webp": "image/webp",
+  ".bmp": "image/bmp",
+};
+
+/** 安全读取本地图片：绝对路径 + 图片扩展名 + 大小限制，返回二进制与 MIME */
+async function serveImageFile(filePath: string): Promise<{ data: Buffer; mime: string } | undefined> {
+  const trimmed = filePath.trim();
+  if (!trimmed || !isAbsolute(trimmed)) return undefined;
+  // 防止路径穿越：normalize 后必须仍是绝对路径且不含 ..
+  const normalized = normalize(trimmed);
+  if (!isAbsolute(normalized) || normalized.includes("..")) return undefined;
+
+  const ext = normalized.slice(normalized.lastIndexOf(".")).toLowerCase();
+  if (!IMAGE_EXTENSIONS.has(ext)) return undefined;
+
+  try {
+    const data = await readFile(normalized);
+    if (data.length === 0 || data.length > MAX_IMAGE_BYTES) return undefined;
+    return { data, mime: IMAGE_MIME[ext] ?? "application/octet-stream" };
+  } catch {
+    return undefined;
+  }
 }

@@ -6,6 +6,8 @@ import { useLocalSearchParams } from "expo-router";
 import { useHost } from "../src/store";
 import type { TimelineItem } from "@maestro-mobile/shared";
 import { ExtensionUiDialog } from "../src/components/ExtensionUiDialog";
+import { InlineImage } from "../src/components/InlineImage";
+import { splitImageSegments } from "../src/image-paths";
 
 export default function SessionScreen() {
   const { id } = useLocalSearchParams<{ id: string }>();
@@ -43,6 +45,7 @@ export default function SessionScreen() {
     const isUser = item.kind === "user";
     const isTool = item.kind === "tool";
     const isThinking = item.kind === "thinking";
+    const segments = isTool ? splitImageSegments(item.text) : null;
     return (
       <View
         style={[
@@ -57,15 +60,26 @@ export default function SessionScreen() {
             {item.isError ? <Text style={styles.toolError}>⚠ 失败</Text> : null}
           </View>
         )}
-        <Text
-          style={[
-            isUser ? styles.textUser : styles.textAgent,
-            isTool && styles.textTool,
-          ]}
-          selectable
-        >
-          {item.text}
-        </Text>
+        {segments ? (
+          <View>
+            {segments.map((seg, i) =>
+              seg.type === "image" ? (
+                <InlineImage key={`img-${i}`} path={seg.path} />
+              ) : (
+                <Text key={`txt-${i}`} style={styles.textTool} selectable>
+                  {seg.text}
+                </Text>
+              ),
+            )}
+          </View>
+        ) : (
+          <Text
+            style={[isUser ? styles.textUser : styles.textAgent]}
+            selectable
+          >
+            {item.text}
+          </Text>
+        )}
       </View>
     );
   };

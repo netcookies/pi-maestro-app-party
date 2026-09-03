@@ -21,6 +21,7 @@ export interface HostStoreValue {
   state: AppState;
   connectionState: ConnectionState;
   isConnected: boolean;
+  hostUrl: string;
   connect(url: string, token?: string): void;
   disconnect(): void;
   openSession(cwd: string): Promise<string>;
@@ -42,6 +43,7 @@ export function HostStoreProvider({ children }: { children: React.ReactNode }) {
   const queueRef = useRef(new ExtensionUiQueue());
   const clientRef = useRef<HostClient | null>(null);
   const [connectionState, setConnectionState] = useState<ConnectionState>("disconnected");
+  const [hostUrl, setHostUrl] = useState<string>("");
 
   const [state, dispatch] = useReducer(
     (s: AppState, e: HostEvent) => reduceEvent(s, e, { dialogQueue: queueRef.current }),
@@ -60,6 +62,7 @@ export function HostStoreProvider({ children }: { children: React.ReactNode }) {
 
   const connect = useCallback((url: string, token?: string) => {
     clientRef.current?.close();
+    setHostUrl(url);
     const client = new HostClient({
       url,
       token,
@@ -149,6 +152,7 @@ export function HostStoreProvider({ children }: { children: React.ReactNode }) {
       state,
       connectionState,
       isConnected: connectionState === "connected",
+      hostUrl,
       connect,
       disconnect,
       openSession,
@@ -163,7 +167,7 @@ export function HostStoreProvider({ children }: { children: React.ReactNode }) {
       cancelDialog,
       lastError: state.lastError,
     }),
-    [state, connectionState, connect, disconnect, openSession, openExistingSession, listHostSessions, listLiveSessions, loadSessionHistory, sendPrompt, sendSteer, sendAbort, answerDialog, cancelDialog],
+    [state, connectionState, hostUrl, connect, disconnect, openSession, openExistingSession, listHostSessions, listLiveSessions, loadSessionHistory, sendPrompt, sendSteer, sendAbort, answerDialog, cancelDialog],
   );
 
   return <HostStoreContext.Provider value={value}>{children}</HostStoreContext.Provider>;

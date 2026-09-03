@@ -9,6 +9,7 @@ import type { DistributiveOmit } from "./event-log.js";
 import type { MobileAgentRuntime, MobileAgentSession } from "./mobile-agent.js";
 import type { SessionRunner, RuntimeFactory } from "./types.js";
 import { EventLog } from "./event-log.js";
+import { replayFromJsonl } from "./jsonl-replay.js";
 import { MobileExtensionUiBridge } from "./mobile-ui-context.js";
 
 /**
@@ -126,7 +127,17 @@ export class SdkSessionRunner implements SessionRunner {
     this.session = this.runtime.session;
     this._state = this.createState(this.session);
     // 回放历史消息为 timeline（打开已有会话时能看到过往对话）
-    const replayed = this.restoreTimelineFromMessages(this.session.messages);
+    // 优先从 jsonl 文件直接解析（SDK messages 会裁剪 tool 输出等）
+    let replayed: TimelineItem[] = [];
+    if (this.session.sessionFile) {
+      const result = await replayFromJsonl(this.session.sessionFile);
+      if (result.items.length > 0) {
+        replayed = result.items;
+      }
+    }
+    if (replayed.length === 0) {
+      replayed = this.restoreTimelineFromMessages(this.session.messages);
+    }
     this.timeline.splice(0, this.timeline.length, ...replayed);
     // 告知客户端历史已就绪（App 侧收到后拉取 snapshot 完整渲染）
     if (replayed.length > 0) {
