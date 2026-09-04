@@ -4,7 +4,7 @@ import {
 } from "react-native";
 import { useRouter } from "expo-router";
 import { useHost } from "../src/store";
-import { useTheme } from "../src/theme";
+import { useTheme, MIUIX_RADIUS, MIUIX_TYPE, MIUIX_SPACE } from "../src/theme";
 
 export default function HomeScreen() {
   const router = useRouter();
@@ -22,7 +22,14 @@ export default function HomeScreen() {
     connect(hostUrl.trim(), token.trim() || undefined);
   };
 
-  const statusColor = isConnected ? theme.success : connectionState === "reconnecting" ? theme.warning : theme.error;
+  const busy = connectionState === "connecting" || connectionState === "reconnecting";
+  const statusColor = isConnected
+    ? theme.success
+    : connectionState === "reconnecting"
+      ? theme.warning
+      : connectionState === "connecting"
+        ? theme.accent
+        : theme.error;
 
   // 开发模式：启动时自动连接默认 Host（模拟器验证用）
   useEffect(() => {
@@ -73,8 +80,14 @@ export default function HomeScreen() {
                 <Text style={styles.buttonText}>断开</Text>
               </TouchableOpacity>
             ) : (
-              <TouchableOpacity style={[styles.button, styles.buttonPrimary]} onPress={handleConnect}>
-                <Text style={styles.buttonText}>连接</Text>
+              <TouchableOpacity
+                style={[styles.button, styles.buttonPrimary, busy && styles.buttonDisabled]}
+                onPress={handleConnect}
+                disabled={busy}
+              >
+                <Text style={styles.buttonText}>
+                  {connectionState === "connecting" ? "连接中…" : connectionState === "reconnecting" ? "重连中…" : "连接"}
+                </Text>
               </TouchableOpacity>
             )}
           </View>
@@ -121,49 +134,50 @@ function makeStyles(theme: ReturnType<typeof useTheme>["theme"]) {
     container: { flex: 1, backgroundColor: theme.bg },
     header: {
       paddingTop: 60,
-      paddingHorizontal: 20,
-      paddingBottom: 16,
+      paddingHorizontal: MIUIX_SPACE.lg,
+      paddingBottom: MIUIX_SPACE.lg,
       backgroundColor: theme.headerBg,
       borderBottomWidth: 1,
       borderBottomColor: theme.border,
     },
     title: { fontSize: 24, fontWeight: "700", color: theme.text },
-    status: { marginTop: 4, fontSize: 13 },
-    body: { flex: 1, padding: 16 },
+    status: { marginTop: MIUIX_SPACE.xs, fontSize: 13 },
+    body: { flex: 1, padding: MIUIX_SPACE.lg },
     card: {
       backgroundColor: theme.cardBg,
-      borderRadius: 12,
-      padding: 16,
-      marginBottom: 16,
+      borderRadius: MIUIX_RADIUS.lg,
+      padding: MIUIX_SPACE.lg,
+      marginBottom: MIUIX_SPACE.lg,
       borderWidth: 1,
       borderColor: theme.border,
     },
-    cardTitle: { fontSize: 16, fontWeight: "600", color: theme.text, marginBottom: 12 },
+    cardTitle: { fontSize: MIUIX_TYPE.main, fontWeight: "700", color: theme.text, marginBottom: MIUIX_SPACE.md },
     input: {
       backgroundColor: theme.inputBg,
-      borderRadius: 8,
-      paddingHorizontal: 12,
-      paddingVertical: 10,
+      borderRadius: MIUIX_RADIUS.md,
+      paddingHorizontal: MIUIX_SPACE.md,
+      paddingVertical: MIUIX_SPACE.sm,
       color: theme.text,
-      marginBottom: 10,
+      marginBottom: MIUIX_SPACE.sm,
       borderWidth: 1,
       borderColor: theme.border,
     },
-    buttonRow: { flexDirection: "row", gap: 10 },
-    button: { flex: 1, borderRadius: 8, paddingVertical: 12, alignItems: "center" },
+    buttonRow: { flexDirection: "row", gap: MIUIX_SPACE.sm },
+    button: { flex: 1, borderRadius: MIUIX_RADIUS.sm, paddingVertical: MIUIX_SPACE.md, alignItems: "center" },
     buttonPrimary: { backgroundColor: theme.buttonPrimary },
     buttonDanger: { backgroundColor: theme.buttonDanger },
+    buttonDisabled: { opacity: 0.5 },
     buttonText: { color: "#fff", fontWeight: "600", fontSize: 15 },
-    error: { color: theme.error, marginTop: 8, fontSize: 13 },
+    error: { color: theme.error, marginTop: MIUIX_SPACE.sm, fontSize: 13 },
     navItem: {
       backgroundColor: theme.inputBg,
-      borderRadius: 8,
-      padding: 14,
-      marginBottom: 10,
+      borderRadius: MIUIX_RADIUS.md,
+      padding: MIUIX_SPACE.md,
+      marginBottom: MIUIX_SPACE.sm,
       borderWidth: 1,
       borderColor: theme.border,
     },
-    navTitle: { fontSize: 15, fontWeight: "600", color: theme.text },
-    navDesc: { fontSize: 12, color: theme.muted, marginTop: 4 },
+    navTitle: { fontSize: MIUIX_TYPE.main, fontWeight: "600", color: theme.text },
+    navDesc: { fontSize: MIUIX_TYPE.body2, color: theme.muted, marginTop: MIUIX_SPACE.xs, lineHeight: 20 },
   });
 }

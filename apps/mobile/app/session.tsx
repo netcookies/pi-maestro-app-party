@@ -1,12 +1,13 @@
 import React, { useEffect, useRef, useState, useMemo } from "react";
 import {
   View, Text, StyleSheet, FlatList, TextInput, TouchableOpacity, KeyboardAvoidingView, Platform, ActivityIndicator,
+  Animated, AccessibilityInfo, LayoutAnimation, UIManager,
 } from "react-native";
 import { useLocalSearchParams, useRouter } from "expo-router";
 import { useHost } from "../src/store";
-import { useTheme } from "../src/theme";
+import { useTheme, MIUIX_RADIUS, MIUIX_TYPE, MIUIX_SPACE } from "../src/theme";
 import { getConfig, loadConfig } from "../src/config";
-import { SafeAreaView } from "react-native-safe-area-context";
+import { SafeAreaView, useSafeAreaInsets } from "react-native-safe-area-context";
 import type { TimelineItem } from "@maestro-mobile/shared";
 import { ExtensionUiDialog } from "../src/components/ExtensionUiDialog";
 import { InlineImage } from "../src/components/InlineImage";
@@ -16,12 +17,19 @@ import { splitImageSegments } from "../src/image-paths";
 import { ChatComposer } from "../src/components/ChatComposer";
 import { pickImagesFromLibrary } from "../src/image-picker";
 
+// Android 需显式开启 LayoutAnimation（模块加载时一次性开启，置于组件外）
+if (Platform.OS === "android" && UIManager.setLayoutAnimationEnabledExperimental) {
+  UIManager.setLayoutAnimationEnabledExperimental(true);
+}
+
 export default function SessionScreen() {
   const { id } = useLocalSearchParams<{ id: string }>();
   const router = useRouter();
   const { state, sendPrompt, sendAbort, answerDialog, cancelDialog, loadMoreHistory, searchHistory, listModels, setModel, setThinking, listSkills, compactSession, renameSession, isConnected, connectionState } = useHost();
   const { theme } = useTheme();
   const cfg = getConfig();
+  const session = state.sessions.get(id ?? "");
+  const insets = useSafeAreaInsets();
 
   // 确保配置加载（冷启动直接进本页时）
   useEffect(() => {
@@ -41,8 +49,14 @@ export default function SessionScreen() {
   const lastScrollY = useRef(0);
   // 懒加载冷却：scrollToOffset 恢复会再次触发 scroll，防止连环加载
   const loadCooldownUntil = useRef(0);
-  // FAB 显示状态（不在底部附近时显示）
+  // FAB 显示状态（不在底部附近时显示）；ref 用于滚动回调判断真实变化，避免反复调度 LayoutAnimation
   const [showFab, setShowFab] = useState(false);
+  const showFabRef = useRef(false);
+  // composer 实测高度 → FAB 动态预留
+  const [composerHeight, setComposerHeight] = useState(0);
+  // streaming 呼吸点（reduce-motion 时不启动循环）
+  const pulseOpacity = useRef(new Animated.Value(1)).current;
+  const [reduceMotion, setReduceMotion] = useState(false);
   // 搜索状态
   const [searchOpen, setSearchOpen] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
@@ -80,13 +94,34 @@ export default function SessionScreen() {
     const maxY = contentH ?? 0;
     if (maxY <= 0) return;
     listRef.current?.scrollToOffset({ offset: ratio * maxY, animated: false });
+    LayoutAnimation.easeInEaseOut();
     setSearchOpen(false);
   };
 
   const styles = useMemo(() => makeStyles(theme), [theme]);
   const timeline = state.timelines.get(id ?? "") ?? [];
-  const session = state.sessions.get(id ?? "");
   const pendingDialog = state.dialogs[0];
+  const fabBottom = insets.bottom + composerHeight + 16;
+
+  useEffect(() => {
+    let cancelled = false;
+    AccessibilityInfo.isReduceMotionEnabled()
+      .then((v) => { if (!cancelled) setReduceMotion(v); })
+      .catch(() => {});
+    return () => { cancelled = true; };
+  }, []);
+
+  useEffect(() => {
+    if (session?.runState !== "streaming" || reduceMotion) return;
+    const anim = Animated.loop(
+      Animated.sequence([
+        Animated.timing(pulseOpacity, { toValue: 0.35, duration: 900, useNativeDriver: true }),
+        Animated.timing(pulseOpacity, { toValue: 1, duration: 900, useNativeDriver: true }),
+      ]),
+    );
+    anim.start();
+    return () => { anim.stop(); pulseOpacity.setValue(1); };
+  }, [session?.runState, reduceMotion, pulseOpacity]);
 
   useEffect(() => {
     // 新消息时滚动到底部（仅在用户位于底部附近时跟随）
@@ -229,7 +264,8 @@ export default function SessionScreen() {
           <Text style={[styles.backText, { color: theme.accent }]}>‹ 返回</Text>
         </TouchableOpacity>
         <Text style={styles.headerTitle} numberOfLines={1}>{session?.title ?? "会话"}</Text>
-        <View style={styles.headerStatusWrap}>
+        {/* 右槽位与返回钮等宽（minWidth 一致），保证标题真正居中 */}
+        <View style={styles.headerRight}>
           {connectionState === "reconnecting" && (
             <Text style={[styles.headerStatus, { color: theme.warning }]}>重连中…</Text>
           )}
@@ -240,12 +276,27 @@ export default function SessionScreen() {
             <Text style={[styles.headerStatus, { color: theme.muted }]}>连接中…</Text>
           )}
           <Text style={styles.headerStatus}>
-            {session?.runState === "streaming" ? "● 正在生成 · 可随时停止" : session?.runState === "compacting" ? "● 正在整理上下文" : "·"}
+            {session?.runState === "streaming" ? (
+              <>
+                <Animated.Text style={{ opacity: pulseOpacity }}>●</Animated.Text>
+                {" 正在生成 · 可随时停止"}
+              </>
+            ) : session?.runState === "compacting" ? (
+              "● 正在整理上下文"
+            ) : (
+              "·"
+            )}
           </Text>
+          <TouchableOpacity
+            onPress={() => {
+              LayoutAnimation.easeInEaseOut();
+              setSearchOpen((v) => !v);
+            }}
+            style={styles.searchToggle}
+          >
+            <Text style={[styles.backText, { color: theme.accent }]}>🔍</Text>
+          </TouchableOpacity>
         </View>
-        <TouchableOpacity onPress={() => setSearchOpen((v) => !v)} style={styles.searchToggle}>
-          <Text style={[styles.backText, { color: theme.accent }]}>🔍</Text>
-        </TouchableOpacity>
       </View>
 
       {/* 搜索条 */}
@@ -335,7 +386,12 @@ export default function SessionScreen() {
           // 底部附近 → 跟随底部；离开底部 → 停止跟随
           const atBottom = y >= maxY - cfg.stickBottomTolerance;
           stickToBottom.current = atBottom;
-          setShowFab(!atBottom && maxY > 0);
+          const nextFab = !atBottom && maxY > 0;
+          if (showFabRef.current !== nextFab) {
+            showFabRef.current = nextFab;
+            LayoutAnimation.easeInEaseOut();
+            setShowFab(nextFab);
+          }
           // 顶部懒加载：接近顶部且有更多时拉取更早历史（带冷却防连环）
           if (y < cfg.loadMoreThreshold && hasMore && !loadingMore && Date.now() >= loadCooldownUntil.current) {
             void handleLoadMore();
@@ -346,9 +402,12 @@ export default function SessionScreen() {
 
       {showFab && (
         <TouchableOpacity
-          style={[styles.fab, { backgroundColor: theme.accent }]}
+          style={[styles.fab, { backgroundColor: theme.accent, bottom: fabBottom }]}
+          accessibilityLabel="回到底部"
           onPress={() => {
+            LayoutAnimation.easeInEaseOut();
             stickToBottom.current = true;
+            showFabRef.current = false;
             setShowFab(false);
             listRef.current?.scrollToEnd({ animated: true });
           }}
@@ -363,6 +422,7 @@ export default function SessionScreen() {
         </TouchableOpacity>
       )}
 
+      <View onLayout={(e) => setComposerHeight(e.nativeEvent.layout.height)}>
       <ChatComposer
         actions={{
           send: async (text, imgs) => {
@@ -396,6 +456,7 @@ export default function SessionScreen() {
         sending={sending || !isConnected}
         skills={availableSkills}
       />
+      </View>
 
       {pendingDialog && (
         <ExtensionUiDialog
@@ -416,36 +477,36 @@ function makeStyles(theme: ReturnType<typeof useTheme>["theme"]) {
       flexDirection: "row",
       justifyContent: "space-between",
       alignItems: "center",
-      paddingHorizontal: 16,
-      paddingVertical: 8,
+      paddingHorizontal: MIUIX_SPACE.lg,
+      paddingVertical: MIUIX_SPACE.sm,
       backgroundColor: theme.headerBg,
       borderBottomWidth: 1,
       borderBottomColor: theme.border,
     },
-    headerTitle: { fontSize: 17, fontWeight: "600", color: theme.text, flex: 1, textAlign: "center" },
-    headerStatus: { fontSize: 12, color: theme.muted, minWidth: 56, textAlign: "right" },
-    headerStatusWrap: { flexDirection: "row", alignItems: "center", gap: 6 },
+    headerTitle: { fontSize: MIUIX_TYPE.title3, fontWeight: "600", color: theme.text, flex: 1, textAlign: "center" },
+    headerStatus: { fontSize: MIUIX_TYPE.footnote2, color: theme.muted, minWidth: 56, textAlign: "right" },
+    headerRight: { flexDirection: "row", alignItems: "center", gap: 6, minWidth: 72, justifyContent: "flex-end" },
     emptyWrap: { alignItems: "center", paddingVertical: 64, gap: 6 },
-    emptyTitle: { fontSize: 15, fontWeight: "600" },
-    emptySub: { fontSize: 13 },
-    backBtn: { paddingVertical: 4, paddingRight: 8 },
-    backText: { fontSize: 15, fontWeight: "600" },
+    emptyTitle: { fontSize: MIUIX_TYPE.body2, fontWeight: "600" },
+    emptySub: { fontSize: MIUIX_TYPE.footnote1 },
+    backBtn: { paddingVertical: 4, paddingRight: 8, minWidth: 72, alignItems: "flex-start" },
+    backText: { fontSize: MIUIX_TYPE.body2, fontWeight: "600" },
     searchToggle: { paddingVertical: 4, paddingLeft: 8 },
     searchBar: {
       flexDirection: "row",
       alignItems: "center",
-      paddingHorizontal: 12,
-      paddingVertical: 8,
+      paddingHorizontal: MIUIX_SPACE.md,
+      paddingVertical: MIUIX_SPACE.sm,
       borderBottomWidth: 1,
-      gap: 8,
+      gap: MIUIX_SPACE.sm,
     },
     searchInput: {
       flex: 1,
-      borderRadius: 8,
-      paddingHorizontal: 12,
+      borderRadius: MIUIX_RADIUS.sm,
+      paddingHorizontal: MIUIX_SPACE.md,
       paddingVertical: 6,
       borderWidth: 1,
-      fontSize: 14,
+      fontSize: MIUIX_TYPE.body2,
     },
     searchGo: { paddingHorizontal: 10, paddingVertical: 6 },
     searchResults: {
@@ -453,31 +514,31 @@ function makeStyles(theme: ReturnType<typeof useTheme>["theme"]) {
       padding: 12,
       maxHeight: 280,
     },
-    searchResultsTitle: { fontSize: 12, marginBottom: 8 },
+    searchResultsTitle: { fontSize: MIUIX_TYPE.footnote1, marginBottom: 8 },
     searchResultItem: {
       flexDirection: "row",
       paddingVertical: 8,
       borderBottomWidth: StyleSheet.hairlineWidth,
       gap: 8,
     },
-    searchResultIndex: { fontSize: 12, fontWeight: "700", width: 30 },
-    searchResultText: { fontSize: 13, flex: 1, lineHeight: 18 },
+    searchResultIndex: { fontSize: MIUIX_TYPE.footnote1, fontWeight: "700", width: 30 },
+    searchResultText: { fontSize: MIUIX_TYPE.footnote1, flex: 1, lineHeight: 18 },
     list: { flex: 1 },
     listContent: { padding: 16 },
     bubble: {
-      borderRadius: 12,
-      padding: 12,
+      borderRadius: MIUIX_RADIUS.md,
+      padding: MIUIX_SPACE.md,
       marginBottom: 10,
       maxWidth: "90%",
     },
     bubbleUser: { backgroundColor: theme.userBubble, alignSelf: "flex-end" },
-    bubbleAgent: { backgroundColor: theme.agentBubble, alignSelf: "flex-start", borderWidth: 1, borderColor: theme.border },
+    bubbleAgent: { backgroundColor: theme.agentBubble, alignSelf: "flex-start", borderWidth: 1, borderColor: theme.border, borderRadius: MIUIX_RADIUS.lg },
     bubbleTool: {
       backgroundColor: theme.toolBubble,
       alignSelf: "stretch",
       borderWidth: 1,
       borderColor: theme.border,
-      borderRadius: 8,
+      borderRadius: MIUIX_RADIUS.md,
     },
     toolImages: { marginTop: 8 },
     loadMoreWrap: { alignItems: "center", paddingVertical: 10 },
@@ -488,18 +549,18 @@ function makeStyles(theme: ReturnType<typeof useTheme>["theme"]) {
       borderWidth: 1,
       borderColor: theme.border,
     },
-    loadMoreText: { fontSize: 13, fontWeight: "600" },
+    loadMoreText: { fontSize: MIUIX_TYPE.footnote1, fontWeight: "600" },
     textTool: {
       fontFamily: Platform.OS === "ios" ? "Menlo" : "monospace",
-      fontSize: 12,
-      lineHeight: 17,
+      fontSize: MIUIX_TYPE.footnote1,
+      lineHeight: 18,
       color: theme.toolOutput,
     },
-    textUser: { color: theme.userText, fontSize: 15, lineHeight: 21 },
-    textAgent: { color: theme.text, fontSize: 15, lineHeight: 21 },
-    thinkingLabel: { color: theme.warning, fontSize: 11, marginBottom: 4, fontWeight: "600" },
-    toolLabel: { color: theme.accent, fontSize: 11, marginBottom: 4, fontWeight: "600" },
-    toolError: { color: theme.error, fontSize: 12, marginTop: 4 },
+    textUser: { color: theme.userText, fontSize: MIUIX_TYPE.body1, lineHeight: 24 },
+    textAgent: { color: theme.text, fontSize: MIUIX_TYPE.body1, lineHeight: 24 },
+    thinkingLabel: { color: theme.warning, fontSize: MIUIX_TYPE.footnote2, marginBottom: 4, fontWeight: "600" },
+    toolLabel: { color: theme.accent, fontSize: MIUIX_TYPE.footnote2, marginBottom: 4, fontWeight: "600" },
+    toolError: { color: theme.error, fontSize: MIUIX_TYPE.footnote1, marginTop: 4 },
     composer: {
       flexDirection: "row",
       padding: 12,
@@ -535,11 +596,10 @@ function makeStyles(theme: ReturnType<typeof useTheme>["theme"]) {
       paddingVertical: 6,
       marginBottom: 8,
     },
-    abortText: { color: "#fff", fontSize: 13, fontWeight: "600" },
+    abortText: { color: "#fff", fontSize: MIUIX_TYPE.footnote1, fontWeight: "600" },
     fab: {
       position: "absolute",
-      right: 18,
-      bottom: 90,
+      right: MIUIX_SPACE.lg + 2,
       width: 46,
       height: 46,
       borderRadius: 23,

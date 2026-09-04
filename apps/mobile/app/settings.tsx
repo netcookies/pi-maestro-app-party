@@ -1,7 +1,7 @@
 import React, { useMemo, useState, useEffect } from "react";
 import { View, Text, StyleSheet, ScrollView, TouchableOpacity, TextInput } from "react-native";
 import { useHost } from "../src/store";
-import { useTheme, THEMES } from "../src/theme";
+import { useTheme, THEMES, MIUIX_RADIUS, MIUIX_TYPE, MIUIX_SPACE } from "../src/theme";
 import { DEFAULT_CONFIG, getConfig, updateConfig, loadConfig, type AppConfig } from "../src/config";
 
 const configFields: { key: keyof AppConfig; label: string; default: number }[] = [
@@ -73,6 +73,8 @@ export default function SettingsScreen() {
                   { backgroundColor: t.cardBg },
                 ]}
                 onPress={() => setTheme(name)}
+                accessibilityRole="button"
+                accessibilityState={{ selected: active }}
               >
                 <View style={[styles.swatch, { backgroundColor: t.accent }]} />
                 <Text style={[styles.themeName, { color: t.text }]}>{t.name}</Text>
@@ -101,7 +103,11 @@ export default function SettingsScreen() {
             />
           </View>
         ))}
-        <TouchableOpacity style={[styles.saveBtn, { backgroundColor: theme.buttonPrimary }]} onPress={saveConfig}>
+        <TouchableOpacity
+          style={[styles.saveBtn, { backgroundColor: theme.buttonPrimary }]}
+          onPress={saveConfig}
+          accessibilityRole="button"
+        >
           <Text style={styles.saveText}>保存参数</Text>
         </TouchableOpacity>
         <Text style={[styles.configHint, { color: theme.dim }]}>
@@ -129,6 +135,7 @@ export default function SettingsScreen() {
             <TouchableOpacity
               style={[styles.saveBtn, { backgroundColor: theme.buttonPrimary }]}
               onPress={saveMaestroSettings}
+              accessibilityRole="button"
             >
               <Text style={styles.saveText}>保存 Maestro 设置（写回 Host）</Text>
             </TouchableOpacity>
@@ -137,7 +144,11 @@ export default function SettingsScreen() {
             </Text>
           </>
         ) : (
-          <TouchableOpacity style={[styles.saveBtn, { backgroundColor: theme.buttonPrimary }]} onPress={loadMaestro}>
+          <TouchableOpacity
+            style={[styles.saveBtn, { backgroundColor: theme.buttonPrimary }]}
+            onPress={loadMaestro}
+            accessibilityRole="button"
+          >
             <Text style={styles.saveText}>加载 Maestro 设置</Text>
           </TouchableOpacity>
         )}
@@ -174,8 +185,8 @@ export default function SettingsScreen() {
         </View>
       </View>
 
-      <View style={styles.card}>
-        <Text style={styles.cardTitle}>架构说明</Text>
+      <View style={styles.cardSecondary}>
+        <Text style={styles.cardTitleSecondary}>架构说明</Text>
         <Text style={styles.desc}>
           Bridge 模式：独立 SDK Host 进程（createAgentSession + bindExtensions），
           MobileExtensionUiBridge 将 maestro ask 的 ctx.ui.select/input/confirm 映射为 extension_ui_request 事件流，
@@ -183,8 +194,8 @@ export default function SettingsScreen() {
         </Text>
       </View>
 
-      <View style={styles.card}>
-        <Text style={styles.cardTitle}>安全</Text>
+      <View style={styles.cardSecondary}>
+        <Text style={styles.cardTitleSecondary}>安全</Text>
         <Text style={styles.desc}>
           移动端是 Pi 的远程入口。建议设置 MAESTRO_MOBILE_TOKEN 鉴权，
           或通过 Tailscale / SSH 隧道访问。不要无鉴权暴露在公网。
@@ -197,44 +208,60 @@ export default function SettingsScreen() {
 function makeStyles(theme: ReturnType<typeof useTheme>["theme"]) {
   return StyleSheet.create({
     container: { flex: 1, backgroundColor: theme.bg },
-    content: { padding: 16 },
+    content: { padding: MIUIX_SPACE.lg },
     card: {
       backgroundColor: theme.cardBg,
-      borderRadius: 12,
-      padding: 16,
-      marginBottom: 16,
+      borderRadius: MIUIX_RADIUS.lg,
+      padding: MIUIX_SPACE.lg,
+      marginBottom: MIUIX_SPACE.lg,
       borderWidth: 1,
       borderColor: theme.border,
     },
-    cardTitle: { fontSize: 16, fontWeight: "600", color: theme.text, marginBottom: 8 },
-    version: { fontSize: 13, color: theme.muted, marginBottom: 12 },
-    desc: { fontSize: 13, color: theme.muted, lineHeight: 20 },
-    row: { flexDirection: "row", justifyContent: "space-between", marginBottom: 8 },
-    label: { fontSize: 14, color: theme.muted },
-    value: { fontSize: 14, fontWeight: "600", color: theme.text },
-    themeRow: { flexDirection: "row", flexWrap: "wrap", gap: 10 },
+    cardSecondary: {
+      borderRadius: MIUIX_RADIUS.lg,
+      padding: MIUIX_SPACE.lg,
+      marginBottom: MIUIX_SPACE.lg,
+      borderWidth: 0,
+      backgroundColor: "transparent",
+    },
+    cardTitle: { fontSize: MIUIX_TYPE.main, fontWeight: "700", color: theme.text, marginBottom: MIUIX_SPACE.sm },
+    cardTitleSecondary: { fontSize: MIUIX_TYPE.body2, fontWeight: "600", color: theme.muted, marginBottom: MIUIX_SPACE.xs },
+    version: { fontSize: MIUIX_TYPE.footnote1, color: theme.muted, marginBottom: MIUIX_SPACE.md },
+    desc: { fontSize: MIUIX_TYPE.footnote1, color: theme.muted, lineHeight: 20 },
+    row: { flexDirection: "row", justifyContent: "space-between", alignItems: "center", marginBottom: MIUIX_SPACE.sm },
+    label: { fontSize: MIUIX_TYPE.body2, color: theme.muted, flex: 1, marginRight: MIUIX_SPACE.md },
+    value: { fontSize: MIUIX_TYPE.body2, fontWeight: "600", color: theme.text },
+    themeRow: { flexDirection: "row", flexWrap: "wrap", gap: MIUIX_SPACE.sm },
     themeItem: {
-      borderRadius: 10,
-      paddingHorizontal: 14,
-      paddingVertical: 12,
+      borderRadius: MIUIX_RADIUS.md,
+      paddingHorizontal: MIUIX_SPACE.md,
+      paddingVertical: MIUIX_SPACE.md,
       borderWidth: 1,
       borderColor: "transparent",
       alignItems: "center",
       minWidth: 80,
     },
-    swatch: { width: 22, height: 22, borderRadius: 11, marginBottom: 6 },
-    themeName: { fontSize: 13, fontWeight: "600" },
+    swatch: { width: 22, height: 22, borderRadius: 11, marginBottom: MIUIX_SPACE.xs },
+    themeName: { fontSize: MIUIX_TYPE.footnote1, fontWeight: "600" },
     configInput: {
-      borderRadius: 6,
+      borderRadius: MIUIX_RADIUS.sm,
       borderWidth: 1,
-      paddingHorizontal: 8,
-      paddingVertical: 4,
-      fontSize: 13,
+      paddingHorizontal: MIUIX_SPACE.sm,
+      paddingVertical: MIUIX_SPACE.xs,
+      fontSize: MIUIX_TYPE.footnote1,
       width: 90,
+      minHeight: 44,
       textAlign: "right",
     },
-    saveBtn: { borderRadius: 8, paddingVertical: 10, alignItems: "center", marginTop: 8 },
-    saveText: { color: "#fff", fontWeight: "600", fontSize: 14 },
-    configHint: { fontSize: 11, marginTop: 8 },
+    saveBtn: {
+      borderRadius: MIUIX_RADIUS.sm,
+      paddingVertical: MIUIX_SPACE.sm,
+      minHeight: 44,
+      alignItems: "center",
+      justifyContent: "center",
+      marginTop: MIUIX_SPACE.sm,
+    },
+    saveText: { color: "#fff", fontWeight: "600", fontSize: MIUIX_TYPE.body2 },
+    configHint: { fontSize: MIUIX_TYPE.footnote1, marginTop: MIUIX_SPACE.sm },
   });
 }

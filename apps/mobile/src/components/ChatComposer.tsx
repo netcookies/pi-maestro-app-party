@@ -12,6 +12,7 @@
 import React, { useState, useRef, useEffect } from "react";
 import {
   View, Text, TextInput, TouchableOpacity, StyleSheet, Modal, FlatList, Image, ScrollView,
+  Animated, AccessibilityInfo,
 } from "react-native";
 import { useTheme } from "../theme";
 
@@ -51,6 +52,45 @@ export function ChatComposer({ actions, currentModel, sending, skills = [], plac
   const [focused, setFocused] = useState(false);
   const [fullscreenEdit, setFullscreenEdit] = useState(false);
   const [fsPanel, setFsPanel] = useState<null | "models" | "thinking" | "plan" | "skills">(null);
+
+  // reduce-motion：系统开启时动画直接置终值，不播动画
+  const [reduceMotion, setReduceMotion] = useState(false);
+  useEffect(() => {
+    let alive = true;
+    AccessibilityInfo.isReduceMotionEnabled()
+      .then((v) => { if (alive) setReduceMotion(v); })
+      .catch(() => {});
+    const sub = AccessibilityInfo.addEventListener("reduceMotionChanged", setReduceMotion);
+    return () => { alive = false; sub.remove(); };
+  }, []);
+
+  // fsPanel 内嵌面板进出场（RN 内置 Animated）
+  const panelAnim = useRef(new Animated.Value(0)).current;
+  const panelCloseTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  useEffect(() => {
+    if (fsPanel === null) return;
+    // 重新打开时取消尚未落地的退场卸载，避免把刚打开的面板清掉
+    if (panelCloseTimer.current !== null) {
+      clearTimeout(panelCloseTimer.current);
+      panelCloseTimer.current = null;
+    }
+    if (reduceMotion) { panelAnim.setValue(1); return; }
+    panelAnim.setValue(0);
+    Animated.timing(panelAnim, { toValue: 1, duration: 200, useNativeDriver: true }).start();
+  }, [fsPanel, reduceMotion, panelAnim]);
+
+  useEffect(() => () => {
+    if (panelCloseTimer.current !== null) clearTimeout(panelCloseTimer.current);
+  }, []);
+
+  // 退场：先 timing 到 0，200ms 后再清 state 卸载面板
+  const closeFsPanel = () => {
+    if (reduceMotion) { setFsPanel(null); return; }
+    Animated.timing(panelAnim, { toValue: 0, duration: 200, useNativeDriver: true }).start();
+    if (panelCloseTimer.current !== null) clearTimeout(panelCloseTimer.current);
+    panelCloseTimer.current = setTimeout(() => { panelCloseTimer.current = null; setFsPanel(null); }, 200);
+  };
 
   const canSend = (text.trim().length > 0 || images.length > 0) && !sending;
 
@@ -283,15 +323,25 @@ export function ChatComposer({ actions, currentModel, sending, skills = [], plac
           </View>
 
           {/* 内嵌面板（全屏内的工具弹层，非独立 Modal，避免层级问题） */}
-          {/* 内嵌面板（全屏内的工具弹层，非独立 Modal，避免层级问题） */}
           {fsPanel !== null && (
-            <View style={styles.fsPanelOverlay}>
-              <View style={[styles.fsPanel, { backgroundColor: theme.cardBg, borderColor: theme.border }]}>
+            <Animated.View style={styles.fsPanelOverlay}>
+              <Animated.View style={[styles.fsPanelScrim, { opacity: panelAnim }]} />
+              <Animated.View
+                style={[
+                  styles.fsPanel,
+                  {
+                    backgroundColor: theme.cardBg,
+                    borderColor: theme.border,
+                    opacity: panelAnim,
+                    transform: [{ translateY: panelAnim.interpolate({ inputRange: [0, 1], outputRange: [24, 0] }) }],
+                  },
+                ]}
+              >
                 <View style={styles.modalHeader}>
                   <Text style={[styles.modalTitle, { color: theme.text }]}>
                     {fsPanel === "models" ? "选择模型" : fsPanel === "thinking" ? "思考等级" : fsPanel === "plan" ? "Plan / Act 模式" : "Skills"}
                   </Text>
-                  <TouchableOpacity onPress={() => setFsPanel(null)} accessibilityRole="button" accessibilityLabel="关闭">
+                  <TouchableOpacity onPress={closeFsPanel} accessibilityRole="button" accessibilityLabel="关闭">
                     <Text style={[styles.modalClose, { color: theme.muted }]}>✕</Text>
                   </TouchableOpacity>
                 </View>
@@ -319,7 +369,7 @@ export function ChatComposer({ actions, currentModel, sending, skills = [], plac
                       renderItem={({ item }) => (
                         <TouchableOpacity
                           style={[styles.modelItem, { borderBottomColor: theme.border }]}
-                          onPress={async () => { await actions.setModel?.(item.id); setFsPanel(null); }}
+                          onPress={async () => { await actions.setModel?.(item.id); closeFsPanel(); }}
                         >
                           <Text style={[styles.modelName, { color: theme.text }]}>{item.name}</Text>
                           <View style={styles.modelMeta}>
@@ -337,7 +387,7 @@ export function ChatComposer({ actions, currentModel, sending, skills = [], plac
                   <TouchableOpacity
                     key={lv}
                     style={[styles.modelItem, { borderBottomColor: theme.border }]}
-                    onPress={async () => { await actions.setThinking?.(lv); setFsPanel(null); }}
+                    onPress={async () => { await actions.setThinking?.(lv); closeFsPanel(); }}
                   >
                     <Text style={[styles.modelName, { color: theme.text }]}>{lv}</Text>
                   </TouchableOpacity>
@@ -346,7 +396,7 @@ export function ChatComposer({ actions, currentModel, sending, skills = [], plac
                   <TouchableOpacity
                     key={p.key}
                     style={[styles.modelItem, { borderBottomColor: theme.border }]}
-                    onPress={async () => { setFsPanel(null); await actions.send(p.prompt); }}
+                    onPress={async () => { closeFsPanel(); await actions.send(p.prompt); }}
                   >
                     <Text style={[styles.modelName, { color: theme.text }]}>{p.label}</Text>
                   </TouchableOpacity>
@@ -368,7 +418,7 @@ export function ChatComposer({ actions, currentModel, sending, skills = [], plac
                     renderItem={({ item }) => (
                       <TouchableOpacity
                         style={[styles.skillItem, { borderBottomColor: theme.border }]}
-                        onPress={() => { setText(`/skill:${item.name} `); setFsPanel(null); }}
+                        onPress={() => { setText(`/skill:${item.name} `); closeFsPanel(); }}
                       >
                         <Text style={[styles.skillName, { color: theme.text }]} numberOfLines={1}>/skill:{item.name}</Text>
                       </TouchableOpacity>
@@ -377,13 +427,13 @@ export function ChatComposer({ actions, currentModel, sending, skills = [], plac
                     style={{ maxHeight: 300 }}
                   />
                 )}
-              </View>
-            </View>
+              </Animated.View>
+            </Animated.View>
           )}
         </View>
       </Modal>
 
-      <Modal visible={showSkills} transparent animationType="fade" onRequestClose={() => setShowSkills(false)}>
+      <Modal visible={showSkills} transparent animationType="slide" onRequestClose={() => setShowSkills(false)}>
         <View style={styles.modalOverlay}>
           <View style={[styles.modalSheet, { backgroundColor: theme.cardBg, borderColor: theme.border }]}>
             <View style={styles.modalHeader}>
@@ -463,7 +513,7 @@ export function ChatComposer({ actions, currentModel, sending, skills = [], plac
       </Modal>
 
       {/* 思考等级 Modal */}
-      <Modal visible={showThinking} transparent animationType="fade" onRequestClose={() => setShowThinking(false)}>
+      <Modal visible={showThinking} transparent animationType="slide" onRequestClose={() => setShowThinking(false)}>
         <View style={styles.modalOverlay}>
           <View style={[styles.modalSheet, { backgroundColor: theme.cardBg, borderColor: theme.border }]}>
             <View style={styles.modalHeader}>
@@ -484,7 +534,7 @@ export function ChatComposer({ actions, currentModel, sending, skills = [], plac
       </Modal>
 
       {/* Plan 模式 Modal */}
-      <Modal visible={showPlanPicker} transparent animationType="fade" onRequestClose={() => setShowPlanPicker(false)}>
+      <Modal visible={showPlanPicker} transparent animationType="slide" onRequestClose={() => setShowPlanPicker(false)}>
         <View style={styles.modalOverlay}>
           <View style={[styles.modalSheet, { backgroundColor: theme.cardBg, borderColor: theme.border }]}>
             <View style={styles.modalHeader}>
@@ -599,11 +649,8 @@ const styles = StyleSheet.create({
   },
   fsToolBtn: { alignItems: "center", paddingHorizontal: 10 },
   fsSpacer: { flex: 1 },
-  fsPanelOverlay: {
-    ...StyleSheet.absoluteFillObject,
-    backgroundColor: "rgba(0,0,0,0.5)",
-    justifyContent: "flex-end",
-  },
+  fsPanelOverlay: { ...StyleSheet.absoluteFillObject, justifyContent: "flex-end" },
+  fsPanelScrim: { ...StyleSheet.absoluteFillObject, backgroundColor: "rgba(0,0,0,0.5)" },
   fsPanel: {
     borderTopLeftRadius: 16,
     borderTopRightRadius: 16,

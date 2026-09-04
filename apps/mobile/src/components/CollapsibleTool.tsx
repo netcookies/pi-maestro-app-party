@@ -7,11 +7,17 @@
  *  - 展开态右下角「全屏」按钮：Modal 全屏查看正文
  *  - 错误态：标题红色提示，可快速识别
  */
-import React, { useState } from "react";
+import React, { useState, useEffect } from "react";
 import {
   View, Text, StyleSheet, TouchableOpacity, Modal, ScrollView, Pressable,
+  LayoutAnimation, Platform, UIManager, AccessibilityInfo,
 } from "react-native";
 import { useTheme } from "../../src/theme";
+
+// Android 开启 LayoutAnimation 实验支持（模块顶层一次性）
+if (Platform.OS === "android") {
+  UIManager.setLayoutAnimationEnabledExperimental?.(true);
+}
 
 interface Props {
   toolName: string;
@@ -27,9 +33,25 @@ export function CollapsibleTool({ toolName, text, isError, summary }: Props) {
   const { theme } = useTheme();
   const [expanded, setExpanded] = useState(false);
   const [fullscreen, setFullscreen] = useState(false);
+  const [reduceMotion, setReduceMotion] = useState(false);
+
+  useEffect(() => {
+    let alive = true;
+    AccessibilityInfo.isReduceMotionEnabled()
+      .then((v) => { if (alive) setReduceMotion(v); })
+      .catch(() => {});
+    const sub = AccessibilityInfo.addEventListener("reduceMotionChanged", setReduceMotion);
+    return () => { alive = false; sub.remove(); };
+  }, []);
 
   const preview = summary ?? text.replace(/\s+/g, " ").slice(0, PREVIEW_LEN);
   const isLong = text.length > PREVIEW_LEN;
+  const lineCount = text.split("\n").length;
+
+  const toggleExpanded = () => {
+    if (!reduceMotion) LayoutAnimation.easeInEaseOut();
+    setExpanded((v) => !v);
+  };
 
   return (
     <>
@@ -39,7 +61,7 @@ export function CollapsibleTool({ toolName, text, isError, summary }: Props) {
           styles.card,
           { backgroundColor: theme.toolBubble, borderColor: isError ? theme.error : theme.border },
         ]}
-        onPress={() => setExpanded((v) => !v)}
+        onPress={toggleExpanded}
         activeOpacity={0.7}
       >
         <View style={styles.header}>
@@ -49,6 +71,8 @@ export function CollapsibleTool({ toolName, text, isError, summary }: Props) {
           <Text style={[styles.name, { color: theme.toolTitle }]} numberOfLines={1}>
             {toolName}
           </Text>
+          {/* 摘要行：输出行数（无耗时数据，不显示状态点） */}
+          <Text style={[styles.meta, { color: theme.muted }]}>{lineCount} 行输出</Text>
           <Text style={[styles.arrow, { color: theme.muted }]}>{expanded ? "▾" : "▸"}</Text>
         </View>
         {!expanded && (
@@ -58,9 +82,12 @@ export function CollapsibleTool({ toolName, text, isError, summary }: Props) {
         )}
         {expanded && (
           <View style={styles.body}>
-            <Text style={[styles.bodyText, { color: theme.toolOutput }]} selectable>
-              {text}
-            </Text>
+            {/* H19: 展开态限高，不再无限撑高聊天列表 */}
+            <ScrollView style={styles.bodyScroll} nestedScrollEnabled>
+              <Text style={[styles.bodyText, { color: theme.toolOutput }]} selectable>
+                {text}
+              </Text>
+            </ScrollView>
             {isLong && (
               <TouchableOpacity style={styles.fullscreenBtn} onPress={() => setFullscreen(true)}>
                 <Text style={[styles.fullscreenText, { color: theme.accent }]}>⛶ 全屏</Text>
@@ -103,8 +130,10 @@ const styles = StyleSheet.create({
   icon: { fontSize: 13 },
   name: { flex: 1, fontSize: 13, fontWeight: "700" },
   arrow: { fontSize: 14 },
+  meta: { fontSize: 11, flexShrink: 0 },
   preview: { fontSize: 11, marginTop: 6, lineHeight: 16 },
   body: { marginTop: 8 },
+  bodyScroll: { maxHeight: 280 },
   bodyText: { fontSize: 12, lineHeight: 17, fontFamily: "monospace" },
   fullscreenBtn: { alignSelf: "flex-end", marginTop: 8, padding: 4 },
   fullscreenText: { fontSize: 12, fontWeight: "600" },
