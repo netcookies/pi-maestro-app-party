@@ -129,8 +129,8 @@ function makeStyles(theme: ReturnType<typeof useTheme>["theme"]) {
   container: { flex: 1, backgroundColor: theme.bg },
   list: { padding: MIUIX_SPACE.lg },
   empty: { flex: 1, justifyContent: "center", alignItems: "center", padding: MIUIX_SPACE.xxl },
-  emptyText: { fontSize: 16, color: theme.muted, fontWeight: "600" },
-  emptyDesc: { fontSize: 13, color: theme.dim, marginTop: MIUIX_SPACE.sm },
+  emptyText: { fontSize: MIUIX_TYPE.body1, color: theme.muted, fontWeight: "600" },
+  emptyDesc: { fontSize: MIUIX_TYPE.footnote1, color: theme.dim, marginTop: MIUIX_SPACE.sm },
   window: {
     backgroundColor: theme.cardBg,
     borderRadius: MIUIX_RADIUS.lg,
