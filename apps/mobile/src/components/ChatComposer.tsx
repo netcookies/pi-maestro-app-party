@@ -22,7 +22,6 @@ export interface ComposerActions {
   setThinking?(level: string): Promise<{ ok: boolean; error?: string }>;
   pickImage?(): Promise<{ data: string; mime: string } | null>;
   compact?(): Promise<{ ok: boolean; error?: string }>;
-  renameSession?(name: string): Promise<{ ok: boolean; error?: string }>;
 }
 
 interface Props {
@@ -46,10 +45,9 @@ export function ChatComposer({ actions, currentModel, sending, skills = [], plac
   const [models, setModels] = useState<{ id: string; provider: string; name: string; reasoning: boolean; vision: boolean }[]>([]);
   const [modelsLoading, setModelsLoading] = useState(false);
   const [showSkills, setShowSkills] = useState(false);
+  const [skillQuery, setSkillQuery] = useState("");
   const [showThinking, setShowThinking] = useState(false);
   const [showPlanPicker, setShowPlanPicker] = useState(false);
-  const [renameText, setRenameText] = useState("");
-  const [showRename, setShowRename] = useState(false);
 
   const canSend = (text.trim().length > 0 || images.length > 0) && !sending;
 
@@ -84,11 +82,6 @@ export function ChatComposer({ actions, currentModel, sending, skills = [], plac
     setShowModels(false);
   };
 
-  // skill 联想：输入以 / 开头时显示
-  useEffect(() => {
-    setShowSkills(text.startsWith("/") && !text.startsWith("/skill:") && skills.length > 0);
-  }, [text, skills.length]);
-
   const planActions = [
     { key: "plan", label: "📋 进入 Plan 模式", prompt: "请调用 plan 工具（action: enter）进入 Plan 模式。" },
     { key: "act", label: "⚡ 退出到 Act 模式", prompt: "请调用 plan 工具（action: exit）退出到 Act 模式。" },
@@ -114,66 +107,95 @@ export function ChatComposer({ actions, currentModel, sending, skills = [], plac
         </ScrollView>
       )}
 
-      {/* skill 联想浮层 */}
-      {showSkills && (
-        <View style={[styles.skillPopup, { backgroundColor: theme.cardBg, borderColor: theme.border }]}>
-          <Text style={[styles.skillTitle, { color: theme.muted }]}>Skills（输入 /skill:name）</Text>
-          {skills.slice(0, 8).map((s) => (
-            <TouchableOpacity
-              key={s}
-              style={[styles.skillItem, { borderBottomColor: theme.border }]}
-              onPress={() => { setText(`/skill:${s} `); setShowSkills(false); }}
-            >
-              <Text style={[styles.skillName, { color: theme.text }]}>/skill:{s}</Text>
-            </TouchableOpacity>
-          ))}
+      {/* skill 弹窗（带搜索条） */}
+      <Modal visible={showSkills} transparent animationType="fade" onRequestClose={() => setShowSkills(false)}>
+        <View style={styles.modalOverlay}>
+          <View style={[styles.modalSheet, { backgroundColor: theme.cardBg, borderColor: theme.border }]}>
+            <View style={styles.modalHeader}>
+              <Text style={[styles.modalTitle, { color: theme.text }]}>Skills</Text>
+              <TouchableOpacity onPress={() => setShowSkills(false)}><Text style={[styles.modalClose, { color: theme.muted }]}>✕</Text></TouchableOpacity>
+            </View>
+            <TextInput
+              style={[styles.skillSearch, { backgroundColor: theme.inputBg, color: theme.text, borderColor: theme.border }]}
+              value={skillQuery}
+              onChangeText={setSkillQuery}
+              placeholder="Search skills..."
+              placeholderTextColor={theme.dim}
+              autoCapitalize="none"
+              autoFocus
+            />
+            <FlatList
+              data={skills.filter((s) => s.toLowerCase().includes(skillQuery.toLowerCase()))}
+              keyExtractor={(s) => s}
+              renderItem={({ item }) => (
+                <TouchableOpacity
+                  style={[styles.skillItem, { borderBottomColor: theme.border }]}
+                  onPress={() => { setText(`/skill:${item} `); setShowSkills(false); }}
+                >
+                  <Text style={[styles.skillName, { color: theme.text }]}>/skill:{item}</Text>
+                </TouchableOpacity>
+              )}
+              ListEmptyComponent={
+                <Text style={[styles.modalEmpty, { color: theme.muted }]}>No skills found</Text>
+              }
+              style={{ maxHeight: 340 }}
+            />
+          </View>
         </View>
-      )}
+      </Modal>
 
-      {/* 工具行 */}
+      {/* 工具行（图标 + 英文文字） */}
       <View style={styles.toolbar}>
-        <TouchableOpacity onPress={pickImage} style={styles.toolBtn}>
-          <Text style={[styles.toolIcon, { color: theme.muted }]}>🖼</Text>
-        </TouchableOpacity>
         <TouchableOpacity onPress={openModels} style={styles.toolBtn}>
           <Text style={[styles.toolIcon, { color: theme.muted }]}>🧠</Text>
+          <Text style={[styles.toolLabel, { color: theme.muted }]}>Model</Text>
         </TouchableOpacity>
         <TouchableOpacity onPress={() => setShowThinking(true)} style={styles.toolBtn}>
           <Text style={[styles.toolIcon, { color: theme.muted }]}>⚡</Text>
+          <Text style={[styles.toolLabel, { color: theme.muted }]}>Think</Text>
         </TouchableOpacity>
         <TouchableOpacity onPress={() => setShowPlanPicker(true)} style={styles.toolBtn}>
           <Text style={[styles.toolIcon, { color: theme.muted }]}>📋</Text>
+          <Text style={[styles.toolLabel, { color: theme.muted }]}>Plan</Text>
         </TouchableOpacity>
         <TouchableOpacity
           onPress={async () => { await actions.compact?.(); }}
           style={styles.toolBtn}
         >
           <Text style={[styles.toolIcon, { color: theme.muted }]}>🗜</Text>
-        </TouchableOpacity>
-        <TouchableOpacity onPress={() => setShowRename(true)} style={styles.toolBtn}>
-          <Text style={[styles.toolIcon, { color: theme.muted }]}>✏️</Text>
+          <Text style={[styles.toolLabel, { color: theme.muted }]}>Compact</Text>
         </TouchableOpacity>
         <Text style={[styles.modelLabel, { color: theme.dim }]} numberOfLines={1}>
-          {currentModel ?? "未选择模型"}
+          {currentModel ?? "no model"}
         </Text>
       </View>
 
       <View style={styles.inputRow}>
+        {/* 附件按钮（输入框左侧）：发送图片 */}
+        <TouchableOpacity onPress={pickImage} style={styles.attachBtn}>
+          <Text style={[styles.toolIcon, { color: theme.accent }]}>📎</Text>
+        </TouchableOpacity>
         <TextInput
           style={[styles.input, { backgroundColor: theme.inputBg, color: theme.text, borderColor: theme.border }]}
           value={text}
           onChangeText={setText}
-          placeholder={placeholder ?? "输入消息...  / 触发 skill 联想"}
+          placeholder={placeholder ?? "Message..."}
           placeholderTextColor={theme.dim}
           multiline
           maxLength={4000}
         />
+        {/* / 按钮：弹 skill 弹窗 */}
+        <TouchableOpacity
+          onPress={() => setShowSkills(true)}
+          style={[styles.slashBtn, { borderColor: theme.border }]}>
+          <Text style={[styles.slashText, { color: theme.accent }]}>/</Text>
+        </TouchableOpacity>
         <TouchableOpacity
           style={[styles.sendButton, { backgroundColor: canSend ? theme.buttonPrimary : theme.border }]}
           onPress={() => void handleSend()}
           disabled={!canSend}
         >
-          <Text style={styles.sendText}>{sending ? "…" : "发送"}</Text>
+          <Text style={styles.sendText}>{sending ? "…" : "Send"}</Text>
         </TouchableOpacity>
       </View>
 
@@ -249,32 +271,6 @@ export function ChatComposer({ actions, currentModel, sending, skills = [], plac
           </View>
         </View>
       </Modal>
-      {/* 重命名 Modal */}
-      <Modal visible={showRename} transparent animationType="fade" onRequestClose={() => setShowRename(false)}>
-        <View style={styles.modalOverlay}>
-          <View style={[styles.modalSheet, { backgroundColor: theme.cardBg, borderColor: theme.border }]}>
-            <Text style={[styles.modalTitle, { color: theme.text }]}>重命名会话</Text>
-            <TextInput
-              style={[styles.input, { backgroundColor: theme.inputBg, color: theme.text, borderColor: theme.border }]}
-              value={renameText}
-              onChangeText={setRenameText}
-              placeholder="输入新名称"
-              placeholderTextColor={theme.dim}
-            />
-            <TouchableOpacity
-              style={[styles.sendButton, { backgroundColor: theme.buttonPrimary, marginTop: 8, alignSelf: "flex-end" }]}
-              onPress={async () => {
-                if (!renameText.trim()) return;
-                await actions.renameSession?.(renameText.trim());
-                setRenameText("");
-                setShowRename(false);
-              }}
-            >
-              <Text style={styles.sendText}>确定</Text>
-            </TouchableOpacity>
-          </View>
-        </View>
-      </Modal>
     </View>
   );
 }
@@ -288,10 +284,30 @@ const styles = StyleSheet.create({
   imageRemoveText: { color: "#fff", fontSize: 10, fontWeight: "700" },
   skillPopup: { marginHorizontal: 10, marginBottom: 4, borderRadius: 8, borderWidth: 1, padding: 8 },
   skillTitle: { fontSize: 11, marginBottom: 6, fontWeight: "600" },
-  skillItem: { paddingVertical: 8, borderBottomWidth: StyleSheet.hairlineWidth },
+  skillItem: { paddingVertical: 10, borderBottomWidth: StyleSheet.hairlineWidth },
   skillName: { fontSize: 13, fontWeight: "600" },
+  skillSearch: {
+    borderRadius: 8,
+    borderWidth: 1,
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    fontSize: 14,
+    marginBottom: 8,
+  },
+  attachBtn: { paddingHorizontal: 4, paddingVertical: 10 },
+  slashBtn: {
+    width: 36,
+    height: 36,
+    borderRadius: 8,
+    borderWidth: 1,
+    alignItems: "center",
+    justifyContent: "center",
+    marginLeft: 4,
+  },
+  slashText: { fontSize: 18, fontWeight: "700" },
+  toolBtn: { alignItems: "center", paddingHorizontal: 8, paddingVertical: 2 },
+  toolLabel: { fontSize: 10, marginTop: 1 },
   toolbar: { flexDirection: "row", alignItems: "center", paddingHorizontal: 10, paddingVertical: 4 },
-  toolBtn: { padding: 6, marginRight: 4 },
   toolIcon: { fontSize: 18 },
   modelLabel: { flex: 1, fontSize: 11, textAlign: "right", marginLeft: 8 },
   inputRow: { flexDirection: "row", alignItems: "flex-end", paddingHorizontal: 10, paddingBottom: 8, gap: 8 },
