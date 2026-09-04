@@ -170,6 +170,8 @@ export function HostStoreProvider({ children }: { children: React.ReactNode }) {
     try {
       const snapshot = await getClient().getSnapshot(sessionId);
       dispatch({ type: "__history_load", sessionId, items: snapshot.timeline, seq: snapshot.nextSeq } as never);
+      // 同时写入 session 状态（model/title 等），否则会话页显示 no model
+      dispatch({ type: "session_updated", session: snapshot.session, seq: snapshot.nextSeq } as never);
     } catch {
       // snapshot 失败静默（历史不可见但不阻塞）
     }

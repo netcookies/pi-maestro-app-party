@@ -180,10 +180,6 @@ export function ChatComposer({ actions, currentModel, sending, skills = [], plac
       </View>
 
       <View style={styles.inputRow}>
-        {/* 附件按钮（输入框左侧）：发送图片 */}
-        <TouchableOpacity onPress={pickImage} style={styles.attachBtn}>
-          <Text style={[styles.toolIcon, { color: theme.accent }]}>📎</Text>
-        </TouchableOpacity>
         <TextInput
           style={[styles.input, { backgroundColor: theme.inputBg, color: theme.text, borderColor: theme.border }]}
           value={text}
@@ -192,6 +188,8 @@ export function ChatComposer({ actions, currentModel, sending, skills = [], plac
           placeholderTextColor={theme.dim}
           multiline
           maxLength={4000}
+          onSubmitEditing={() => void handleSend()}
+          blurOnSubmit={false}
         />
         {/* / 按钮：弹 skill 弹窗 */}
         <TouchableOpacity
@@ -199,13 +197,20 @@ export function ChatComposer({ actions, currentModel, sending, skills = [], plac
           style={[styles.slashBtn, { borderColor: theme.border }]}>
           <Text style={[styles.slashText, { color: theme.accent }]}>/</Text>
         </TouchableOpacity>
-        <TouchableOpacity
-          style={[styles.sendButton, { backgroundColor: canSend ? theme.buttonPrimary : theme.border }]}
-          onPress={() => void handleSend()}
-          disabled={!canSend}
-        >
-          <Text style={styles.sendText}>{sending ? "…" : "Send"}</Text>
+        {/* 图片按钮：选图发送 */}
+        <TouchableOpacity onPress={pickImage} style={[styles.slashBtn, { borderColor: theme.border }]}>
+          <Text style={styles.toolIcon}>📎</Text>
         </TouchableOpacity>
+        {/* 发送按钮：仅在有内容时出现 */}
+        {canSend && (
+          <TouchableOpacity
+            style={[styles.sendButton, { backgroundColor: theme.buttonPrimary }]}
+            onPress={() => void handleSend()}
+            disabled={sending}
+          >
+            <Text style={styles.sendText}>{sending ? "…" : "↑"}</Text>
+          </TouchableOpacity>
+        )}
       </View>
 
       {/* 模型选择 Modal */}
@@ -322,8 +327,14 @@ const styles = StyleSheet.create({
   modelLabel: { flex: 1, fontSize: 11, textAlign: "right", marginLeft: 8 },
   inputRow: { flexDirection: "row", alignItems: "flex-end", paddingHorizontal: 10, paddingBottom: 8, gap: 8 },
   input: { flex: 1, borderRadius: 8, paddingHorizontal: 12, paddingVertical: 10, borderWidth: 1, fontSize: 15, maxHeight: 120 },
-  sendButton: { borderRadius: 8, paddingHorizontal: 16, paddingVertical: 12 },
-  sendText: { color: "#fff", fontWeight: "700", fontSize: 14 },
+  sendButton: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  sendText: { color: "#fff", fontWeight: "700", fontSize: 16 },
   modalOverlay: { flex: 1, backgroundColor: "rgba(0,0,0,0.55)", justifyContent: "flex-end" },
   modalSheet: { borderTopLeftRadius: 16, borderTopRightRadius: 16, borderWidth: 1, padding: 16, maxHeight: 480 },
   modalHeader: { flexDirection: "row", justifyContent: "space-between", alignItems: "center", marginBottom: 8 },
