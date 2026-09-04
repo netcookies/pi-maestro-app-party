@@ -15,6 +15,7 @@ import {
   Animated, AccessibilityInfo,
 } from "react-native";
 import { useTheme } from "../theme";
+import { LineIcon } from "./LineIcon";
 
 export interface ComposerActions {
   send(text: string, images?: { data: string; mime: string }[]): Promise<void>;
@@ -138,9 +139,9 @@ export function ChatComposer({ actions, currentModel, sending, skills = [], plac
   };
 
   const planActions = [
-    { key: "plan", label: "📋 进入 Plan 模式", prompt: "请调用 plan 工具（action: enter）进入 Plan 模式。" },
-    { key: "act", label: "⚡ 退出到 Act 模式", prompt: "请调用 plan 工具（action: exit）退出到 Act 模式。" },
-    { key: "status", label: "📊 查看 Plan 状态", prompt: "请调用 plan 工具（action: status）查看当前 Plan 状态。" },
+    { key: "plan", label: "进入 Plan 模式", prompt: "请调用 plan 工具（action: enter）进入 Plan 模式。" },
+    { key: "act", label: "退出到 Act 模式", prompt: "请调用 plan 工具（action: exit）退出到 Act 模式。" },
+    { key: "status", label: "查看 Plan 状态", prompt: "请调用 plan 工具（action: status）查看当前 Plan 状态。" },
   ];
 
   return (
@@ -158,7 +159,9 @@ export function ChatComposer({ actions, currentModel, sending, skills = [], plac
                 accessibilityLabel="移除图片"
                 onPress={() => setImages((prev) => prev.filter((_, j) => j !== i))}
               >
-                <Text style={styles.imageRemoveText}>✕</Text>
+                <Text style={styles.imageRemoveText}>
+                  <LineIcon name="x" size={10} color="#fff" strokeWidth={2.2} />
+                </Text>
               </TouchableOpacity>
             </View>
           ))}
@@ -171,15 +174,15 @@ export function ChatComposer({ actions, currentModel, sending, skills = [], plac
         <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.toolbarScroll}>
           <View style={styles.toolbarBtns}>
             <TouchableOpacity onPress={openModels} style={styles.toolBtn} accessibilityRole="button" accessibilityLabel="选择模型">
-              <Text style={[styles.toolIcon, { color: theme.muted }]}>🧠</Text>
+              <LineIcon name="brain" size={18} color={theme.muted} />
               <Text style={[styles.toolLabel, { color: theme.muted }]}>Model</Text>
             </TouchableOpacity>
             <TouchableOpacity onPress={() => setShowThinking(true)} style={styles.toolBtn} accessibilityRole="button" accessibilityLabel="思考等级">
-              <Text style={[styles.toolIcon, { color: theme.muted }]}>⚡</Text>
+              <LineIcon name="bolt" size={18} color={theme.muted} />
               <Text style={[styles.toolLabel, { color: theme.muted }]}>Think</Text>
             </TouchableOpacity>
             <TouchableOpacity onPress={() => setShowPlanPicker(true)} style={styles.toolBtn} accessibilityRole="button" accessibilityLabel="Plan模式">
-              <Text style={[styles.toolIcon, { color: theme.muted }]}>📋</Text>
+              <LineIcon name="plan" size={18} color={theme.muted} />
               <Text style={[styles.toolLabel, { color: theme.muted }]}>Plan</Text>
             </TouchableOpacity>
             <TouchableOpacity
@@ -188,7 +191,7 @@ export function ChatComposer({ actions, currentModel, sending, skills = [], plac
               accessibilityRole="button"
               accessibilityLabel="压缩会话"
             >
-              <Text style={[styles.toolIcon, { color: theme.muted }]}>🗜</Text>
+              <LineIcon name="compress" size={18} color={theme.muted} />
               <Text style={[styles.toolLabel, { color: theme.muted }]}>Compact</Text>
             </TouchableOpacity>
           </View>
@@ -214,7 +217,7 @@ export function ChatComposer({ actions, currentModel, sending, skills = [], plac
           accessibilityRole="button"
           accessibilityLabel="添加图片"
         >
-          <Text style={styles.toolIcon}>📎</Text>
+          <LineIcon name="clip" size={18} color={theme.text} />
         </TouchableOpacity>
         {/* 输入框（聚焦时内侧右缘显示全屏按钮） */}
         <View style={styles.inputWrap}>
@@ -237,11 +240,11 @@ export function ChatComposer({ actions, currentModel, sending, skills = [], plac
               accessibilityLabel="展开全屏编辑"
               onPress={() => { setFullscreenEdit(true); void actions.listModels?.().then(setModels).catch(() => {}); }}
             >
-              <Text style={[styles.expandIcon, { color: theme.accent }]}>⛶</Text>
+              <LineIcon name="expand" size={13} color={theme.accent} strokeWidth={2.2} />
             </TouchableOpacity>
           )}
         </View>
-        {/* 发送按钮（✈️） */}
+        {/* 发送按钮 */}
         <TouchableOpacity
           style={[styles.sendButton, { backgroundColor: canSend ? theme.buttonPrimary : theme.border }]}
           hitSlop={{ top: 4, bottom: 4, left: 4, right: 4 }}
@@ -251,7 +254,7 @@ export function ChatComposer({ actions, currentModel, sending, skills = [], plac
           onPress={() => void handleSend()}
           disabled={!canSend || sending}
         >
-          <Text style={styles.sendText}>{sending ? "…" : "✈"}</Text>
+          <LineIcon name="send" size={16} color="#fff" strokeWidth={2} />
         </TouchableOpacity>
       </View>
 
@@ -268,7 +271,7 @@ export function ChatComposer({ actions, currentModel, sending, skills = [], plac
               accessibilityLabel="收起全屏编辑"
               onPress={() => setFullscreenEdit(false)}
             >
-              <Text style={[styles.fsMinIcon, { color: theme.accent }]}>⤓</Text>
+              <LineIcon name="collapse" size={18} color={theme.accent} strokeWidth={2} />
             </TouchableOpacity>
           </View>
           {/* 大输入框（自动聚焦） */}
@@ -289,15 +292,15 @@ export function ChatComposer({ actions, currentModel, sending, skills = [], plac
               onPress={() => { setFsPanel("models"); if (models.length === 0) loadModels(); }}
               style={styles.fsToolBtn}
             >
-              <Text style={styles.toolIcon}>🧠</Text>
+              <LineIcon name="brain" size={18} color={theme.muted} />
               <Text style={[styles.toolLabel, { color: theme.muted }]}>Model</Text>
             </TouchableOpacity>
             <TouchableOpacity onPress={() => setFsPanel("thinking")} style={styles.fsToolBtn}>
-              <Text style={styles.toolIcon}>⚡</Text>
+              <LineIcon name="bolt" size={18} color={theme.muted} />
               <Text style={[styles.toolLabel, { color: theme.muted }]}>Think</Text>
             </TouchableOpacity>
             <TouchableOpacity onPress={() => setFsPanel("plan")} style={styles.fsToolBtn}>
-              <Text style={styles.toolIcon}>📋</Text>
+              <LineIcon name="plan" size={18} color={theme.muted} />
               <Text style={[styles.toolLabel, { color: theme.muted }]}>Plan</Text>
             </TouchableOpacity>
             <TouchableOpacity onPress={() => setFsPanel("skills")} style={styles.fsToolBtn}>
@@ -305,7 +308,7 @@ export function ChatComposer({ actions, currentModel, sending, skills = [], plac
               <Text style={[styles.toolLabel, { color: theme.muted }]}>Skill</Text>
             </TouchableOpacity>
             <TouchableOpacity onPress={pickImage} style={styles.fsToolBtn}>
-              <Text style={styles.toolIcon}>📎</Text>
+              <LineIcon name="clip" size={18} color={theme.muted} />
               <Text style={[styles.toolLabel, { color: theme.muted }]}>Image</Text>
             </TouchableOpacity>
             <View style={styles.fsSpacer} />
@@ -318,7 +321,7 @@ export function ChatComposer({ actions, currentModel, sending, skills = [], plac
               onPress={() => { setFullscreenEdit(false); void handleSend(); }}
               disabled={!canSend || sending}
             >
-              <Text style={styles.sendText}>{sending ? "…" : "✈"}</Text>
+              <LineIcon name="send" size={16} color="#fff" strokeWidth={2} />
             </TouchableOpacity>
           </View>
 
@@ -342,7 +345,7 @@ export function ChatComposer({ actions, currentModel, sending, skills = [], plac
                     {fsPanel === "models" ? "选择模型" : fsPanel === "thinking" ? "思考等级" : fsPanel === "plan" ? "Plan / Act 模式" : "Skills"}
                   </Text>
                   <TouchableOpacity onPress={closeFsPanel} accessibilityRole="button" accessibilityLabel="关闭">
-                    <Text style={[styles.modalClose, { color: theme.muted }]}>✕</Text>
+                    <LineIcon name="x" size={14} color={theme.muted} strokeWidth={2.2} />
                   </TouchableOpacity>
                 </View>
                 {fsPanel === "models" && (
@@ -374,8 +377,8 @@ export function ChatComposer({ actions, currentModel, sending, skills = [], plac
                           <Text style={[styles.modelName, { color: theme.text }]}>{item.name}</Text>
                           <View style={styles.modelMeta}>
                             <Text style={[styles.modelProvider, { color: theme.muted }]}>{item.provider}</Text>
-                            {item.vision && <Text style={[styles.modelBadge, { color: theme.success }]}>👁 vision</Text>}
-                            {item.reasoning && <Text style={[styles.modelBadge, { color: theme.accent }]}>🧠 reasoning</Text>}
+                            {item.vision && <View style={styles.badgeRow}><LineIcon name="eye" size={12} color={theme.success} strokeWidth={2} /><Text style={[styles.modelBadge, { color: theme.success }]}> vision</Text></View>}
+                            {item.reasoning && <View style={styles.badgeRow}><LineIcon name="brain" size={12} color={theme.accent} strokeWidth={2} /><Text style={[styles.modelBadge, { color: theme.accent }]}> reasoning</Text></View>}
                           </View>
                         </TouchableOpacity>
                       )}
@@ -438,7 +441,7 @@ export function ChatComposer({ actions, currentModel, sending, skills = [], plac
           <View style={[styles.modalSheet, { backgroundColor: theme.cardBg, borderColor: theme.border }]}>
             <View style={styles.modalHeader}>
               <Text style={[styles.modalTitle, { color: theme.text }]}>Skills</Text>
-              <TouchableOpacity onPress={() => setShowSkills(false)} accessibilityRole="button" accessibilityLabel="关闭"><Text style={[styles.modalClose, { color: theme.muted }]}>✕</Text></TouchableOpacity>
+              <TouchableOpacity onPress={() => setShowSkills(false)} accessibilityRole="button" accessibilityLabel="关闭"><LineIcon name="x" size={14} color={theme.muted} strokeWidth={2.2} /></TouchableOpacity>
             </View>
             <TextInput
               style={[styles.skillSearch, { backgroundColor: theme.inputBg, color: theme.text, borderColor: theme.border }]}
@@ -484,7 +487,7 @@ export function ChatComposer({ actions, currentModel, sending, skills = [], plac
           <View style={[styles.modalSheet, { backgroundColor: theme.cardBg, borderColor: theme.border }]}>
             <View style={styles.modalHeader}>
               <Text style={[styles.modalTitle, { color: theme.text }]}>选择模型</Text>
-              <TouchableOpacity onPress={() => setShowModels(false)} accessibilityRole="button" accessibilityLabel="关闭"><Text style={[styles.modalClose, { color: theme.muted }]}>✕</Text></TouchableOpacity>
+              <TouchableOpacity onPress={() => setShowModels(false)} accessibilityRole="button" accessibilityLabel="关闭"><LineIcon name="x" size={14} color={theme.muted} strokeWidth={2.2} /></TouchableOpacity>
             </View>
             {modelsLoading ? (
               <Text style={[styles.modalEmpty, { color: theme.muted }]}>加载中...</Text>
@@ -500,8 +503,8 @@ export function ChatComposer({ actions, currentModel, sending, skills = [], plac
                     <Text style={[styles.modelName, { color: theme.text }]}>{item.name}</Text>
                     <View style={styles.modelMeta}>
                       <Text style={[styles.modelProvider, { color: theme.muted }]}>{item.provider}</Text>
-                      {item.vision && <Text style={[styles.modelBadge, { color: theme.success }]}>👁 视觉</Text>}
-                      {item.reasoning && <Text style={[styles.modelBadge, { color: theme.accent }]}>🧠 推理</Text>}
+                      {item.vision && <View style={styles.badgeRow}><LineIcon name="eye" size={12} color={theme.success} strokeWidth={2} /><Text style={[styles.modelBadge, { color: theme.success }]}> 视觉</Text></View>}
+                      {item.reasoning && <View style={styles.badgeRow}><LineIcon name="brain" size={12} color={theme.accent} strokeWidth={2} /><Text style={[styles.modelBadge, { color: theme.accent }]}> 推理</Text></View>}
                     </View>
                   </TouchableOpacity>
                 )}
@@ -518,7 +521,7 @@ export function ChatComposer({ actions, currentModel, sending, skills = [], plac
           <View style={[styles.modalSheet, { backgroundColor: theme.cardBg, borderColor: theme.border }]}>
             <View style={styles.modalHeader}>
               <Text style={[styles.modalTitle, { color: theme.text }]}>思考等级</Text>
-              <TouchableOpacity onPress={() => setShowThinking(false)} accessibilityRole="button" accessibilityLabel="关闭"><Text style={[styles.modalClose, { color: theme.muted }]}>✕</Text></TouchableOpacity>
+              <TouchableOpacity onPress={() => setShowThinking(false)} accessibilityRole="button" accessibilityLabel="关闭"><LineIcon name="x" size={14} color={theme.muted} strokeWidth={2.2} /></TouchableOpacity>
             </View>
             {THINKING_LEVELS.map((lv) => (
               <TouchableOpacity
@@ -539,7 +542,7 @@ export function ChatComposer({ actions, currentModel, sending, skills = [], plac
           <View style={[styles.modalSheet, { backgroundColor: theme.cardBg, borderColor: theme.border }]}>
             <View style={styles.modalHeader}>
               <Text style={[styles.modalTitle, { color: theme.text }]}>Plan / Act 模式</Text>
-              <TouchableOpacity onPress={() => setShowPlanPicker(false)} accessibilityRole="button" accessibilityLabel="关闭"><Text style={[styles.modalClose, { color: theme.muted }]}>✕</Text></TouchableOpacity>
+              <TouchableOpacity onPress={() => setShowPlanPicker(false)} accessibilityRole="button" accessibilityLabel="关闭"><LineIcon name="x" size={14} color={theme.muted} strokeWidth={2.2} /></TouchableOpacity>
             </View>
             {planActions.map((p) => (
               <TouchableOpacity
@@ -680,4 +683,5 @@ const styles = StyleSheet.create({
   modelMeta: { flexDirection: "row", gap: 8, marginTop: 2 },
   modelProvider: { fontSize: 11 },
   modelBadge: { fontSize: 11 },
+  badgeRow: { flexDirection: "row", alignItems: "center" },
 });
