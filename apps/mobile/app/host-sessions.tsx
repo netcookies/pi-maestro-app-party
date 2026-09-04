@@ -4,7 +4,7 @@ import {
 } from "react-native";
 import { useRouter } from "expo-router";
 import { useHost } from "../src/store";
-import { useTheme } from "../src/theme";
+import { useTheme, MIUIX_RADIUS, MIUIX_TYPE, MIUIX_SPACE } from "../src/theme";
 import { getConfig, loadConfig } from "../src/config";
 import type { HostSessionSummary, LiveSessionInfo } from "@maestro-mobile/shared";
 
@@ -15,6 +15,11 @@ const TABS: { key: TabKey; label: string }[] = [
   { key: "active", label: "活跃" },
   { key: "history", label: "历史" },
 ];
+
+// 扁平行模型：分组头与会话均为 FlatList 顶层行，保持列表虚拟化
+type Row =
+  | { type: "group"; key: string; cwd: string; count: number }
+  | { type: "session"; key: string; session: HostSessionSummary; live: boolean; opening: boolean };
 
 export default function HostSessionsScreen() {
   const router = useRouter();
@@ -103,60 +108,77 @@ export default function HostSessionsScreen() {
     });
   }, [sessions, tab, query, liveSessions]);
 
-  // 按项目分组
-  const rows = useMemo(() => {
+  // 按项目分组并扁平化为一维行：分组头按最新会话时间排序，组内保持原序
+  const flatRows = useMemo<Row[]>(() => {
     const grouped = filtered.reduce<Record<string, HostSessionSummary[]>>((acc, s) => {
       (acc[s.cwd] ??= []).push(s);
       return acc;
     }, {});
-    return Object.entries(grouped).sort((a, b) => {
+    const entries = Object.entries(grouped).sort((a, b) => {
       const tA = Math.max(...a[1].map((s) => new Date(s.updatedAt).getTime()));
       const tB = Math.max(...b[1].map((s) => new Date(s.updatedAt).getTime()));
       return tB - tA;
     });
-  }, [filtered]);
+    const rows: Row[] = [];
+    for (const [cwd, group] of entries) {
+      rows.push({
+        type: "group",
+        key: `g:${cwd}`,
+        cwd,
+        count: group.length,
+      });
+      for (const s of group) {
+        rows.push({
+          type: "session",
+          key: `s:${s.id}`,
+          session: s,
+          live: liveSessions.has(s.id),
+          opening: opening === s.id,
+        });
+      }
+    }
+    return rows;
+  }, [filtered, liveSessions, opening]);
 
-  const renderSession = ({ item }: { item: HostSessionSummary }) => {
-    const live = liveSessions.has(item.id);
+  const renderItem = ({ item }: { item: Row }) => {
+    if (item.type === "group") {
+      return (
+        <View style={styles.group}>
+          <Text style={styles.groupTitle}>
+            {cwdName(item.cwd)} · {item.count}
+          </Text>
+          <Text style={styles.groupPath} numberOfLines={1}>{item.cwd}</Text>
+        </View>
+      );
+    }
+    const s = item.session;
     return (
       <TouchableOpacity
-        style={[styles.sessionItem, live && styles.sessionItemLive]}
-        onPress={() => void handleOpen(item)}
-        disabled={opening === item.id}
+        style={[styles.sessionItem, item.live && styles.sessionItemLive]}
+        onPress={() => void handleOpen(s)}
+        disabled={item.opening}
+        accessibilityRole="button"
       >
         <View style={styles.sessionHeader}>
-          {live && <View style={styles.liveDot} />}
+          {item.live && <View style={styles.liveDot} />}
           <Text style={styles.sessionTitle} numberOfLines={2}>
-            {item.name ?? item.title ?? "(无首条消息)"}
+            {s.name ?? s.title ?? "(无首条消息)"}
           </Text>
-          {opening === item.id && <ActivityIndicator size="small" color={theme.success} />}
+          {item.opening && <ActivityIndicator size="small" color={theme.success} />}
         </View>
         {/* 详情行：模型 / 消息数 / 时间 */}
         <View style={styles.detailRow}>
-          {item.model ? (
-            <Text style={styles.detailItem}>🧠 {item.model}</Text>
+          {s.model ? (
+            <Text style={styles.detailItem}>🧠 {s.model}</Text>
           ) : null}
-          <Text style={styles.detailItem}>💬 {item.messageCount}</Text>
-          <Text style={styles.detailItem}>{live ? "🟢 运行中" : formatTime(item.updatedAt)}</Text>
+          <Text style={styles.detailItem}>💬 {s.messageCount}</Text>
+          <Text style={styles.detailItem}>{item.live ? "🟢 运行中" : formatTime(s.updatedAt)}</Text>
         </View>
         {/* 详情行：会话 id */}
         <Text style={styles.sessionId} numberOfLines={1}>
-          #{item.id.slice(0, 12)} · {cwdName(item.cwd)}
+          #{s.id.slice(0, 12)} · {cwdName(s.cwd)}
         </Text>
       </TouchableOpacity>
-    );
-  };
-
-  const renderGroup = ({ item }: { item: [string, HostSessionSummary[]] }) => {
-    const [cwd, group] = item;
-    return (
-      <View style={styles.group}>
-        <Text style={styles.groupTitle}>{cwdName(cwd)}</Text>
-        <Text style={styles.groupPath} numberOfLines={1}>{cwd}</Text>
-        {group.map((s) => (
-          <View key={s.id}>{renderSession({ item: s })}</View>
-        ))}
-      </View>
     );
   };
 
@@ -218,8 +240,13 @@ export default function HostSessionsScreen() {
           placeholderTextColor={theme.dim}
           autoCapitalize="none"
           autoCorrect={false}
+          accessibilityLabel="搜索会话"
         />
-        <TouchableOpacity onPress={() => { void load(); void loadLive(); }} style={styles.refreshBtn}>
+        <TouchableOpacity
+          onPress={() => { void load(); void loadLive(); }}
+          style={styles.refreshBtn}
+          accessibilityLabel="刷新列表"
+        >
           <Text style={[styles.refreshText, { color: theme.accent }]}>刷新</Text>
         </TouchableOpacity>
       </View>
@@ -230,9 +257,9 @@ export default function HostSessionsScreen() {
         </View>
       ) : (
         <FlatList
-          data={rows}
-          keyExtractor={(r) => r[0]}
-          renderItem={renderGroup}
+          data={flatRows}
+          keyExtractor={(r) => r.key}
+          renderItem={renderItem}
           contentContainerStyle={styles.list}
           keyboardShouldPersistTaps="handled"
         />
@@ -253,65 +280,68 @@ function cwdName(cwd: string): string {
 function formatTime(iso: string): string {
   try {
     const d = new Date(iso);
+    const t = d.getTime();
+    if (!Number.isFinite(t)) return "时间未知";
     const now = new Date();
-    const diff = now.getTime() - d.getTime();
+    const diff = now.getTime() - t;
+    if (diff < 0) return d.toLocaleString();
     if (diff < 60_000) return "刚刚";
     if (diff < 3_600_000) return `${Math.floor(diff / 60_000)} 分钟前`;
     if (diff < 86_400_000) return `${Math.floor(diff / 3_600_000)} 小时前`;
     return d.toLocaleDateString();
   } catch {
-    return "";
+    return "时间未知";
   }
 }
 
 function makeStyles(theme: ReturnType<typeof useTheme>["theme"]) {
   return StyleSheet.create({
     container: { flex: 1, backgroundColor: theme.bg },
-    center: { flex: 1, justifyContent: "center", alignItems: "center", padding: 24 },
-    centerText: { color: theme.muted, fontSize: 14, marginTop: 12 },
-    errorText: { color: theme.error, fontSize: 14 },
+    center: { flex: 1, justifyContent: "center", alignItems: "center", padding: MIUIX_SPACE.xxl },
+    centerText: { color: theme.muted, fontSize: MIUIX_TYPE.body2, marginTop: MIUIX_SPACE.md },
+    errorText: { color: theme.error, fontSize: MIUIX_TYPE.body2 },
     retryButton: {
-      marginTop: 12,
+      marginTop: MIUIX_SPACE.md,
       backgroundColor: theme.buttonPrimary,
-      paddingHorizontal: 24,
-      paddingVertical: 8,
-      borderRadius: 8,
+      paddingHorizontal: MIUIX_SPACE.xxl,
+      paddingVertical: MIUIX_SPACE.sm,
+      borderRadius: MIUIX_RADIUS.md,
     },
     retryText: { color: "#fff", fontWeight: "600" },
-    tabBar: { flexDirection: "row", alignItems: "center", paddingHorizontal: 12 },
+    tabBar: { flexDirection: "row", alignItems: "center", paddingHorizontal: MIUIX_SPACE.md },
     tabItem: { paddingVertical: 10, paddingHorizontal: 14, borderBottomWidth: 2, borderBottomColor: "transparent" },
-    tabText: { fontSize: 15, fontWeight: "600" },
-    tabRight: { flex: 1, alignItems: "flex-end", paddingRight: 4 },
-    toolbarText: { color: theme.muted, fontSize: 12 },
-    searchRow: { flexDirection: "row", alignItems: "center", paddingHorizontal: 12, paddingVertical: 8, gap: 8 },
+    tabText: { fontSize: MIUIX_TYPE.body1, fontWeight: "600" },
+    tabRight: { flex: 1, alignItems: "flex-end", paddingRight: MIUIX_SPACE.xs },
+    toolbarText: { color: theme.muted, fontSize: MIUIX_TYPE.footnote2 },
+    searchRow: { flexDirection: "row", alignItems: "center", paddingHorizontal: MIUIX_SPACE.md, paddingVertical: MIUIX_SPACE.sm, gap: MIUIX_SPACE.sm },
     searchInput: {
       flex: 1,
-      borderRadius: 8,
-      paddingHorizontal: 12,
-      paddingVertical: 8,
+      borderRadius: MIUIX_RADIUS.sm,
+      paddingHorizontal: MIUIX_SPACE.md,
+      paddingVertical: MIUIX_SPACE.sm,
       borderWidth: 1,
-      fontSize: 14,
+      fontSize: MIUIX_TYPE.body2,
     },
-    refreshBtn: { paddingHorizontal: 8, paddingVertical: 6 },
-    refreshText: { fontSize: 14, fontWeight: "600" },
-    list: { padding: 12 },
-    group: { marginBottom: 16 },
-    groupTitle: { color: theme.text, fontSize: 15, fontWeight: "700" },
-    groupPath: { color: theme.dim, fontSize: 11, marginBottom: 8 },
+    refreshBtn: { paddingHorizontal: MIUIX_SPACE.sm, paddingVertical: 6 },
+    refreshText: { fontSize: MIUIX_TYPE.body2, fontWeight: "600" },
+    list: { padding: MIUIX_SPACE.md },
+    group: { marginBottom: MIUIX_SPACE.lg },
+    groupTitle: { color: theme.text, fontSize: MIUIX_TYPE.main, fontWeight: "700" },
+    groupPath: { color: theme.dim, fontSize: MIUIX_TYPE.footnote2, marginBottom: MIUIX_SPACE.sm },
     sessionItem: {
       backgroundColor: theme.cardBg,
-      borderRadius: 10,
-      padding: 12,
-      marginBottom: 8,
+      borderRadius: MIUIX_RADIUS.lg,
+      padding: MIUIX_SPACE.md,
+      marginBottom: MIUIX_SPACE.sm,
       borderWidth: 1,
       borderColor: theme.border,
     },
     sessionItemLive: { borderColor: theme.success, backgroundColor: theme.mdCodeBlockBg },
     sessionHeader: { flexDirection: "row", alignItems: "center" },
-    liveDot: { width: 8, height: 8, borderRadius: 4, backgroundColor: theme.success, marginRight: 6 },
-    sessionTitle: { color: theme.text, fontSize: 14, fontWeight: "600", flex: 1, marginRight: 8 },
+    liveDot: { width: 8, height: 8, borderRadius: MIUIX_RADIUS.xs, backgroundColor: theme.success, marginRight: 6 },
+    sessionTitle: { color: theme.text, fontSize: MIUIX_TYPE.body2, fontWeight: "600", flex: 1, marginRight: MIUIX_SPACE.sm },
     detailRow: { flexDirection: "row", flexWrap: "wrap", gap: 10, marginTop: 6 },
-    detailItem: { color: theme.muted, fontSize: 12 },
-    sessionId: { color: theme.dim, fontSize: 11, marginTop: 4 },
+    detailItem: { color: theme.muted, fontSize: MIUIX_TYPE.footnote1 },
+    sessionId: { color: theme.dim, fontSize: MIUIX_TYPE.footnote2, marginTop: MIUIX_SPACE.xs },
   });
 }
