@@ -48,6 +48,8 @@ export function ChatComposer({ actions, currentModel, sending, skills = [], plac
   const [skillQuery, setSkillQuery] = useState("");
   const [showThinking, setShowThinking] = useState(false);
   const [showPlanPicker, setShowPlanPicker] = useState(false);
+  const [focused, setFocused] = useState(false);
+  const [fullscreenEdit, setFullscreenEdit] = useState(false);
 
   const canSend = (text.trim().length > 0 || images.length > 0) && !sending;
 
@@ -180,17 +182,6 @@ export function ChatComposer({ actions, currentModel, sending, skills = [], plac
       </View>
 
       <View style={styles.inputRow}>
-        <TextInput
-          style={[styles.input, { backgroundColor: theme.inputBg, color: theme.text, borderColor: theme.border }]}
-          value={text}
-          onChangeText={setText}
-          placeholder={placeholder ?? "Message..."}
-          placeholderTextColor={theme.dim}
-          multiline
-          maxLength={4000}
-          onSubmitEditing={() => void handleSend()}
-          blurOnSubmit={false}
-        />
         {/* / 按钮：弹 skill 弹窗 */}
         <TouchableOpacity
           onPress={() => setShowSkills(true)}
@@ -201,17 +192,96 @@ export function ChatComposer({ actions, currentModel, sending, skills = [], plac
         <TouchableOpacity onPress={pickImage} style={[styles.slashBtn, { borderColor: theme.border }]}>
           <Text style={styles.toolIcon}>📎</Text>
         </TouchableOpacity>
-        {/* 发送按钮：仅在有内容时出现 */}
-        {canSend && (
-          <TouchableOpacity
-            style={[styles.sendButton, { backgroundColor: theme.buttonPrimary }]}
-            onPress={() => void handleSend()}
-            disabled={sending}
-          >
-            <Text style={styles.sendText}>{sending ? "…" : "↑"}</Text>
-          </TouchableOpacity>
-        )}
+        {/* 输入框（聚焦时内侧右缘显示全屏按钮） */}
+        <View style={styles.inputWrap}>
+          <TextInput
+            style={[styles.input, { backgroundColor: theme.inputBg, color: theme.text, borderColor: theme.border }]}
+            value={text}
+            onChangeText={setText}
+            placeholder={placeholder ?? "Message..."}
+            placeholderTextColor={theme.dim}
+            multiline
+            maxLength={4000}
+            onFocus={() => setFocused(true)}
+            onBlur={() => setFocused(false)}
+          />
+          {focused && (
+            <TouchableOpacity
+              style={[styles.expandBtn, { backgroundColor: theme.cardBg, borderColor: theme.border }]}
+              onPress={() => setFullscreenEdit(true)}
+            >
+              <Text style={[styles.expandIcon, { color: theme.accent }]}>⛶</Text>
+            </TouchableOpacity>
+          )}
+        </View>
+        {/* 发送按钮（✈️） */}
+        <TouchableOpacity
+          style={[styles.sendButton, { backgroundColor: canSend ? theme.buttonPrimary : theme.border }]}
+          onPress={() => void handleSend()}
+          disabled={!canSend || sending}
+        >
+          <Text style={styles.sendText}>{sending ? "…" : "✈"}</Text>
+        </TouchableOpacity>
       </View>
+
+      {/* 全屏编辑弹窗 */}
+      <Modal visible={fullscreenEdit} animationType="slide" onRequestClose={() => setFullscreenEdit(false)}>
+        <View style={[styles.fsRoot, { backgroundColor: theme.bg }]}>
+          {/* 右上角最小化 */}
+          <View style={[styles.fsTopBar, { paddingTop: 60 }]}>
+            <Text style={[styles.fsTitle, { color: theme.muted }]}>Edit</Text>
+            <TouchableOpacity
+              style={[styles.fsMinBtn, { backgroundColor: theme.cardBg, borderColor: theme.border }]}
+              onPress={() => setFullscreenEdit(false)}
+            >
+              <Text style={[styles.fsMinIcon, { color: theme.accent }]}>⤓</Text>
+            </TouchableOpacity>
+          </View>
+          {/* 大输入框（自动聚焦） */}
+          <TextInput
+            style={[styles.fsInput, { backgroundColor: theme.inputBg, color: theme.text, borderColor: theme.border }]}
+            value={text}
+            onChangeText={setText}
+            placeholder={placeholder ?? "Message..."}
+            placeholderTextColor={theme.dim}
+            multiline
+            autoFocus
+            textAlignVertical="top"
+            maxLength={8000}
+          />
+          {/* 底部工具栏（聚焦时显示） */}
+          <View style={[styles.fsToolbar, { borderTopColor: theme.border, backgroundColor: theme.headerBg }]}>
+            <TouchableOpacity onPress={openModels} style={styles.fsToolBtn}>
+              <Text style={styles.toolIcon}>🧠</Text>
+              <Text style={[styles.toolLabel, { color: theme.muted }]}>Model</Text>
+            </TouchableOpacity>
+            <TouchableOpacity onPress={() => setShowThinking(true)} style={styles.fsToolBtn}>
+              <Text style={styles.toolIcon}>⚡</Text>
+              <Text style={[styles.toolLabel, { color: theme.muted }]}>Think</Text>
+            </TouchableOpacity>
+            <TouchableOpacity onPress={() => setShowPlanPicker(true)} style={styles.fsToolBtn}>
+              <Text style={styles.toolIcon}>📋</Text>
+              <Text style={[styles.toolLabel, { color: theme.muted }]}>Plan</Text>
+            </TouchableOpacity>
+            <TouchableOpacity onPress={() => setShowSkills(true)} style={styles.fsToolBtn}>
+              <Text style={[styles.slashText, { color: theme.accent }]}>/</Text>
+              <Text style={[styles.toolLabel, { color: theme.muted }]}>Skill</Text>
+            </TouchableOpacity>
+            <TouchableOpacity onPress={pickImage} style={styles.fsToolBtn}>
+              <Text style={styles.toolIcon}>📎</Text>
+              <Text style={[styles.toolLabel, { color: theme.muted }]}>Image</Text>
+            </TouchableOpacity>
+            <View style={styles.fsSpacer} />
+            <TouchableOpacity
+              style={[styles.sendButton, { backgroundColor: canSend ? theme.buttonPrimary : theme.border }]}
+              onPress={() => { setFullscreenEdit(false); void handleSend(); }}
+              disabled={!canSend || sending}
+            >
+              <Text style={styles.sendText}>✈</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      </Modal>
 
       {/* 模型选择 Modal */}
       <Modal visible={showModels} transparent animationType="slide" onRequestClose={() => setShowModels(false)}>
@@ -325,7 +395,57 @@ const styles = StyleSheet.create({
   toolbar: { flexDirection: "row", alignItems: "center", paddingHorizontal: 10, paddingVertical: 4 },
   toolIcon: { fontSize: 18 },
   modelLabel: { flex: 1, fontSize: 11, textAlign: "right", marginLeft: 8 },
-  inputRow: { flexDirection: "row", alignItems: "flex-end", paddingHorizontal: 10, paddingBottom: 8, gap: 8 },
+  inputRow: { flexDirection: "row", alignItems: "flex-end", paddingHorizontal: 10, paddingBottom: 8, gap: 6 },
+  inputWrap: { flex: 1, position: "relative" },
+  expandBtn: {
+    position: "absolute",
+    right: 6,
+    bottom: 6,
+    width: 26,
+    height: 26,
+    borderRadius: 6,
+    borderWidth: 1,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  expandIcon: { fontSize: 13, fontWeight: "700" },
+  fsRoot: { flex: 1 },
+  fsTopBar: {
+    flexDirection: "row",
+    justifyContent: "flex-end",
+    alignItems: "center",
+    paddingHorizontal: 16,
+    paddingBottom: 8,
+  },
+  fsTitle: { fontSize: 13, flex: 1 },
+  fsMinBtn: {
+    width: 36,
+    height: 36,
+    borderRadius: 10,
+    borderWidth: 1,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  fsMinIcon: { fontSize: 18, fontWeight: "700" },
+  fsInput: {
+    flex: 1,
+    margin: 12,
+    borderRadius: 12,
+    borderWidth: 1,
+    padding: 14,
+    fontSize: 15,
+    lineHeight: 22,
+  },
+  fsToolbar: {
+    flexDirection: "row",
+    alignItems: "center",
+    borderTopWidth: 1,
+    paddingHorizontal: 10,
+    paddingVertical: 10,
+    gap: 4,
+  },
+  fsToolBtn: { alignItems: "center", paddingHorizontal: 10 },
+  fsSpacer: { flex: 1 },
   input: { flex: 1, borderRadius: 8, paddingHorizontal: 12, paddingVertical: 10, borderWidth: 1, fontSize: 15, maxHeight: 120 },
   sendButton: {
     width: 36,
