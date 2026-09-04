@@ -50,6 +50,7 @@ export function ChatComposer({ actions, currentModel, sending, skills = [], plac
   const [showPlanPicker, setShowPlanPicker] = useState(false);
   const [focused, setFocused] = useState(false);
   const [fullscreenEdit, setFullscreenEdit] = useState(false);
+  const [fsPanel, setFsPanel] = useState<null | "models" | "thinking" | "plan" | "skills">(null);
 
   const canSend = (text.trim().length > 0 || images.length > 0) && !sending;
 
@@ -163,7 +164,7 @@ export function ChatComposer({ actions, currentModel, sending, skills = [], plac
           {focused && (
             <TouchableOpacity
               style={[styles.expandBtn, { backgroundColor: theme.cardBg, borderColor: theme.border }]}
-              onPress={() => setFullscreenEdit(true)}
+              onPress={() => { setFullscreenEdit(true); void actions.listModels?.().then(setModels).catch(() => {}); }}
             >
               <Text style={[styles.expandIcon, { color: theme.accent }]}>⛶</Text>
             </TouchableOpacity>
@@ -206,19 +207,19 @@ export function ChatComposer({ actions, currentModel, sending, skills = [], plac
           />
           {/* 底部工具栏（聚焦时显示） */}
           <View style={[styles.fsToolbar, { borderTopColor: theme.border, backgroundColor: theme.headerBg }]}>
-            <TouchableOpacity onPress={openModels} style={styles.fsToolBtn}>
+            <TouchableOpacity onPress={() => setFsPanel("models")} style={styles.fsToolBtn}>
               <Text style={styles.toolIcon}>🧠</Text>
               <Text style={[styles.toolLabel, { color: theme.muted }]}>Model</Text>
             </TouchableOpacity>
-            <TouchableOpacity onPress={() => setShowThinking(true)} style={styles.fsToolBtn}>
+            <TouchableOpacity onPress={() => setFsPanel("thinking")} style={styles.fsToolBtn}>
               <Text style={styles.toolIcon}>⚡</Text>
               <Text style={[styles.toolLabel, { color: theme.muted }]}>Think</Text>
             </TouchableOpacity>
-            <TouchableOpacity onPress={() => setShowPlanPicker(true)} style={styles.fsToolBtn}>
+            <TouchableOpacity onPress={() => setFsPanel("plan")} style={styles.fsToolBtn}>
               <Text style={styles.toolIcon}>📋</Text>
               <Text style={[styles.toolLabel, { color: theme.muted }]}>Plan</Text>
             </TouchableOpacity>
-            <TouchableOpacity onPress={() => setShowSkills(true)} style={styles.fsToolBtn}>
+            <TouchableOpacity onPress={() => setFsPanel("skills")} style={styles.fsToolBtn}>
               <Text style={[styles.slashText, { color: theme.accent }]}>/</Text>
               <Text style={[styles.toolLabel, { color: theme.muted }]}>Skill</Text>
             </TouchableOpacity>
@@ -235,6 +236,101 @@ export function ChatComposer({ actions, currentModel, sending, skills = [], plac
               <Text style={styles.sendText}>✈</Text>
             </TouchableOpacity>
           </View>
+
+          {/* 内嵌面板（全屏内的工具弹层，非独立 Modal，避免层级问题） */}
+          {fsPanel && (
+            <TouchableOpacity style={styles.fsPanelOverlay} activeOpacity={1} onPress={() => setFsPanel(null)}>
+              <TouchableOpacity
+                activeOpacity={1}
+                style={[styles.fsPanel, { backgroundColor: theme.cardBg, borderColor: theme.border }]}
+              >
+                <View style={styles.modalHeader}>
+                  <Text style={[styles.modalTitle, { color: theme.text }]}>
+                    {fsPanel === "models" ? "选择模型" : fsPanel === "thinking" ? "思考等级" : fsPanel === "plan" ? "Plan / Act 模式" : "Skills"}
+                  </Text>
+                  <TouchableOpacity onPress={() => setFsPanel(null)}>
+                    <Text style={[styles.modalClose, { color: theme.muted }]}>✕</Text>
+                  </TouchableOpacity>
+                </View>
+
+                {fsPanel === "models" && (
+                  models.length === 0 ? (
+                    <Text style={[styles.modalEmpty, { color: theme.muted }]}>加载中...</Text>
+                  ) : (
+                    <FlatList
+                      data={models}
+                      keyExtractor={(m) => `${m.provider}/${m.id}`}
+                      renderItem={({ item }) => (
+                        <TouchableOpacity
+                          style={[styles.modelItem, { borderBottomColor: theme.border }]}
+                          onPress={async () => { await actions.setModel?.(item.id); setFsPanel(null); }}
+                        >
+                          <Text style={[styles.modelName, { color: theme.text }]}>{item.name}</Text>
+                          <View style={styles.modelMeta}>
+                            <Text style={[styles.modelProvider, { color: theme.muted }]}>{item.provider}</Text>
+                            {item.vision && <Text style={[styles.modelBadge, { color: theme.success }]}>👁 vision</Text>}
+                            {item.reasoning && <Text style={[styles.modelBadge, { color: theme.accent }]}>🧠 reasoning</Text>}
+                          </View>
+                        </TouchableOpacity>
+                      )}
+                      style={{ maxHeight: 360 }}
+                    />
+                  )
+                )}
+
+                {fsPanel === "thinking" && THINKING_LEVELS.map((lv) => (
+                  <TouchableOpacity
+                    key={lv}
+                    style={[styles.modelItem, { borderBottomColor: theme.border }]}
+                    onPress={async () => { await actions.setThinking?.(lv); setFsPanel(null); }}
+                  >
+                    <Text style={[styles.modelName, { color: theme.text }]}>{lv}</Text>
+                  </TouchableOpacity>
+                ))}
+
+                {fsPanel === "plan" && planActions.map((p) => (
+                  <TouchableOpacity
+                    key={p.key}
+                    style={[styles.modelItem, { borderBottomColor: theme.border }]}
+                    onPress={async () => { setFsPanel(null); await actions.send(p.prompt); }}
+                  >
+                    <Text style={[styles.modelName, { color: theme.text }]}>{p.label}</Text>
+                  </TouchableOpacity>
+                ))}
+
+                {fsPanel === "skills" && (
+                  <>
+                    <TextInput
+                      style={[styles.skillSearch, { backgroundColor: theme.inputBg, color: theme.text, borderColor: theme.border }]}
+                      value={skillQuery}
+                      onChangeText={setSkillQuery}
+                      placeholder="Search skills..."
+                      placeholderTextColor={theme.dim}
+                      autoCapitalize="none"
+                    />
+                    <FlatList
+                      data={skills
+                        .map((s) => (typeof s === "string" ? { name: s, description: undefined } : s))
+                        .filter((s) => s.name.toLowerCase().includes(skillQuery.toLowerCase()))}
+                      keyExtractor={(s) => s.name}
+                      renderItem={({ item }) => (
+                        <TouchableOpacity
+                          style={[styles.skillItem, { borderBottomColor: theme.border }]}
+                          onPress={() => { setText(`/skill:${item.name} `); setFsPanel(null); }}
+                        >
+                          <Text style={[styles.skillName, { color: theme.text }]} numberOfLines={1}>
+                            /skill:{item.name}
+                          </Text>
+                        </TouchableOpacity>
+                      )}
+                      ListEmptyComponent={<Text style={[styles.modalEmpty, { color: theme.muted }]}>No skills found</Text>}
+                      style={{ maxHeight: 300 }}
+                    />
+                  </>
+                )}
+              </View>
+            </TouchableOpacity>
+          )}
         </View>
       </Modal>
 
@@ -452,6 +548,18 @@ const styles = StyleSheet.create({
   },
   fsToolBtn: { alignItems: "center", paddingHorizontal: 10 },
   fsSpacer: { flex: 1 },
+  fsPanelOverlay: {
+    ...StyleSheet.absoluteFillObject,
+    backgroundColor: "rgba(0,0,0,0.5)",
+    justifyContent: "flex-end",
+  },
+  fsPanel: {
+    borderTopLeftRadius: 16,
+    borderTopRightRadius: 16,
+    borderWidth: 1,
+    padding: 16,
+    maxHeight: 480,
+  },
   input: { flex: 1, borderRadius: 8, paddingHorizontal: 12, paddingVertical: 10, borderWidth: 1, fontSize: 15, maxHeight: 120 },
   sendButton: {
     width: 36,
