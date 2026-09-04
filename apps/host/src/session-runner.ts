@@ -107,17 +107,34 @@ export class SdkSessionRunner implements SessionRunner {
     });
   }
 
-  /** 列出可用模型（供移动端选择器） */
+  /** 列出可用模型（已配置 auth 的，与 TUI 选择器一致） */
   listModels(): { id: string; provider: string; name: string; reasoning: boolean; vision: boolean }[] {
     const reg = this.session.modelRegistry;
     if (!reg || typeof reg.getAll !== "function") return [];
-    return reg.getAll().map((m) => ({
+    // getAvailable() = 已配置 auth 的模型（与 TUI /model 选择器一致）；
+    // getAll() 会返回 1000+ 内置未配置模型。
+    const source = typeof reg.getAvailable === "function" ? reg.getAvailable() : reg.getAll();
+    return source.map((m) => ({
       id: String(m.id ?? ""),
       provider: String(m.provider ?? ""),
       name: String(m.name ?? m.id ?? ""),
       reasoning: Boolean(m.reasoning),
       vision: Array.isArray(m.input) && m.input.includes("image"),
     }));
+  }
+
+  /** 列出实际加载的 skills（与 TUI 一致，走 resourceLoader） */
+  listLoadedSkills(): { name: string; description?: string }[] {
+    const loader = this.session.resourceLoader;
+    if (!loader || typeof loader.getSkills !== "function") return [];
+    try {
+      return (loader.getSkills().skills ?? []).map((s) => ({
+        name: String(s.name ?? ""),
+        description: typeof s.description === "string" ? s.description : undefined,
+      }));
+    } catch {
+      return [];
+    }
   }
 
   /** 切换模型 */

@@ -254,7 +254,9 @@ export class MobileHostServer {
         case "list_skills": {
           const runner = this.controller.getSession(command.sessionId);
           if (!runner) { this.sendError(client, "session_not_found", (command as { id?: string }).id ?? ""); break; }
-          const skills = await listSkills(runner.state.cwd);
+          // 优先走 SDK resourceLoader（与 TUI 一致），回退到文件扫描
+          const loaded = typeof runner.listLoadedSkills === "function" ? runner.listLoadedSkills() : [];
+          const skills = loaded.length > 0 ? loaded : await listSkills(runner.state.cwd);
           this.sendAck(client, command, skills);
           break;
         }

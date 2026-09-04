@@ -30,7 +30,14 @@
     },
     "scheme": "maestro-mobile",
     "plugins": [
-      "expo-router"
+      "expo-router",
+      [
+        "expo-image-picker",
+        {
+          "photosPermission": "允许 Maestro Mobile 访问相册以发送图片给 Pi agent",
+          "cameraPermission": "允许 Maestro Mobile 使用相机拍摄图片发送给 Pi agent"
+        }
+      ]
     ]
   }
 }

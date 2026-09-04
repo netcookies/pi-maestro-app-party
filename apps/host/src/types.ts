@@ -22,6 +22,7 @@ export interface SessionRunner {
   followUp(message: string): Promise<void>;
   abort(): Promise<void>;
   listModels?(): { id: string; provider: string; name: string; reasoning: boolean; vision: boolean }[];
+  listLoadedSkills?(): { name: string; description?: string }[];
   setModel?(modelId: string): Promise<{ ok: boolean; error?: string }>;
   setThinking?(level: string): { ok: boolean; error?: string };
   compact?(customInstructions?: string): Promise<{ ok: boolean; error?: string }>;

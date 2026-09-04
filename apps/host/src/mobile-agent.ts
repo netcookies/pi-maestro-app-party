@@ -20,7 +20,11 @@ export interface MobileAgentSession {
   thinkingLevel?: string;
   modelRegistry?: {
     getAll(): { id?: string; provider?: string; name?: string; reasoning?: boolean; input?: string[] }[];
+    getAvailable?(): { id?: string; provider?: string; name?: string; reasoning?: boolean; input?: string[] }[];
     getById?(id: string): { id?: string; provider?: string; name?: string } | undefined;
+  };
+  resourceLoader?: {
+    getSkills?(): { skills: { name: string; description?: string }[] };
   };
 
   prompt(
