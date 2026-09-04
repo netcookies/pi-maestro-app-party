@@ -17,10 +17,15 @@ export interface SessionRunner {
   eventsSince(seq: number): HostEvent[];
   loadMoreHistory(count?: number): Promise<{ items: TimelineItem[]; hasMore: boolean; totalEntries: number }>;
   searchHistory(keyword: string, maxResults?: number, previewLength?: number): Promise<{ matches: { index: number; text: string; kind: string }[]; totalEntries: number }>;
-  prompt(message: string, streamingBehavior?: "steer" | "followUp"): Promise<void>;
+  prompt(message: string, streamingBehavior?: "steer" | "followUp", images?: unknown[]): Promise<void>;
   steer(message: string): Promise<void>;
   followUp(message: string): Promise<void>;
   abort(): Promise<void>;
+  listModels?(): { id: string; provider: string; name: string; reasoning: boolean; vision: boolean }[];
+  setModel?(modelId: string): Promise<{ ok: boolean; error?: string }>;
+  setThinking?(level: string): { ok: boolean; error?: string };
+  compact?(customInstructions?: string): Promise<{ ok: boolean; error?: string }>;
+  renameSession?(name: string): { ok: boolean; error?: string };
   respondToExtensionUi(requestId: string, response: unknown): boolean;
   dispose(): Promise<void>;
 }

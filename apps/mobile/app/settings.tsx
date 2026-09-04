@@ -14,16 +14,41 @@ const configFields: { key: keyof AppConfig; label: string; default: number }[] =
   { key: "previewLength", label: "消息预览长度", default: DEFAULT_CONFIG.previewLength },
 ];
 
+const maestroSettingsKeys = ["defaultModel", "defaultProvider", "defaultThinkingLevel", "theme", "hideThinkingBlock"];
+
 export default function SettingsScreen() {
-  const { connectionState, isConnected, state } = useHost();
+  const { connectionState, isConnected, state, getMaestroSettings, updateMaestroSettings } = useHost();
   const { theme, themeName, setTheme, themeNames } = useTheme();
   const styles = useMemo(() => makeStyles(theme), [theme]);
   const [config, setConfig] = useState<AppConfig>(getConfig());
   const [configDraft, setConfigDraft] = useState<Partial<AppConfig>>({});
+  const [maestroSettings, setMaestroSettings] = useState<Record<string, unknown> | null>(null);
+  const [maestroDraft, setMaestroDraft] = useState<Record<string, string>>({});
 
   useEffect(() => {
     void loadConfig().then((c) => setConfig(c));
   }, []);
+
+  const loadMaestro = async () => {
+    try {
+      const overview = await getMaestroSettings();
+      const settingsFile = overview.files.find((f) => f.key === "settings");
+      if (settingsFile) setMaestroSettings(settingsFile.data);
+    } catch {
+      // 加载失败静默
+    }
+  };
+
+  const saveMaestroSettings = async () => {
+    const patch = Object.fromEntries(
+      Object.entries(maestroDraft).filter(([, v]) => v !== undefined && v !== ""),
+    );
+    const r = await updateMaestroSettings(patch);
+    if (r.ok) {
+      setMaestroDraft({});
+      await loadMaestro();
+    }
+  };
 
   const saveConfig = async () => {
     const next = await updateConfig(configDraft);
@@ -82,6 +107,40 @@ export default function SettingsScreen() {
         <Text style={[styles.configHint, { color: theme.dim }]}>
           已保存值：{config.historyPageSize} 条/页 · 冷却 {config.loadCooldownMs}ms
         </Text>
+      </View>
+
+      {/* Maestro 设置（对应 /maestro-settings /api-manager） */}
+      <View style={styles.card}>
+        <Text style={styles.cardTitle}>🎛 Maestro 设置</Text>
+        {maestroSettings ? (
+          <>
+            {maestroSettingsKeys.map((k) => (
+              <View key={k} style={styles.row}>
+                <Text style={styles.label}>{k}</Text>
+                <TextInput
+                  style={[styles.configInput, { backgroundColor: theme.inputBg, color: theme.text, borderColor: theme.border }]}
+                  value={String(maestroDraft[k] ?? maestroSettings[k] ?? "")}
+                  onChangeText={(v) => setMaestroDraft({ ...maestroDraft, [k]: v })}
+                  placeholder={String(maestroSettings[k] ?? "")}
+                  placeholderTextColor={theme.dim}
+                />
+              </View>
+            ))}
+            <TouchableOpacity
+              style={[styles.saveBtn, { backgroundColor: theme.buttonPrimary }]}
+              onPress={saveMaestroSettings}
+            >
+              <Text style={styles.saveText}>保存 Maestro 设置（写回 Host）</Text>
+            </TouchableOpacity>
+            <Text style={[styles.configHint, { color: theme.dim }]}>
+              对应 Pi 的 /maestro-settings：默认模型/提供商/思考等级/主题等（白名单字段，带备份）
+            </Text>
+          </>
+        ) : (
+          <TouchableOpacity style={[styles.saveBtn, { backgroundColor: theme.buttonPrimary }]} onPress={loadMaestro}>
+            <Text style={styles.saveText}>加载 Maestro 设置</Text>
+          </TouchableOpacity>
+        )}
       </View>
 
       <View style={styles.card}>

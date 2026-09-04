@@ -269,6 +269,14 @@ export type ClientCommand =
   | { type: "list_live_sessions" }
   | { type: "load_more_history"; sessionId: string; count?: number }
   | { type: "search_history"; sessionId: string; keyword: string; maxResults?: number; previewLength?: number }
+  | { type: "list_models"; sessionId: string }
+  | { type: "list_skills"; sessionId: string }
+  | { type: "get_maestro_settings" }
+  | { type: "update_maestro_settings"; key: string; patch: Record<string, unknown> }
+  | { type: "set_model"; sessionId: string; modelId: string }
+  | { type: "set_thinking"; sessionId: string; level: string }
+  | { type: "compact"; sessionId: string; customInstructions?: string }
+  | { type: "rename_session"; sessionId: string; name: string }
   | { type: "close_session"; sessionId: string }
   | { type: "list_sessions"; cwd?: string }
   | { type: "list_directories"; path: string }
@@ -279,10 +287,7 @@ export type ClientCommand =
   | { type: "extension_ui_response"; sessionId: string; requestId: string; response: ExtensionUiResponse }
   | { type: "get_snapshot"; sessionId: string }
   | { type: "get_maestro_state" }
-  | { type: "get_monitor_state" }
-  | { type: "set_model"; sessionId: string; model: string }
-  | { type: "set_thinking"; sessionId: string; level: string }
-  | { type: "compact"; sessionId: string };
+  | { type: "get_monitor_state" };
 
 // ─────────────────────────────────────────────────────────────────────────────
 // 宿主状态

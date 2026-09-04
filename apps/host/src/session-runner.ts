@@ -75,7 +75,7 @@ export class SdkSessionRunner implements SessionRunner {
     return this.eventLog.eventsSince(seq);
   }
 
-  async prompt(message: string, streamingBehavior?: "steer" | "followUp"): Promise<void> {
+  async prompt(message: string, streamingBehavior?: "steer" | "followUp", images?: unknown[]): Promise<void> {
     let accepted = false;
     let recordedPrompt = false;
     await new Promise<void>((resolve, reject) => {
@@ -83,12 +83,13 @@ export class SdkSessionRunner implements SessionRunner {
         .prompt(message, {
           streamingBehavior,
           source: "rpc",
+          ...(images && images.length > 0 ? { images } : {}),
           preflightResult: (success: boolean) => {
             if (success) {
               accepted = true;
               if (!recordedPrompt) {
                 recordedPrompt = true;
-                this.recordUserMessage(message);
+                this.recordUserMessage(message, images);
               }
               resolve();
             } else {
@@ -104,6 +105,78 @@ export class SdkSessionRunner implements SessionRunner {
           this.recordCommandError("prompt", message);
         });
     });
+  }
+
+  /** 列出可用模型（供移动端选择器） */
+  listModels(): { id: string; provider: string; name: string; reasoning: boolean; vision: boolean }[] {
+    const reg = this.session.modelRegistry;
+    if (!reg || typeof reg.getAll !== "function") return [];
+    return reg.getAll().map((m) => ({
+      id: String(m.id ?? ""),
+      provider: String(m.provider ?? ""),
+      name: String(m.name ?? m.id ?? ""),
+      reasoning: Boolean(m.reasoning),
+      vision: Array.isArray(m.input) && m.input.includes("image"),
+    }));
+  }
+
+  /** 切换模型 */
+  async setModel(modelId: string): Promise<{ ok: boolean; error?: string }> {
+    const reg = this.session.modelRegistry;
+    if (!reg || typeof reg.getAll !== "function") {
+      return { ok: false, error: "model registry unavailable" };
+    }
+    const model = reg.getAll().find((m) => String(m.id ?? "") === modelId)
+      ?? (typeof reg.getById === "function" ? reg.getById(modelId) : undefined);
+    if (!model || typeof this.session.setModel !== "function") {
+      return { ok: false, error: "model not found" };
+    }
+    try {
+      await this.session.setModel(model);
+      return { ok: true };
+    } catch (e) {
+      return { ok: false, error: e instanceof Error ? e.message : String(e) };
+    }
+  }
+
+  /** 切换思考等级 */
+  setThinking(level: string): { ok: boolean; error?: string } {
+    if (typeof this.session.setThinkingLevel !== "function") {
+      return { ok: false, error: "thinking unavailable" };
+    }
+    try {
+      this.session.setThinkingLevel(level);
+      return { ok: true };
+    } catch (e) {
+      return { ok: false, error: e instanceof Error ? e.message : String(e) };
+    }
+  }
+
+  /** 手动压缩上下文 */
+  async compact(customInstructions?: string): Promise<{ ok: boolean; error?: string }> {
+    if (typeof this.session.compact !== "function") {
+      return { ok: false, error: "compact unavailable" };
+    }
+    try {
+      await this.session.compact(customInstructions);
+      return { ok: true };
+    } catch (e) {
+      return { ok: false, error: e instanceof Error ? e.message : String(e) };
+    }
+  }
+
+  /** 重命名会话 */
+  renameSession(name: string): { ok: boolean; error?: string } {
+    if (typeof this.session.setSessionName !== "function") {
+      return { ok: false, error: "rename unavailable" };
+    }
+    try {
+      this.session.setSessionName(name);
+      this._state = { ...this._state, title: name };
+      return { ok: true };
+    } catch (e) {
+      return { ok: false, error: e instanceof Error ? e.message : String(e) };
+    }
   }
 
   async steer(message: string): Promise<void> {
@@ -301,11 +374,11 @@ export class SdkSessionRunner implements SessionRunner {
     }
   }
 
-  private recordUserMessage(message: string): void {
+  private recordUserMessage(message: string, images?: unknown[]): void {
     const item: TimelineItem = {
       id: `user-${this.eventLog.nextSequence}`,
       kind: "user",
-      text: message,
+      text: images && images.length > 0 ? `${message}${message ? "\n" : ""}[🖼 ${images.length} 张图片]` : message,
       createdAt: new Date().toISOString(),
     };
     this.timeline.push(item);

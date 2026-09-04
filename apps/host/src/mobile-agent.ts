@@ -18,17 +18,26 @@ export interface MobileAgentSession {
   isCompacting: boolean;
   model?: unknown;
   thinkingLevel?: string;
+  modelRegistry?: {
+    getAll(): { id?: string; provider?: string; name?: string; reasoning?: boolean; input?: string[] }[];
+    getById?(id: string): { id?: string; provider?: string; name?: string } | undefined;
+  };
 
   prompt(
     message: string,
     options?: {
       streamingBehavior?: "steer" | "followUp";
       source?: "rpc" | "extension";
+      images?: unknown[];
       preflightResult?: (success: boolean) => void;
     },
   ): Promise<unknown>;
-  steer(message: string): Promise<unknown>;
-  followUp(message: string): Promise<unknown>;
+  steer(message: string, images?: unknown[]): Promise<unknown>;
+  followUp(message: string, images?: unknown[]): Promise<unknown>;
+  setModel?(model: unknown): Promise<void>;
+  setThinkingLevel?(level: string): void;
+  compact?(customInstructions?: string): Promise<unknown>;
+  setSessionName?(name: string): void;
   abort(): Promise<void>;
   subscribe(listener: (event: AgentSessionEvent) => void): () => void;
   bindExtensions(options: {

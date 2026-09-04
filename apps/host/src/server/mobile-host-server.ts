@@ -16,6 +16,7 @@ import type {
 import type { HostController } from "../host-controller.js";
 import type { RuntimeFactory } from "../types.js";
 import type { LiveSessionList } from "../live-sessions.js";
+import { readSettingsOverview, updateSettingsJson } from "../maestro-settings.js";
 
 export interface MobileHostServerOptions {
   token?: string;
@@ -143,6 +144,12 @@ export class MobileHostServer {
         return;
       }
 
+      if (request.method === "GET" && url.pathname === "/api/maestro-settings") {
+        const overview = await readSettingsOverview();
+        writeJson(response, 200, overview);
+        return;
+      }
+
       if (request.method === "GET" && url.pathname === "/api/live-sessions") {
         const list = await this.controller.listLiveSessions();
         writeJson(response, 200, list satisfies LiveSessionList);
@@ -233,7 +240,67 @@ export class MobileHostServer {
         case "search_history": {
           const runner = this.controller.getSession(command.sessionId);
           if (!runner) { this.sendError(client, "session_not_found", (command as { id?: string }).id ?? ""); break; }
-          const result = await runner.searchHistory(command.keyword, command.maxResults);
+          const result = await runner.searchHistory(command.keyword, command.maxResults, command.previewLength);
+          this.sendAck(client, command, result);
+          break;
+        }
+        case "list_models": {
+          const runner = this.controller.getSession(command.sessionId);
+          if (!runner) { this.sendError(client, "session_not_found", (command as { id?: string }).id ?? ""); break; }
+          const models = typeof runner.listModels === "function" ? runner.listModels() : [];
+          this.sendAck(client, command, models);
+          break;
+        }
+        case "list_skills": {
+          const runner = this.controller.getSession(command.sessionId);
+          if (!runner) { this.sendError(client, "session_not_found", (command as { id?: string }).id ?? ""); break; }
+          const skills = await listSkills(runner.state.cwd);
+          this.sendAck(client, command, skills);
+          break;
+        }
+        case "get_maestro_settings": {
+          const overview = await readSettingsOverview();
+          this.sendAck(client, command, overview);
+          break;
+        }
+        case "update_maestro_settings": {
+          if (command.key !== "settings") {
+            this.sendError(client, "unsupported_key", undefined, (command as { id?: string }).id ?? "");
+            break;
+          }
+          const result = await updateSettingsJson(command.patch);
+          this.sendAck(client, command, result);
+          break;
+        }
+        case "set_model": {
+          const runner = this.controller.getSession(command.sessionId);
+          if (!runner) { this.sendError(client, "session_not_found", (command as { id?: string }).id ?? ""); break; }
+          if (typeof runner.setModel !== "function") { this.sendError(client, "unsupported_command", undefined, (command as { id?: string }).id ?? ""); break; }
+          const result = await runner.setModel(command.modelId);
+          this.sendAck(client, command, result);
+          break;
+        }
+        case "set_thinking": {
+          const runner = this.controller.getSession(command.sessionId);
+          if (!runner) { this.sendError(client, "session_not_found", (command as { id?: string }).id ?? ""); break; }
+          if (typeof runner.setThinking !== "function") { this.sendError(client, "unsupported_command", undefined, (command as { id?: string }).id ?? ""); break; }
+          const result = runner.setThinking(command.level);
+          this.sendAck(client, command, result);
+          break;
+        }
+        case "compact": {
+          const runner = this.controller.getSession(command.sessionId);
+          if (!runner) { this.sendError(client, "session_not_found", (command as { id?: string }).id ?? ""); break; }
+          if (typeof runner.compact !== "function") { this.sendError(client, "unsupported_command", undefined, (command as { id?: string }).id ?? ""); break; }
+          const result = await runner.compact(command.customInstructions);
+          this.sendAck(client, command, result);
+          break;
+        }
+        case "rename_session": {
+          const runner = this.controller.getSession(command.sessionId);
+          if (!runner) { this.sendError(client, "session_not_found", (command as { id?: string }).id ?? ""); break; }
+          if (typeof runner.renameSession !== "function") { this.sendError(client, "unsupported_command", undefined, (command as { id?: string }).id ?? ""); break; }
+          const result = runner.renameSession(command.name);
           this.sendAck(client, command, result);
           break;
         }
@@ -457,4 +524,25 @@ async function serveImageFile(filePath: string): Promise<{ data: Buffer; mime: s
   } catch {
     return undefined;
   }
+}
+/** 扫描可用的 skill 名录（agent 全局 + 项目本地） */
+async function listSkills(cwd: string): Promise<string[]> {
+  const { readdir } = await import("node:fs/promises");
+  const { join } = await import("node:path");
+  const { homedir } = await import("node:os");
+  const dirs: string[] = [];
+  try { dirs.push(join(homedir(), ".pi", "agent", "skills")); } catch { /* skip */ }
+  try { dirs.push(join(cwd, ".pi", "skills")); } catch { /* skip */ }
+  const names = new Set<string>();
+  for (const dir of dirs) {
+    try {
+      const entries = await readdir(dir, { withFileTypes: true });
+      for (const e of entries) {
+        if (e.isDirectory() && !e.name.startsWith(".")) names.add(e.name);
+      }
+    } catch {
+      // skip
+    }
+  }
+  return [...names].sort();
 }

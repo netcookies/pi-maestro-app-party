@@ -13,17 +13,22 @@ import { InlineImage } from "../src/components/InlineImage";
 import { CollapsibleTool } from "../src/components/CollapsibleTool";
 import { MarkdownText } from "../src/components/MarkdownText";
 import { splitImageSegments } from "../src/image-paths";
+import { ChatComposer } from "../src/components/ChatComposer";
+import { pickImagesFromLibrary } from "../src/image-picker";
 
 export default function SessionScreen() {
   const { id } = useLocalSearchParams<{ id: string }>();
   const router = useRouter();
-  const { state, sendPrompt, sendAbort, answerDialog, cancelDialog, loadMoreHistory, searchHistory } = useHost();
+  const { state, sendPrompt, sendAbort, answerDialog, cancelDialog, loadMoreHistory, searchHistory, listModels, setModel, setThinking, listSkills, compactSession, renameSession } = useHost();
   const { theme } = useTheme();
   const cfg = getConfig();
 
   // 确保配置加载（冷启动直接进本页时）
   useEffect(() => {
     void loadConfig();
+    if (id) {
+      void listSkills(id).then(setAvailableSkills).catch(() => {});
+    }
   }, []);
   const [input, setInput] = useState("");
   const [sending, setSending] = useState(false);
@@ -44,6 +49,9 @@ export default function SessionScreen() {
   const [searchResults, setSearchResults] = useState<{ index: number; text: string; kind: string }[]>([]);
   const [searching, setSearching] = useState(false);
   const [searchTotal, setSearchTotal] = useState(0);
+  // ChatComposer 状态
+  const [availableSkills, setAvailableSkills] = useState<string[]>([]);
+  const [currentModelId, setCurrentModelId] = useState<string | undefined>(session?.model ? String((session.model as { id?: string })?.id ?? "") : undefined);
   const contentHeightBefore = useRef(0);
   const pendingOffsetRestore = useRef(false);
 
@@ -329,20 +337,37 @@ export default function SessionScreen() {
         </TouchableOpacity>
       )}
 
-      <View style={styles.composer}>
-        <TextInput
-          style={styles.input}
-          value={input}
-          onChangeText={setInput}
-          placeholder={sending ? "发送中..." : "输入消息..."}
-          placeholderTextColor="#484f58"
-          multiline
-          maxLength={2000}
-        />
-        <TouchableOpacity style={styles.sendButton} onPress={handleSend} disabled={sending || !input.trim()}>
-          <Text style={styles.sendText}>发送</Text>
-        </TouchableOpacity>
-      </View>
+      <ChatComposer
+        actions={{
+          send: async (text, imgs) => {
+            if (!id) return;
+            setSending(true);
+            try {
+              await sendPrompt(id, text, imgs);
+            } finally {
+              setSending(false);
+            }
+          },
+          listModels: async () => (id ? listModels(id) : []),
+          setModel: async (modelId) => {
+            const r = id ? await setModel(id, modelId) : { ok: false, error: "no session" };
+            if (r.ok) setCurrentModelId(modelId);
+            return r;
+          },
+          setThinking: async (level) => (id ? setThinking(id, level) : { ok: false, error: "no session" }),
+          pickImage: async () => {
+            const picked = await pickImagesFromLibrary(1);
+            return picked.length > 0 ? picked[0] : null;
+          },
+          compact: async () => (id ? compactSession(id) : { ok: false, error: "no session" }),
+          renameSession: async (name) => (id ? renameSession(id, name) : { ok: false, error: "no session" }),
+        }}
+        currentModel={currentModelId
+          ? (session?.model as { name?: string } | undefined)?.name ?? currentModelId
+          : (session?.model as { name?: string } | undefined)?.name}
+        sending={sending}
+        skills={availableSkills}
+      />
 
       {pendingDialog && (
         <ExtensionUiDialog

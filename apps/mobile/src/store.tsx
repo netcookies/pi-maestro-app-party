@@ -31,7 +31,15 @@ export interface HostStoreValue {
   loadSessionHistory(sessionId: string): Promise<void>;
   loadMoreHistory(sessionId: string, count?: number): Promise<{ items: TimelineItem[]; hasMore: boolean; totalEntries: number }>;
   searchHistory(sessionId: string, keyword: string, maxResults?: number, previewLength?: number): Promise<{ matches: { index: number; text: string; kind: string }[]; totalEntries: number }>;
-  sendPrompt(sessionId: string, message: string): Promise<void>;
+  listModels(sessionId: string): Promise<{ id: string; provider: string; name: string; reasoning: boolean; vision: boolean }[]>;
+  listSkills(sessionId: string): Promise<string[]>;
+  getMaestroSettings(): Promise<{ files: { key: string; label: string; path: string; data: Record<string, unknown> }[]; observedAt: string }>;
+  updateMaestroSettings(patch: Record<string, unknown>): Promise<{ ok: boolean; error?: string }>;
+  setModel(sessionId: string, modelId: string): Promise<{ ok: boolean; error?: string }>;
+  setThinking(sessionId: string, level: string): Promise<{ ok: boolean; error?: string }>;
+  compactSession(sessionId: string, customInstructions?: string): Promise<{ ok: boolean; error?: string }>;
+  renameSession(sessionId: string, name: string): Promise<{ ok: boolean; error?: string }>;
+  sendPrompt(sessionId: string, message: string, images?: { data: string; mime: string }[]): Promise<void>;
   sendSteer(sessionId: string, message: string): Promise<void>;
   sendAbort(sessionId: string): Promise<void>;
   answerDialog(requestId: string, value: string | string[]): void;
@@ -106,8 +114,48 @@ export function HostStoreProvider({ children }: { children: React.ReactNode }) {
     return result as LiveSessionList;
   }, [getClient]);
 
-  const sendPrompt = useCallback(async (sessionId: string, message: string) => {
-    await getClient().sendCommand({ type: "prompt", sessionId, message });
+  const sendPrompt = useCallback(async (sessionId: string, message: string, images?: { data: string; mime: string }[]) => {
+    await getClient().sendCommand({ type: "prompt", sessionId, message, ...(images && images.length > 0 ? { images } : {}) });
+  }, [getClient]);
+
+  const listModels = useCallback(async (sessionId: string) => {
+    const result = await getClient().sendCommand({ type: "list_models", sessionId });
+    return result as { id: string; provider: string; name: string; reasoning: boolean; vision: boolean }[];
+  }, [getClient]);
+
+  const listSkills = useCallback(async (sessionId: string) => {
+    const result = await getClient().sendCommand({ type: "list_skills", sessionId });
+    return result as string[];
+  }, [getClient]);
+
+  const getMaestroSettings = useCallback(async () => {
+    const result = await getClient().sendCommand({ type: "get_maestro_settings" });
+    return result as { files: { key: string; label: string; path: string; data: Record<string, unknown> }[]; observedAt: string };
+  }, [getClient]);
+
+  const updateMaestroSettings = useCallback(async (patch: Record<string, unknown>) => {
+    const result = await getClient().sendCommand({ type: "update_maestro_settings", key: "settings", patch });
+    return result as { ok: boolean; error?: string };
+  }, [getClient]);
+
+  const setModel = useCallback(async (sessionId: string, modelId: string) => {
+    const result = await getClient().sendCommand({ type: "set_model", sessionId, modelId });
+    return result as { ok: boolean; error?: string };
+  }, [getClient]);
+
+  const setThinking = useCallback(async (sessionId: string, level: string) => {
+    const result = await getClient().sendCommand({ type: "set_thinking", sessionId, level });
+    return result as { ok: boolean; error?: string };
+  }, [getClient]);
+
+  const compactSession = useCallback(async (sessionId: string, customInstructions?: string) => {
+    const result = await getClient().sendCommand({ type: "compact", sessionId, customInstructions });
+    return result as { ok: boolean; error?: string };
+  }, [getClient]);
+
+  const renameSession = useCallback(async (sessionId: string, name: string) => {
+    const result = await getClient().sendCommand({ type: "rename_session", sessionId, name });
+    return result as { ok: boolean; error?: string };
   }, [getClient]);
 
   const sendSteer = useCallback(async (sessionId: string, message: string) => {
@@ -178,6 +226,14 @@ export function HostStoreProvider({ children }: { children: React.ReactNode }) {
       loadSessionHistory,
       loadMoreHistory,
       searchHistory,
+      listModels,
+      listSkills,
+      getMaestroSettings,
+      updateMaestroSettings,
+      setModel,
+      setThinking,
+      compactSession,
+      renameSession,
       sendPrompt,
       sendSteer,
       sendAbort,
@@ -185,7 +241,7 @@ export function HostStoreProvider({ children }: { children: React.ReactNode }) {
       cancelDialog,
       lastError: state.lastError,
     }),
-    [state, connectionState, hostUrl, connect, disconnect, openSession, openExistingSession, listHostSessions, listLiveSessions, loadSessionHistory, loadMoreHistory, searchHistory, sendPrompt, sendSteer, sendAbort, answerDialog, cancelDialog],
+    [state, connectionState, hostUrl, connect, disconnect, openSession, openExistingSession, listHostSessions, listLiveSessions, loadSessionHistory, loadMoreHistory, searchHistory, listModels, listSkills, getMaestroSettings, updateMaestroSettings, setModel, setThinking, compactSession, renameSession, sendPrompt, sendSteer, sendAbort, answerDialog, cancelDialog],
   );
 
   return <HostStoreContext.Provider value={value}>{children}</HostStoreContext.Provider>;
