@@ -63,6 +63,9 @@ export function CollapsibleTool({ toolName, text, isError, summary }: Props) {
         ]}
         onPress={toggleExpanded}
         activeOpacity={0.7}
+        accessibilityRole="button"
+        accessibilityLabel={`${toolName}，${expanded ? "收起" : "展开"}`}
+        accessibilityState={{ expanded }}
       >
         <View style={styles.header}>
           <Text style={[styles.icon, { color: isError ? theme.error : theme.accent }]}>
@@ -89,7 +92,12 @@ export function CollapsibleTool({ toolName, text, isError, summary }: Props) {
               </Text>
             </ScrollView>
             {isLong && (
-              <TouchableOpacity style={styles.fullscreenBtn} onPress={() => setFullscreen(true)}>
+              <TouchableOpacity
+                style={styles.fullscreenBtn}
+                onPress={() => setFullscreen(true)}
+                accessibilityRole="button"
+                accessibilityLabel="全屏查看工具输出"
+              >
                 <Text style={[styles.fullscreenText, { color: theme.accent }]}>⛶ 全屏</Text>
               </TouchableOpacity>
             )}

@@ -94,7 +94,7 @@ export default function SessionScreen() {
     const maxY = contentH ?? 0;
     if (maxY <= 0) return;
     listRef.current?.scrollToOffset({ offset: ratio * maxY, animated: false });
-    LayoutAnimation.easeInEaseOut();
+    animateLayout();
     setSearchOpen(false);
   };
 
@@ -102,6 +102,11 @@ export default function SessionScreen() {
   const timeline = state.timelines.get(id ?? "") ?? [];
   const pendingDialog = state.dialogs[0];
   const fabBottom = insets.bottom + composerHeight + 16;
+
+  // reduce-motion 时跳过布局动画（RV-001）
+  const animateLayout = useCallback(() => {
+    if (!reduceMotion) LayoutAnimation.easeInEaseOut();
+  }, [reduceMotion]);
 
   useEffect(() => {
     let cancelled = false;
@@ -289,7 +294,7 @@ export default function SessionScreen() {
           </Text>
           <TouchableOpacity
             onPress={() => {
-              LayoutAnimation.easeInEaseOut();
+              animateLayout();
               setSearchOpen((v) => !v);
             }}
             style={styles.searchToggle}
@@ -389,7 +394,7 @@ export default function SessionScreen() {
           const nextFab = !atBottom && maxY > 0;
           if (showFabRef.current !== nextFab) {
             showFabRef.current = nextFab;
-            LayoutAnimation.easeInEaseOut();
+            animateLayout();
             setShowFab(nextFab);
           }
           // 顶部懒加载：接近顶部且有更多时拉取更早历史（带冷却防连环）
@@ -405,7 +410,7 @@ export default function SessionScreen() {
           style={[styles.fab, { backgroundColor: theme.accent, bottom: fabBottom }]}
           accessibilityLabel="回到底部"
           onPress={() => {
-            LayoutAnimation.easeInEaseOut();
+            animateLayout();
             stickToBottom.current = true;
             showFabRef.current = false;
             setShowFab(false);

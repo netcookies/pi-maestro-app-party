@@ -7,8 +7,8 @@ import { useTheme } from "../../src/theme";
 
 interface Props {
   request: ExtensionUiRequest;
-  onAnswer: (value: string | string[]) => void;
-  onCancel: () => void;
+  onAnswer: (value: string | string[]) => void | Promise<void>;
+  onCancel: () => void | Promise<void>;
 }
 
 /** 仅对 #RRGGBB 追加 8 位透明度后缀，避免对非 6 位色值生成非法颜色串 */
@@ -34,15 +34,15 @@ export function ExtensionUiDialog({ request, onAnswer, onCancel }: Props) {
     // 保留原语义：选项分支未选中但输入了自定义答案时仍可确认
     (hasOptions && !isSingleSelect && selected.length === 0 && freeText.trim().length === 0);
 
-  const runAnswer = (produce: () => void) => {
+  const runAnswer = (produce: () => void | Promise<void>) => {
     if (submitting) return;
     setSubmitting(true);
-    try {
-      produce();
-    } finally {
-      // 弹窗通常在作答后被父级卸载；复位保证异常或复用场景下状态干净
-      setSubmitting(false);
-    }
+    // 弹窗通常在作答后被父级卸载；复位保证异常或复用场景下状态干净
+    // 父级返回 Promise（WS bridge 异步送达）时保持 submitting 直到 settle，防重复提交（RV-003）
+    Promise.resolve()
+      .then(produce)
+      .catch(() => undefined)
+      .finally(() => setSubmitting(false));
   };
 
   const handleSelect = (option: string) => {
