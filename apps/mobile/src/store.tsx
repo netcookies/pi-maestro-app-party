@@ -32,7 +32,7 @@ export interface HostStoreValue {
   loadMoreHistory(sessionId: string, count?: number): Promise<{ items: TimelineItem[]; hasMore: boolean; totalEntries: number }>;
   searchHistory(sessionId: string, keyword: string, maxResults?: number, previewLength?: number): Promise<{ matches: { index: number; text: string; kind: string }[]; totalEntries: number }>;
   listModels(sessionId: string): Promise<{ id: string; provider: string; name: string; reasoning: boolean; vision: boolean }[]>;
-  listSkills(sessionId: string): Promise<string[]>;
+  listSkills(sessionId: string): Promise<{ name: string; description?: string }[]>;
   getMaestroSettings(): Promise<{ files: { key: string; label: string; path: string; data: Record<string, unknown> }[]; observedAt: string }>;
   updateMaestroSettings(patch: Record<string, unknown>): Promise<{ ok: boolean; error?: string }>;
   setModel(sessionId: string, modelId: string): Promise<{ ok: boolean; error?: string }>;
@@ -125,7 +125,7 @@ export function HostStoreProvider({ children }: { children: React.ReactNode }) {
 
   const listSkills = useCallback(async (sessionId: string) => {
     const result = await getClient().sendCommand({ type: "list_skills", sessionId });
-    return result as string[];
+    return result as { name: string; description?: string }[];
   }, [getClient]);
 
   const getMaestroSettings = useCallback(async () => {

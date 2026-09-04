@@ -30,8 +30,8 @@ interface Props {
   currentModel?: string;
   /** 发送中状态 */
   sending?: boolean;
-  /** 可用 skills（名称列表） */
-  skills?: string[];
+  /** 可用 skills（名称或 {name, description} 对象列表） */
+  skills?: (string | { name: string; description?: string })[];
   placeholder?: string;
 }
 
@@ -125,14 +125,23 @@ export function ChatComposer({ actions, currentModel, sending, skills = [], plac
               autoFocus
             />
             <FlatList
-              data={skills.filter((s) => s.toLowerCase().includes(skillQuery.toLowerCase()))}
-              keyExtractor={(s) => s}
+              data={skills
+                .map((s) => (typeof s === "string" ? { name: s, description: undefined } : s))
+                .filter((s) => s.name.toLowerCase().includes(skillQuery.toLowerCase()))}
+              keyExtractor={(s) => s.name}
               renderItem={({ item }) => (
                 <TouchableOpacity
                   style={[styles.skillItem, { borderBottomColor: theme.border }]}
-                  onPress={() => { setText(`/skill:${item} `); setShowSkills(false); }}
+                  onPress={() => { setText(`/skill:${item.name} `); setShowSkills(false); }}
                 >
-                  <Text style={[styles.skillName, { color: theme.text }]}>/skill:{item}</Text>
+                  <Text style={[styles.skillName, { color: theme.text }]} numberOfLines={1}>
+                    /skill:{item.name}
+                  </Text>
+                  {item.description ? (
+                    <Text style={[styles.skillDesc, { color: theme.muted }]} numberOfLines={1}>
+                      {item.description}
+                    </Text>
+                  ) : null}
                 </TouchableOpacity>
               )}
               ListEmptyComponent={
@@ -286,6 +295,7 @@ const styles = StyleSheet.create({
   skillTitle: { fontSize: 11, marginBottom: 6, fontWeight: "600" },
   skillItem: { paddingVertical: 10, borderBottomWidth: StyleSheet.hairlineWidth },
   skillName: { fontSize: 13, fontWeight: "600" },
+  skillDesc: { fontSize: 11, marginTop: 2 },
   skillSearch: {
     borderRadius: 8,
     borderWidth: 1,
