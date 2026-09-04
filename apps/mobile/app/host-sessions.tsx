@@ -174,9 +174,9 @@ export default function HostSessionsScreen() {
           <Text style={styles.detailItem}>💬 {s.messageCount}</Text>
           <Text style={styles.detailItem}>{item.live ? "🟢 运行中" : formatTime(s.updatedAt)}</Text>
         </View>
-        {/* 详情行：会话 id */}
-        <Text style={styles.sessionId} numberOfLines={1}>
-          #{s.id.slice(0, 12)} · {cwdName(s.cwd)}
+        {/* 详情行：会话 id（仅超长时截断，保留中段可辦识） */}
+        <Text style={styles.sessionId} numberOfLines={1} ellipsizeMode="middle">
+          #{s.id.length > 14 ? s.id.slice(0, 6) + "…" + s.id.slice(-6) : s.id} · {cwdName(s.cwd)}
         </Text>
       </TouchableOpacity>
     );
