@@ -46,9 +46,61 @@ export interface AppTheme {
   /** 导航 */
   headerBg: string;
   headerText: string;
+  /** Miuix 语义扩展槽（全部可选，旧主题可不提供） */
+  surfaceVariant?: string;
+  onSurfaceVariantSummary?: string;
+  tertiaryContainer?: string;
+  onTertiaryContainer?: string;
+  secondaryContainer?: string;
+  onSecondaryContainer?: string;
+  disabledPrimaryButton?: string;
+  outline?: string;
+  dividerLine?: string;
+  onBackgroundVariant?: string;
+  windowDimming?: string;
 }
 
 export const THEMES: Record<string, AppTheme> = {
+  // ── Miuix Light（design-spec §6 Light 列真实值）──
+  "miuix-light": {
+    name: "Miuix Light",
+    bg: "#FFFFFF", cardBg: "#F7F7F7", border: "#D9D9D9",
+    text: "#000000", muted: "#666666", dim: "rgba(0,0,0,0.6)", accent: "#3482FF",
+    userBubble: "#3482FF", userText: "#FFFFFF",
+    agentBubble: "#FFFFFF", toolBubble: "#F7F7F7",
+    toolTitle: "#000000", toolOutput: "rgba(0,0,0,0.8)",
+    success: "#1E8E4E", error: "#E94634", warning: "#B25E09", info: "#3482FF",
+    inputBg: "#F7F7F7", buttonPrimary: "#3482FF", buttonDanger: "#E94634",
+    mdHeading: "#000000", mdLink: "#3482FF", mdCode: "#B34700",
+    mdCodeBlock: "#000000", mdCodeBlockBg: "#F7F7F7", mdQuote: "#666666", mdQuoteBorder: "#E0E0E0", mdHr: "#E0E0E0",
+    headerBg: "#FFFFFF", headerText: "#000000",
+    surfaceVariant: "#F7F7F7", onSurfaceVariantSummary: "rgba(0,0,0,0.6)",
+    tertiaryContainer: "#EAF2FF", onTertiaryContainer: "#3482FF",
+    secondaryContainer: "#F0F0F0", onSecondaryContainer: "#6B6B6B",
+    disabledPrimaryButton: "#C2D9FF", outline: "#D9D9D9", dividerLine: "#E0E0E0",
+    onBackgroundVariant: "#8C93B0", windowDimming: "rgba(0,0,0,0.3)",
+  },
+
+  // ── Miuix Dark（design-spec §6 Dark 列真实值；卡片取 surfaceContainerHighest #2D2D2D）──
+  "miuix-dark": {
+    name: "Miuix Dark",
+    bg: "#242424", cardBg: "#2D2D2D", border: "#404040",
+    text: "rgba(255,255,255,0.9)", muted: "#A8A8A8", dim: "#999999", accent: "#277AF7",
+    userBubble: "#277AF7", userText: "#FFFFFF",
+    agentBubble: "#2D2D2D", toolBubble: "#242424",
+    toolTitle: "#F2F2F2", toolOutput: "rgba(255,255,255,0.8)",
+    success: "#4ADE80", error: "#F12522", warning: "#FBBF24", info: "#277AF7",
+    inputBg: "#242424", buttonPrimary: "#277AF7", buttonDanger: "#F12522",
+    mdHeading: "rgba(255,255,255,0.9)", mdLink: "#277AF7", mdCode: "#99C7F1",
+    mdCodeBlock: "#F2F2F2", mdCodeBlockBg: "#242424", mdQuote: "#A8A8A8", mdQuoteBorder: "#393939", mdHr: "#393939",
+    headerBg: "#242424", headerText: "rgba(255,255,255,0.9)",
+    surfaceVariant: "#2D2D2D", onSurfaceVariantSummary: "#999999",
+    tertiaryContainer: "#2B3B54", onTertiaryContainer: "#4788FF",
+    secondaryContainer: "#434343", onSecondaryContainer: "#A8A8A8",
+    disabledPrimaryButton: "#253E64", outline: "#404040", dividerLine: "#393939",
+    onBackgroundVariant: "#787E96", windowDimming: "rgba(0,0,0,0.6)",
+  },
+
   // ── 深色 базов (原 App 配色) ──
   dark: {
     name: "Dark",
@@ -110,7 +162,11 @@ export const THEMES: Record<string, AppTheme> = {
   },
 };
 
-export const DEFAULT_THEME = "dark";
+export const MIUIX_RADIUS = { xs: 4, sm: 8, md: 12, lg: 16, xl: 20, pill: 999 };
+export const MIUIX_TYPE = { footnote2: 11, footnote1: 13, body2: 14, body1: 16, main: 17, title4: 18, title3: 20, title2: 24, title1: 32 };
+export const MIUIX_SPACE = { xs: 4, sm: 8, md: 12, lg: 16, xl: 20, xxl: 24 };
+
+export const DEFAULT_THEME = "miuix-light";
 
 interface ThemeContextValue {
   theme: AppTheme;
