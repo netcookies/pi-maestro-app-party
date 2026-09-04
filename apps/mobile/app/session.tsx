@@ -19,7 +19,7 @@ import { pickImagesFromLibrary } from "../src/image-picker";
 export default function SessionScreen() {
   const { id } = useLocalSearchParams<{ id: string }>();
   const router = useRouter();
-  const { state, sendPrompt, sendAbort, answerDialog, cancelDialog, loadMoreHistory, searchHistory, listModels, setModel, setThinking, listSkills, compactSession, renameSession } = useHost();
+  const { state, sendPrompt, sendAbort, answerDialog, cancelDialog, loadMoreHistory, searchHistory, listModels, setModel, setThinking, listSkills, compactSession, renameSession, isConnected, connectionState } = useHost();
   const { theme } = useTheme();
   const cfg = getConfig();
 
@@ -97,12 +97,15 @@ export default function SessionScreen() {
   const handleSend = async () => {
     const text = input.trim();
     if (!text || !id) return;
-    setInput("");
+    // 断连/重连中禁止发送（输入保留，待恢复连接后再发）
+    if (!isConnected) return;
     setSending(true);
     try {
       await sendPrompt(id, text);
-    } catch (e) {
-      // 显示错误由 store.lastError 处理
+      // 发送成功才清空输入；失败（超时/断连 reject）保留草稿，错误由 store.lastError 提示
+      setInput("");
+    } catch {
+      // 保留 input 不清空
     } finally {
       setSending(false);
     }
@@ -226,9 +229,20 @@ export default function SessionScreen() {
           <Text style={[styles.backText, { color: theme.accent }]}>‹ 返回</Text>
         </TouchableOpacity>
         <Text style={styles.headerTitle} numberOfLines={1}>{session?.title ?? "会话"}</Text>
-        <Text style={styles.headerStatus}>
-          {session?.runState === "streaming" ? "● 运行中" : session?.runState === "compacting" ? "● 压缩中" : "·"}
-        </Text>
+        <View style={styles.headerStatusWrap}>
+          {connectionState === "reconnecting" && (
+            <Text style={[styles.headerStatus, { color: theme.warning }]}>重连中…</Text>
+          )}
+          {connectionState === "disconnected" && (
+            <Text style={[styles.headerStatus, { color: theme.error }]}>未连接</Text>
+          )}
+          {connectionState === "connecting" && (
+            <Text style={[styles.headerStatus, { color: theme.muted }]}>连接中…</Text>
+          )}
+          <Text style={styles.headerStatus}>
+            {session?.runState === "streaming" ? "● 正在生成 · 可随时停止" : session?.runState === "compacting" ? "● 正在整理上下文" : "·"}
+          </Text>
+        </View>
         <TouchableOpacity onPress={() => setSearchOpen((v) => !v)} style={styles.searchToggle}>
           <Text style={[styles.backText, { color: theme.accent }]}>🔍</Text>
         </TouchableOpacity>
@@ -279,11 +293,23 @@ export default function SessionScreen() {
         </View>
       )}
 
+      {searchOpen && searchQuery.trim() && searchResults.length === 0 && !searching && (
+        <View style={[styles.searchResults, { backgroundColor: theme.cardBg, borderColor: theme.border }]}>
+          <Text style={[styles.searchResultsTitle, { color: theme.muted }]}>未找到匹配结果</Text>
+        </View>
+      )}
+
       <FlatList
         ref={listRef}
         data={hasMore ? [{ id: "__load_more__" } as TimelineItem, ...timeline] : timeline}
         keyExtractor={(item) => item.id}
         renderItem={renderItem}
+        ListEmptyComponent={
+          <View style={styles.emptyWrap}>
+            <Text style={[styles.emptyTitle, { color: theme.muted }]}>暂无消息</Text>
+            <Text style={[styles.emptySub, { color: theme.dim }]}>发送第一条指令开始对话</Text>
+          </View>
+        }
         style={styles.list}
         contentContainerStyle={styles.listContent}
         onContentSizeChange={(w, h) => {
@@ -341,6 +367,8 @@ export default function SessionScreen() {
         actions={{
           send: async (text, imgs) => {
             if (!id) return;
+            // 断连时禁止发送；throw 使 ChatComposer 恢复草稿（其内部先清空后发送）
+            if (!isConnected) throw new Error("未连接到主机");
             setSending(true);
             try {
               await sendPrompt(id, text, imgs);
@@ -365,7 +393,7 @@ export default function SessionScreen() {
         currentModel={currentModelId
           ? (session?.model as { name?: string } | undefined)?.name ?? currentModelId
           : (session?.model as { name?: string } | undefined)?.name}
-        sending={sending}
+        sending={sending || !isConnected}
         skills={availableSkills}
       />
 
@@ -396,6 +424,10 @@ function makeStyles(theme: ReturnType<typeof useTheme>["theme"]) {
     },
     headerTitle: { fontSize: 17, fontWeight: "600", color: theme.text, flex: 1, textAlign: "center" },
     headerStatus: { fontSize: 12, color: theme.muted, minWidth: 56, textAlign: "right" },
+    headerStatusWrap: { flexDirection: "row", alignItems: "center", gap: 6 },
+    emptyWrap: { alignItems: "center", paddingVertical: 64, gap: 6 },
+    emptyTitle: { fontSize: 15, fontWeight: "600" },
+    emptySub: { fontSize: 13 },
     backBtn: { paddingVertical: 4, paddingRight: 8 },
     backText: { fontSize: 15, fontWeight: "600" },
     searchToggle: { paddingVertical: 4, paddingLeft: 8 },
