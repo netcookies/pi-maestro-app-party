@@ -110,51 +110,6 @@ export function ChatComposer({ actions, currentModel, sending, skills = [], plac
       )}
 
       {/* skill 弹窗（带搜索条） */}
-      <Modal visible={showSkills} transparent animationType="fade" onRequestClose={() => setShowSkills(false)}>
-        <View style={styles.modalOverlay}>
-          <View style={[styles.modalSheet, { backgroundColor: theme.cardBg, borderColor: theme.border }]}>
-            <View style={styles.modalHeader}>
-              <Text style={[styles.modalTitle, { color: theme.text }]}>Skills</Text>
-              <TouchableOpacity onPress={() => setShowSkills(false)}><Text style={[styles.modalClose, { color: theme.muted }]}>✕</Text></TouchableOpacity>
-            </View>
-            <TextInput
-              style={[styles.skillSearch, { backgroundColor: theme.inputBg, color: theme.text, borderColor: theme.border }]}
-              value={skillQuery}
-              onChangeText={setSkillQuery}
-              placeholder="Search skills..."
-              placeholderTextColor={theme.dim}
-              autoCapitalize="none"
-              autoFocus
-            />
-            <FlatList
-              data={skills
-                .map((s) => (typeof s === "string" ? { name: s, description: undefined } : s))
-                .filter((s) => s.name.toLowerCase().includes(skillQuery.toLowerCase()))}
-              keyExtractor={(s) => s.name}
-              renderItem={({ item }) => (
-                <TouchableOpacity
-                  style={[styles.skillItem, { borderBottomColor: theme.border }]}
-                  onPress={() => { setText(`/skill:${item.name} `); setShowSkills(false); }}
-                >
-                  <Text style={[styles.skillName, { color: theme.text }]} numberOfLines={1}>
-                    /skill:{item.name}
-                  </Text>
-                  {item.description ? (
-                    <Text style={[styles.skillDesc, { color: theme.muted }]} numberOfLines={1}>
-                      {item.description}
-                    </Text>
-                  ) : null}
-                </TouchableOpacity>
-              )}
-              ListEmptyComponent={
-                <Text style={[styles.modalEmpty, { color: theme.muted }]}>No skills found</Text>
-              }
-              style={{ maxHeight: 340 }}
-            />
-          </View>
-        </View>
-      </Modal>
-
       {/* 工具行（图标 + 英文文字） */}
       <View style={styles.toolbar}>
         <TouchableOpacity onPress={openModels} style={styles.toolBtn}>
@@ -283,6 +238,51 @@ export function ChatComposer({ actions, currentModel, sending, skills = [], plac
         </View>
       </Modal>
 
+      <Modal visible={showSkills} transparent animationType="fade" onRequestClose={() => setShowSkills(false)}>
+        <View style={styles.modalOverlay}>
+          <View style={[styles.modalSheet, { backgroundColor: theme.cardBg, borderColor: theme.border }]}>
+            <View style={styles.modalHeader}>
+              <Text style={[styles.modalTitle, { color: theme.text }]}>Skills</Text>
+              <TouchableOpacity onPress={() => setShowSkills(false)}><Text style={[styles.modalClose, { color: theme.muted }]}>✕</Text></TouchableOpacity>
+            </View>
+            <TextInput
+              style={[styles.skillSearch, { backgroundColor: theme.inputBg, color: theme.text, borderColor: theme.border }]}
+              value={skillQuery}
+              onChangeText={setSkillQuery}
+              placeholder="Search skills..."
+              placeholderTextColor={theme.dim}
+              autoCapitalize="none"
+              autoFocus
+            />
+            <FlatList
+              data={skills
+                .map((s) => (typeof s === "string" ? { name: s, description: undefined } : s))
+                .filter((s) => s.name.toLowerCase().includes(skillQuery.toLowerCase()))}
+              keyExtractor={(s) => s.name}
+              renderItem={({ item }) => (
+                <TouchableOpacity
+                  style={[styles.skillItem, { borderBottomColor: theme.border }]}
+                  onPress={() => { setText(`/skill:${item.name} `); setShowSkills(false); }}
+                >
+                  <Text style={[styles.skillName, { color: theme.text }]} numberOfLines={1}>
+                    /skill:{item.name}
+                  </Text>
+                  {item.description ? (
+                    <Text style={[styles.skillDesc, { color: theme.muted }]} numberOfLines={1}>
+                      {item.description}
+                    </Text>
+                  ) : null}
+                </TouchableOpacity>
+              )}
+              ListEmptyComponent={
+                <Text style={[styles.modalEmpty, { color: theme.muted }]}>No skills found</Text>
+              }
+              style={{ maxHeight: 340 }}
+            />
+          </View>
+        </View>
+      </Modal>
+
       {/* 模型选择 Modal */}
       <Modal visible={showModels} transparent animationType="slide" onRequestClose={() => setShowModels(false)}>
         <View style={styles.modalOverlay}>
@@ -321,7 +321,10 @@ export function ChatComposer({ actions, currentModel, sending, skills = [], plac
       <Modal visible={showThinking} transparent animationType="fade" onRequestClose={() => setShowThinking(false)}>
         <View style={styles.modalOverlay}>
           <View style={[styles.modalSheet, { backgroundColor: theme.cardBg, borderColor: theme.border }]}>
-            <Text style={[styles.modalTitle, { color: theme.text }]}>思考等级</Text>
+            <View style={styles.modalHeader}>
+              <Text style={[styles.modalTitle, { color: theme.text }]}>思考等级</Text>
+              <TouchableOpacity onPress={() => setShowThinking(false)}><Text style={[styles.modalClose, { color: theme.muted }]}>✕</Text></TouchableOpacity>
+            </View>
             {THINKING_LEVELS.map((lv) => (
               <TouchableOpacity
                 key={lv}
@@ -339,7 +342,10 @@ export function ChatComposer({ actions, currentModel, sending, skills = [], plac
       <Modal visible={showPlanPicker} transparent animationType="fade" onRequestClose={() => setShowPlanPicker(false)}>
         <View style={styles.modalOverlay}>
           <View style={[styles.modalSheet, { backgroundColor: theme.cardBg, borderColor: theme.border }]}>
-            <Text style={[styles.modalTitle, { color: theme.text }]}>Plan / Act 模式</Text>
+            <View style={styles.modalHeader}>
+              <Text style={[styles.modalTitle, { color: theme.text }]}>Plan / Act 模式</Text>
+              <TouchableOpacity onPress={() => setShowPlanPicker(false)}><Text style={[styles.modalClose, { color: theme.muted }]}>✕</Text></TouchableOpacity>
+            </View>
             {planActions.map((p) => (
               <TouchableOpacity
                 key={p.key}
