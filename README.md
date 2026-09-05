@@ -28,7 +28,7 @@
 前提：Node ≥ 22.19、pnpm ≥ 10、Pi agent 可用（含 pi-maestro-flow）。
 
 ```bash
-git clone https://github.com/isulewli/pi-maestro-app-party.git
+git clone https://github.com/netcookies/pi-maestro-app-party.git
 cd pi-maestro-app-party
 pnpm install
 

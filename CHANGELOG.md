@@ -32,4 +32,4 @@
 - iOS 真机安装需 Apple Developer 签名；模拟器构建免签
 - 默认无鉴权监听 `0.0.0.0`，公网暴露必须配置 `MAESTRO_MOBILE_TOKEN`
 
-[0.1.0]: https://github.com/isulewli/pi-maestro-app-party/releases/tag/v0.1.0
+[0.1.0]: https://github.com/netcookies/pi-maestro-app-party/releases/tag/v0.1.0
