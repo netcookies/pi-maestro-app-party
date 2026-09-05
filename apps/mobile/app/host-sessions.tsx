@@ -73,18 +73,23 @@ export default function HostSessionsScreen() {
   useEffect(() => {
     if (autoReconnectRef.current) return;
     if (isConnected) { autoReconnectRef.current = true; return; }
-    void AsyncStorage.getItem(HOST_CONN_KEY).then((raw) => {
+    // 延迟一拍等 AsyncStorage 保存值先回填 hostUrl state
+    const timer = setTimeout(() => {
       if (autoReconnectRef.current || isConnected) return;
-      if (!raw) return;
-      try {
-        const saved = JSON.parse(raw) as { hostUrl?: string; token?: string };
-        if (saved.hostUrl) {
-          autoReconnectRef.current = true;
-          connect(saved.hostUrl, saved.token);
-        }
-      } catch {}
-    });
-  }, [isConnected, connect]);
+      autoReconnectRef.current = true;
+      // 优先持久化参数；没有则用当前 hostUrl state（默认地址兜底）
+      void AsyncStorage.getItem(HOST_CONN_KEY).then((raw) => {
+        let url = hostUrl;
+        let tok = token;
+        try {
+          const saved = raw ? JSON.parse(raw) as { hostUrl?: string; token?: string } : null;
+          if (saved?.hostUrl) { url = saved.hostUrl; tok = saved.token ?? tok; }
+        } catch {}
+        if (url) connect(url, tok.trim() || undefined);
+      });
+    }, 600);
+    return () => clearTimeout(timer);
+  }, [isConnected, connect, hostUrl, token]);
 
   const load = useCallback(async () => {
     if (!isConnected) { setLoading(false); return; } // 未连接不加载（连接卡在上面）
