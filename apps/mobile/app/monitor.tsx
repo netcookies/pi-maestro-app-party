@@ -5,11 +5,16 @@ import { useTheme, MIUIX_RADIUS, MIUIX_TYPE, MIUIX_SPACE } from "../src/theme";
 import type { MonitorWindowSummary, MonitorAttentionSummary } from "@maestro-mobile/shared";
 
 export default function MonitorScreen() {
-  const { state } = useHost();
+  const { state, fetchMonitorState } = useHost();
   const { theme } = useTheme();
   const styles = React.useMemo(() => makeStyles(theme), [theme]);
   const windows = state.monitor?.windows ?? [];
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
+
+  // 进入页面主动拉取（host 只在变化时推送，后连接会错过）
+  React.useEffect(() => {
+    void fetchMonitorState();
+  }, [fetchMonitorState]);
 
   const LIMIT = 5;
   const toggleExpanded = (key: string) => {

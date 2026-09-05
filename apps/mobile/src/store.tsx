@@ -34,6 +34,7 @@ export interface HostStoreValue {
   listModels(sessionId: string): Promise<{ id: string; provider: string; name: string; reasoning: boolean; vision: boolean }[]>;
   listSkills(sessionId: string): Promise<{ name: string; description?: string }[]>;
   getMaestroSettings(): Promise<{ files: { key: string; label: string; path: string; data: Record<string, unknown> }[]; observedAt: string }>;
+  fetchMonitorState(): Promise<void>;
   updateMaestroSettings(patch: Record<string, unknown>): Promise<{ ok: boolean; error?: string }>;
   setModel(sessionId: string, modelId: string): Promise<{ ok: boolean; error?: string }>;
   setThinking(sessionId: string, level: string): Promise<{ ok: boolean; error?: string }>;
@@ -138,6 +139,34 @@ export function HostStoreProvider({ children }: { children: React.ReactNode }) {
     return result as { ok: boolean; error?: string };
   }, [getClient]);
 
+  const fetchMonitorState = useCallback(async (): Promise<void> => {
+    try {
+      const result = await getClient().sendCommand({ type: "get_monitor_state" });
+      const telemetry = result as { owners: { workspaceId: string; normalizedCwd: string; ownerId: string; pid: number; sessionId: string; publishedAt: number; agents: unknown[]; alive: boolean; ageMs: number }[]; observedAt: string; aliveCount: number };
+      // 投影为 MonitorState（与 host monitor_state 事件同构）
+      dispatch({ type: "monitor_state", state: {
+        windows: telemetry.owners.map((o) => ({
+          identity: {
+            workspaceId: o.workspaceId,
+            ownerId: o.ownerId,
+            ownerNonce: "",
+            endpointId: o.sessionId,
+          },
+          name: o.normalizedCwd.split("/").filter(Boolean).pop() ?? o.normalizedCwd,
+          status: o.alive ? "running" : "sleeping",
+          lifecycle: o.alive ? "running" : "disconnected",
+          workStatus: (o.agents?.length ?? 0) > 0 ? "active" : "idle",
+          todos: [],
+          attention: [],
+          facets: [],
+        })),
+        observedAt: telemetry.observedAt,
+      } } as never);
+    } catch {
+      // 静默
+    }
+  }, [getClient]);
+
   const setModel = useCallback(async (sessionId: string, modelId: string) => {
     const result = await getClient().sendCommand({ type: "set_model", sessionId, modelId });
     return result as { ok: boolean; error?: string };
@@ -232,6 +261,7 @@ export function HostStoreProvider({ children }: { children: React.ReactNode }) {
       listSkills,
       getMaestroSettings,
       updateMaestroSettings,
+      fetchMonitorState,
       setModel,
       setThinking,
       compactSession,
@@ -243,7 +273,7 @@ export function HostStoreProvider({ children }: { children: React.ReactNode }) {
       cancelDialog,
       lastError: state.lastError,
     }),
-    [state, connectionState, hostUrl, connect, disconnect, openSession, openExistingSession, listHostSessions, listLiveSessions, loadSessionHistory, loadMoreHistory, searchHistory, listModels, listSkills, getMaestroSettings, updateMaestroSettings, setModel, setThinking, compactSession, renameSession, sendPrompt, sendSteer, sendAbort, answerDialog, cancelDialog],
+    [state, connectionState, hostUrl, connect, disconnect, openSession, openExistingSession, listHostSessions, listLiveSessions, loadSessionHistory, loadMoreHistory, searchHistory, listModels, listSkills, getMaestroSettings, updateMaestroSettings, fetchMonitorState, setModel, setThinking, compactSession, renameSession, sendPrompt, sendSteer, sendAbort, answerDialog, cancelDialog],
   );
 
   return <HostStoreContext.Provider value={value}>{children}</HostStoreContext.Provider>;

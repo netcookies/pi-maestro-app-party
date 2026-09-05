@@ -11,11 +11,16 @@ type Row =
   | { type: "dispatch"; dispatch: MaestroDispatchSummary };
 
 export default function TeammateScreen() {
-  const { state } = useHost();
+  const { state, fetchMonitorState } = useHost();
   const { theme } = useTheme();
   const styles = React.useMemo(() => makeStyles(theme), [theme]);
   const schedules = state.maestro?.schedules ?? [];
   const ownerWindows = state.monitor?.windows ?? [];
+
+  // 进入页面主动拉取（host 只在变化时推送，后连接会错过）
+  React.useEffect(() => {
+    void fetchMonitorState();
+  }, [fetchMonitorState]);
 
   const rows = React.useMemo<Row[]>(() => {
     const out: Row[] = [];
