@@ -59,7 +59,7 @@ export default function TeammateScreen() {
         <View style={styles.schedule}>
           <View style={styles.scheduleHeader}>
             <Text style={styles.scheduleTitle}>{w.name ?? "Pi 会话"}</Text>
-            <Text style={[styles.scheduleState, statusColor(w.status)]}>
+            <Text style={[styles.scheduleState, statusColor(w.status, theme)]}>
               {w.status === "running" ? "运行中" : w.status === "sleeping" ? "睡眠" : w.status}
             </Text>
           </View>
@@ -72,7 +72,7 @@ export default function TeammateScreen() {
                 <Text style={[styles.sessionTitle, { color: theme.text, fontSize: 13 }]} numberOfLines={1}>
                   {a.name ?? a.agent ?? "teammate"}
                 </Text>
-                <Text style={[styles.scheduleState, statusColor(a.status ?? "")]}>{a.status ?? "?"}</Text>
+                <Text style={[styles.scheduleState, statusColor(a.status ?? "", theme)]}>{a.status ?? "?"}</Text>{a.status ?? "?"}</Text>
               </View>
               {a.phase ? <Text style={[styles.progress, { marginTop: 2 }]}>phase: {a.phase}</Text> : null}
               {a.outputTail && Array.isArray(a.outputTail) && a.outputTail.length > 0 ? (
