@@ -10,6 +10,7 @@ import type { MobileAgentRuntime, MobileAgentSession } from "./mobile-agent.js";
 import type { SessionRunner, RuntimeFactory } from "./types.js";
 import { EventLog } from "./event-log.js";
 import { replayTailFromJsonl, replayPageFromJsonl, searchInJsonl } from "./jsonl-pager.js";
+import { readSessionUsage } from "./usage-reader.js";
 import { MobileExtensionUiBridge } from "./mobile-ui-context.js";
 
 const HISTORY_PAGE_SIZE = 80;
@@ -205,6 +206,35 @@ export class SdkSessionRunner implements SessionRunner {
 
   async steer(message: string): Promise<void> {
     await this.session.steer(message);
+  }
+
+  /** SDK 实时上下文用量（tokens / contextWindow / percent；未知时 tokens 为 null） */
+  getContextUsage(): { tokens: number | null; contextWindow: number; percent: number | null } | null {
+    if (typeof (this.session as unknown as { getContextUsage?: unknown }).getContextUsage !== "function") return null;
+    try {
+      const u = (this.session as unknown as { getContextUsage(): unknown }).getContextUsage();
+      if (!u || typeof u !== "object") return null;
+      const rec = u as Record<string, unknown>;
+      return {
+        tokens: typeof rec.tokens === "number" ? rec.tokens : null,
+        contextWindow: typeof rec.contextWindow === "number" ? rec.contextWindow : 0,
+        percent: typeof rec.percent === "number" ? rec.percent : null,
+      };
+    } catch {
+      return null;
+    }
+  }
+
+  /** 会话 token 用量（sessionFile JSONL 聚合；无文件/无 usage 时 entries=0） */
+  async getUsage(): Promise<{ entries: number; input: number; output: number; cacheRead: number; cacheWrite: number; reasoning: number; totalTokens: number; cost: number }> {
+    if (!this.session.sessionFile) {
+      return { entries: 0, input: 0, output: 0, cacheRead: 0, cacheWrite: 0, reasoning: 0, totalTokens: 0, cost: 0 };
+    }
+    const t = await readSessionUsage(this.session.sessionFile);
+    return {
+      entries: t.entries, input: t.input, output: t.output, cacheRead: t.cacheRead,
+      cacheWrite: t.cacheWrite, reasoning: t.reasoning, totalTokens: t.totalTokens, cost: t.cost,
+    };
   }
 
   async followUp(message: string): Promise<void> {

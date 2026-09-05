@@ -16,9 +16,12 @@ import type {
   ExtensionUiResponse,
 } from "@maestro-mobile/shared";
 import { ExtensionUiQueue, type DialogEntry } from "./extension-ui-queue";
+import { parseHostStatusMeta, type HostStatusMeta } from "./host-status";
 
 export interface AppState {
   connectionStatus: string;
+  /** host_status 对象载荷解析出的版本/maestro 检测元数据（设置页「版本与诊断」用；null = 待 Host 接入） */
+  hostStatusMeta: HostStatusMeta | null;
   sessions: Map<string, SessionState>;
   timelines: Map<string, TimelineItem[]>;
   maestro: MaestroState | null;
@@ -30,6 +33,7 @@ export interface AppState {
 export function createInitialState(): AppState {
   return {
     connectionStatus: "disconnected",
+    hostStatusMeta: null,
     sessions: new Map(),
     timelines: new Map(),
     maestro: null,
@@ -78,8 +82,15 @@ export function reduceEvent(state: AppState, event: HostEvent | InternalEvent | 
     return { ...state, timelines };
   }
   switch (event.type) {
-    case "host_status":
-      return { ...state, connectionStatus: event.status };
+    case "host_status": {
+      const meta = parseHostStatusMeta(event.status);
+      return {
+        ...state,
+        connectionStatus: typeof event.status === "string" ? event.status : state.connectionStatus,
+        // 对象载荷（Host 首次连接推送 getStatus()）→ 提取版本元数据；字符串载荷不改元数据
+        ...(meta ? { hostStatusMeta: meta } : null),
+      };
+    }
 
     case "session_updated": {
       const sessions = new Map(state.sessions);

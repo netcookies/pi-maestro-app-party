@@ -1,5 +1,14 @@
+/**
+ * 设置页（方向 A 精简版）
+ *
+ * 移除「Maestro 设置」通用键值编辑区（模型/思考等会话级配置不属于全局设置；
+ * 协议命令 get_maestro_settings / update_maestro_settings 保留，Host 侧不动）。
+ * 分组：外观 / 连接状态 / 数据拉取参数 / 通知与行为 / 版本与诊断。
+ * 版本与诊断：Host 版本来自 host_status 对象载荷（hostStatusMeta），
+ * Pi / pi-maestro-flow / Maestro CLI 版本协议未提供，显示「待 Host 接入」，不编造。
+ */
 import React, { useMemo, useState, useEffect } from "react";
-import { View, Text, StyleSheet, ScrollView, TouchableOpacity, TextInput } from "react-native";
+import { View, Text, StyleSheet, ScrollView, TouchableOpacity } from "react-native";
 import { useHost } from "../src/store";
 import { useTheme, THEMES, MIUIX_RADIUS, MIUIX_TYPE, MIUIX_SPACE } from "../src/theme";
 import { DEFAULT_CONFIG, getConfig, updateConfig, loadConfig, type AppConfig } from "../src/config";
@@ -34,16 +43,12 @@ function useAppearanceSegment(): number {
   return themeName === "miuix-dark" ? 2 : storedChoice === "light" ? 1 : 0;
 }
 
-const maestroSettingsKeys = ["defaultModel", "defaultProvider", "defaultThinkingLevel", "theme", "hideThinkingBlock"];
-
 export default function SettingsScreen() {
-  const { connectionState, isConnected, state, getMaestroSettings, updateMaestroSettings } = useHost();
+  const { connectionState, isConnected, state } = useHost();
   const { theme, themeName, setTheme } = useTheme();
   const styles = useMemo(() => makeStyles(theme), [theme]);
   const [config, setConfig] = useState<AppConfig>(getConfig());
   const [configDraft, setConfigDraft] = useState<Partial<AppConfig>>({});
-  const [maestroSettings, setMaestroSettings] = useState<Record<string, unknown> | null>(null);
-  const [maestroDraft, setMaestroDraft] = useState<Record<string, string>>({});
   // 本地行为偏好（演示态，不接 Host）
   const [notifAttention, setNotifAttention] = useState(true);
   const [askHaptic, setAskHaptic] = useState(true);
@@ -53,27 +58,6 @@ export default function SettingsScreen() {
     void loadConfig().then((c) => setConfig(c));
   }, []);
 
-  const loadMaestro = async () => {
-    try {
-      const overview = await getMaestroSettings();
-      const settingsFile = overview.files.find((f) => f.key === "settings");
-      if (settingsFile) setMaestroSettings(settingsFile.data);
-    } catch {
-      // 加载失败静默
-    }
-  };
-
-  const saveMaestroSettings = async () => {
-    const patch = Object.fromEntries(
-      Object.entries(maestroDraft).filter(([, v]) => v !== undefined && v !== ""),
-    );
-    const r = await updateMaestroSettings(patch);
-    if (r.ok) {
-      setMaestroDraft({});
-      await loadMaestro();
-    }
-  };
-
   const saveConfig = async () => {
     const next = await updateConfig(configDraft);
     setConfig(next);
@@ -81,6 +65,7 @@ export default function SettingsScreen() {
   };
 
   const currentSeg = useAppearanceSegment();
+  const meta = state.hostStatusMeta;
 
   return (
     <ScrollView style={styles.container} contentContainerStyle={styles.content}>
@@ -168,47 +153,6 @@ export default function SettingsScreen() {
         </TouchableOpacity>
       </View>
 
-      {/* Maestro 设置（对应 /maestro-settings /api-manager） */}
-      <Text style={styles.smallTitle}>Maestro 设置</Text>
-      <View style={[styles.prefGroup, { backgroundColor: theme.cardBg, borderColor: theme.border }]}>
-        {maestroSettings ? (
-          <>
-            {maestroSettingsKeys.map((k) => (
-              <View key={k} style={styles.maestroRow}>
-                <Text style={styles.maestroKey}>{k}</Text>
-                <TextInput
-                  style={[styles.configInput, { backgroundColor: theme.inputBg, color: theme.text, borderColor: theme.border }]}
-                  value={String(maestroDraft[k] ?? maestroSettings[k] ?? "")}
-                  onChangeText={(v) => setMaestroDraft({ ...maestroDraft, [k]: v })}
-                  placeholder={String(maestroSettings[k] ?? "")}
-                  placeholderTextColor={theme.onBackgroundVariant ?? theme.dim}
-                />
-              </View>
-            ))}
-            <TouchableOpacity
-              style={[styles.saveBtn, { backgroundColor: theme.buttonPrimary }]}
-              onPress={saveMaestroSettings}
-              accessibilityRole="button"
-              accessibilityLabel="保存 Maestro 设置"
-            >
-              <Text style={styles.saveText}>保存 Maestro 设置（写回 Host）</Text>
-            </TouchableOpacity>
-            <Text style={styles.configHint}>
-              对应 Pi 的 /maestro-settings：白名单字段，带备份
-            </Text>
-          </>
-        ) : (
-          <TouchableOpacity
-            style={[styles.saveBtn, { backgroundColor: theme.buttonPrimary }]}
-            onPress={loadMaestro}
-            accessibilityRole="button"
-            accessibilityLabel="加载 Maestro 设置"
-          >
-            <Text style={styles.saveText}>加载 Maestro 设置</Text>
-          </TouchableOpacity>
-        )}
-      </View>
-
       {/* 通知与行为（设计稿 switchRow 组） */}
       <Text style={styles.smallTitle}>通知与行为</Text>
       <View style={[styles.prefGroup, { backgroundColor: theme.cardBg, borderColor: theme.border }]}>
@@ -246,18 +190,58 @@ export default function SettingsScreen() {
         </View>
       </View>
 
-      {/* 关于（设计稿 version-card：居中徽标） */}
-      <Text style={styles.smallTitle}>关于</Text>
-      <View style={[styles.versionCard, { backgroundColor: theme.cardBg, borderColor: theme.border }]}>
-        <View style={[styles.vcBadge, { backgroundColor: theme.tertiaryContainer ?? theme.inputBg }]}>
-          <LineIcon name="brain" size={26} color={theme.onTertiaryContainer ?? theme.accent} />
+      {/* 版本与诊断（设计稿 version-card：Host 版本来自 host_status 载荷，其余待接入） */}
+      <Text style={styles.smallTitle}>版本与诊断</Text>
+      <View style={[styles.prefGroup, { backgroundColor: theme.cardBg, borderColor: theme.border }]}>
+        <View style={styles.prefRow}>
+          <View style={styles.prefMain}>
+            <Text style={styles.prefLabel}>Maestro Mobile</Text>
+          </View>
+          <Text style={styles.prefValue}>0.1.0</Text>
         </View>
-        <Text style={styles.vcName}>Maestro Mobile</Text>
-        <Text style={styles.vcVer}>v0.1.0</Text>
-        <Text style={styles.vcDesc}>
-          在移动端远程操控 Pi Agent + pi-maestro-flow。{"\n"}
-          Bridge 方案 · extension_ui 桥接 ask-user-question。
-        </Text>
+        <View style={[styles.prefDivider, { backgroundColor: theme.dividerLine ?? theme.border }]} />
+        <View style={styles.prefRow}>
+          <View style={styles.prefMain}>
+            <Text style={styles.prefLabel}>Mobile Host</Text>
+            <Text style={styles.prefSummary}>
+              {meta ? `运行 ${Math.round((meta.uptimeMs ?? 0) / 1000)}s · ${meta.sessions ?? 0} 会话` : "连接后显示"}
+            </Text>
+          </View>
+          <Text style={styles.prefValue}>{meta?.version ?? "待 Host 接入"}</Text>
+        </View>
+        <View style={[styles.prefDivider, { backgroundColor: theme.dividerLine ?? theme.border }]} />
+        <View style={styles.prefRow}>
+          <View style={styles.prefMain}>
+            <Text style={styles.prefLabel}>Pi Agent</Text>
+            <Text style={styles.prefSummary}>桌面 TUI 同款会话引擎</Text>
+          </View>
+          <Text style={styles.prefValue}>{meta?.piVersion ?? "待 Host 接入"}</Text>
+        </View>
+        <View style={[styles.prefDivider, { backgroundColor: theme.dividerLine ?? theme.border }]} />
+        <View style={styles.prefRow}>
+          <View style={styles.prefMain}>
+            <Text style={styles.prefLabel}>pi-maestro-flow</Text>
+            <Text style={styles.prefSummary}>{meta ? (meta.flowVersion ? "已检测" : "未检测到") : "连接后显示"}</Text>
+          </View>
+          <Text style={styles.prefValue}>{meta?.flowVersion ?? (meta ? "未检测到" : "待 Host 接入")}</Text>
+        </View>
+        <View style={[styles.prefDivider, { backgroundColor: theme.dividerLine ?? theme.border }]} />
+        <View style={styles.prefRow}>
+          <View style={styles.prefMain}>
+            <Text style={styles.prefLabel}>Maestro CLI</Text>
+          </View>
+          <Text style={styles.prefValue}>{meta?.maestroCliVersion ?? (meta ? "未检测到" : "待 Host 接入")}</Text>
+        </View>
+        <View style={[styles.prefDivider, { backgroundColor: theme.dividerLine ?? theme.border }]} />
+        <View style={styles.prefRow}>
+          <View style={styles.prefMain}>
+            <Text style={styles.prefLabel}>协议兼容性</Text>
+            <Text style={styles.prefSummary}>host_status 载荷解析</Text>
+          </View>
+          <Text style={[styles.prefValue, { color: meta ? theme.success : theme.muted }]}>
+            {meta ? "正常" : "未知"}
+          </Text>
+        </View>
       </View>
     </ScrollView>
   );
@@ -282,19 +266,6 @@ function makeStyles(theme: ReturnType<typeof useTheme>["theme"]) {
     prefLabel: { fontSize: MIUIX_TYPE.body2, fontWeight: "600", color: theme.text },
     prefSummary: { fontSize: MIUIX_TYPE.footnote2, color: theme.onBackgroundVariant ?? theme.muted, marginTop: 2 },
     prefValue: { fontSize: MIUIX_TYPE.body2, fontWeight: "700", color: theme.text, fontVariant: ["tabular-nums"] },
-    // Maestro 键值行
-    maestroRow: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", paddingVertical: MIUIX_SPACE.xs, gap: MIUIX_SPACE.sm },
-    maestroKey: { fontSize: MIUIX_TYPE.footnote1, color: theme.text, flex: 1, fontFamily: "Menlo" },
-    configInput: {
-      borderRadius: MIUIX_RADIUS.sm,
-      borderWidth: 1,
-      paddingHorizontal: MIUIX_SPACE.sm,
-      fontSize: MIUIX_TYPE.footnote1,
-      width: 150,
-      minHeight: 40,
-      textAlign: "right",
-      color: theme.text,
-    },
     saveBtn: {
       borderRadius: MIUIX_RADIUS.sm,
       paddingVertical: MIUIX_SPACE.sm,
@@ -304,12 +275,5 @@ function makeStyles(theme: ReturnType<typeof useTheme>["theme"]) {
       marginVertical: MIUIX_SPACE.sm,
     },
     saveText: { color: "#fff", fontWeight: "600", fontSize: MIUIX_TYPE.body2 },
-    configHint: { fontSize: MIUIX_TYPE.footnote2, color: theme.onBackgroundVariant ?? theme.muted, marginBottom: MIUIX_SPACE.sm },
-    // 关于卡（设计稿 version-card：居中）
-    versionCard: { borderRadius: MIUIX_RADIUS.lg, borderWidth: 1, alignItems: "center", padding: MIUIX_SPACE.xl, marginBottom: MIUIX_SPACE.xl },
-    vcBadge: { width: 56, height: 56, borderRadius: 16, alignItems: "center", justifyContent: "center", marginBottom: MIUIX_SPACE.md },
-    vcName: { fontSize: MIUIX_TYPE.main, fontWeight: "700", color: theme.text },
-    vcVer: { fontSize: MIUIX_TYPE.footnote1, color: theme.muted, marginTop: MIUIX_SPACE.xs },
-    vcDesc: { fontSize: MIUIX_TYPE.footnote2, color: theme.onBackgroundVariant ?? theme.muted, textAlign: "center", lineHeight: 18, marginTop: MIUIX_SPACE.md },
   });
 }

@@ -10,12 +10,13 @@ import { loadConfig } from "../src/config";
 import { useEffect } from "react";
 
 /**
- * 导航架构（对齐 Miuix 设计稿 NavigationBar）：
- * 主壳 = 底部 Tabs 4 个（会话 host-sessions / Teammate / Monitor / 设置），
+ * 导航架构（方向 A：Dashboard 工作台为首页）：
+ * 主壳 = 底部 Tabs 4 个（工作台 dashboard / 会话 host-sessions / Monitor / 设置），
  * 会话聊天 session 为 stack 内二级页（无 tab）。
- * index 入口页重定向到 /host-sessions（原连接功能已迁移到会话页 HostConnectCard）。
+ * index 不再 Redirect，直接作为工作台态势总览页；Teammate 页保留为会话页二级入口（待后续接入）。
  */
 const TAB_ICONS: Record<string, LineIconName> = {
+  dashboard: "brain",
   "host-sessions": "image",
   teammate: "plan",
   monitor: "bolt",
@@ -23,8 +24,8 @@ const TAB_ICONS: Record<string, LineIconName> = {
 };
 
 const TAB_LABELS: Record<string, string> = {
+  dashboard: "工作台",
   sessions: "会话",
-  teammate: "Teammate",
   monitor: "Monitor",
   settings: "设置",
 };
@@ -36,7 +37,7 @@ function RootNavigator() {
       <StatusBar style={theme.bg === "#f7f7f5" || theme.name === "notion" ? "dark" : "light"} />
       <Tabs
         screenOptions={{
-          initialRouteName: "host-sessions",
+          initialRouteName: "index",
           headerStyle: { backgroundColor: theme.headerBg },
           headerTintColor: theme.headerText,
           headerTitleStyle: { fontSize: 24, fontWeight: "700" },
@@ -57,7 +58,10 @@ function RootNavigator() {
       >
         <Tabs.Screen
           name="index"
-          options={{ href: null }}
+          options={{
+            title: "工作台",
+            tabBarIcon: ({ color }) => <LineIcon name="brain" size={22} color={color} />,
+          }}
         />
         <Tabs.Screen
           name="host-sessions"
@@ -68,10 +72,7 @@ function RootNavigator() {
         />
         <Tabs.Screen
           name="teammate"
-          options={{
-            title: "Teammate",
-            tabBarIcon: ({ color }) => <LineIcon name="plan" size={22} color={color} />,
-          }}
+          options={{ href: null }}
         />
         <Tabs.Screen
           name="monitor"

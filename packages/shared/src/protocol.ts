@@ -189,6 +189,8 @@ export interface MonitorWindowSummary {
   };
   name?: string;
   objective?: string;
+  /** 窗口 cwd（telemetry normalizedCwd；steer_window 接管路径需要） */
+  cwd?: string;
   status: string;
   lifecycle: string;
   workStatus: string;
@@ -313,12 +315,39 @@ export type ClientCommand =
   | { type: "list_directories"; path: string }
   | { type: "prompt"; sessionId: string; message: string; images?: { data: string; mime: string }[] }
   | { type: "steer"; sessionId: string; message: string }
+  | { type: "steer_window"; endpointId: string; cwd: string; message: string }
   | { type: "follow_up"; sessionId: string; message: string }
   | { type: "abort"; sessionId: string }
   | { type: "extension_ui_response"; sessionId: string; requestId: string; response: ExtensionUiResponse }
   | { type: "get_snapshot"; sessionId: string }
+  | { type: "get_session_usage"; sessionId: string }
   | { type: "get_maestro_state" }
   | { type: "get_monitor_state" };
+
+/** steer_window 结果（tookOver=true 表示窗口原先未打开，Host 已接管为受控会话） */
+export interface SteerWindowResult {
+  ok: boolean;
+  sessionId: string;
+  tookOver: boolean;
+  error?: string;
+}
+
+/** 会话 token 用量（JSONL 聚合；entries=0 表示无 usage 数据） */
+export interface SessionUsageSummary {
+  sessionId: string;
+  entries: number;
+  input: number;
+  output: number;
+  cacheRead: number;
+  cacheWrite: number;
+  reasoning: number;
+  /** input+output+cacheRead+cacheWrite+reasoning 之和（参考值，非独立增量） */
+  totalTokens: number;
+  /** 累计成本（美元；免费模型为 0） */
+  cost: number;
+  /** SDK 实时上下文用量（未流式响应或刚 compact 后可能为 null） */
+  context: { tokens: number | null; contextWindow: number; percent: number | null } | null;
+}
 
 // ─────────────────────────────────────────────────────────────────────────────
 // 宿主状态
@@ -329,6 +358,12 @@ export interface HostStatus {
   version: string;
   maestroDetected: boolean;
   maestroVersion?: string;
+  /** Pi coding agent 版本（探测失败时不返回，UI 显示「待接入」） */
+  piVersion?: string;
+  /** pi-maestro-flow 扩展版本 */
+  flowVersion?: string;
+  /** Maestro CLI 版本 */
+  maestroCliVersion?: string;
   sessions: number;
   uptimeMs: number;
 }

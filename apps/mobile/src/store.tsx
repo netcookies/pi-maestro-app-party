@@ -7,7 +7,7 @@
  * - 暴露 connect / disconnect / sendPrompt / answerDialog 等动作
  */
 import React, { createContext, useContext, useMemo, useReducer, useRef, useState, useCallback } from "react";
-import type { ExtensionUiRequest, HostEvent, HostSessionList, LiveSessionList, TimelineItem } from "@maestro-mobile/shared";
+import type { ExtensionUiRequest, HostEvent, HostSessionList, LiveSessionList, TimelineItem, SessionUsageSummary } from "@maestro-mobile/shared";
 import { HostClient, type ConnectionState } from "./host-client";
 import { ExtensionUiQueue } from "./extension-ui-queue";
 import {
@@ -38,6 +38,8 @@ export interface HostStoreValue {
   listModels(sessionId: string): Promise<{ id: string; provider: string; name: string; reasoning: boolean; vision: boolean }[]>;
   listSkills(sessionId: string): Promise<{ name: string; description?: string }[]>;
   getMaestroSettings(): Promise<{ files: { key: string; label: string; path: string; data: Record<string, unknown> }[]; observedAt: string }>;
+  /** 会话 token 用量（JSONL 聚合 + SDK context）；目标会话未打开时返回 null */
+  fetchSessionUsage(sessionId: string): Promise<SessionUsageSummary | null>;
   fetchMonitorState(): Promise<void>;
   updateMaestroSettings(patch: Record<string, unknown>): Promise<{ ok: boolean; error?: string }>;
   setModel(sessionId: string, modelId: string): Promise<{ ok: boolean; error?: string }>;
@@ -46,6 +48,8 @@ export interface HostStoreValue {
   renameSession(sessionId: string, name: string): Promise<{ ok: boolean; error?: string }>;
   sendPrompt(sessionId: string, message: string, images?: { data: string; mime: string }[]): Promise<void>;
   sendSteer(sessionId: string, message: string): Promise<void>;
+  /** 跨窗口监督发送：未打开的窗口会被 Host 接管（返回 tookOver=true） */
+  sendSteerWindow(endpointId: string, cwd: string, message: string): Promise<{ ok: boolean; sessionId: string; tookOver: boolean; error?: string }>;
   sendAbort(sessionId: string): Promise<void>;
   answerDialog(requestId: string, value: string | string[]): void;
   cancelDialog(requestId: string): void;
@@ -53,7 +57,6 @@ export interface HostStoreValue {
 }
 
 const HostStoreContext = createContext<HostStoreValue | null>(null);
-
 export function HostStoreProvider({ children }: { children: React.ReactNode }) {
   const queueRef = useRef(new ExtensionUiQueue());
   const clientRef = useRef<HostClient | null>(null);
@@ -174,6 +177,15 @@ export function HostStoreProvider({ children }: { children: React.ReactNode }) {
     return result as { ok: boolean; error?: string };
   }, [getClient]);
 
+  const fetchSessionUsage = useCallback(async (sessionId: string): Promise<SessionUsageSummary | null> => {
+    try {
+      const result = await getClient().sendCommand({ type: "get_session_usage", sessionId });
+      return result as SessionUsageSummary;
+    } catch {
+      return null;
+    }
+  }, [getClient]);
+
   const fetchMonitorState = useCallback(async (): Promise<void> => {
     try {
       const result = await getClient().sendCommand({ type: "get_monitor_state" });
@@ -188,6 +200,7 @@ export function HostStoreProvider({ children }: { children: React.ReactNode }) {
             endpointId: o.sessionId,
           },
           name: o.normalizedCwd.split("/").filter(Boolean).pop() ?? o.normalizedCwd,
+          cwd: o.normalizedCwd,
           status: o.alive ? "running" : "sleeping",
           lifecycle: o.alive ? "running" : "disconnected",
           workStatus: (o.agents?.length ?? 0) > 0 ? "active" : "idle",
@@ -228,6 +241,11 @@ export function HostStoreProvider({ children }: { children: React.ReactNode }) {
 
   const sendSteer = useCallback(async (sessionId: string, message: string) => {
     await getClient().sendCommand({ type: "steer", sessionId, message });
+  }, [getClient]);
+
+  const sendSteerWindow = useCallback(async (endpointId: string, cwd: string, message: string): Promise<{ ok: boolean; sessionId: string; tookOver: boolean; error?: string }> => {
+    const result = await getClient().sendCommand({ type: "steer_window", endpointId, cwd, message });
+    return result as { ok: boolean; sessionId: string; tookOver: boolean; error?: string };
   }, [getClient]);
 
   const sendAbort = useCallback(async (sessionId: string) => {
@@ -305,6 +323,7 @@ export function HostStoreProvider({ children }: { children: React.ReactNode }) {
       listSkills,
       getMaestroSettings,
       updateMaestroSettings,
+      fetchSessionUsage,
       fetchMonitorState,
       setModel,
       setThinking,
@@ -312,12 +331,13 @@ export function HostStoreProvider({ children }: { children: React.ReactNode }) {
       renameSession,
       sendPrompt,
       sendSteer,
+      sendSteerWindow,
       sendAbort,
       answerDialog,
       cancelDialog,
       lastError: state.lastError,
     }),
-    [state, connectionState, hostUrl, token, connect, disconnect, openSession, openExistingSession, closeSession, listHostSessions, listLiveSessions, loadSessionHistory, loadMoreHistory, searchHistory, listModels, listSkills, getMaestroSettings, updateMaestroSettings, fetchMonitorState, setModel, setThinking, compactSession, renameSession, sendPrompt, sendSteer, sendAbort, answerDialog, cancelDialog],
+    [state, connectionState, hostUrl, token, connect, disconnect, openSession, openExistingSession, closeSession, listHostSessions, listLiveSessions, loadSessionHistory, loadMoreHistory, searchHistory, listModels, listSkills, getMaestroSettings, updateMaestroSettings, fetchSessionUsage, fetchMonitorState, setModel, setThinking, compactSession, renameSession, sendPrompt, sendSteer, sendSteerWindow, sendAbort, answerDialog, cancelDialog],
   );
 
   return <HostStoreContext.Provider value={value}>{children}</HostStoreContext.Provider>;

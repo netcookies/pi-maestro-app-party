@@ -403,6 +403,25 @@ export class MobileHostServer {
           this.sendAck(client, command, {});
           break;
         }
+        case "steer_window": {
+          // 监督会话跨窗口发送：已打开 → 直接 steer；未打开 → 接管（open_session continue）后 steer。
+          // 接管语义：Host 打开的会话与原桌面 Pi 进程并行写同一 JSONL，移动端 UI 必须明示「接管并发送」。
+          const existing = this.controller.getSession(command.endpointId);
+          if (existing) {
+            await existing.steer(command.message);
+            this.sendAck(client, command, { ok: true, sessionId: command.endpointId, tookOver: false });
+            break;
+          }
+          try {
+            const runner = await this.controller.openSession({ cwd: command.cwd, mode: "continue", sessionFile: undefined });
+            await runner.steer(command.message);
+            this.sendAck(client, command, { ok: true, sessionId: runner.id, tookOver: true });
+          } catch (error) {
+            const message = error instanceof Error ? error.message : String(error);
+            this.sendAck(client, command, { ok: false, sessionId: command.endpointId, tookOver: false, error: message });
+          }
+          break;
+        }
         case "follow_up": {
           const runner = this.controller.getSession(command.sessionId);
           if (!runner) { this.sendError(client, "session_not_found", (command as { id?: string }).id ?? ""); break; }
@@ -450,6 +469,14 @@ export class MobileHostServer {
             ok: true,
             result: snapshot,
           }));
+          break;
+        }
+        case "get_session_usage": {
+          const runner = this.controller.getSession(command.sessionId);
+          if (!runner) { this.sendError(client, "session_not_found", (command as { id?: string }).id ?? ""); break; }
+          const usage = typeof runner.getUsage === "function" ? await runner.getUsage() : { entries: 0, input: 0, output: 0, cacheRead: 0, cacheWrite: 0, reasoning: 0, totalTokens: 0, cost: 0 };
+          const context = typeof runner.getContextUsage === "function" ? runner.getContextUsage() ?? null : null;
+          this.sendAck(client, command, { sessionId: command.sessionId, ...usage, context });
           break;
         }
         default:

@@ -4,6 +4,7 @@ import { SdkSessionRunner } from "./session-runner.js";
 import { MaestroStateReader } from "./maestro-state.js";
 import { LiveSessionsService } from "./live-sessions.js";
 import { WorkspaceTelemetryReader } from "./workspace-telemetry.js";
+import { VersionDetector, type ComponentVersions } from "./version-detector.js";
 import { EventLog } from "./event-log.js";
 
 /**
@@ -26,6 +27,8 @@ export class HostController {
   private readonly emitToListeners: (event: HostEvent) => void;
   private maestroPollTimer: ReturnType<typeof setInterval> | null = null;
   private maestroDetected = false;
+  private readonly versionDetector = new VersionDetector();
+  private componentVersions: ComponentVersions = {};
   private _startedAt = Date.now();
 
   constructor(
@@ -76,6 +79,7 @@ export class HostController {
             endpointId: o.sessionId,
           },
           name: o.normalizedCwd.split("/").filter(Boolean).pop() ?? o.normalizedCwd,
+          cwd: o.normalizedCwd,
           status: o.alive ? "running" : "sleeping",
           lifecycle: o.alive ? "running" : "disconnected",
           workStatus: o.agents.length > 0 ? "active" : "idle",
@@ -111,12 +115,13 @@ export class HostController {
   }
 
   /** 获取状态信息 */
-  getStatus(): { ok: boolean; version: string; maestroDetected: boolean; sessions: number; uptimeMs: number } {
+  getStatus(): { ok: boolean; version: string; maestroDetected: boolean; sessions: number; uptimeMs: number } & ComponentVersions {
     const uptimeMs = Date.now() - this._startedAt;
     return {
       ok: true,
       version: "0.1.0",
       maestroDetected: this.maestroDetected,
+      ...this.componentVersions,
       sessions: this.sessions.size,
       uptimeMs,
     };
@@ -124,6 +129,8 @@ export class HostController {
 
   /** 启动 Maestro 状态轮询 */
   async startMaestroPoll(intervalMs = 5000): Promise<void> {
+    // 启动时探测一次组件版本（内部带缓存，失败字段留空由 UI 显示待接入）
+    this.componentVersions = await this.versionDetector.detect();
     await this.refreshMaestroState();
     await this.pollTelemetry();
     this.maestroPollTimer = setInterval(() => {

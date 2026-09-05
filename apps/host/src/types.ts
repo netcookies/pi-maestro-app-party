@@ -21,6 +21,10 @@ export interface SessionRunner {
   steer(message: string): Promise<void>;
   followUp(message: string): Promise<void>;
   abort(): Promise<void>;
+  /** SDK 实时上下文用量（不可用时返回 null） */
+  getContextUsage?(): { tokens: number | null; contextWindow: number; percent: number | null } | null;
+  /** 会话 token 用量（JSONL 聚合） */
+  getUsage?(): Promise<{ entries: number; input: number; output: number; cacheRead: number; cacheWrite: number; reasoning: number; totalTokens: number; cost: number }>;
   listModels?(): { id: string; provider: string; name: string; reasoning: boolean; vision: boolean }[];
   listLoadedSkills?(): { name: string; description?: string }[];
   setModel?(modelId: string): Promise<{ ok: boolean; error?: string }>;
