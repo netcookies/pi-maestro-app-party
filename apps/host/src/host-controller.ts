@@ -3,6 +3,7 @@ import type { RuntimeFactory, SessionRunner, OpenSessionRequest, HostEventListen
 import { SdkSessionRunner } from "./session-runner.js";
 import { MaestroStateReader } from "./maestro-state.js";
 import { LiveSessionsService } from "./live-sessions.js";
+import { WorkspaceTelemetryReader } from "./workspace-telemetry.js";
 import { EventLog } from "./event-log.js";
 
 /**
@@ -20,6 +21,8 @@ export class HostController {
   private readonly listeners = new Set<HostEventListener>();
   private readonly maestroReader: MaestroStateReader;
   private readonly liveSessions: LiveSessionsService;
+  private readonly telemetryReader: WorkspaceTelemetryReader;
+  private telemetryCache: string | null = null;
   private readonly emitToListeners: (event: HostEvent) => void;
   private maestroPollTimer: ReturnType<typeof setInterval> | null = null;
   private _startedAt = Date.now();
@@ -30,6 +33,7 @@ export class HostController {
   ) {
     this.maestroReader = maestroReader ?? new MaestroStateReader();
     this.liveSessions = new LiveSessionsService();
+    this.telemetryReader = new WorkspaceTelemetryReader();
     this.emitToListeners = (event: HostEvent) => {
       for (const listener of this.listeners) {
         try { listener(event); } catch { /* ignore */ }
@@ -48,6 +52,41 @@ export class HostController {
   /** 读取活跃会话列表（只读，不 claim owner） */
   async listLiveSessions() {
     return this.liveSessions.list();
+  }
+
+  /** 读取 workspace telemetry（owner 状态，Monitor/Teammate 合同） */
+  async readTelemetry() {
+    return this.telemetryReader.read();
+  }
+
+  /** 轮询 telemetry，状态变化时推送 monitor_state 事件 */
+  async pollTelemetry(): Promise<void> {
+    try {
+      const t = await this.telemetryReader.read();
+      const json = JSON.stringify(t.owners);
+      if (json === this.telemetryCache) return;
+      this.telemetryCache = json;
+      this.emitToListeners(this.eventLog.record({ type: "monitor_state", state: {
+        windows: t.owners.map((o) => ({
+          identity: {
+            workspaceId: o.workspaceId,
+            ownerId: o.ownerId,
+            ownerNonce: "",
+            endpointId: o.sessionId,
+          },
+          name: o.normalizedCwd.split("/").filter(Boolean).pop() ?? o.normalizedCwd,
+          status: o.alive ? "running" : "sleeping",
+          lifecycle: o.alive ? "running" : "disconnected",
+          workStatus: o.agents.length > 0 ? "active" : "idle",
+          todos: [],
+          attention: [],
+          facets: [],
+        })),
+        observedAt: t.observedAt,
+      } as never }));
+    } catch {
+      // ignore
+    }
   }
 
   /** 注册事件监听（WebSocket 层订阅） */
@@ -71,8 +110,10 @@ export class HostController {
   /** 启动 Maestro 状态轮询 */
   async startMaestroPoll(intervalMs = 5000): Promise<void> {
     await this.refreshMaestroState();
+    await this.pollTelemetry();
     this.maestroPollTimer = setInterval(() => {
       void this.refreshMaestroState();
+      void this.pollTelemetry();
     }, intervalMs);
   }
 

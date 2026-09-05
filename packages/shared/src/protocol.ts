@@ -94,6 +94,28 @@ export interface LiveSessionList {
   liveCount: number;
 }
 
+/** Teammate/Monitor 合同：workspace owner 运行时状态（pi-maestro-teammate 持久化） */
+export interface WorkspaceOwnerState {
+  workspaceId: string;
+  normalizedCwd: string;
+  ownerId: string;
+  pid: number;
+  sessionId: string;
+  publishedAt: number;
+  contextPressure: JsonValue;
+  agents: JsonValue[];
+  settled: JsonValue[];
+  backgroundJobs: JsonValue[];
+  alive: boolean;
+  ageMs: number;
+}
+
+export interface WorkspaceTelemetryState {
+  owners: WorkspaceOwnerState[];
+  observedAt: string;
+  aliveCount: number;
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Maestro 状态投影（flow-schedule store 的只读投影）
 // ─────────────────────────────────────────────────────────────────────────────

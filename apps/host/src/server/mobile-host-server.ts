@@ -17,6 +17,7 @@ import type { HostController } from "../host-controller.js";
 import type { RuntimeFactory } from "../types.js";
 import type { LiveSessionList } from "../live-sessions.js";
 import { readSettingsOverview, updateSettingsJson } from "../maestro-settings.js";
+import { WorkspaceTelemetryReader } from "../workspace-telemetry.js";
 
 export interface MobileHostServerOptions {
   token?: string;
@@ -147,6 +148,12 @@ export class MobileHostServer {
       if (request.method === "GET" && url.pathname === "/api/maestro-settings") {
         const overview = await readSettingsOverview();
         writeJson(response, 200, overview);
+        return;
+      }
+
+      if (request.method === "GET" && url.pathname === "/api/workspace-telemetry") {
+        const telemetry = await this.controller.readTelemetry();
+        writeJson(response, 200, telemetry);
         return;
       }
 
@@ -365,6 +372,16 @@ export class MobileHostServer {
           } else {
             this.sendError(client, "request_not_found", (command as { id?: string }).id ?? "");
           }
+          break;
+        }
+        case "get_maestro_state": {
+          const state = await this.controller.readMaestroStateNow();
+          this.sendAck(client, command, state);
+          break;
+        }
+        case "get_monitor_state": {
+          const telemetry = await this.controller.readTelemetry();
+          this.sendAck(client, command, telemetry);
           break;
         }
         case "get_snapshot": {

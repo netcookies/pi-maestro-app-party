@@ -2,9 +2,13 @@ import React from "react";
 import { View, Text, StyleSheet, FlatList } from "react-native";
 import { useHost } from "../src/store";
 import { useTheme, MIUIX_RADIUS, MIUIX_TYPE, MIUIX_SPACE } from "../src/theme";
-import type { MaestroScheduleSummary, MaestroStepSummary, MaestroDispatchSummary } from "@maestro-mobile/shared";
+import type { MaestroScheduleSummary, MaestroStepSummary, MaestroDispatchSummary, MonitorWindowSummary } from "@maestro-mobile/shared";
 
 type Row =
+  | { type: "schedule"; schedule: MaestroScheduleSummary }
+  | { type: "step"; step: MaestroStepSummary; scheduleId: string }
+type Row =
+  | { type: "owner"; owner: MonitorWindowSummary }
   | { type: "schedule"; schedule: MaestroScheduleSummary }
   | { type: "step"; step: MaestroStepSummary; scheduleId: string }
   | { type: "dispatch"; dispatch: MaestroDispatchSummary };
@@ -14,9 +18,14 @@ export default function TeammateScreen() {
   const { theme } = useTheme();
   const styles = React.useMemo(() => makeStyles(theme), [theme]);
   const schedules = state.maestro?.schedules ?? [];
+  const ownerWindows = state.monitor?.windows ?? [];
 
   const rows = React.useMemo<Row[]>(() => {
     const out: Row[] = [];
+    // workspace owners（活的 Pi 会话 + 运行中 agents）
+    for (const w of ownerWindows) {
+      out.push({ type: "owner", owner: w });
+    }
     for (const schedule of schedules) {
       out.push({ type: "schedule", schedule });
       for (const step of schedule.steps) {
@@ -31,6 +40,7 @@ export default function TeammateScreen() {
 
   const keyExtractor = (item: Row) => {
     switch (item.type) {
+      case "owner": return `owner:${item.owner.identity.ownerId}`;
       case "schedule": return `schedule:${item.schedule.scheduleId}`;
       case "step": return `step:${item.scheduleId}:${item.step.stepId}`;
       case "dispatch": return `dispatch:${item.dispatch.dispatchId}`;
@@ -38,6 +48,23 @@ export default function TeammateScreen() {
   };
 
   const renderItem = ({ item }: { item: Row }) => {
+    if (item.type === "owner") {
+      const w = item.owner;
+      const agents = w.facets?.length ?? 0;
+      return (
+        <View style={styles.schedule}>
+          <View style={styles.scheduleHeader}>
+            <Text style={styles.scheduleTitle}>{w.name ?? "Pi 会话"}</Text>
+            <Text style={[styles.scheduleState, statusColor(w.status)]}>
+              {w.status === "running" ? "运行中" : w.status === "sleeping" ? "睡眠" : w.status}
+            </Text>
+          </View>
+          <Text style={styles.progress}>
+            {w.identity.endpointId.slice(0, 8)} · agents {agents}
+          </Text>
+        </View>
+      );
+    }
     if (item.type === "schedule") {
       const s = item.schedule;
       return (
