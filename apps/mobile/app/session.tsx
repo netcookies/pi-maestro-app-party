@@ -7,6 +7,7 @@ import { useLocalSearchParams, useRouter } from "expo-router";
 import { useHost } from "../src/store";
 import { useTheme, MIUIX_RADIUS, MIUIX_TYPE, MIUIX_SPACE } from "../src/theme";
 import { getConfig, loadConfig } from "../src/config";
+import { LineIcon } from "../src/components/LineIcon";
 import { SafeAreaView, useSafeAreaInsets } from "react-native-safe-area-context";
 import type { TimelineItem } from "@maestro-mobile/shared";
 import { ExtensionUiDialog } from "../src/components/ExtensionUiDialog";
@@ -265,8 +266,8 @@ export default function SessionScreen() {
       behavior={Platform.OS === "ios" ? "padding" : undefined}
     >
       <View style={styles.header}>
-        <TouchableOpacity onPress={() => router.back()} style={styles.backBtn}>
-          <Text style={[styles.backText, { color: theme.accent }]}>‹ 返回</Text>
+        <TouchableOpacity onPress={() => router.back()} style={styles.backBtn} accessibilityRole="button" accessibilityLabel="返回">
+          <LineIcon name="collapse" size={20} color={theme.accent} strokeWidth={2.2} />
         </TouchableOpacity>
         <Text style={styles.headerTitle} numberOfLines={1}>{session?.title ?? "会话"}</Text>
         {/* 右槽位与返回钮等宽（minWidth 一致），保证标题真正居中 */}
@@ -495,7 +496,6 @@ function makeStyles(theme: ReturnType<typeof useTheme>["theme"]) {
     emptyTitle: { fontSize: MIUIX_TYPE.body2, fontWeight: "600" },
     emptySub: { fontSize: MIUIX_TYPE.footnote1 },
     backBtn: { paddingVertical: 4, paddingRight: 8, minWidth: 72, alignItems: "flex-start" },
-    backText: { fontSize: MIUIX_TYPE.body2, fontWeight: "600" },
     searchToggle: { paddingVertical: 4, paddingLeft: 8 },
     searchBar: {
       flexDirection: "row",

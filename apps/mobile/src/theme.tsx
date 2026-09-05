@@ -18,6 +18,9 @@ export interface AppTheme {
   muted: string;
   dim: string;
   accent: string;
+  /** Miuix slider 语义 */
+  sliderBackground?: string;
+  sliderKeyPoint?: string;
   /** 消息 */
   userBubble: string;
   userText: string;
@@ -79,6 +82,7 @@ export const THEMES: Record<string, AppTheme> = {
     secondaryContainer: "#F0F0F0", onSecondaryContainer: "#A9A9A9",
     disabledPrimaryButton: "#C2D9FF", outline: "#D9D9D9", dividerLine: "#E0E0E0",
     onBackgroundVariant: "#8C93B0", windowDimming: "rgba(0,0,0,0.3)",
+    sliderBackground: "rgba(0,0,0,0.06)", sliderKeyPoint: "rgba(0,0,0,0.25)",
   },
 
   // ── Miuix Dark（design-spec §6 Dark 列真实值；卡片取 surfaceContainerHighest #2D2D2D）──
@@ -99,6 +103,7 @@ export const THEMES: Record<string, AppTheme> = {
     secondaryContainer: "#434343", onSecondaryContainer: "#7C7C7C",
     disabledPrimaryButton: "#253E64", outline: "#404040", dividerLine: "#393939",
     onBackgroundVariant: "#787E96", windowDimming: "rgba(0,0,0,0.6)",
+    sliderBackground: "rgba(255,255,255,0.15)", sliderKeyPoint: "rgba(255,255,255,0.3)",
   },
 
   // ── 深色 базов (原 App 配色) ──

@@ -21,6 +21,10 @@ export default function MonitorScreen() {
     });
   };
 
+  // 顶部 Attention 汇总告警条（设计稿 attention-bar：errorContainer + 脉冲点）
+  const attentionWindows = windows.filter((w) => w.attention.length > 0);
+  const totalAttention = windows.reduce((n, w) => n + w.attention.length, 0);
+
   const renderWindow = ({ item }: { item: MonitorWindowSummary }) => {
     const key = `${item.identity.workspaceId}-${item.identity.ownerId}`;
     const attentionExpanded = expanded.has(`${key}-attention`);
@@ -64,13 +68,20 @@ export default function MonitorScreen() {
       {item.todos.length > 0 && (
         <View style={styles.todoSection}>
           <Text style={styles.sectionTitle}>Todo</Text>
-          {shownTodos.map((t, i) => (
-            <View key={i} style={styles.todoItem}>
-              <Text style={styles.todoId}>#{t.id}</Text>
-              <Text style={styles.todoSubject}>{t.subject}</Text>
-              <Text style={styles.todoStatus}>{t.status}</Text>
-            </View>
-          ))}
+          {shownTodos.map((t, i) => {
+            const done = t.status === "completed";
+            return (
+              <View key={i} style={styles.todoLine}>
+                <View style={[styles.todoCheck, done && { backgroundColor: theme.accent, borderColor: theme.accent }]}>
+                  {done ? <View style={styles.todoCheckInner} /> : null}
+                </View>
+                <Text style={[styles.todoSubject, done && styles.todoDoneText]} numberOfLines={1}>
+                  {t.subject}
+                </Text>
+                <Text style={styles.todoStatus}>{t.status}</Text>
+              </View>
+            );
+          })}
           {item.todos.length > LIMIT && (
             <TouchableOpacity
               style={styles.showAllButton}
@@ -82,6 +93,21 @@ export default function MonitorScreen() {
               </Text>
             </TouchableOpacity>
           )}
+          {/* Todo 进度条（设计稿 progress-wrap） */}
+          <View style={styles.progressWrap}>
+            <Text style={styles.progressMeta}>Todo 进度</Text>
+            <Text style={styles.progressMeta}>
+              {item.todos.filter((t) => t.status === "completed").length} / {item.todos.length}
+            </Text>
+          </View>
+          <View style={[styles.progressTrack, { backgroundColor: theme.secondaryContainer ?? theme.border }]}>
+            <View
+              style={[
+                styles.progressFill,
+                { backgroundColor: theme.accent, width: `${Math.round((item.todos.filter((t) => t.status === "completed").length / Math.max(1, item.todos.length)) * 100)}%` },
+              ]}
+            />
+          </View>
         </View>
       )}
     </View>
@@ -90,6 +116,15 @@ export default function MonitorScreen() {
 
   return (
     <View style={styles.container}>
+      {/* 顶部 Attention 汇总告警条 */}
+      {totalAttention > 0 && (
+        <View style={[styles.attentionBar, { backgroundColor: theme.errorContainer ?? theme.error }]}>
+          <View style={[styles.sevDot, { backgroundColor: theme.error }]} />
+          <Text style={[styles.attentionText, { color: theme.onErrorContainer ?? theme.error }]} numberOfLines={2}>
+            <Text style={styles.attentionBold}>需要关注</Text> · {totalAttention} 条告警，涉及 {attentionWindows.length} 个窗口
+          </Text>
+        </View>
+      )}
       {windows.length === 0 ? (
         <View style={styles.empty}>
           <Text style={styles.emptyText}>暂无窗口数据</Text>
@@ -141,7 +176,12 @@ function makeStyles(theme: ReturnType<typeof useTheme>["theme"]) {
   },
   windowHeader: { flexDirection: "row", justifyContent: "space-between", marginBottom: MIUIX_SPACE.sm },
   windowName: { fontSize: MIUIX_TYPE.main, fontWeight: "600", color: theme.text, flex: 1 },
-  windowStatus: { fontSize: MIUIX_TYPE.footnote1, fontWeight: "600" },
+  windowStatus: { fontSize: MIUIX_TYPE.footnote2, fontWeight: "700", letterSpacing: 0.4 },
+  // Attention 告警条（设计稿 attention-bar）
+  attentionBar: { flexDirection: "row", alignItems: "center", gap: MIUIX_SPACE.sm, marginHorizontal: MIUIX_SPACE.lg, marginBottom: MIUIX_SPACE.md, borderRadius: MIUIX_RADIUS.lg, padding: MIUIX_SPACE.md },
+  sevDot: { width: 10, height: 10, borderRadius: 5 },
+  attentionText: { flex: 1, fontSize: MIUIX_TYPE.footnote1, lineHeight: 18 },
+  attentionBold: { fontWeight: "700" },
   objective: { fontSize: MIUIX_TYPE.body2, color: theme.muted, marginBottom: MIUIX_SPACE.xs },
   meta: { fontSize: MIUIX_TYPE.footnote2, color: theme.dim, marginBottom: MIUIX_SPACE.sm },
   sectionTitle: { fontSize: MIUIX_TYPE.footnote1, fontWeight: "700", color: theme.text, marginBottom: MIUIX_SPACE.sm, marginTop: MIUIX_SPACE.xs },
@@ -149,11 +189,17 @@ function makeStyles(theme: ReturnType<typeof useTheme>["theme"]) {
   attentionItem: { flexDirection: "row", gap: MIUIX_SPACE.sm, marginBottom: MIUIX_SPACE.xs },
   attentionCode: { fontSize: MIUIX_TYPE.footnote2, fontWeight: "600" },
   attentionMsg: { fontSize: MIUIX_TYPE.footnote2, color: theme.muted, flex: 1 },
-  todoSection: {},
-  todoItem: { flexDirection: "row", gap: MIUIX_SPACE.sm, marginBottom: MIUIX_SPACE.xs },
-  todoId: { fontSize: MIUIX_TYPE.footnote2, color: theme.dim },
-  todoSubject: { fontSize: MIUIX_TYPE.footnote2, color: theme.text, flex: 1 },
-  todoStatus: { fontSize: MIUIX_TYPE.footnote2, color: theme.muted },
+  todoSection: { marginTop: MIUIX_SPACE.sm },
+  // Todo checkbox 细线轨道行（设计稿 todo-line）
+  todoLine: { flexDirection: "row", alignItems: "center", gap: MIUIX_SPACE.sm + 3, paddingVertical: 6 },
+  todoCheck: { width: 18, height: 18, borderRadius: 5, borderWidth: 1.5, borderColor: theme.outline ?? theme.border, alignItems: "center", justifyContent: "center" },
+  todoCheckInner: { width: 8, height: 8, borderRadius: 2, backgroundColor: "#fff" },
+  todoDoneText: { color: theme.muted, textDecorationLine: "line-through" },
+  // 进度条（设计稿 progress-wrap）
+  progressWrap: { flexDirection: "row", justifyContent: "space-between", marginTop: MIUIX_SPACE.sm, marginBottom: MIUIX_SPACE.xs },
+  progressMeta: { fontSize: MIUIX_TYPE.footnote2, color: theme.muted, fontVariant: ["tabular-nums"] },
+  progressTrack: { height: 5, borderRadius: 2.5, overflow: "hidden" },
+  progressFill: { height: 5, borderRadius: 2.5 },
   showAllButton: { marginTop: MIUIX_SPACE.xs, alignSelf: "flex-start" },
   showAllText: { fontSize: MIUIX_TYPE.footnote1, color: theme.accent },
 });
