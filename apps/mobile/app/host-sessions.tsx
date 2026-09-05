@@ -29,7 +29,7 @@ export default function HostSessionsScreen() {
   const router = useRouter();
   const { theme } = useTheme();
   const styles = useMemo(() => makeStyles(theme), [theme]);
-  const { listHostSessions, listLiveSessions, openExistingSession, loadSessionHistory } = useHost();
+  const { listHostSessions, listLiveSessions, openExistingSession, loadSessionHistory, isConnected, connect, disconnect, connectionState, lastError } = useHost();
   const cfg = getConfig();
 
   // 确保配置加载（冷启动直接进本页时）
@@ -69,6 +69,7 @@ export default function HostSessionsScreen() {
   };
 
   const load = useCallback(async () => {
+    if (!isConnected) { setLoading(false); return; } // 未连接不加载（连接卡在上面）
     setLoading(true);
     setError(null);
     try {
@@ -79,7 +80,7 @@ export default function HostSessionsScreen() {
     } finally {
       setLoading(false);
     }
-  }, [listHostSessions]);
+  }, [listHostSessions, isConnected]);
 
   const loadLive = useCallback(async () => {
     try {
@@ -97,10 +98,10 @@ export default function HostSessionsScreen() {
   useEffect(() => {
     void load();
     void loadLive();
-    // 每 5 秒刷新活跃状态（vibe coding 感知）
-    const timer = setInterval(() => void loadLive(), cfg.livePollIntervalMs);
+    // 每 5 秒刷新活跃状态（vibe coding 感知）；未连接时轮询也跳过（loadLive 内部早退）
+    const timer = setInterval(() => { if (isConnected) void loadLive(); }, cfg.livePollIntervalMs);
     return () => clearInterval(timer);
-  }, [load, loadLive]);
+  }, [load, loadLive, isConnected]);
 
   const handleOpen = async (s: HostSessionSummary) => {
     if (opening) return;
@@ -220,9 +221,12 @@ export default function HostSessionsScreen() {
   }
 
   if (error) {
+    const isNotConnected = error.includes("HostClient not initialized");
     return (
       <View style={styles.center}>
-        <Text style={styles.errorText}>{error}</Text>
+        <Text style={styles.errorText}>
+          {isNotConnected ? "未连接 Host —— 请在上方连接卡片里点击「连接」" : error}
+        </Text>
         <TouchableOpacity style={styles.retryButton} onPress={() => void load()}>
           <Text style={styles.retryText}>重试</Text>
         </TouchableOpacity>

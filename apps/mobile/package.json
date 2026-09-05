@@ -3,7 +3,7 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "main": "index.ts",
+  "main": "expo-router/entry",
   "scripts": {
     "typecheck": "tsc --noEmit",
     "test": "vitest run",

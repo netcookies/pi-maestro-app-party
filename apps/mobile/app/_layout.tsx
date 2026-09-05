@@ -36,6 +36,7 @@ function RootNavigator() {
       <StatusBar style={theme.bg === "#f7f7f5" || theme.name === "notion" ? "dark" : "light"} />
       <Tabs
         screenOptions={{
+          initialRouteName: "host-sessions",
           headerStyle: { backgroundColor: theme.headerBg },
           headerTintColor: theme.headerText,
           headerTitleStyle: { fontSize: 24, fontWeight: "700" },
