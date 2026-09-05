@@ -52,7 +52,9 @@ export default function TeammateScreen() {
   const renderItem = ({ item }: { item: Row }) => {
     if (item.type === "owner") {
       const w = item.owner;
-      const agents = w.facets?.length ?? 0;
+      // 从 facets 取 agents 详情（host 投影 teammate-agents facet）
+      const facet = w.facets?.find((f) => f.kind === "teammate-agents");
+      const agents = (facet?.data as { agents?: { name?: string; agent?: string; status?: string; phase?: string }[] } | undefined)?.agents ?? [];
       return (
         <View style={styles.schedule}>
           <View style={styles.scheduleHeader}>
@@ -62,8 +64,24 @@ export default function TeammateScreen() {
             </Text>
           </View>
           <Text style={styles.progress}>
-            {w.identity.endpointId.slice(0, 8)} · agents {agents}
+            {w.identity.endpointId.slice(0, 8)} · {agents.length} 个 teammate
           </Text>
+          {agents.map((a, i) => (
+            <View key={i} style={[styles.dispatch, { borderLeftWidth: 3, borderLeftColor: a.status === "running" ? theme.success : theme.border, paddingLeft: 8, marginBottom: 4 }]}>
+              <View style={styles.scheduleHeader}>
+                <Text style={[styles.sessionTitle, { color: theme.text, fontSize: 13 }]} numberOfLines={1}>
+                  {a.name ?? a.agent ?? "teammate"}
+                </Text>
+                <Text style={[styles.scheduleState, statusColor(a.status ?? "")]}>{a.status ?? "?"}</Text>
+              </View>
+              {a.phase ? <Text style={[styles.progress, { marginTop: 2 }]}>phase: {a.phase}</Text> : null}
+              {a.outputTail && Array.isArray(a.outputTail) && a.outputTail.length > 0 ? (
+                <Text numberOfLines={2} style={[styles.dispatchId, { marginTop: 2 }]}>
+                  {String(a.outputTail[a.outputTail.length - 1]).slice(0, 100)}
+                </Text>
+              ) : null}
+            </View>
+          ))}
         </View>
       );
     }

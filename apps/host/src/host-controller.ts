@@ -80,7 +80,21 @@ export class HostController {
           workStatus: o.agents.length > 0 ? "active" : "idle",
           todos: [],
           attention: [],
-          facets: [],
+          facets: [
+            {
+              kind: "teammate-agents",
+              target: {
+                identity: {
+                  workspaceId: o.workspaceId,
+                  ownerId: o.ownerId,
+                  ownerNonce: "",
+                  endpointId: o.sessionId,
+                },
+              },
+              revision: String(o.publishedAt),
+              data: { agents: o.agents, backgroundJobs: o.backgroundJobs, contextPressure: o.contextPressure },
+            },
+          ],
         })),
         observedAt: t.observedAt,
       } as never }));

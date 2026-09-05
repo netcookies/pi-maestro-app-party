@@ -142,7 +142,7 @@ export function HostStoreProvider({ children }: { children: React.ReactNode }) {
   const fetchMonitorState = useCallback(async (): Promise<void> => {
     try {
       const result = await getClient().sendCommand({ type: "get_monitor_state" });
-      const telemetry = result as { owners: { workspaceId: string; normalizedCwd: string; ownerId: string; pid: number; sessionId: string; publishedAt: number; agents: unknown[]; alive: boolean; ageMs: number }[]; observedAt: string; aliveCount: number };
+      const telemetry = result as { owners: { workspaceId: string; normalizedCwd: string; ownerId: string; pid: number; sessionId: string; publishedAt: number; agents: unknown[]; backgroundJobs?: unknown[]; alive: boolean; ageMs: number }[]; observedAt: string; aliveCount: number };
       // 投影为 MonitorState（与 host monitor_state 事件同构）
       dispatch({ type: "monitor_state", state: {
         windows: telemetry.owners.map((o) => ({
@@ -158,7 +158,11 @@ export function HostStoreProvider({ children }: { children: React.ReactNode }) {
           workStatus: (o.agents?.length ?? 0) > 0 ? "active" : "idle",
           todos: [],
           attention: [],
-          facets: [],
+          facets: [{
+            kind: "teammate-agents",
+            revision: String(o.publishedAt),
+            data: { agents: o.agents, backgroundJobs: (o as { backgroundJobs?: unknown[] }).backgroundJobs ?? [] },
+          }],
         })),
         observedAt: telemetry.observedAt,
       } } as never);
