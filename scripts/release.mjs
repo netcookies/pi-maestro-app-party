@@ -47,7 +47,11 @@ function bumpVersion(v, kind) {
 
 /** 从 git log 生成一组 {type, items[]} */
 function collectChanges(fromTag) {
-  const range = fromTag ? `${fromTag}..HEAD` : "HEAD";
+  // tag 不存在(首次发版)时回退全量 HEAD
+  const hasTag = fromTag
+    ? spawnSync("git", ["rev-parse", "--verify", "--quiet", `${fromTag}^{commit}`], { cwd: ROOT }).status === 0
+    : false;
+  const range = hasTag ? `${fromTag}..HEAD` : "HEAD";
   const out = sh(`git log ${range} --pretty=format:%s`);
   const lines = out ? out.split("\n") : [];
   const groups = new Map(); // type -> items[]
