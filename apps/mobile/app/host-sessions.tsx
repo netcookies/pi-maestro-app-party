@@ -6,7 +6,11 @@ import { useRouter } from "expo-router";
 import { useHost } from "../src/store";
 import { useTheme, MIUIX_RADIUS, MIUIX_TYPE, MIUIX_SPACE } from "../src/theme";
 import { getConfig, loadConfig } from "../src/config";
+import AsyncStorage from "@react-native-async-storage/async-storage";
+import { HostConnectCard } from "../src/components/HostConnectCard";
 import type { HostSessionSummary, LiveSessionInfo } from "@maestro-mobile/shared";
+
+const HOST_CONN_KEY = "maestro-mobile.host-connection";
 
 type TabKey = "all" | "active" | "history";
 
@@ -39,6 +43,30 @@ export default function HostSessionsScreen() {
   const [opening, setOpening] = useState<string | null>(null);
   const [tab, setTab] = useState<TabKey>("all");
   const [query, setQuery] = useState("");
+  // 连接参数（原 index 页迁移；独立 AsyncStorage 键持久化）
+  const [hostUrl, setHostUrl] = useState("ws://127.0.0.1:4739/ws");
+  const [token, setToken] = useState("");
+
+  // 冷启动读回持久化的连接参数
+  useEffect(() => {
+    void AsyncStorage.getItem(HOST_CONN_KEY).then((raw) => {
+      if (!raw) return;
+      try {
+        const saved = JSON.parse(raw) as { hostUrl?: string; token?: string };
+        if (saved.hostUrl) setHostUrl(saved.hostUrl);
+        if (saved.token) setToken(saved.token);
+      } catch {}
+    });
+  }, []);
+
+  const handleHostUrlChange = (v: string) => {
+    setHostUrl(v);
+    void AsyncStorage.setItem(HOST_CONN_KEY, JSON.stringify({ hostUrl: v, token })).catch(() => {});
+  };
+  const handleTokenChange = (v: string) => {
+    setToken(v);
+    void AsyncStorage.setItem(HOST_CONN_KEY, JSON.stringify({ hostUrl, token: v })).catch(() => {});
+  };
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -206,6 +234,13 @@ export default function HostSessionsScreen() {
 
   return (
     <View style={styles.container}>
+      {/* Host 控制中心连接卡（设计稿 screenSessions 对齐） */}
+      <HostConnectCard
+        hostUrl={hostUrl}
+        token={token}
+        onHostUrlChange={handleHostUrlChange}
+        onTokenChange={handleTokenChange}
+      />
       {/* Tab 栏 */}
       <View style={styles.tabBar}>
         {TABS.map((t) => {
