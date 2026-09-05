@@ -134,10 +134,10 @@ export default function TeammateScreen() {
 
   return (
     <View style={styles.container}>
-      {schedules.length === 0 ? (
+      {schedules.length === 0 && ownerWindows.length === 0 ? (
         <View style={styles.empty}>
-          <Text style={styles.emptyText}>暂无调度任务</Text>
-          <Text style={styles.emptyDesc}>请确保 Host 端有正在运行的 flow-schedule</Text>
+          <Text style={styles.emptyText}>暂无 teammate 活动</Text>
+          <Text style={styles.emptyDesc}>Pi 会话的 teammate/agents 会出现在这里</Text>
         </View>
       ) : (
         <FlatList
