@@ -39,7 +39,7 @@ export function InlineImage({ path }: Props) {
           onLoad={() => { setLoading(false); setFailed(false); }}
           onError={() => { setLoading(false); setFailed(true); }}
         />
-        {failed && <Text style={styles.failed}>⚠ 图片加载失败</Text>}
+        {failed && <Text style={styles.failed}>图片加载失败</Text>}
       </TouchableOpacity>
 
       <Modal visible={preview} transparent animationType="fade" onRequestClose={() => setPreview(false)}>

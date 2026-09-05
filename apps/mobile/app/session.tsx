@@ -231,7 +231,7 @@ export default function SessionScreen() {
           isUser ? styles.bubbleUser : styles.bubbleAgent,
         ]}
       >
-        {isThinking && <Text style={styles.thinkingLabel}>🧠 思考</Text>}
+        {isThinking && <Text style={styles.thinkingLabel}>思考</Text>}
         {hasImages ? (
           <View>
             {segments.map((seg, i) =>
@@ -300,7 +300,7 @@ export default function SessionScreen() {
             }}
             style={styles.searchToggle}
           >
-            <Text style={[styles.backText, { color: theme.accent }]}>🔍</Text>
+            <Text style={[styles.backText, { color: theme.accent }]}>搜索</Text>
           </TouchableOpacity>
         </View>
       </View>

@@ -2,7 +2,7 @@
  * CollapsibleTool — 可折叠/展开的工具调用卡片
  *
  * 交互：
- *  - 默认折叠：只显示标题行（🔧 工具名 + 简短摘要 + 展开箭头）
+ *  - 默认折叠：只显示标题行（工具名 + 简短摘要 + 展开箭头）
  *  - 点击展开：显示完整正文（等宽输出）
  *  - 展开态右下角「全屏」按钮：Modal 全屏查看正文
  *  - 错误态：标题红色提示，可快速识别
@@ -69,7 +69,7 @@ export function CollapsibleTool({ toolName, text, isError, summary }: Props) {
       >
         <View style={styles.header}>
           <Text style={[styles.icon, { color: isError ? theme.error : theme.accent }]}>
-            {isError ? "⛔" : "🔧"}
+            {isError ? "错误" : "工具"}
           </Text>
           <Text style={[styles.name, { color: theme.toolTitle }]} numberOfLines={1}>
             {toolName}
@@ -98,7 +98,7 @@ export function CollapsibleTool({ toolName, text, isError, summary }: Props) {
                 accessibilityRole="button"
                 accessibilityLabel="全屏查看工具输出"
               >
-                <Text style={[styles.fullscreenText, { color: theme.accent }]}>⛶ 全屏</Text>
+                <Text style={[styles.fullscreenText, { color: theme.accent }]}>全屏</Text>
               </TouchableOpacity>
             )}
           </View>
@@ -110,7 +110,7 @@ export function CollapsibleTool({ toolName, text, isError, summary }: Props) {
         <View style={[styles.fsRoot, { backgroundColor: theme.bg }]}>
           <View style={[styles.fsHeader, { backgroundColor: theme.headerBg, borderBottomColor: theme.border }]}>
             <Text style={[styles.fsTitle, { color: theme.text }]}>
-              {isError ? "⛔" : "🔧"} {toolName}
+              {isError ? "错误" : "工具"} {toolName}
             </Text>
             <TouchableOpacity onPress={() => setFullscreen(false)} style={styles.fsClose}>
               <Text style={[styles.fsCloseText, { color: theme.accent }]}>✕ 关闭</Text>

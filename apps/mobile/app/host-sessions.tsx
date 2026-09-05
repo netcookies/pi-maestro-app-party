@@ -197,10 +197,10 @@ export default function HostSessionsScreen() {
         {/* 详情行：模型 / 消息数 / 时间 */}
         <View style={styles.detailRow}>
           {s.model ? (
-            <Text style={styles.detailItem}>🧠 {s.model}</Text>
+            <Text style={styles.detailItem}>{s.model}</Text>
           ) : null}
-          <Text style={styles.detailItem}>💬 {s.messageCount}</Text>
-          <Text style={styles.detailItem}>{item.live ? "🟢 运行中" : formatTime(s.updatedAt)}</Text>
+          <Text style={styles.detailItem}>{s.messageCount} 条消息</Text>
+          <Text style={styles.detailItem}>{item.live ? "运行中" : formatTime(s.updatedAt)}</Text>
         </View>
         {/* 详情行：会话 id（仅超长时截断，保留中段可辦识） */}
         <Text style={styles.sessionId} numberOfLines={1} ellipsizeMode="middle">
@@ -260,7 +260,7 @@ export default function HostSessionsScreen() {
         <View style={styles.tabRight}>
           <Text style={styles.toolbarText}>
             {filtered.length} 个{tabsuffix(tab)}
-            {liveCount > 0 ? ` · 🟢 ${liveCount}` : ""}
+            {liveCount > 0 ? ` · 运行中 ${liveCount}` : ""}
           </Text>
         </View>
       </View>
