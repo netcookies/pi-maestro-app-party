@@ -1,4 +1,4 @@
-import React, { useEffect, useState, useCallback, useMemo } from "react";
+import React, { useEffect, useState, useCallback, useMemo, useRef } from "react";
 import {
   View, Text, StyleSheet, FlatList, TouchableOpacity, ActivityIndicator, Alert, TextInput,
 } from "react-native";
@@ -67,6 +67,24 @@ export default function HostSessionsScreen() {
     setToken(v);
     void AsyncStorage.setItem(HOST_CONN_KEY, JSON.stringify({ hostUrl, token: v })).catch(() => {});
   };
+
+  // 自动重连：有持久化连接参数且当前未连接时自动 connect（App 启动/重启场景）
+  const autoReconnectRef = useRef(false);
+  useEffect(() => {
+    if (autoReconnectRef.current) return;
+    if (isConnected) { autoReconnectRef.current = true; return; }
+    void AsyncStorage.getItem(HOST_CONN_KEY).then((raw) => {
+      if (autoReconnectRef.current || isConnected) return;
+      if (!raw) return;
+      try {
+        const saved = JSON.parse(raw) as { hostUrl?: string; token?: string };
+        if (saved.hostUrl) {
+          autoReconnectRef.current = true;
+          connect(saved.hostUrl, saved.token);
+        }
+      } catch {}
+    });
+  }, [isConnected, connect]);
 
   const load = useCallback(async () => {
     if (!isConnected) { setLoading(false); return; } // 未连接不加载（连接卡在上面）
