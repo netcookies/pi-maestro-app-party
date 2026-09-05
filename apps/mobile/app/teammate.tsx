@@ -5,9 +5,6 @@ import { useTheme, MIUIX_RADIUS, MIUIX_TYPE, MIUIX_SPACE } from "../src/theme";
 import type { MaestroScheduleSummary, MaestroStepSummary, MaestroDispatchSummary, MonitorWindowSummary } from "@maestro-mobile/shared";
 
 type Row =
-  | { type: "schedule"; schedule: MaestroScheduleSummary }
-  | { type: "step"; step: MaestroStepSummary; scheduleId: string }
-type Row =
   | { type: "owner"; owner: MonitorWindowSummary }
   | { type: "schedule"; schedule: MaestroScheduleSummary }
   | { type: "step"; step: MaestroStepSummary; scheduleId: string }
