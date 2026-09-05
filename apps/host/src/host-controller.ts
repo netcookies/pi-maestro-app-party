@@ -25,6 +25,7 @@ export class HostController {
   private telemetryCache: string | null = null;
   private readonly emitToListeners: (event: HostEvent) => void;
   private maestroPollTimer: ReturnType<typeof setInterval> | null = null;
+  private maestroDetected = false;
   private _startedAt = Date.now();
 
   constructor(
@@ -115,7 +116,7 @@ export class HostController {
     return {
       ok: true,
       version: "0.1.0",
-      maestroDetected: false, // 由 refreshMaestroState 更新
+      maestroDetected: this.maestroDetected,
       sessions: this.sessions.size,
       uptimeMs,
     };
@@ -153,6 +154,12 @@ export class HostController {
     const runner = await SdkSessionRunner.open(this.runtimeFactory, request, (event) => {
       this.emitToListeners(this.eventLog.record(event));
     });
+    // P2-4：同一会话（continue 同一 sessionFile 时 id 相同）重复 open 时，
+    // 先释放旧 runner（否则旧实例仍在订阅 SDK 事件并广播，且 runtime 常驻内存），再登记新实例。
+    const existing = this.sessions.get(runner.id);
+    if (existing && existing !== runner) {
+      await existing.dispose();
+    }
     this.sessions.set(runner.id, runner);
     this.emitToListeners(this.eventLog.record({
       type: "host_status",
@@ -184,6 +191,12 @@ export class HostController {
 
   /** 刷新 Maestro 状态（仅状态变化时推送） */
   private async refreshMaestroState(): Promise<void> {
+    try {
+      // P3-1：接线 detectMaestro，使 getStatus().maestroDetected 反映真实检测结果
+      this.maestroDetected = await this.maestroReader.detectMaestro();
+    } catch {
+      // ignore
+    }
     try {
       const state = await this.maestroReader.readStateChanged();
       if (state === null) return;

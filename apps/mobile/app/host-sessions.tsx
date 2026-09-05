@@ -29,7 +29,9 @@ export default function HostSessionsScreen() {
   const router = useRouter();
   const { theme } = useTheme();
   const styles = useMemo(() => makeStyles(theme), [theme]);
-  const { listHostSessions, listLiveSessions, openExistingSession, loadSessionHistory, isConnected, connect, disconnect, connectionState, lastError } = useHost();
+  const { listHostSessions, listLiveSessions, openExistingSession, closeSession, loadSessionHistory, isConnected, connect, disconnect, connectionState, lastError } = useHost();
+  // 当前已打开的会话（P2-4：open 新会话前先 close 旧的，避免 host 端旧 runner 泄漏）
+  const openedSessionRef = useRef<string | null>(null);
   const cfg = getConfig();
 
   // 确保配置加载（冷启动直接进本页时）
@@ -131,6 +133,12 @@ export default function HostSessionsScreen() {
     setOpening(s.id);
     try {
       const sessionId = await openExistingSession(s.path, s.cwd);
+      // host 端同样有重复 open 先 dispose 旧的修复；这里显式 close 旧会话做双保险
+      const previous = openedSessionRef.current;
+      if (previous && previous !== sessionId) {
+        void closeSession(previous);
+      }
+      openedSessionRef.current = sessionId;
       // 拉取历史 timeline（回放）
       await loadSessionHistory(sessionId);
       router.push({ pathname: "/session", params: { id: sessionId } });

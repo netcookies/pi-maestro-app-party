@@ -23,6 +23,10 @@ if (Platform.OS === "android" && UIManager.setLayoutAnimationEnabledExperimental
   UIManager.setLayoutAnimationEnabledExperimental(true);
 }
 
+/** 加载更早按钮的虚拟行 id（独立于 TimelineItem 类型，不再 as 欺骗） */
+const LOAD_MORE_ID = "__load_more__";
+type ListRow = TimelineItem | { id: typeof LOAD_MORE_ID; __virtual: true };
+
 export default function SessionScreen() {
   const { id } = useLocalSearchParams<{ id: string }>();
   const router = useRouter();
@@ -69,6 +73,9 @@ export default function SessionScreen() {
   const [currentModelId, setCurrentModelId] = useState<string | undefined>(session?.model ? String((session.model as { id?: string })?.id ?? "") : undefined);
   const contentHeightBefore = useRef(0);
   const pendingOffsetRestore = useRef(false);
+  // P2-8：FlatList onContentSizeChange/onScroll 记录的真实内容高度与视口高度
+  const lastContentHeight = useRef(0);
+  const viewportHeight = useRef(0);
 
   const handleSearch = async () => {
     const q = searchQuery.trim();
@@ -86,13 +93,11 @@ export default function SessionScreen() {
   };
 
   const jumpToResult = async (index: number) => {
-    // 粗略定位：按匹配序号在全文中的比例滚动到已加载窗口的对应位置
-    // （精确跳转需按需加载到目标页，见后续迭代；此处用真实内容高度保证短会话也正确）
+    // P2-8：RN ScrollView JS 侧没有 contentSize 属性（此前恒为 0 → 静默 no-op）。
+    // 用 onScroll/onContentSizeChange 记录的真实内容高度按比例定位。
     if (searchTotal <= 0) return;
     const ratio = Math.min(1, index / searchTotal);
-    const native = listRef.current?.getNativeScrollRef();
-    const contentH = (native as unknown as { contentSize?: { height: number } } | null)?.contentSize?.height;
-    const maxY = contentH ?? 0;
+    const maxY = Math.max(0, lastContentHeight.current - viewportHeight.current);
     if (maxY <= 0) return;
     listRef.current?.scrollToOffset({ offset: ratio * maxY, animated: false });
     animateLayout();
@@ -180,9 +185,9 @@ export default function SessionScreen() {
     }
   }, []);
 
-  const renderItem = ({ item }: { item: TimelineItem }) => {
+  const renderItem = ({ item }: { item: ListRow }) => {
     // 虚拟行：顶部“加载更早”按钮（参与正常 cell 测量，避免 header 高度错乱）
-    if (item.id === "__load_more__") {
+    if (item.id === LOAD_MORE_ID) {
       return hasMore ? (
         <View style={styles.loadMoreWrap}>
           {loadingMore ? (
@@ -358,7 +363,7 @@ export default function SessionScreen() {
 
       <FlatList
         ref={listRef}
-        data={hasMore ? [{ id: "__load_more__" } as TimelineItem, ...timeline] : timeline}
+        data={hasMore ? ([{ id: LOAD_MORE_ID, __virtual: true }] as ListRow[]).concat(timeline) : (timeline as ListRow[])}
         keyExtractor={(item) => item.id}
         renderItem={renderItem}
         ListEmptyComponent={
@@ -370,6 +375,7 @@ export default function SessionScreen() {
         style={styles.list}
         contentContainerStyle={styles.listContent}
         onContentSizeChange={(w, h) => {
+          lastContentHeight.current = h;
           // prepend 完成后：锚点 = 原 offset + 新增高度（停在新段落底部）
           if (pendingOffsetRestore.current) {
             const prev = contentHeightBefore.current;
@@ -388,6 +394,7 @@ export default function SessionScreen() {
           const y = e.nativeEvent.contentOffset.y;
           lastScrollY.current = y;
           contentHeightBefore.current = e.nativeEvent.contentSize.height;
+          viewportHeight.current = e.nativeEvent.layoutMeasurement.height;
           const maxY = e.nativeEvent.contentSize.height - e.nativeEvent.layoutMeasurement.height;
           // 底部附近 → 跟随底部；离开底部 → 停止跟随
           const atBottom = y >= maxY - cfg.stickBottomTolerance;

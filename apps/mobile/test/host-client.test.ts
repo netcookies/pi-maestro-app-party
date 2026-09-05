@@ -145,4 +145,20 @@ describe("HostClient", () => {
     }));
     await promise;
   });
+
+  it("attaches token to ws url when provided (P1-5 跨域依赖)", () => {
+    let capturedUrl = "";
+    const ws = createFakeWs();
+    const c = new HostClient({
+      url: "ws://192.168.1.5:4739/ws",
+      token: "secret",
+      wsFactory: (url) => {
+        capturedUrl = url;
+        return ws;
+      },
+    });
+    c.connect();
+    expect(capturedUrl).toBe(`ws://192.168.1.5:4739/ws?token=${encodeURIComponent("secret")}`);
+    c.close();
+  });
 });

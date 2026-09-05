@@ -20,26 +20,48 @@ export function HostConnectCard({ hostUrl, token, onHostUrlChange, onTokenChange
   const { theme } = useTheme();
   const { isConnected, connectionState, connect, disconnect, lastError } = useHost();
   const [open, setOpen] = useState(false);
+  // P3-5：keepAlive 接入真实语义 —— 关闭时不再自动重连（HostClient.close 后不再拉起）；
+  // 开启时（默认）断线自动重连。开关变化即时生效：关闭时若在重连中则断开，重新打开时重连。
   const [keepAlive, setKeepAlive] = useState(true);
   const [latency, setLatency] = useState<number | null>(null);
 
   const busy = connectionState === "connecting" || connectionState === "reconnecting";
   const styles = makeStyles(theme);
 
-  // 简单链路延迟指示：连接建立后按轮询间隔估算（真实 RTT 可在 host-client 扩展）
+  const handleKeepAliveChange = (v: boolean) => {
+    setKeepAlive(v);
+    if (!v) {
+      // 关闭保活：断开当前连接（用户手动重连才拉起）
+      if (isConnected || busy) disconnect();
+    } else if (hostUrl.trim()) {
+      // 重新开启：立即按当前参数重连
+      connect(hostUrl.trim(), token.trim() || undefined);
+    }
+  };
+
+  // P3-5：链路延迟测真实 host 端点（/api/status），而非 Metro dev server（localhost:8081 是手机自身）。
+  // ws://ip:port/ws → http://ip:port/api/status?token=...；失败不显示数值。
   React.useEffect(() => {
-    if (!isConnected) { setLatency(null); return; }
+    if (!isConnected || !hostUrl) { setLatency(null); return; }
     let alive = true;
+    const httpBase = hostUrl.replace(/^wss:\/\//, "https://").replace(/^ws:\/\//, "http://").replace(/\/ws$/, "");
+    const statusUrl = `${httpBase}/api/status${token ? `?token=${encodeURIComponent(token)}` : ""}`;
     const tick = () => {
       const t0 = Date.now();
-      void fetch("http://localhost:8081/status").catch(() => undefined).finally(() => {
-        if (alive) setLatency(Math.max(1, Date.now() - t0));
-      });
+      void fetch(statusUrl)
+        .then((res) => {
+          // 仅成功响应计为有效 RTT；401/5xx 不作为延迟数值
+          if (alive && res.ok) setLatency(Math.max(1, Date.now() - t0));
+          else if (alive) setLatency(null);
+        })
+        .catch(() => {
+          if (alive) setLatency(null);
+        });
     };
     tick();
     const timer = setInterval(tick, 5000);
     return () => { alive = false; clearInterval(timer); };
-  }, [isConnected]);
+  }, [isConnected, hostUrl, token]);
 
   const statusColor = isConnected ? theme.success : busy ? theme.accent : theme.error;
   const statusText = isConnected ? "已连接" : busy ? (connectionState === "connecting" ? "连接中" : "重连中") : "未连接";
@@ -91,7 +113,7 @@ export function HostConnectCard({ hostUrl, token, onHostUrlChange, onTokenChange
               <Text style={[styles.rowLabel, { color: theme.text }]}>保持连接</Text>
               <Text style={[styles.rowSub, { color: theme.onBackgroundVariant ?? theme.muted }]}>断线自动重连 WebSocket</Text>
             </View>
-            <MiuixSwitch value={keepAlive} onValueChange={setKeepAlive} />
+            <MiuixSwitch value={keepAlive} onValueChange={handleKeepAliveChange} accessibilityLabel="保持连接" />
           </View>
           <View style={styles.row}>
             <Text style={[styles.rowLabel, { color: theme.text }]}>链路延迟</Text>

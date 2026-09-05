@@ -21,16 +21,23 @@ export function ExtensionUiDialog({ request, onAnswer, onCancel }: Props) {
   const [selected, setSelected] = React.useState<string[]>([]);
   const [freeText, setFreeText] = React.useState("");
   const [submitting, setSubmitting] = React.useState(false);
+  // P2-7：editor 的 prefill 作为初始文本（仅 editor；input 保持空起点）
+  React.useEffect(() => {
+    if (request.method === "editor" && request.prefill) setFreeText(request.prefill);
+  }, [request.method, request.prefill]);
 
   const hasOptions = Array.isArray(request.options) && request.options.length > 0;
   // host bridge（apps/host/src/mobile-ui-context.ts）约定 select 为单选：优先 value，兼容取 selected[0]
   const isSingleSelect = request.method === "select" && hasOptions;
   const isInput = request.method === "input";
   const isConfirm = request.method === "confirm";
+  // P2-7：editor 复用多行输入框（prefill 作为初始值），否则只能取消，交互死路
+  const isEditor = request.method === "editor";
+  const showInput = isInput || isEditor;
 
   const confirmDisabled =
     submitting ||
-    (isInput && freeText.trim().length === 0) ||
+    (showInput && freeText.trim().length === 0) ||
     // 保留原语义：选项分支未选中但输入了自定义答案时仍可确认
     (hasOptions && !isSingleSelect && selected.length === 0 && freeText.trim().length === 0);
 
@@ -59,8 +66,10 @@ export function ExtensionUiDialog({ request, onAnswer, onCancel }: Props) {
   const handleConfirm = () => {
     if (submitting) return;
     if (isConfirm) {
-      runAnswer(() => onAnswer("yes"));
-    } else if (isInput) {
+      // P1-2：confirm 必须携带 confirmed 布尔语义（host 端只认 confirmed 字段，
+      // 此前发 "yes" 导致用户点确认 host 收到的是拒绝）
+      runAnswer(() => onAnswer("confirmed:true"));
+    } else if (isInput || request.method === "editor") {
       const text = freeText.trim();
       if (!text) return;
       runAnswer(() => onAnswer(text));
@@ -105,7 +114,7 @@ export function ExtensionUiDialog({ request, onAnswer, onCancel }: Props) {
             })}
           </ScrollView>
 
-          {isInput || request.placeholder ? (
+          {showInput || request.placeholder ? (
             <TextInput
               style={[styles.input, { backgroundColor: theme.bg, color: theme.text, borderColor: theme.border }]}
               value={freeText}
@@ -114,6 +123,8 @@ export function ExtensionUiDialog({ request, onAnswer, onCancel }: Props) {
               placeholderTextColor={theme.dim}
               autoFocus
               editable={!submitting}
+              multiline={isEditor}
+              numberOfLines={isEditor ? 6 : 1}
             />
           ) : null}
 

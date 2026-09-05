@@ -269,8 +269,17 @@ export type DistributiveOmitUiResponse =
 
 export type HostEvent =
   | { type: "host_status"; status: string; seq: number }
+  | { type: "host_info"; info: HostStatus; seq: number }
   | { type: "session_updated"; session: SessionState; seq: number }
+  /**
+   * 消息终态投影：host 在 message_end 时按稳定 id 发出。
+   * 客户端契约：若 timeline 中已存在相同 id 的条目则替换，否则追加。
+   */
   | { type: "timeline_item"; sessionId: string; item: TimelineItem; seq: number }
+  /**
+   * 流式增量：message_update 期间按同一稳定 itemId 发出（可节流）。
+   * 客户端契约：已存在该 id 的条目则追加文本；尚不存在时可忽略（终态由 timeline_item 补齐）。
+   */
   | { type: "timeline_delta"; sessionId: string; itemId: string; delta: string; seq: number }
   | { type: "raw_event"; sessionId: string; event: JsonValue; seq: number }
   | { type: "command_error"; sessionId: string; command: string; message: string; seq: number }

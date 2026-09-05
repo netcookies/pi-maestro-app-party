@@ -22,10 +22,14 @@ export interface HostStoreValue {
   connectionState: ConnectionState;
   isConnected: boolean;
   hostUrl: string;
+  /** 当前连接使用的 token（P1-5：图片 URL 携带凭证） */
+  token?: string;
   connect(url: string, token?: string): void;
   disconnect(): void;
   openSession(cwd: string): Promise<string>;
   openExistingSession(sessionFile: string, cwd: string): Promise<string>;
+  /** 关闭 host 上的会话 runner（P2-4：避免重复 open 泄漏旧实例） */
+  closeSession(sessionId: string): Promise<void>;
   listHostSessions(cwd?: string): Promise<HostSessionList>;
   listLiveSessions(): Promise<LiveSessionList>;
   loadSessionHistory(sessionId: string): Promise<void>;
@@ -55,6 +59,10 @@ export function HostStoreProvider({ children }: { children: React.ReactNode }) {
   const clientRef = useRef<HostClient | null>(null);
   const [connectionState, setConnectionState] = useState<ConnectionState>("disconnected");
   const [hostUrl, setHostUrl] = useState<string>("");
+  const [token, setToken] = useState<string | undefined>(undefined);
+  // P2-2：重连前记录的活动会话，重连成功后自动补拉 snapshot，避免断线期间消息永久丢失
+  const activeSessionRef = useRef<string | null>(null);
+  const reloadGenerationRef = useRef(0);
 
   const [state, dispatch] = useReducer(
     (s: AppState, e: HostEvent) => reduceEvent(s, e, { dialogQueue: queueRef.current }),
@@ -71,16 +79,34 @@ export function HostStoreProvider({ children }: { children: React.ReactNode }) {
     return clientRef.current;
   }, []);
 
-  const connect = useCallback((url: string, token?: string) => {
+  const connect = useCallback((url: string, tok?: string) => {
     clientRef.current?.close();
     setHostUrl(url);
+    setToken(tok);
     const client = new HostClient({
       url,
-      token,
+      token: tok,
       reconnectBaseMs: 1000,
       reconnectMaxMs: 15000,
       onEvent: (event) => dispatch(event),
-      onStateChange: (s) => setConnectionState(s),
+      onStateChange: (s) => {
+        setConnectionState(s);
+        // P2-2：断线重连成功后，为重连前活动的会话补拉 snapshot（代次号防陈旧响应覆盖新状态）
+        if (s === "connected") {
+          const sessionId = activeSessionRef.current;
+          if (sessionId && client.isConnected) {
+            const generation = ++reloadGenerationRef.current;
+            void client
+              .getSnapshot(sessionId)
+              .then((snapshot) => {
+                if (generation !== reloadGenerationRef.current) return; // 已被更新的拉取取代
+                dispatch({ type: "__history_load", sessionId, items: snapshot.timeline, seq: snapshot.nextSeq } as never);
+                dispatch({ type: "session_updated", session: snapshot.session, seq: snapshot.nextSeq } as never);
+              })
+              .catch(() => undefined);
+          }
+        }
+      },
     });
     clientRef.current = client;
     client.connect();
@@ -90,6 +116,7 @@ export function HostStoreProvider({ children }: { children: React.ReactNode }) {
     clientRef.current?.close();
     clientRef.current = null;
     queueRef.current.clearAll();
+    activeSessionRef.current = null;
     setConnectionState("disconnected");
   }, []);
 
@@ -103,6 +130,14 @@ export function HostStoreProvider({ children }: { children: React.ReactNode }) {
     const result = await getClient().sendCommand({ type: "open_session", cwd, mode: "create", sessionFile });
     const r = result as { sessionId?: string };
     return r.sessionId ?? "";
+  }, [getClient]);
+
+  const closeSession = useCallback(async (sessionId: string): Promise<void> => {
+    try {
+      await getClient().sendCommand({ type: "close_session", sessionId });
+    } catch {
+      // 会话可能已不存在，忽略
+    }
   }, [getClient]);
 
   const listHostSessions = useCallback(async (cwd?: string): Promise<HostSessionList> => {
@@ -200,8 +235,11 @@ export function HostStoreProvider({ children }: { children: React.ReactNode }) {
   }, [getClient]);
 
   const loadSessionHistory = useCallback(async (sessionId: string): Promise<void> => {
+    // 记录活动会话：断线重连成功后自动补拉 snapshot（P2-2）
+    activeSessionRef.current = sessionId;
     try {
       const snapshot = await getClient().getSnapshot(sessionId);
+      const generation = ++reloadGenerationRef.current;
       dispatch({ type: "__history_load", sessionId, items: snapshot.timeline, seq: snapshot.nextSeq } as never);
       // 同时写入 session 状态（model/title 等），否则会话页显示 no model
       dispatch({ type: "session_updated", session: snapshot.session, seq: snapshot.nextSeq } as never);
@@ -252,10 +290,12 @@ export function HostStoreProvider({ children }: { children: React.ReactNode }) {
       connectionState,
       isConnected: connectionState === "connected",
       hostUrl,
+      token,
       connect,
       disconnect,
       openSession,
       openExistingSession,
+      closeSession,
       listHostSessions,
       listLiveSessions,
       loadSessionHistory,
@@ -277,7 +317,7 @@ export function HostStoreProvider({ children }: { children: React.ReactNode }) {
       cancelDialog,
       lastError: state.lastError,
     }),
-    [state, connectionState, hostUrl, connect, disconnect, openSession, openExistingSession, listHostSessions, listLiveSessions, loadSessionHistory, loadMoreHistory, searchHistory, listModels, listSkills, getMaestroSettings, updateMaestroSettings, fetchMonitorState, setModel, setThinking, compactSession, renameSession, sendPrompt, sendSteer, sendAbort, answerDialog, cancelDialog],
+    [state, connectionState, hostUrl, token, connect, disconnect, openSession, openExistingSession, closeSession, listHostSessions, listLiveSessions, loadSessionHistory, loadMoreHistory, searchHistory, listModels, listSkills, getMaestroSettings, updateMaestroSettings, fetchMonitorState, setModel, setThinking, compactSession, renameSession, sendPrompt, sendSteer, sendAbort, answerDialog, cancelDialog],
   );
 
   return <HostStoreContext.Provider value={value}>{children}</HostStoreContext.Provider>;

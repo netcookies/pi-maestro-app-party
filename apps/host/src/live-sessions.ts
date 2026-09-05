@@ -8,7 +8,7 @@
  *
  * 关键特性：**只读**，不 claim workspace owner，不与真实 Pi 会话冲突。
  */
-import { readdir, stat, readFile } from "node:fs/promises";
+import { readdir, stat, open } from "node:fs/promises";
 import { join, basename } from "node:path";
 import { homedir } from "node:os";
 
@@ -47,6 +47,8 @@ export class LiveSessionsService {
   private readonly liveThresholdMs: number;
   private readonly maxPerCwd: number;
   private readonly now: () => number;
+  /** P2-6：entryCount 按 mtime 缓存（文件未变时跳过流式扫描，避免每 5s 全量读盘） */
+  private readonly lineCountCache = new Map<string, { mtimeMs: number; count: number }>();
 
   constructor(options: LiveSessionsOptions = {}) {
     this.sessionsRoot = options.sessionsRoot ?? join(homedir(), ".pi", "agent", "sessions");
@@ -109,6 +111,23 @@ export class LiveSessionsService {
     return { sessions, observedAt: new Date(observedAt).toISOString(), liveCount };
   }
 
+  /** 条目数 = 非空行数；mtime 未变时用缓存，变化时流式重扫并更新缓存 */
+  private async countEntries(
+    path: string,
+    handle: Awaited<ReturnType<typeof open>>,
+    mtimeMs: number,
+  ): Promise<number> {
+    const cached = this.lineCountCache.get(path);
+    if (cached && cached.mtimeMs === mtimeMs) return cached.count;
+    try {
+      const count = await countLinesStreamed(handle);
+      this.lineCountCache.set(path, { mtimeMs, count });
+      return count;
+    } catch {
+      return cached?.count ?? 0;
+    }
+  }
+
   /** 解析单个会话文件（只读头部 + 行数），标记是否活跃 */
   private async readSessionInfo(
     path: string,
@@ -131,7 +150,7 @@ export class LiveSessionsService {
         // cwd 优先从首行 session 记录的 cwd 字段取（目录名有 - 转义歧义）
         const cwd = extractCwdFromHeader(head) ?? cwdNameFromDir;
         const firstMessage = extractFirstMessage(head);
-        const entryCount = await countLines(path, handle);
+        const entryCount = await this.countEntries(path, handle, mtimeMs);
 
         const age = this.now() - mtimeMs;
         return {
@@ -192,16 +211,32 @@ function extractFirstMessage(head: string): string {
   }
 }
 
-/** 快速统计 jsonl 行数（用已打开的文件句柄） */
-async function countLines(path: string, handle: Awaited<ReturnType<typeof import("node:fs/promises").open>>): Promise<number> {
-  // 简化：用 readFile 分块统计 \n
-  const { readFile } = await import("node:fs/promises");
-  try {
-    const content = await readFile(path, "utf8");
-    return content.split("\n").filter((l) => l.trim().length > 0).length;
-  } catch {
-    return 0;
+/**
+ * P2-6：流式分块统计非空行数（等价于整读 split("\n") 的结果，但内存恒定），
+ * 并按 mtime 缓存 —— 文件未变化时直接复用上次计数，轮询时不再整读大文件。
+ */
+const COUNT_CHUNK_BYTES = 512 * 1024;
+
+async function countLinesStreamed(handle: Awaited<ReturnType<typeof open>>): Promise<number> {
+  const { size } = await handle.stat();
+  let count = 0;
+  let carry = ""; // 块边界的残行，拼入下一块后再按行处理
+  let pos = 0;
+  while (pos < size) {
+    const readLen = Math.min(COUNT_CHUNK_BYTES, size - pos);
+    const chunk = Buffer.alloc(readLen);
+    await handle.read(chunk, 0, readLen, pos);
+    pos += readLen;
+    const text = carry + chunk.toString("utf8");
+    const lines = text.split("\n");
+    // 最后一段可能是残行（后面还有块），留到下一轮；末块时一并处理
+    carry = pos < size ? (lines.pop() ?? "") : (lines.pop() ?? "");
+    for (const line of lines) {
+      if (line.trim().length > 0) count++;
+    }
   }
+  if (carry.trim().length > 0) count++; // 无换行结尾的残行
+  return count;
 }
 
 export { decodeCwdDir };

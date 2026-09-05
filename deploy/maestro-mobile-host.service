@@ -21,7 +21,8 @@ RestartSec=5
 NoNewPrivileges=true
 PrivateTmp=true
 
-# 环境变量（token 鉴权）
+# 环境变量（token 鉴权，必须配置）：删除此行且未加 --token 时，
+# host 会生成一次性随机 token 并仅打印到 stdout（journalctl 可查），重启即变。
 Environment=MAESTRO_MOBILE_TOKEN=REPLACE_WITH_A_RANDOM_SECRET
 # 指向你的项目根（包含 .pi/flow-schedule 的目录）
 Environment=MAESTRO_MOBILE_PROJECT_ROOT=/srv/pi-workspace

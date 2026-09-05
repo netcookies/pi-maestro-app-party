@@ -38,7 +38,8 @@ export default function TeammateScreen() {
       }
     }
     return out;
-  }, [schedules]);
+    // P3-4：ownerWindows 必须列入依赖，否则 monitor 更新时 owner 列表不刷新
+  }, [schedules, ownerWindows]);
 
   const keyExtractor = (item: Row) => {
     switch (item.type) {
@@ -55,6 +56,13 @@ export default function TeammateScreen() {
       // 从 facets 取 agents 详情（host 投影 teammate-agents facet）
       const facet = w.facets?.find((f) => f.kind === "teammate-agents");
       const agents = (facet?.data as { agents?: { name?: string; agent?: string; status?: string; phase?: string }[] } | undefined)?.agents ?? [];
+      // P3-4：host 投影里 facets 可能缺失；agent 总数以 workStatus 之外的语义展示，
+      // facets 有 agents 用 agents.length，否则显示 workStatus（active/idle）而不臆造数字
+      const agentCountLabel = agents.length > 0
+        ? `${agents.length} 个 teammate`
+        : w.workStatus === "active"
+          ? "teammate 运行中"
+          : "无活跃 teammate";
       return (
         <View style={styles.schedule}>
           <View style={styles.scheduleHeader}>
@@ -64,7 +72,7 @@ export default function TeammateScreen() {
             </Text>
           </View>
           <Text style={styles.progress}>
-            {w.identity.endpointId.slice(0, 8)} · {agents.length} 个 teammate
+            {w.identity.endpointId.slice(0, 8)} · {agentCountLabel}
           </Text>
           {agents.map((a, i) => (
             <View key={i} style={[styles.dispatch, { borderLeftWidth: 3, borderLeftColor: a.status === "running" ? theme.success : theme.border, paddingLeft: 8, marginBottom: 4 }]}>

@@ -4,7 +4,9 @@ import type { RawData } from "ws";
 import { URL } from "node:url";
 import { WebSocketServer, type WebSocket } from "ws";
 import { readFile, open } from "node:fs/promises";
+import { realpath } from "node:fs/promises";
 import { isAbsolute, normalize } from "node:path";
+import { homedir, tmpdir } from "node:os";
 import type {
   ClientCommand,
   HostEvent,
@@ -17,11 +19,13 @@ import type { HostController } from "../host-controller.js";
 import type { RuntimeFactory } from "../types.js";
 import type { LiveSessionList } from "../live-sessions.js";
 import { readSettingsOverview, updateSettingsJson } from "../maestro-settings.js";
-import { WorkspaceTelemetryReader } from "../workspace-telemetry.js";
+import { validateClientCommand } from "@maestro-mobile/shared";
 
 export interface MobileHostServerOptions {
   token?: string;
   corsOrigin?: string;
+  /** WS Origin 额外白名单（除 loopback 与绑定 host 外的受信来源，如显式 LAN IP） */
+  allowedOrigins?: string[];
 }
 
 interface ClientSocket {
@@ -43,6 +47,7 @@ export class MobileHostServer {
   private readonly webSocketServer = new WebSocketServer({ noServer: true });
   private readonly clients = new Set<ClientSocket>();
   private unsubscribeController: (() => void) | undefined;
+  private boundHost = "0.0.0.0";
 
   constructor(
     private readonly controller: HostController,
@@ -58,7 +63,9 @@ export class MobileHostServer {
     this.webSocketServer.on("connection", (ws) => {
       const client: ClientSocket = { id: crypto.randomUUID(), ws };
       this.clients.add(client);
-      ws.send(JSON.stringify({ type: "host_status", status: this.controller.getStatus(), seq: 0 }));
+      // P2-1：host_status 契约是 status: string；HostStatus 对象走独立的 host_info 事件
+      ws.send(JSON.stringify({ type: "host_status", status: "connected", seq: 0 }));
+      ws.send(JSON.stringify({ type: "host_info", info: this.controller.getStatus(), seq: 0 }));
       ws.on("message", (data) => {
         void this.handleClientMessage(client, data);
       });
@@ -78,6 +85,7 @@ export class MobileHostServer {
   }
 
   listen(port: number, hostname = "0.0.0.0"): Promise<void> {
+    this.boundHost = hostname;
     return new Promise((resolve) => {
       this.server.listen(port, hostname, () => resolve());
     });
@@ -209,6 +217,13 @@ export class MobileHostServer {
       socket.destroy();
       return;
     }
+    // P0-1：浏览器发起的 WS（带 Origin）必须来自白名单，防恶意网页 drive-by 连接；
+    // 非浏览器客户端（RN fetch/ws）通常无 Origin，放行后仍由 token 鉴权把关。
+    if (!this.isOriginAllowed(request.headers.origin)) {
+      socket.write("HTTP/1.1 403 Forbidden\r\n\r\n");
+      socket.destroy();
+      return;
+    }
     if (!this.authorized(request, url)) {
       socket.write("HTTP/1.1 401 Unauthorized\r\n\r\n");
       socket.destroy();
@@ -216,6 +231,33 @@ export class MobileHostServer {
     }
     this.webSocketServer.handleUpgrade(request, socket, head, (ws) => {
       this.webSocketServer.emit("connection", ws, request);
+    });
+  }
+
+  /** WS 握手 Origin 白名单：loopback 变体 + 绑定 host（非 0.0.0.0 时）+ 显式配置 */
+  private isOriginAllowed(origin: string | undefined): boolean {
+    if (!origin) return true; // 非浏览器客户端
+    let parsed: URL;
+    try {
+      parsed = new URL(origin);
+    } catch {
+      return false;
+    }
+    const hostname = parsed.hostname.toLowerCase();
+    if (hostname === "localhost" || hostname === "127.0.0.1" || hostname === "::1" || hostname === "[::1]") {
+      return true;
+    }
+    const bound = this.boundHost.toLowerCase();
+    if (bound !== "0.0.0.0" && bound !== "::" && hostname === bound) {
+      return true;
+    }
+    const allowed = this.options.allowedOrigins ?? [];
+    return allowed.some((o) => {
+      try {
+        return new URL(o).hostname.toLowerCase() === hostname;
+      } catch {
+        return false;
+      }
     });
   }
 
@@ -227,6 +269,14 @@ export class MobileHostServer {
       command = JSON.parse(data.toString()) as ClientCommand;
     } catch {
       client.ws.send(JSON.stringify({ type: "error", code: "invalid_json", message: "Invalid JSON" }));
+      return;
+    }
+
+    // P3-2：分发前真正走 shared 校验（激活 validation 模块，拦截缺 type 的任意载荷）
+    try {
+      command = validateClientCommand(command);
+    } catch {
+      client.ws.send(JSON.stringify({ type: "error", code: "invalid_command", message: "Invalid ClientCommand: missing type" }));
       return;
     }
 
@@ -336,7 +386,13 @@ export class MobileHostServer {
         case "prompt": {
           const runner = this.controller.getSession(command.sessionId);
           if (!runner) { this.sendError(client, "session_not_found", (command as { id?: string }).id ?? ""); break; }
-          await runner.prompt(command.message);
+          // P1-3：透传图片（此前被静默丢弃），非法元素显式报错而非静默丢失
+          const images = command.images?.map((img) => toSdkImageContent(img)).filter((x) => x !== undefined);
+          if (command.images && command.images.length > 0 && images?.length !== command.images.length) {
+            this.sendError(client, "invalid_image", "images 元素必须是 base64 data 与 mime 字段齐全的图片", (command as { id?: string }).id ?? "");
+            break;
+          }
+          await runner.prompt(command.message, undefined, images);
           this.sendAck(client, command, {});
           break;
         }
@@ -513,6 +569,13 @@ function normalizeIso(raw: string): string {
   return Number.isFinite(t) ? new Date(t).toISOString() : raw;
 }
 
+/** 协议 images 元素 → Pi SDK ImageContent（type/data/mimeType）；非法返回 undefined */
+function toSdkImageContent(img: { data: string; mime: string }): { type: "image"; data: string; mimeType: string } | undefined {
+  if (typeof img?.data !== "string" || img.data.length === 0) return undefined;
+  if (typeof img?.mime !== "string" || !img.mime.startsWith("image/")) return undefined;
+  return { type: "image", data: img.data, mimeType: img.mime };
+}
+
 const IMAGE_EXTENSIONS = new Set([".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp"]);
 const MAX_IMAGE_BYTES = 20 * 1024 * 1024; // 20MB
 
@@ -525,7 +588,7 @@ const IMAGE_MIME: Record<string, string> = {
   ".bmp": "image/bmp",
 };
 
-/** 安全读取本地图片：绝对路径 + 图片扩展名 + 大小限制，返回二进制与 MIME */
+/** 安全读取本地图片：绝对路径 + 图片扩展名 + 大小限制 + realpath 防 symlink 绕过 */
 async function serveImageFile(filePath: string): Promise<{ data: Buffer; mime: string } | undefined> {
   const trimmed = filePath.trim();
   if (!trimmed || !isAbsolute(trimmed)) return undefined;
@@ -537,12 +600,29 @@ async function serveImageFile(filePath: string): Promise<{ data: Buffer; mime: s
   if (!IMAGE_EXTENSIONS.has(ext)) return undefined;
 
   try {
-    const data = await readFile(normalized);
+    // P3-3：先解析真实路径，防止指向任意位置的 symlink 绕过绝对路径约束
+    const resolved = await realpath(normalized);
+    if (!(await isUnderAllowedRoot(resolved))) return undefined;
+    const data = await readFile(resolved);
     if (data.length === 0 || data.length > MAX_IMAGE_BYTES) return undefined;
     return { data, mime: IMAGE_MIME[ext] ?? "application/octet-stream" };
   } catch {
     return undefined;
   }
+}
+
+/** 允许读取的根目录：用户目录、系统临时目录、进程工作目录（会话产物、图片预览所在）。取 realpath 以兼容 /tmp → /private/tmp */
+async function isUnderAllowedRoot(resolved: string): Promise<boolean> {
+  const roots = [homedir(), tmpdir(), process.cwd()];
+  for (const root of roots) {
+    try {
+      const rp = await realpath(root);
+      if (resolved === rp || resolved.startsWith(rp + "/")) return true;
+    } catch {
+      // root 不存在时跳过
+    }
+  }
+  return false;
 }
 /** 扫描可用的 skill 名录（agent 全局 + 项目本地） */
 async function listSkills(cwd: string): Promise<string[]> {

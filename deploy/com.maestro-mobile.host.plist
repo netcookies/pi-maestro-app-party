@@ -31,6 +31,10 @@
   <dict>
     <key>PATH</key>
     <string>/usr/local/bin:/usr/bin:/bin:/opt/homebrew/bin</string>
+    <!--
+      token 鉴权（必须配置）：删除此环境变量且未加 --token 时，
+      host 会生成一次性随机 token 并仅打印到 stdout（见 --help），重启即变。
+    -->
     <key>MAESTRO_MOBILE_TOKEN</key>
     <string>REPLACE_WITH_A_RANDOM_SECRET</string>
   </dict>

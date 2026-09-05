@@ -16,7 +16,7 @@ import { useEffect } from "react";
  * index 入口页重定向到 /host-sessions（原连接功能已迁移到会话页 HostConnectCard）。
  */
 const TAB_ICONS: Record<string, LineIconName> = {
-  sessions: "image",
+  "host-sessions": "image",
   teammate: "plan",
   monitor: "bolt",
   settings: "compress",
@@ -47,9 +47,11 @@ function RootNavigator() {
             backgroundColor: theme.headerBg,
             borderTopColor: theme.border,
           },
-          tabBarIcon: ({ color, focused }) => {
-            // screenProps 不可直接拿 name；用 render 兜底不命中时退回 plan
-            return <LineIcon name={TAB_ICONS.sessions ?? "plan"} size={22} color={color} />;
+          tabBarIcon: ({ route, color }) => {
+            // P3-6：按 route name 取真实图标（此前写死 sessions 图标）；
+            // 各 Screen 已自行覆盖时此处不会触发，仅作为兜底。
+            const name = TAB_ICONS[route.name] ?? "plan";
+            return <LineIcon name={name} size={22} color={color} />;
           },
         }}
       >

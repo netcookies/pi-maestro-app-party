@@ -23,8 +23,12 @@ export interface SettingsNode {
   key: string;
   label: string;
   path: string;
-  /** 浅层 JSON 快照（供展示） */
+  /** 浅层 JSON 快照（供展示）；敏感文件恒为 {} */
   data: Record<string, unknown>;
+  /** 敏感文件（auth/api-manager 等）已脱敏：仅返回存在性与顶层 keys，无任何值 */
+  redacted?: boolean;
+  /** 敏感文件时返回顶层 key 列表 */
+  topLevelKeys?: string[];
 }
 
 export interface SettingsOverview {
@@ -48,6 +52,11 @@ const FILES: { key: string; label: string; path: string; sub?: string }[] = [
   { key: "chinese-mode", label: "中文回复模式", path: join(MAESTRO_DIR, "maestro-chinese-response-mode.json") },
 ];
 
+/**
+ * 敏感文件（P1-4）：含 API 密钥的文件只返回存在性与顶层 keys，值永不离开宿主机。
+ */
+const SENSITIVE_FILE_KEYS = new Set(["auth", "api-manager"]);
+
 /** 读取所有设置文件的浅层快照 */
 export async function readSettingsOverview(): Promise<SettingsOverview> {
   const files: SettingsNode[] = [];
@@ -55,7 +64,18 @@ export async function readSettingsOverview(): Promise<SettingsOverview> {
     try {
       const raw = await readFile(f.path, "utf8");
       const parsed = JSON.parse(raw) as Record<string, unknown>;
-      files.push({ key: f.key, label: f.label, path: f.path, data: parsed });
+      if (SENSITIVE_FILE_KEYS.has(f.key)) {
+        files.push({
+          key: f.key,
+          label: f.label,
+          path: f.path,
+          data: {},
+          redacted: true,
+          topLevelKeys: Object.keys(parsed),
+        });
+      } else {
+        files.push({ key: f.key, label: f.label, path: f.path, data: parsed });
+      }
     } catch {
       // 文件不存在或不可解析 → 跳过
     }

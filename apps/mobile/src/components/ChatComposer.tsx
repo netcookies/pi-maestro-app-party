@@ -117,6 +117,10 @@ export function ChatComposer({ actions, currentModel, sending, skills = [], plac
     try {
       const list = await actions.listModels?.() ?? [];
       setModels(list);
+    } catch {
+      // P2-9：拉取失败不再抛未处理 rejection，清空列表并收起面板
+      setModels([]);
+      setShowModels(false);
     } finally {
       setModelsLoading(false);
     }
@@ -133,9 +137,22 @@ export function ChatComposer({ actions, currentModel, sending, skills = [], plac
     if (img) setImages((prev) => [...prev, img]);
   };
 
+  const [modelError, setModelError] = useState<string | null>(null);
+
   const switchModel = async (id: string) => {
-    await actions.setModel?.(id);
-    setShowModels(false);
+    try {
+      const r = await actions.setModel?.(id);
+      if (r && !r.ok) {
+        // P2-9：切换失败给出轻提示而非静默
+        setModelError(r.error ?? "切换失败");
+        setTimeout(() => setModelError(null), 3000);
+        return;
+      }
+      setShowModels(false);
+    } catch {
+      setModelError("切换失败（连接异常）");
+      setTimeout(() => setModelError(null), 3000);
+    }
   };
 
   const planActions = [
@@ -489,6 +506,9 @@ export function ChatComposer({ actions, currentModel, sending, skills = [], plac
               <Text style={[styles.modalTitle, { color: theme.text }]}>选择模型</Text>
               <TouchableOpacity onPress={() => setShowModels(false)} accessibilityRole="button" accessibilityLabel="关闭"><LineIcon name="x" size={14} color={theme.muted} strokeWidth={2.2} /></TouchableOpacity>
             </View>
+            {modelError ? (
+              <Text style={[styles.modalEmpty, { color: theme.error }]}>{modelError}</Text>
+            ) : null}
             {modelsLoading ? (
               <Text style={[styles.modalEmpty, { color: theme.muted }]}>加载中...</Text>
             ) : (

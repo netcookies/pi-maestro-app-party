@@ -14,12 +14,25 @@ const configFields: { key: keyof AppConfig; label: string; unit: string; max: nu
   { key: "previewLength", label: "消息预览长度", unit: "字符", max: 300 },
 ];
 
-/** 外观三段（设计稿 SegmentedControl）：跟随系统 / 浅色 / 深色 */
+/** 外观三段（设计稿 SegmentedControl）：跟随系统 / 浅色 / 深色。
+ *  P3-6：themeKey 与主题名分离 —— auto 与 light 都映射 miuix-light 皮肤，但选中态可区分。 */
 const APPEARANCE_SEGMENTS = [
-  { key: "auto", label: "跟随系统", themeName: "miuix-light" },
-  { key: "light", label: "浅色", themeName: "miuix-light" },
-  { key: "dark", label: "深色", themeName: "miuix-dark" },
+  { key: "auto", label: "跟随系统", themeKey: "auto", themeName: "miuix-light" },
+  { key: "light", label: "浅色", themeKey: "light", themeName: "miuix-light" },
+  { key: "dark", label: "深色", themeKey: "dark", themeName: "miuix-dark" },
 ];
+
+/** 由当前主题名 + 持久化的选择推断当前段：浅色皮肤时按用户上次选择（auto/light），深色固定 dark */
+function useAppearanceSegment(): number {
+  const { themeName } = useTheme();
+  const [storedChoice, setStoredChoice] = useState<"auto" | "light">("auto");
+  useEffect(() => {
+    void import("../src/config").then(({ getAppearanceChoice }) => {
+      setStoredChoice(getAppearanceChoice());
+    });
+  }, []);
+  return themeName === "miuix-dark" ? 2 : storedChoice === "light" ? 1 : 0;
+}
 
 const maestroSettingsKeys = ["defaultModel", "defaultProvider", "defaultThinkingLevel", "theme", "hideThinkingBlock"];
 
@@ -67,7 +80,7 @@ export default function SettingsScreen() {
     setConfigDraft({});
   };
 
-  const currentSeg = themeName === "miuix-dark" ? 2 : 0;
+  const currentSeg = useAppearanceSegment();
 
   return (
     <ScrollView style={styles.container} contentContainerStyle={styles.content}>
@@ -80,7 +93,13 @@ export default function SettingsScreen() {
             <TouchableOpacity
               key={seg.key}
               style={[styles.segItem, active && { backgroundColor: theme.cardBg }]}
-              onPress={() => setTheme(seg.themeName)}
+              onPress={() => {
+                // 记录用户选择（auto/light 在皮肤上都走 miuix-light，但选中态需要区分）
+                void import("../src/config").then(({ setAppearanceChoice }) => {
+                  setAppearanceChoice(seg.themeKey as "auto" | "light" | "dark");
+                });
+                setTheme(seg.themeName);
+              }}
               accessibilityRole="button"
               accessibilityState={{ selected: active }}
               accessibilityLabel={`外观：${seg.label}`}

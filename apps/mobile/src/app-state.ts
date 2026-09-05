@@ -13,6 +13,7 @@ import type {
   MonitorState,
   SessionState,
   TimelineItem,
+  ExtensionUiResponse,
 } from "@maestro-mobile/shared";
 import { ExtensionUiQueue, type DialogEntry } from "./extension-ui-queue";
 
@@ -89,13 +90,21 @@ export function reduceEvent(state: AppState, event: HostEvent | InternalEvent | 
     case "timeline_item": {
       const timelines = new Map(state.timelines);
       const items = timelines.get(event.sessionId) ?? [];
-      timelines.set(event.sessionId, [...items, event.item]);
+      // P1-1 契约：相同 id 替换（host 对同一消息更新时复用稳定 id），否则追加
+      const idx = items.findIndex((t) => t.id === event.item.id);
+      const next = idx >= 0
+        ? items.map((t, i) => (i === idx ? event.item : t))
+        : [...items, event.item];
+      timelines.set(event.sessionId, next);
       return { ...state, timelines };
     }
 
     case "timeline_delta": {
       const timelines = new Map(state.timelines);
       const items = timelines.get(event.sessionId) ?? [];
+      // 未建条目时忽略（终态由 timeline_item 补齐，见 protocol.ts 契约注释）
+      const known = items.some((t) => t.id === event.itemId);
+      if (!known) return state;
       const updated = items.map((item) =>
         item.id === event.itemId ? { ...item, text: item.text + event.delta } : item,
       );
@@ -144,9 +153,7 @@ export function createAppActions(
     answerDialog(requestId, value) {
       const entry = queue.get(requestId);
       if (!entry) return;
-      const response = Array.isArray(value)
-        ? queue.answer(requestId, { selected: value as string[] })
-        : queue.answer(requestId, { value: value as string });
+      const response = buildDialogResponse(queue, requestId, value);
       if (response) {
         responder(entry.request.sessionId, requestId, response);
       }
@@ -160,4 +167,33 @@ export function createAppActions(
       }
     },
   };
+}
+
+/**
+ * 按请求方法构造响应（P1-2）：
+ * - confirm：sendConfirmation 约定 "confirmed:true"/"confirmed:false"，
+ *   转 { confirmed: bool }（host 端 mobile-ui-context.ts 只认 confirmed 字段；
+ *   发 { value: "yes" } 会被解析成 false —— 语义反转缺陷）
+ * - 其他：数组 → selected，字符串 → value（与 select/input//editor 的 host 解析器一致）
+ */
+export const CONFIRM_TRUE = "confirmed:true";
+export const CONFIRM_FALSE = "confirmed:false";
+
+function buildDialogResponse(
+  queue: ExtensionUiQueue,
+  requestId: string,
+  value: string | string[],
+): ExtensionUiResponse | undefined {
+  const entry = queue.get(requestId);
+  if (!entry) return undefined;
+  if (entry.request.method === "confirm" && typeof value === "string") {
+    if (value === CONFIRM_TRUE || value === CONFIRM_FALSE) {
+      return queue.answer(requestId, { confirmed: value === CONFIRM_TRUE });
+    }
+    return queue.answer(requestId, { confirmed: value === "yes" });
+  }
+  if (Array.isArray(value)) {
+    return queue.answer(requestId, { selected: value as string[] });
+  }
+  return queue.answer(requestId, { value: value as string });
 }

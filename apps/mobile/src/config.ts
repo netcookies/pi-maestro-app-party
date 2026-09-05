@@ -46,6 +46,35 @@ const CONFIG_LIMITS: Record<keyof AppConfig, { min: number; max: number }> = {
   previewLength: { min: 10, max: 1000 },
 };
 
+const APPEARANCE_STORAGE_KEY = "maestro-mobile.appearance";
+
+export type AppearanceChoice = "auto" | "light" | "dark";
+
+let appearanceChoice: AppearanceChoice = "auto";
+
+/** 当前外观段选择（P3-6：auto 与 light 共用 miuix-light 皮肤时，选中态靠它区分） */
+export function getAppearanceChoice(): AppearanceChoice {
+  return appearanceChoice;
+}
+
+export async function setAppearanceChoice(choice: AppearanceChoice): Promise<void> {
+  appearanceChoice = choice;
+  await AsyncStorage.setItem(APPEARANCE_STORAGE_KEY, choice).catch(() => {});
+}
+
+/** 启动时恢复外观选择（与 loadConfig 同期调用） */
+export async function loadAppearanceChoice(): Promise<AppearanceChoice> {
+  try {
+    const raw = await AsyncStorage.getItem(APPEARANCE_STORAGE_KEY);
+    if (raw === "auto" || raw === "light" || raw === "dark") {
+      appearanceChoice = raw;
+    }
+  } catch {
+    // 默认 auto
+  }
+  return appearanceChoice;
+}
+
 /** 清洗非法配置：非有限数/越界回退默认 */
 function sanitizeConfig(patch: Partial<AppConfig>): Partial<AppConfig> {
   const clean: Partial<AppConfig> = {};

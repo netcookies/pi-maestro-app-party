@@ -23,7 +23,8 @@ export function InlineImage({ path }: Props) {
   const host = useHost();
   const { theme } = useTheme();
   const styles = useMemo(() => makeStyles(theme), [theme]);
-  const imageUrl = imageUrlFor(host.hostUrl, path);
+  // P1-5：带 token，否则 host 开启鉴权后图片全部 401
+  const imageUrl = imageUrlFor(host.hostUrl, path, host.token);
 
   if (!imageUrl) return null;
 
