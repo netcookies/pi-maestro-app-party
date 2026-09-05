@@ -10,7 +10,9 @@
     "test": "pnpm -r test",
     "test:coverage": "pnpm -r test:coverage",
     "dev:host": "pnpm --filter @maestro-mobile/host dev",
-    "dev:app": "pnpm --filter @maestro-mobile/app dev"
+    "dev:app": "pnpm --filter @maestro-mobile/app dev",
+    "release": "node scripts/release.mjs",
+    "release:notes": "node scripts/release.mjs --changelog-only"
   },
   "engines": {
     "node": ">=22.19.0"
