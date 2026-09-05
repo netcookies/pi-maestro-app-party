@@ -19,10 +19,10 @@
   },
   "dependencies": {
     "@maestro-mobile/shared": "workspace:*",
-    "@react-native-async-storage/async-storage": "^3.1.1",
+    "@react-native-async-storage/async-storage": "^2.1.2",
     "expo": "~53.0.0",
     "expo-constants": "~17.1.8",
-    "expo-document-picker": "^57.0.1",
+    "expo-document-picker": "^13.1.6",
     "expo-image-picker": "^16.1.4",
     "expo-linking": "~7.1.7",
     "expo-router": "~5.1.11",
