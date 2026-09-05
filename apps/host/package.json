@@ -34,5 +34,11 @@
     "tsx": "^4.20.0",
     "typescript": "^5.8.0",
     "vitest": "^4.1.0"
+  },
+  "description": "Maestro Mobile Host — PC 端 SDK Host（Pi agent 会话 + maestro 状态投影 + WS 服务）",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/isulewli/pi-maestro-app-party.git"
   }
 }

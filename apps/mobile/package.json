@@ -39,5 +39,11 @@
     "@types/react": "~19.0.0",
     "typescript": "^5.8.0",
     "vitest": "^4.1.0"
+  },
+  "description": "Maestro Mobile App — 移动端（Expo / React Native）",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/isulewli/pi-maestro-app-party.git"
   }
 }

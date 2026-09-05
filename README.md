@@ -14,6 +14,7 @@
 │  ├─ SdkSessionRunner      → 订阅事件 + 投影              │
 │  ├─ MobileExtensionUiBridge → ask 桥接 (extension_ui)    │
 │  ├─ MaestroStateReader    → 读 flow-schedule store       │
+│  ├─ WorkspaceTelemetryReader → 读 teammate owners 状态  │
 │  └─ MobileHostServer      → HTTP + WS 直连               │
 │                        │                                 │
 └─────────────────────────┼────────────────────────────────┘
@@ -22,7 +23,8 @@
 │  移动端：Expo / React Native (apps/mobile)               │
 │  ├─ HostClient      → WS 连接 + 重连                     │
 │  ├─ ExtensionUiQueue → ask 弹窗队列                      │
-│  └─ AppState        → 事件流 → UI 状态 reducer           │
+│  ├─ AppState        → 事件流 → UI 状态 reducer           │
+│  └─ Tabs            → 会话 / Teammate / Monitor / 设置  │
 └──────────────────────────────────────────────────────────┘
 ```
 
@@ -99,12 +101,26 @@ pnpm typecheck     # 类型检查
 | `timeline_item` / `timeline_delta` | 对话/工具时间线 |
 | `extension_ui_request` / `extension_ui_cleared` | ask 弹窗（select/input/confirm） |
 | `maestro_state` | flow-schedule 调度投影 |
-| `monitor_state` | 窗口监控状态 |
+| `monitor_state` | workspace owners + teammate agents 状态（5s 变化驱动推送） |
 | `command_error` / `error` | 错误 |
 
 ### ClientCommand（移动端 → host）
 
-`open_session` / `close_session` / `prompt` / `steer` / `follow_up` / `abort` / `extension_ui_response` / `get_snapshot` / `set_model` / `set_thinking` / `compact`
+`open_session` / `close_session` / `prompt` / `steer` / `follow_up` / `abort` / `extension_ui_response` / `get_snapshot` / `set_model` / `set_thinking` / `compact` / `get_maestro_state` / `get_monitor_state`
+
+### Workspace Telemetry 数据源
+
+Teammate / Monitor Tab 的数据来自 pi-maestro-teammate 的 owner 持久化文件：
+
+```
+~/.pi/teammate/workspaces/<workspaceId>/runtime/owners/<ownerId>.json
+  { workspaceId, normalizedCwd, ownerId, pid, sessionId, publishedAt,
+    contextPressure, agents[], settled[], backgroundJobs[] }
+```
+
+- 每个 owner = 一个活的 Pi 会话（workspace owner claim 持有者）
+- 心跳新鲜度（90s 无心跳判不活跃）判活；`agents[]` 即正在运行的 teammate dispatch
+- host 5s 轮询，变化时推 `monitor_state`；App 进页面时主动 `get_monitor_state` 兜底
 
 ## 构建安装包（APK / IPA）
 
@@ -158,9 +174,10 @@ xcodebuild -workspace MaestroMobile.xcworkspace -scheme MaestroMobile \
 
 ## 路线图
 
-- [ ] P0 ✅ monorepo 骨架 + 直连服务器
-- [ ] P1 ✅ Maestro Bridge（flow-schedule 投影 + 变更检测）
-- [ ] P2 ✅ 移动端核心逻辑（HostClient + ExtensionUiQueue + AppState）
-- [ ] P3 ✅ E2E 联调（ask 闭环 / maestro 状态流 / 重连）
-- [ ] P4 ✅ 常驻启动 + 部署配置
-- [ ] 后续：Teammate/Monitor UI 页面、图片附件、推送通知
+- [x] P0 ✅ monorepo 骨架 + 直连服务器
+- [x] P1 ✅ Maestro Bridge（flow-schedule 投影 + 变更检测）
+- [x] P2 ✅ 移动端核心逻辑（HostClient + ExtensionUiQueue + AppState）
+- [x] P3 ✅ E2E 联调（ask 闭环 / maestro 状态流 / 重连）
+- [x] P4 ✅ 常驻启动 + 部署配置
+- [x] P5 ✅ Teammate / Monitor Tab（workspace telemetry 合同）
+- [ ] 后续：owner 详情页（contextPressure / backgroundJobs / settled）、图片附件、推送通知
