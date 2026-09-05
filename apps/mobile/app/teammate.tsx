@@ -72,7 +72,7 @@ export default function TeammateScreen() {
                 <Text style={[styles.sessionTitle, { color: theme.text, fontSize: 13 }]} numberOfLines={1}>
                   {a.name ?? a.agent ?? "teammate"}
                 </Text>
-                <Text style={[styles.scheduleState, statusColor(a.status ?? "", theme)]}>{a.status ?? "?"}</Text>{a.status ?? "?"}</Text>
+                <Text style={[styles.scheduleState, statusColor(a.status ?? "", theme)]}>{a.status ?? "?"}</Text>
               </View>
               {a.phase ? <Text style={[styles.progress, { marginTop: 2 }]}>phase: {a.phase}</Text> : null}
               {a.outputTail && Array.isArray(a.outputTail) && a.outputTail.length > 0 ? (
