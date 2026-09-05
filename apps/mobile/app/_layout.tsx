@@ -87,7 +87,7 @@ function RootNavigator() {
         />
         <Tabs.Screen
           name="session"
-          options={{ href: null }}
+          options={{ href: null, headerShown: false }}
         />
       </Tabs>
     </>
