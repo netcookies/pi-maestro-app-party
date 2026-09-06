@@ -18,28 +18,11 @@
 import { readFile, readdir } from "node:fs/promises";
 import { join } from "node:path";
 import { homedir } from "node:os";
+import type { WorkspaceOwnerState, WorkspaceTelemetryState, JsonValue } from "@maestro-mobile/shared";
 
-export interface WorkspaceOwner {
-  workspaceId: string;
-  normalizedCwd: string;
-  ownerId: string;
-  pid: number;
-  sessionId: string;
-  publishedAt: number;
-  contextPressure: unknown;
-  agents: unknown[];
-  settled: unknown[];
-  backgroundJobs: unknown[];
-  /** heartbeat 新鲜度推断 */
-  alive: boolean;
-  ageMs: number;
-}
-
-export interface WorkspaceTelemetry {
-  owners: WorkspaceOwner[];
-  observedAt: string;
-  aliveCount: number;
-}
+/** 兼容别名：投影层使用 shared 类型（单一来源） */
+export type WorkspaceOwner = WorkspaceOwnerState;
+export type WorkspaceTelemetry = WorkspaceTelemetryState;
 
 const WORKSPACES_ROOT = join(homedir(), ".pi", "teammate", "workspaces");
 const HEARTBEAT_STALE_MS = 90_000; // 90s 无心跳视为不活跃
@@ -70,7 +53,9 @@ export class WorkspaceTelemetryReader {
           const raw = await readFile(join(ownersDir, f), "utf8");
           const d = JSON.parse(raw) as Record<string, unknown>;
           if (d.kind !== "owner") continue;
-          const publishedAt = Number(d.publishedAt ?? 0);
+          // 畸形 publishedAt 跳过：NaN 会让 alive/排序失效（correctness）
+          const publishedAt = Number(d.publishedAt);
+          if (!Number.isFinite(publishedAt) || publishedAt <= 0) continue;
           const ageMs = Math.max(0, Date.now() - publishedAt);
           owners.push({
             workspaceId: String(d.workspaceId ?? wsId),
@@ -79,10 +64,10 @@ export class WorkspaceTelemetryReader {
             pid: Number(d.pid ?? 0),
             sessionId: String(d.sessionId ?? ""),
             publishedAt,
-            contextPressure: d.contextPressure,
-            agents: Array.isArray(d.agents) ? d.agents : [],
-            settled: Array.isArray(d.settled) ? d.settled : [],
-            backgroundJobs: Array.isArray(d.backgroundJobs) ? d.backgroundJobs : [],
+            contextPressure: (d.contextPressure ?? null) as JsonValue,
+            agents: Array.isArray(d.agents) ? (d.agents as JsonValue[]) : [],
+            settled: Array.isArray(d.settled) ? (d.settled as JsonValue[]) : [],
+            backgroundJobs: Array.isArray(d.backgroundJobs) ? (d.backgroundJobs as JsonValue[]) : [],
             alive: ageMs < this.staleMs,
             ageMs,
           });

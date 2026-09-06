@@ -188,32 +188,9 @@ export function HostStoreProvider({ children }: { children: React.ReactNode }) {
 
   const fetchMonitorState = useCallback(async (): Promise<void> => {
     try {
+      // host 已用共享 projector 投影好 MonitorState，客户端不再二次投影（H12/H10）
       const result = await getClient().sendCommand({ type: "get_monitor_state" });
-      const telemetry = result as { owners: { workspaceId: string; normalizedCwd: string; ownerId: string; pid: number; sessionId: string; publishedAt: number; agents: unknown[]; backgroundJobs?: unknown[]; alive: boolean; ageMs: number }[]; observedAt: string; aliveCount: number };
-      // 投影为 MonitorState（与 host monitor_state 事件同构）
-      dispatch({ type: "monitor_state", state: {
-        windows: telemetry.owners.map((o) => ({
-          identity: {
-            workspaceId: o.workspaceId,
-            ownerId: o.ownerId,
-            ownerNonce: "",
-            endpointId: o.sessionId,
-          },
-          name: o.normalizedCwd.split("/").filter(Boolean).pop() ?? o.normalizedCwd,
-          cwd: o.normalizedCwd,
-          status: o.alive ? "running" : "sleeping",
-          lifecycle: o.alive ? "running" : "disconnected",
-          workStatus: (o.agents?.length ?? 0) > 0 ? "active" : "idle",
-          todos: [],
-          attention: [],
-          facets: [{
-            kind: "teammate-agents",
-            revision: String(o.publishedAt),
-            data: { agents: o.agents, backgroundJobs: (o as { backgroundJobs?: unknown[] }).backgroundJobs ?? [] },
-          }],
-        })),
-        observedAt: telemetry.observedAt,
-      } } as never);
+      dispatch({ type: "monitor_state", state: result } as unknown as Parameters<typeof dispatch>[0]);
     } catch {
       // 静默
     }

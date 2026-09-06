@@ -16,6 +16,7 @@ import type {
   SessionSnapshot,
 } from "@maestro-mobile/shared";
 import type { HostController } from "../host-controller.js";
+import { projectMonitorState } from "../monitor-projection.js";
 import type { RuntimeFactory } from "../types.js";
 import type { LiveSessionList } from "../live-sessions.js";
 import { readSettingsOverview, updateSettingsJson } from "../maestro-settings.js";
@@ -455,8 +456,9 @@ export class MobileHostServer {
           break;
         }
         case "get_monitor_state": {
+          // 与推送路径共用同一投影，避免双投影漂移
           const telemetry = await this.controller.readTelemetry();
-          this.sendAck(client, command, telemetry);
+          this.sendAck(client, command, projectMonitorState(telemetry));
           break;
         }
         case "get_snapshot": {

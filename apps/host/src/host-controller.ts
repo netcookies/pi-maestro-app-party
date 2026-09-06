@@ -4,6 +4,7 @@ import { SdkSessionRunner } from "./session-runner.js";
 import { MaestroStateReader } from "./maestro-state.js";
 import { LiveSessionsService } from "./live-sessions.js";
 import { WorkspaceTelemetryReader } from "./workspace-telemetry.js";
+import { projectMonitorState, telemetryStableKey, monitorStateEvent } from "./monitor-projection.js";
 import { VersionDetector, type ComponentVersions } from "./version-detector.js";
 import { EventLog } from "./event-log.js";
 
@@ -24,6 +25,7 @@ export class HostController {
   private readonly liveSessions: LiveSessionsService;
   private readonly telemetryReader: WorkspaceTelemetryReader;
   private telemetryCache: string | null = null;
+  private telemetryInFlight = false;
   private readonly emitToListeners: (event: HostEvent) => void;
   private maestroPollTimer: ReturnType<typeof setInterval> | null = null;
   private maestroDetected = false;
@@ -63,48 +65,20 @@ export class HostController {
     return this.telemetryReader.read();
   }
 
-  /** 轮询 telemetry，状态变化时推送 monitor_state 事件 */
+  /** 轮询 telemetry，状态变化时推送 monitor_state 事件（single-flight + 稳定键变更检测） */
   async pollTelemetry(): Promise<void> {
+    if (this.telemetryInFlight) return;
+    this.telemetryInFlight = true;
     try {
       const t = await this.telemetryReader.read();
-      const json = JSON.stringify(t.owners);
-      if (json === this.telemetryCache) return;
-      this.telemetryCache = json;
-      this.emitToListeners(this.eventLog.record({ type: "monitor_state", state: {
-        windows: t.owners.map((o) => ({
-          identity: {
-            workspaceId: o.workspaceId,
-            ownerId: o.ownerId,
-            ownerNonce: "",
-            endpointId: o.sessionId,
-          },
-          name: o.normalizedCwd.split("/").filter(Boolean).pop() ?? o.normalizedCwd,
-          cwd: o.normalizedCwd,
-          status: o.alive ? "running" : "sleeping",
-          lifecycle: o.alive ? "running" : "disconnected",
-          workStatus: o.agents.length > 0 ? "active" : "idle",
-          todos: [],
-          attention: [],
-          facets: [
-            {
-              kind: "teammate-agents",
-              target: {
-                identity: {
-                  workspaceId: o.workspaceId,
-                  ownerId: o.ownerId,
-                  ownerNonce: "",
-                  endpointId: o.sessionId,
-                },
-              },
-              revision: String(o.publishedAt),
-              data: { agents: o.agents, backgroundJobs: o.backgroundJobs, contextPressure: o.contextPressure },
-            },
-          ],
-        })),
-        observedAt: t.observedAt,
-      } as never }));
+      const key = telemetryStableKey(t);
+      if (key === this.telemetryCache) return;
+      this.telemetryCache = key;
+      this.emitToListeners(this.eventLog.record(monitorStateEvent(projectMonitorState(t))));
     } catch {
-      // ignore
+      // 读取失败保留上次快照，不广播空窗口
+    } finally {
+      this.telemetryInFlight = false;
     }
   }
 
@@ -129,6 +103,7 @@ export class HostController {
 
   /** 启动 Maestro 状态轮询 */
   async startMaestroPoll(intervalMs = 5000): Promise<void> {
+    if (this.maestroPollTimer) return; // 重复启动防护
     // 启动时探测一次组件版本（内部带缓存，失败字段留空由 UI 显示待接入）
     this.componentVersions = await this.versionDetector.detect();
     await this.refreshMaestroState();

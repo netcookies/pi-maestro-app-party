@@ -177,7 +177,40 @@ export interface MaestroState {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Monitor 窗口状态
+/** Teammate dispatch 运行状态（pi-maestro-teammate owner.agents 条目，有界投影） */
+export interface TeammateAgentState {
+  correlationId?: string;
+  name?: string;
+  agent?: string;
+  status?: string;
+  phase?: string;
+  /** 最近输出行（host 端截断至有界条数） */
+  outputTail?: string[];
+  pendingInteractions?: number;
+}
+
+/** Monitor 窗口 facet：teammate agents 详情（host 投影合同） */
+export interface TeammateAgentsFacet {
+  kind: "teammate-agents";
+  target: {
+    identity: {
+      workspaceId: string;
+      ownerId: string;
+      ownerNonce: string;
+      endpointId: string;
+    };
+  };
+  revision: string;
+  data: {
+    agents: TeammateAgentState[];
+    backgroundJobs: JsonValue[];
+    contextPressure?: JsonValue;
+  };
+}
+
+export type MonitorFacet = TeammateAgentsFacet;
+
+/** Monitor 窗口状态 */
 // ─────────────────────────────────────────────────────────────────────────────
 
 export interface MonitorWindowSummary {
@@ -196,7 +229,7 @@ export interface MonitorWindowSummary {
   workStatus: string;
   todos: MonitorTodoSummary[];
   attention: MonitorAttentionSummary[];
-  facets: JsonValue[];
+  facets: MonitorFacet[];
 }
 
 export interface MonitorTodoSummary {

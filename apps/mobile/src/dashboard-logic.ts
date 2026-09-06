@@ -89,7 +89,7 @@ export function isWindowSteerable(endpointId: string, controllableSessionIds: Re
 function agentsOfWindow(w: MonitorWindowSummary): Array<{ status?: unknown }> {
   for (const f of w.facets ?? []) {
     if (f && typeof f === "object" && !Array.isArray(f)) {
-      const facet = f as Record<string, unknown>;
+      const facet = f as unknown as Record<string, unknown>;
       if (facet.kind === "teammate-agents") {
         const data = facet.data as { agents?: unknown } | undefined;
         if (data && Array.isArray(data.agents)) {
