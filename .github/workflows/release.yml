@@ -22,9 +22,8 @@ jobs:
         with:
           fetch-depth: 0
 
+      # pnpm 版本从 package.json 的 packageManager 字段读取（避免双源冲突）
       - uses: pnpm/action-setup@v4
-        with:
-          version: 10
 
       - uses: actions/setup-node@v4
         with:
