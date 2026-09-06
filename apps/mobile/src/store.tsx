@@ -188,9 +188,14 @@ export function HostStoreProvider({ children }: { children: React.ReactNode }) {
 
   const fetchMonitorState = useCallback(async (): Promise<void> => {
     try {
-      // host 已用共享 projector 投影好 MonitorState，客户端不再二次投影（H12/H10）
-      const result = await getClient().sendCommand({ type: "get_monitor_state" });
-      dispatch({ type: "monitor_state", state: result } as unknown as Parameters<typeof dispatch>[0]);
+      // host 已用共享 projector 投影好 MonitorState；运行时校验后再 dispatch（防异常/恶意载荷）
+      const result = await getClient().sendCommand({ type: "get_monitor_state" }) as unknown;
+      if (
+        result && typeof result === "object" && !Array.isArray(result)
+        && Array.isArray((result as { windows?: unknown }).windows)
+      ) {
+        dispatch({ type: "monitor_state", state: result } as unknown as Parameters<typeof dispatch>[0]);
+      }
     } catch {
       // 静默
     }

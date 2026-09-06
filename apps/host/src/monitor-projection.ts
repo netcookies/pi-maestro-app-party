@@ -85,22 +85,15 @@ export function projectMonitorState(t: WorkspaceTelemetryState): MonitorState {
 }
 
 /**
- * 稳定变更键 — 不含 ageMs/observedAt 等时间派生字段，
- * 只有 owner 集合、身份、发布时间、alive 与 agents 内容变化才触发广播。
+ * 稳定变更键 — 不含 ageMs/observedAt 等时间派生字段。
+ * 对与广播相同的有界投影做确定性 JSON 序列化：投影可见的字段变化必然触发广播，
+ * 且 JSON.stringify 无分隔符碰撞问题。
  */
 export function telemetryStableKey(t: WorkspaceTelemetryState): string {
-  const parts = t.owners.map((o) => {
-    const agents = (o.agents ?? []).slice(0, AGENTS_MAX).map((a) => {
-      if (typeof a !== "object" || a === null) return "?";
-      const d = a as Record<string, unknown>;
-      const last = Array.isArray(d.outputTail) && d.outputTail.length > 0
-        ? String(d.outputTail[d.outputTail.length - 1]).slice(0, OUTPUT_TAIL_MAX_CHARS)
-        : "";
-      return `${d.correlationId ?? ""}|${d.status ?? ""}|${d.phase ?? ""}|${last}`;
-    });
-    return `${o.ownerId}|${o.publishedAt}|${o.alive ? 1 : 0}|${agents.join(";;")}`;
-  });
-  return `${parts.sort().join("||")}`;
+  const projected = t.owners.map(projectWindow).sort((a, b) =>
+    a.identity.ownerId < b.identity.ownerId ? -1 : a.identity.ownerId > b.identity.ownerId ? 1 : 0,
+  );
+  return JSON.stringify(projected);
 }
 
 /** 从 monitor_state 构造 HostEvent（供 controller emit） */
