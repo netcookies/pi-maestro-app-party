@@ -5,7 +5,7 @@ Host 是 PC 端常驻服务，把 Pi agent 会话、Monitor 窗口 telemetry、m
 | 形态 | 适用场景 | 会话接管 | 安装成本 |
 |---|---|---|---|
 | ① npm 全局安装 | 日常主力机（macOS/Linux） | ✅ 完整 | 低 |
-| ② pi 扩展安装 | 深度 Pi 用户（规划中） | ✅ 完整 | 低 |
+| ② pi 扩展安装 | 深度 Pi 用户 | ✅ 完整 | 低 |
 | ③ Docker 看板模式 | NAS / 远程服务器 / 不想装 Node 环境 | ❌ 仅看板 | 中 |
 
 ---
@@ -55,13 +55,21 @@ headless 服务器需要 `sudo loginctl enable-linger $USER`（如果是 user se
 
 ---
 
-## 形态二：pi 扩展安装（规划中）
+## 形态二：pi 扩展安装
 
 ```bash
 pi install npm:pi-maestro-host
 ```
 
-计划提供 `/maestro-host start|stop|status` 薄扩展命令：扩展本身不承载服务（Host 仍是独立进程），只通过 discovery 文件/socket 遥控常驻守护进程——参考 remote-pi 的 supervisord 模式与 pi-maestro-flow 的 `PI_GUI` sidecar 先例。当前版本请使用形态一。
+提供 `/maestro-host status|start|stop` 薄扩展命令。**扩展不承载服务**：它只 spawn/探测独立的 host 进程（`detached` + PID 文件 `~/.pi/maestro-host.pid` + `/api/health` 幂等探测），host 生命周期与 Pi 会话完全解耦——关掉 Pi 会话 host 继续跑，launchd/systemd 管理的实例也不会被误杀（stop 仅针对本扩展启动的 PID）。
+
+```text
+/maestro-host status   # 探测 :4739，显示运行状态与版本（未配 token 时提示）
+/maestro-host start    # 幂等启动：已在监听则跳过；否则 spawn dist/cli.js 并等待 health
+/maestro-host stop     # 仅停止本扩展启动的实例
+```
+
+端口跟随 `MAESTRO_MOBILE_PORT`（默认 4739）。
 
 ---
 

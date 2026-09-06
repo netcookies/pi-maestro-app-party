@@ -55,5 +55,10 @@
     "remote",
     "websocket",
     "teammate"
-  ]
+  ],
+  "pi": {
+    "extensions": [
+      "./dist/extension.js"
+    ]
+  }
 }
