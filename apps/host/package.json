@@ -1,8 +1,14 @@
 {
-  "name": "@maestro-mobile/host",
+  "name": "pi-maestro-host",
   "version": "0.1.0",
-  "private": true,
   "type": "module",
+  "description": "Maestro Mobile Host — PC 端常驻服务：Pi agent 会话桥 + Monitor telemetry 投影 + 移动端 WS/HTTP 服务",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/netcookies/pi-maestro-app-party.git",
+    "directory": "apps/host"
+  },
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
   "exports": {
@@ -11,19 +17,23 @@
       "default": "./dist/index.js"
     }
   },
-  "scripts": {
-    "build": "tsc",
-    "typecheck": "tsc --noEmit",
-    "test": "vitest run",
-    "test:coverage": "vitest run --coverage",
-    "dev": "tsx src/cli.ts",
-    "start": "node dist/cli.js"
-  },
   "bin": {
     "maestro-mobile-host": "./dist/cli.js"
   },
+  "files": [
+    "dist",
+    "README.md"
+  ],
+  "scripts": {
+    "build": "bash build.sh",
+    "typecheck": "bash scripts/vendor-shared.sh && npx tsc --noEmit; rc=$?; git checkout -- src 2>/dev/null; rm -rf src/vendor; exit $rc",
+    "test": "vitest run",
+    "test:coverage": "vitest run --coverage",
+    "dev": "tsx src/cli.ts",
+    "start": "node dist/cli.js",
+    "prepublishOnly": "bash build.sh && vitest run"
+  },
   "dependencies": {
-    "@maestro-mobile/shared": "workspace:*",
     "@earendil-works/pi-coding-agent": "^0.79.0",
     "ws": "^8.18.0"
   },
@@ -34,10 +44,16 @@
     "typescript": "^5.8.0",
     "vitest": "^4.1.0"
   },
-  "description": "Maestro Mobile Host — PC 端 SDK Host（Pi agent 会话 + maestro 状态投影 + WS 服务）",
-  "license": "MIT",
-  "repository": {
-    "type": "git",
-    "url": "git+https://github.com/netcookies/pi-maestro-app-party.git"
-  }
+  "engines": {
+    "node": ">=22.19"
+  },
+  "keywords": [
+    "pi",
+    "pi-agent",
+    "maestro",
+    "mobile",
+    "remote",
+    "websocket",
+    "teammate"
+  ]
 }

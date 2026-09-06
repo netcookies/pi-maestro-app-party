@@ -13,9 +13,6 @@ importers:
       '@earendil-works/pi-coding-agent':
         specifier: ^0.79.0
         version: 0.79.10(ws@8.21.3)(zod@4.5.4)
-      '@maestro-mobile/shared':
-        specifier: workspace:*
-        version: link:../../packages/shared
       ws:
         specifier: ^8.18.0
         version: 8.21.3
