@@ -1,19 +1,19 @@
-# pi-maestro-host Docker Compose — 看板模式
+# maestro-mobile Docker Compose — 看板模式
 #
 # 用法：
 #   MAESTRO_MOBILE_TOKEN=your-secret docker compose -f deploy/docker-compose.host.yml up -d
 #
 # 能力边界：Dashboard / Monitor 窗口 / usage 统计 / 会话历史浏览可用；
 # open_session / steer_window 会话接管不可用（容器内无 pi）。
-# 需要接管能力时用宿主安装（npm i -g pi-maestro-host）。
+# 需要接管能力时用宿主安装（npm i -g maestro-mobile）。
 
 services:
   host:
     build:
       context: ..
       dockerfile: Dockerfile
-    image: pi-maestro-host:latest
-    container_name: maestro-mobile-host
+    image: maestro-mobile:latest
+    container_name: maestro-mobile
     restart: unless-stopped
     ports:
       - "4739:4739"

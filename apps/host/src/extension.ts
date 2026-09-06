@@ -1,5 +1,5 @@
 /**
- * maestro-host extension — 薄遥控器（用户提案：pi 扩展自动拉起 npm 包的 host）
+ * maestro-mobile extension — 薄遥控器（用户提案：pi 扩展自动拉起 npm 包的 host）
  *
  * 职责边界（刻意保持薄）：
  *  - start:  幂等启动 host 子进程（detached；已在监听则跳过）
@@ -16,7 +16,7 @@ import { homedir } from "node:os";
 import { fileURLToPath } from "node:url";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 
-const PID_FILE = join(homedir(), ".pi", "maestro-host.pid");
+const PID_FILE = join(homedir(), ".pi", "maestro-mobile.pid");
 const DEFAULT_PORT = 4739;
 
 function hostPort(): number {
@@ -43,7 +43,7 @@ function hostStatus(port: number, timeoutMs = 800): Promise<Record<string, unkno
   });
 }
 
-/** host cli.js 入口：同包 dist（pi install npm:pi-maestro-host 时随包分发） */
+/** host cli.js 入口：同包 dist（pi install npm:pi-maestro-mobile 时随包分发） */
 function hostCliPath(): string {
   // dist/extension.js 与 dist/cli.js 同目录
   return join(fileURLToPath(new URL(".", import.meta.url)), "cli.js");
@@ -60,7 +60,7 @@ async function readPid(): Promise<number | null> {
 }
 
 export default function maestroHostExtension(pi: ExtensionAPI): void {
-  pi.registerCommand("maestro-host", {
+  pi.registerCommand("maestro-mobile", {
     description: "Maestro Mobile Host 遥控（status / start / stop）",
     handler: async (args: string, ctx) => {
       const sub = (args ?? "").trim().split(/\s+/)[0] || "status";
@@ -69,20 +69,20 @@ export default function maestroHostExtension(pi: ExtensionAPI): void {
 
       if (sub === "status") {
         if (!alive) {
-          ctx.ui.notify(`maestro-host: 未运行（端口 ${port} 无响应）`, "info");
+          ctx.ui.notify(`maestro-mobile: 未运行（端口 ${port} 无响应）`, "info");
           return;
         }
         const s = await hostStatus(port);
         const ver = s
           ? `${s.version} · pi ${s.piVersion ?? "?"} · flow ${s.flowVersion ?? "?"} · cli ${s.maestroCliVersion ?? "?"}`
           : "运行中（未配 token，版本详情需在 host 侧设置 MAESTRO_MOBILE_TOKEN 后由手机 App 查看）";
-        ctx.ui.notify(`maestro-host: 运行中 :${port} — ${ver}`, "info");
+        ctx.ui.notify(`maestro-mobile: 运行中 :${port} — ${ver}`, "info");
         return;
       }
 
       if (sub === "start") {
         if (alive) {
-          ctx.ui.notify(`maestro-host: 已在运行（:${port}），跳过启动`, "info");
+          ctx.ui.notify(`maestro-mobile: 已在运行（:${port}），跳过启动`, "info");
           return;
         }
         const child = spawn(process.execPath, [hostCliPath(), "--port", String(port)], {
@@ -96,32 +96,32 @@ export default function maestroHostExtension(pi: ExtensionAPI): void {
         for (let i = 0; i < 10; i++) {
           await new Promise((r) => setTimeout(r, 300));
           if (await probeHealth(port)) {
-            ctx.ui.notify(`maestro-host: 已启动 :${port} pid=${child.pid}`, "info");
+            ctx.ui.notify(`maestro-mobile: 已启动 :${port} pid=${child.pid}`, "info");
             return;
           }
         }
-        ctx.ui.notify("maestro-host: 启动后 3s 内未见 health 通过，请查日志", "warning");
+        ctx.ui.notify("maestro-mobile: 启动后 3s 内未见 health 通过，请查日志", "warning");
         return;
       }
 
       if (sub === "stop") {
         const pid = await readPid();
         if (!pid) {
-          ctx.ui.notify("maestro-host: 无本扩展启动的实例（PID 文件不存在）；launchd/systemd 管理的实例请用对应服务命令停", "warning");
+          ctx.ui.notify("maestro-mobile: 无本扩展启动的实例（PID 文件不存在）；launchd/systemd 管理的实例请用对应服务命令停", "warning");
           return;
         }
         try {
           process.kill(pid, "SIGTERM");
           await unlink(PID_FILE).catch(() => {});
-          ctx.ui.notify(`maestro-host: 已发送 SIGTERM 到 pid=${pid}`, "info");
+          ctx.ui.notify(`maestro-mobile: 已发送 SIGTERM 到 pid=${pid}`, "info");
         } catch {
           await unlink(PID_FILE).catch(() => {});
-          ctx.ui.notify(`maestro-host: pid=${pid} 已不存在，清理 PID 文件`, "info");
+          ctx.ui.notify(`maestro-mobile: pid=${pid} 已不存在，清理 PID 文件`, "info");
         }
         return;
       }
 
-      ctx.ui.notify(`maestro-host: 未知子命令 "${sub}"（可用：status / start / stop）`, "warning");
+      ctx.ui.notify(`maestro-mobile: 未知子命令 "${sub}"（可用：status / start / stop）`, "warning");
     },
   });
 }

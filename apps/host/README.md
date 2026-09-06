@@ -1,9 +1,9 @@
-# pi-maestro-host
+# maestro-mobile
 
 PC 端常驻服务：把 Pi agent 会话、Monitor 窗口 telemetry、maestro 调度状态投影给手机 App（Maestro Mobile）。
 
 ```
-手机 App  ←—— 局域网 WS/HTTP ——→  pi-maestro-host  ←→  Pi SDK AgentSession / ~/.pi 文件状态
+手机 App  ←—— 局域网 WS/HTTP ——→  maestro-mobile  ←→  Pi SDK AgentSession / ~/.pi 文件状态
 ```
 
 ## 安装
@@ -11,8 +11,8 @@ PC 端常驻服务：把 Pi agent 会话、Monitor 窗口 telemetry、maestro �
 ### 方式一：npm 全局安装（推荐，launchd/systemd 常驻）
 
 ```bash
-npm install -g pi-maestro-host
-maestro-mobile-host --port 4739
+npm install -g maestro-mobile
+maestro-mobile --port 4739
 ```
 
 开机常驻见下方 [守护进程](#守护进程)。
@@ -20,7 +20,7 @@ maestro-mobile-host --port 4739
 ### 方式二：pi 扩展安装
 
 ```bash
-pi install npm:pi-maestro-host
+pi install npm:maestro-mobile
 ```
 
 （薄扩展入口：`/maestro-host` 命令管理守护进程，规划中；当前版本请用方式一。）
@@ -28,12 +28,12 @@ pi install npm:pi-maestro-host
 ### 方式三：Docker（看板模式）
 
 ```bash
-docker run -d --name maestro-mobile-host \
+docker run -d --name maestro-mobile \
   -p 4739:4739 \
   -v ~/.pi/agent/sessions:/home/node/.pi/agent/sessions:ro \
   -v ~/.pi/teammate:/home/node/.pi/teammate:ro \
   -e MAESTRO_MOBILE_TOKEN=your-secret \
-  pi-maestro-host
+  maestro-mobile
 ```
 
 容器模式能力边界：Dashboard / Monitor 看板、会话历史浏览、usage 统计**可用**；
@@ -43,7 +43,7 @@ docker run -d --name maestro-mobile-host \
 ## 使用
 
 ```bash
-maestro-mobile-host [--port 4739] [--host 0.0.0.0] [--token <secret>] [--project-root <dir>] [--poll-ms 5000]
+maestro-mobile [--port 4739] [--host 0.0.0.0] [--token <secret>] [--project-root <dir>] [--poll-ms 5000]
 ```
 
 | 参数 | 环境变量 | 默认 | 说明 |
@@ -69,8 +69,8 @@ launchctl load ~/Library/LaunchAgents/com.maestro-mobile.host.plist
 **Linux（systemd）**：
 
 ```bash
-sudo cp deploy/maestro-mobile-host.service /etc/systemd/system/
-sudo systemctl enable --now maestro-mobile-host
+sudo cp deploy/maestro-mobile.service /etc/systemd/system/
+sudo systemctl enable --now maestro-mobile
 ```
 
 ## HTTP 接口速览

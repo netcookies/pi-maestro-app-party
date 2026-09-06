@@ -5,7 +5,7 @@
 ```
 ┌────────────── PC 端：Pi Host（Node 进程）────────────────┐
 │                                                          │
-│  maestro-mobile-host (apps/host)                         │
+│  maestro-mobile (apps/host)                         │
 │  ├─ PiSdkRuntimeFactory   → createAgentSession           │
 │  ├─ SdkSessionRunner      → 订阅事件 + 投影              │
 │  ├─ MobileExtensionUiBridge → ask 桥接 (extension_ui)    │

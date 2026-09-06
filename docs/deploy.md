@@ -1,4 +1,4 @@
-# pi-maestro-host 部署指南
+# maestro-mobile 部署指南
 
 Host 是 PC 端常驻服务，把 Pi agent 会话、Monitor 窗口 telemetry、maestro 调度状态投影给手机 App。三种部署形态按场景选择：
 
@@ -15,7 +15,7 @@ Host 是 PC 端常驻服务，把 Pi agent 会话、Monitor 窗口 telemetry、m
 ### 安装
 
 ```bash
-npm install -g pi-maestro-host
+npm install -g maestro-mobile
 ```
 
 要求 Node ≥ 22.19。包自包含（vendored shared），只拉 `pi-coding-agent` SDK 和 `ws` 两个运行时依赖。
@@ -23,7 +23,7 @@ npm install -g pi-maestro-host
 ### 手动运行
 
 ```bash
-maestro-mobile-host --port 4739
+maestro-mobile --port 4739
 # 首次无 --token 会生成随机 token 并打印，手机连接时带上
 ```
 
@@ -35,16 +35,16 @@ cp deploy/com.maestro-mobile.host.plist ~/Library/LaunchAgents/
 launchctl load ~/Library/LaunchAgents/com.maestro-mobile.host.plist
 ```
 
-日志：`/tmp/maestro-mobile-host.{out,err}.log`。`KeepAlive` 开启，崩溃自动拉起。
+日志：`/tmp/maestro-mobile.{out,err}.log`。`KeepAlive` 开启，崩溃自动拉起。
 
 ### 常驻（Linux systemd）
 
 ```bash
-sudo cp deploy/maestro-mobile-host.service /etc/systemd/system/
+sudo cp deploy/maestro-mobile.service /etc/systemd/system/
 # 编辑 ExecStart 路径与 Environment
 sudo systemctl daemon-reload
-sudo systemctl enable --now maestro-mobile-host
-journalctl -u maestro-mobile-host -f
+sudo systemctl enable --now maestro-mobile
+journalctl -u maestro-mobile -f
 ```
 
 headless 服务器需要 `sudo loginctl enable-linger $USER`（如果是 user service）。
@@ -58,7 +58,7 @@ headless 服务器需要 `sudo loginctl enable-linger $USER`（如果是 user se
 ## 形态二：pi 扩展安装
 
 ```bash
-pi install npm:pi-maestro-host
+pi install npm:maestro-mobile
 ```
 
 提供 `/maestro-host status|start|stop` 薄扩展命令。**扩展不承载服务**：它只 spawn/探测独立的 host 进程（`detached` + PID 文件 `~/.pi/maestro-host.pid` + `/api/health` 幂等探测），host 生命周期与 Pi 会话完全解耦——关掉 Pi 会话 host 继续跑，launchd/systemd 管理的实例也不会被误杀（stop 仅针对本扩展启动的 PID）。
@@ -96,12 +96,12 @@ MAESTRO_MOBILE_TOKEN=your-secret docker compose -f docker-compose.host.yml up -d
 ### 纯 docker run
 
 ```bash
-docker run -d --name maestro-mobile-host \
+docker run -d --name maestro-mobile \
   -p 4739:4739 \
   -v ~/.pi/agent/sessions:/home/node/.pi/agent/sessions:ro \
   -v ~/.pi/teammate:/home/node/.pi/teammate:ro \
   -e MAESTRO_MOBILE_TOKEN=your-secret \
-  pi-maestro-host
+  maestro-mobile
 ```
 
 镜像自带 HEALTHCHECK（`/api/health`），非 root 用户运行。

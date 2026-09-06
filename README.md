@@ -85,8 +85,8 @@
 **方式 A · npm 全局安装（推荐）**：
 
 ```bash
-npm install -g pi-maestro-host
-maestro-mobile-host --host 0.0.0.0 --port 4739 --token "your-secret-token"
+npm install -g maestro-mobile
+maestro-mobile --host 0.0.0.0 --port 4739 --token "your-secret-token"
 ```
 
 常驻（launchd/systemd）、Docker 看板模式与能力边界对比，见 [部署指南](docs/deploy.md)。

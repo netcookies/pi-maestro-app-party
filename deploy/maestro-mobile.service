@@ -1,10 +1,10 @@
 # systemd 服务 — Maestro Mobile Host（Linux）
 # 安装：
-#   sudo cp deploy/maestro-mobile-host.service /etc/systemd/system/
+#   sudo cp deploy/maestro-mobile.service /etc/systemd/system/
 #   sudo systemctl daemon-reload
-#   sudo systemctl enable --now maestro-mobile-host
+#   sudo systemctl enable --now maestro-mobile
 # 日志：
-#   journalctl -u maestro-mobile-host -f
+#   journalctl -u maestro-mobile -f
 
 [Unit]
 Description=Maestro Mobile Host — Pi agent mobile bridge

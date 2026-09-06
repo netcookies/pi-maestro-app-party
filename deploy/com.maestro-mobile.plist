@@ -7,7 +7,7 @@
     launchctl load ~/Library/LaunchAgents/com.maestro-mobile.host.plist
   卸载：
     launchctl unload ~/Library/LaunchAgents/com.maestro-mobile.host.plist
-  日志：/tmp/maestro-mobile-host.{out,err}.log
+  日志：/tmp/maestro-mobile.{out,err}.log
 -->
 <plist version="1.0">
 <dict>
@@ -47,8 +47,8 @@
   <string>Background</string>
 
   <key>StandardOutPath</key>
-  <string>/tmp/maestro-mobile-host.out.log</string>
+  <string>/tmp/maestro-mobile.out.log</string>
   <key>StandardErrorPath</key>
-  <string>/tmp/maestro-mobile-host.err.log</string>
+  <string>/tmp/maestro-mobile.err.log</string>
 </dict>
 </plist>
