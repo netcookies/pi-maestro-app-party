@@ -68,6 +68,10 @@ react {
  */
 def enableProguardInReleaseBuilds = (findProperty('android.enableProguardInReleaseBuilds') ?: false).toBoolean()
 
+// Maestro Mobile：release 启用混淆 + 资源收缩（gradle.properties 可覆盖为 false）
+def maestroMinify = (findProperty('maestro.minifyRelease') ?: true).toBoolean()
+enableProguardInReleaseBuilds = maestroMinify
+
 /**
  * The preferred build flavor of JavaScriptCore (JSC)
  *
@@ -102,6 +106,26 @@ android {
             keyAlias 'androiddebugkey'
             keyPassword 'android'
         }
+        // release 签名：优先 local.properties（本地不入 git），其次环境变量（CI 用 GitHub Secrets）
+        release {
+            def lp = new Properties()
+            def lpFile = rootProject.file("local.properties")
+            if (lpFile.exists()) lpFile.withInputStream { lp.load(it) }
+            def ksFile = lp.getProperty("RELEASE_KEYSTORE_FILE")
+                ?: System.getenv("MAESTRO_KEYSTORE_FILE")
+            def ksPass = lp.getProperty("RELEASE_KEYSTORE_PASSWORD")
+                ?: System.getenv("MAESTRO_KEYSTORE_PASSWORD")
+            def ksAlias = lp.getProperty("RELEASE_KEY_ALIAS")
+                ?: System.getenv("MAESTRO_KEY_ALIAS") ?: "release"
+            def keyPass = lp.getProperty("RELEASE_KEY_PASSWORD")
+                ?: System.getenv("MAESTRO_KEY_PASSWORD") ?: ksPass
+            if (ksFile != null && ksPass != null && file(ksFile).exists()) {
+                storeFile file(ksFile)
+                storePassword ksPass
+                keyAlias ksAlias
+                keyPassword keyPass
+            }
+        }
     }
     buildTypes {
         debug {
@@ -110,8 +134,9 @@ android {
         release {
             // Caution! In production, you need to generate your own keystore file.
             // see https://reactnative.dev/docs/signed-apk-android.
-            signingConfig signingConfigs.debug
-            shrinkResources (findProperty('android.enableShrinkResourcesInReleaseBuilds')?.toBoolean() ?: false)
+            // 有 release keystore 配置时用它；否则回退 debug 签名（避免无配置环境构建失败）
+            signingConfig signingConfigs.release.storeFile != null ? signingConfigs.release : signingConfigs.debug
+            shrinkResources maestroMinify
             minifyEnabled enableProguardInReleaseBuilds
             proguardFiles getDefaultProguardFile("proguard-android.txt"), "proguard-rules.pro"
             crunchPngs (findProperty('android.enablePngCrunchInReleaseBuilds')?.toBoolean() ?: true)
