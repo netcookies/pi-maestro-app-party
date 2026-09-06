@@ -45,8 +45,16 @@ function piAgentModulePath(pkgName: string): string {
   return join(homedir(), ".pi", "agent", "npm", "node_modules", pkgName, "package.json");
 }
 
-/** execFile 兜底：bin 不存在/超时均返回 undefined（3s 超时，版本命令无 stdin 输入） */
+/** execFile 兜底：bin 不存在/超时均返回 undefined（3s 超时，版本命令无 stdin 输入）
+ * Windows：npm 全局 bin 是 pi.cmd / maestro.cmd，无 shell 的 execFile("pi") 找不到 .cmd —— 先探测 .cmd 再回退裸名 */
 function binVersion(bin: string): Promise<string | undefined> {
+  if (process.platform === "win32") {
+    return binVersionRaw(`${bin}.cmd`).then((v) => v ?? binVersionRaw(bin));
+  }
+  return binVersionRaw(bin);
+}
+
+function binVersionRaw(bin: string): Promise<string | undefined> {
   return new Promise((resolve) => {
     const child = execFile(bin, ["--version"], { timeout: 3000 }, (error, stdout) => {
       if (error) return resolve(undefined);
@@ -133,7 +141,11 @@ export class VersionDetector {
 
   /** npm 全局目录探测（macOS homebrew / Linux nvm 路径差异大，仅试常见前缀） */
   private async globalModuleVersion(pkgName: string): Promise<string | undefined> {
-    const prefixes = [process.env.PREFIX, "/opt/homebrew/lib/node_modules", "/usr/local/lib/node_modules"].filter(Boolean) as string[];
+    // 覆盖 macOS（homebrew/自定义 PREFIX）、Linux（/usr/local、nvm）与 Windows（%APPDATA%\npm）
+    const prefixes: string[] = [];
+    if (process.env.PREFIX) prefixes.push(process.env.PREFIX);
+    if (process.env.APPDATA) prefixes.push(join(process.env.APPDATA, "npm"));
+    prefixes.push("/opt/homebrew/lib/node_modules", "/usr/local/lib/node_modules");
     for (const prefix of prefixes) {
       const v = await versionFromPkgPath(join(prefix, pkgName, "package.json"));
       if (v) return v;
@@ -146,3 +158,6 @@ export class VersionDetector {
 export async function detectComponentVersions(detector: VersionDetector): Promise<ComponentVersions> {
   return detector.detect();
 }
+
+/** 测试导出：Windows .cmd 探测路径 */
+export const binVersionForTest = binVersion;
