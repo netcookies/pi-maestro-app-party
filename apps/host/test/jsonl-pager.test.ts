@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { randomUUID } from "node:crypto";
 import { replayTailFromJsonl, replayPageFromJsonl } from "../src/jsonl-pager.js";
+import { invalidateIndex } from "../src/jsonl-index.js";
 
 function msg(role: string, content: string, ts = 1756800000000, extra: Record<string, unknown> = {}) {
   return JSON.stringify({
@@ -20,6 +21,7 @@ describe("jsonl-pager", () => {
     dir = join(tmpdir(), `jsonl-pager-${randomUUID()}`);
     await mkdir(dir, { recursive: true });
     path = join(dir, "session.jsonl");
+    invalidateIndex(path);
   });
 
   afterEach(async () => {
@@ -141,5 +143,51 @@ describe("jsonl-pager", () => {
     expect(page.items.length).toBe(80);
     expect(page.items[0].text).toBe("u40");
     expect(page.hasMore).toBe(true);
+  });
+
+  it("H8: indexed page path returns same results as full scan across repeated pages", async () => {
+    // 200 条 user：先 tail 50，再连续翻 3 页，索引路径与全量扫描结果必须一致
+    const lines: string[] = [];
+    for (let i = 0; i < 200; i++) lines.push(msg("user", `u${i}`));
+    await writeLines(lines);
+
+    // 全量扫描基准（先建基准再清缓存，让后续页走索引路径）
+    const tail = await replayTailFromJsonl(path, 50);
+    expect(tail.items[0].text).toBe("u150");
+    let cursor = tail.cursor;
+    const collected = tail.items.map((t) => t.text);
+
+    for (let p = 0; p < 3; p++) {
+      const page = await replayPageFromJsonl(path, cursor, 50);
+      expect(page.items.length).toBe(50);
+      collected.push(...page.items.map((t) => t.text));
+      cursor = page.cursor;
+      if (!page.hasMore) break;
+    }
+    // 200 条全部收集完毕（倒序分页: tail 末窗口 + 3 页向前）
+    expect(collected.length).toBe(200);
+    // 文件序分界点: 各窗口内保持文件序
+    expect(collected[0]).toBe("u150");
+    expect(collected[49]).toBe("u199");
+    expect(collected[50]).toBe("u100");
+    expect(collected[150]).toBe("u0");
+    expect(collected[199]).toBe("u49");
+    // 连续页无重叠/遗漏：唯一
+    expect(new Set(collected).size).toBe(200);
+  });
+
+  it("H8: index invalidation on append — new pages reflect new file", async () => {
+    const lines: string[] = [];
+    for (let i = 0; i < 30; i++) lines.push(msg("user", `u${i}`));
+    await writeLines(lines);
+    const first = await replayTailFromJsonl(path, 10);
+    expect(first.totalEntries).toBe(30);
+
+    // Pi 追加写入 → size/mtime 变化 → 索引自动重建
+    const { appendFile } = await import("node:fs/promises");
+    await appendFile(path, [msg("user", "u30"), msg("user", "u31")].join("\n") + "\n");
+    const second = await replayTailFromJsonl(path, 10);
+    expect(second.totalEntries).toBe(32);
+    expect(second.items[second.items.length - 1].text).toBe("u31");
   });
 });

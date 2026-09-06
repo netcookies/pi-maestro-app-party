@@ -1,0 +1,172 @@
+/**
+ * server/helpers — MobileHostServer 与 ws-command-handlers 共用的纯函数
+ * （H9 拆分：会话摘要、图片编解码、skill 扫描、安全文件读取）
+ */
+import { readFile, open, stat, readdir } from "node:fs/promises";
+import { realpath } from "node:fs/promises";
+import { isAbsolute, normalize, join } from "node:path";
+import { homedir, tmpdir } from "node:os";
+import type { HostSessionList, HostSessionSummary } from "../vendor/shared/index.js";
+
+// ── 会话摘要 ─────────────────────────────────────────────────────────────────
+
+/**
+ * 将 SessionManager 返回的完整 SessionInfo 裁剪为移动端友好的摘要。
+ * 关键：不携带 allMessagesText 等大字段，避免移动端流量/内存浪费。
+ */
+export async function toSessionSummaryList(records: unknown[]): Promise<HostSessionList> {
+  const sessions: HostSessionSummary[] = [];
+  for (const raw of records) {
+    const r = raw as Record<string, unknown>;
+    const cwd = String(r.cwd ?? "");
+    const title = String(r.firstMessage ?? r.title ?? "");
+    const id = String(r.id ?? "");
+    const path = String(r.path ?? r.sessionFile ?? "");
+    sessions.push({
+      id,
+      cwd,
+      cwdName: cwd.split("/").filter(Boolean).pop() ?? cwd,
+      path,
+      title: title.length > 80 ? `${title.slice(0, 80)}…` : title,
+      name: typeof r.name === "string" && r.name ? r.name : undefined,
+      model: await latestModelFromJsonl(path),
+      messageCount: typeof r.messageCount === "number" ? r.messageCount : 0,
+      // 规范化为 ISO 字符串：Hermes（iOS）解析不了 "Thu Sep 03 2026 ..." 这种本地化格式
+      updatedAt: normalizeIso(String(r.modified ?? r.updatedAt ?? "")),
+      ...(r.created ? { createdAt: normalizeIso(String(r.created)) } : {}),
+    });
+  }
+  return { sessions, observedAt: new Date().toISOString() };
+}
+
+/** 从 jsonl 里找最近的 model_change，返回 provider/modelId 精简名 */
+async function latestModelFromJsonl(path: string): Promise<string | undefined> {
+  if (!path || !path.endsWith(".jsonl")) return undefined;
+  try {
+    // 只读尾部 256KB（model_change 通常在会话活跃期靠后出现），避免整文件扫描
+    const handle = await open(path, "r");
+    try {
+      const { size } = await handle.stat();
+      const readLen = Math.min(TRAIL_READ_BYTES, size);
+      const buf = Buffer.alloc(readLen);
+      await handle.read(buf, 0, readLen, size - readLen);
+      const tail = buf.toString("utf8");
+      const lines = tail.split("\n");
+      for (let i = lines.length - 1; i >= 0; i--) {
+        const line = lines[i];
+        if (!line.includes("model_change")) continue;
+        try {
+          const o = JSON.parse(line) as { provider?: string; modelId?: string };
+          if (o.modelId) {
+            const provider = o.provider ? `${o.provider}/` : "";
+            return `${provider}${o.modelId}`;
+          }
+        } catch {
+          // ignore malformed
+        }
+      }
+      return undefined;
+    } finally {
+      await handle.close();
+    }
+  } catch {
+    return undefined;
+  }
+}
+
+const TRAIL_READ_BYTES = 256 * 1024;
+
+/** 尝试解析为 ISO；无法解析时保留原字符串（App 端需兜底） */
+function normalizeIso(raw: string): string {
+  if (!raw) return "";
+  const t = Date.parse(raw);
+  return Number.isFinite(t) ? new Date(t).toISOString() : raw;
+}
+
+// ── 图片协议转换 ─────────────────────────────────────────────────────────────
+
+/** 协议 images 元素 → Pi SDK ImageContent（type/data/mimeType）；非法返回 undefined */
+export function toSdkImageContent(img: { data: string; mime: string }): { type: "image"; data: string; mimeType: string } | undefined {
+  if (typeof img?.data !== "string" || img.data.length === 0) return undefined;
+  if (typeof img?.mime !== "string" || !img.mime.startsWith("image/")) return undefined;
+  return { type: "image", data: img.data, mimeType: img.mime };
+}
+
+// ── skill 扫描 ───────────────────────────────────────────────────────────────
+
+/** 扫描可用的 skill 名录（agent 全局 + 项目本地） */
+export async function listSkills(cwd: string): Promise<string[]> {
+  const dirs: string[] = [];
+  try { dirs.push(join(homedir(), ".pi", "agent", "skills")); } catch { /* skip */ }
+  try { dirs.push(join(cwd, ".pi", "skills")); } catch { /* skip */ }
+  const names = new Set<string>();
+  for (const dir of dirs) {
+    try {
+      const entries = await readdir(dir, { withFileTypes: true });
+      for (const e of entries) {
+        if (e.isDirectory() && !e.name.startsWith(".")) names.add(e.name);
+      }
+    } catch {
+      // skip
+    }
+  }
+  return [...names].sort();
+}
+
+// ── 安全文件读取（图片预览）───────────────────────────────────────────────
+
+const IMAGE_EXTENSIONS = new Set([".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp"]);
+const MAX_IMAGE_BYTES = 20 * 1024 * 1024; // 20MB
+
+const IMAGE_MIME: Record<string, string> = {
+  ".png": "image/png",
+  ".jpg": "image/jpeg",
+  ".jpeg": "image/jpeg",
+  ".gif": "image/gif",
+  ".webp": "image/webp",
+  ".bmp": "image/bmp",
+};
+
+/** stat 包装（抛错由调用方捕获） */
+function fstat(p: string): Promise<{ size: number }> {
+  return stat(p) as unknown as Promise<{ size: number }>;
+}
+
+/** 安全读取本地图片：绝对路径 + 图片扩展名 + 大小限制 + realpath 防 symlink 绕过 */
+export async function serveImageFile(filePath: string): Promise<{ data: Buffer; mime: string } | undefined> {
+  const trimmed = filePath.trim();
+  if (!trimmed || !isAbsolute(trimmed)) return undefined;
+  // 防止路径穿越：normalize 后必须仍是绝对路径且不含 ..
+  const normalized = normalize(trimmed);
+  if (!isAbsolute(normalized) || normalized.includes("..")) return undefined;
+
+  const ext = normalized.slice(normalized.lastIndexOf(".")).toLowerCase();
+  if (!IMAGE_EXTENSIONS.has(ext)) return undefined;
+
+  try {
+    // P3-3：先解析真实路径，防止指向任意位置的 symlink 绕过绝对路径约束
+    const resolved = await realpath(normalized);
+    if (!(await isUnderAllowedRoot(resolved))) return undefined;
+    // 先 stat 校验大小再读取，避免超大文件先耗尽内存
+    const st = await fstat(resolved);
+    if (st.size === 0 || st.size > MAX_IMAGE_BYTES) return undefined;
+    const data = await readFile(resolved);
+    return { data, mime: IMAGE_MIME[ext] ?? "application/octet-stream" };
+  } catch {
+    return undefined;
+  }
+}
+
+/** 允许读取的根目录：用户目录、系统临时目录、进程工作目录（会话产物、图片预览所在）。取 realpath 以兼容 /tmp → /private/tmp */
+async function isUnderAllowedRoot(resolved: string): Promise<boolean> {
+  const roots = [homedir(), tmpdir(), process.cwd()];
+  for (const root of roots) {
+    try {
+      const rp = await realpath(root);
+      if (resolved === rp || resolved.startsWith(rp + "/")) return true;
+    } catch {
+      // root 不存在时跳过
+    }
+  }
+  return false;
+}
