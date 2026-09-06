@@ -38,7 +38,8 @@ function parseArgs(argv: string[]): CliArgs {
   }
 
   const port = Number(args.get("port") ?? process.env.MAESTRO_MOBILE_PORT ?? "4739");
-  const host = args.get("host") ?? process.env.MAESTRO_MOBILE_HOST ?? "0.0.0.0";
+  // 安全默认：仅监听 loopback；显式 --host 0.0.0.0 才对 LAN 开放（README 安全节提醒配 token）
+  const host = args.get("host") ?? process.env.MAESTRO_MOBILE_HOST ?? "127.0.0.1";
   const token = args.get("token") ?? process.env.MAESTRO_MOBILE_TOKEN ?? undefined;
   const projectRoot = args.get("project-root") ?? process.env.MAESTRO_MOBILE_PROJECT_ROOT ?? process.cwd();
   const pollMs = Number(args.get("poll-ms") ?? process.env.MAESTRO_MOBILE_POLL_MS ?? "5000");

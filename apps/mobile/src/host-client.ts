@@ -48,6 +48,9 @@ export class HostClient {
   private readonly reconnectBaseMs: number;
   private readonly reconnectMaxMs: number;
   private reconnectAttempt = 0;
+  /** 连接代次：旧 socket 回调不接管新连接状态 */
+  private socketGeneration = 0;
+  private connectedAt = 0;
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
   private closed = false;
   private pendingCommands = new Map<string, {
@@ -134,9 +137,17 @@ export class HostClient {
     this.setState(this.reconnectAttempt === 0 ? "connecting" : "reconnecting");
     const factory = this.options.wsFactory
       ?? ((url: string) => new WebSocket(url) as unknown as WebSocketLike);
-    const wsUrl = this.options.token
-      ? `${this.options.url}?token=${encodeURIComponent(this.options.token)}`
-      : this.options.url;
+    // token 用 searchParams 拼接：url 已有 query 时也能正确连接
+    let wsUrl = this.options.url;
+    if (this.options.token) {
+      try {
+        const u = new URL(wsUrl);
+        u.searchParams.set("token", this.options.token);
+        wsUrl = u.toString();
+      } catch {
+        wsUrl = `${wsUrl}${wsUrl.includes("?") ? "&" : "?"}token=${encodeURIComponent(this.options.token)}`;
+      }
+    }
 
     let ws: WebSocketLike;
     try {
@@ -145,19 +156,29 @@ export class HostClient {
       this.scheduleReconnect();
       return;
     }
+    // 旧 socket 延迟回调不再接管状态（连接代次防护）
+    const generation = ++this.socketGeneration;
     this.ws = ws;
 
     ws.onopen = () => {
-      this.reconnectAttempt = 0;
+      if (generation !== this.socketGeneration || this.closed) return;
+      // 连接需稳定保持 30s 才清零退避，防握手后反复断开退化为每秒重试
+      this.connectedAt = Date.now();
       this.setState("connected");
+      setTimeout(() => {
+        if (generation === this.socketGeneration && this.ws === ws && Date.now() - this.connectedAt >= 30_000) {
+          this.reconnectAttempt = 0;
+        }
+      }, 30_000);
     };
 
     ws.onmessage = (data) => {
+      if (generation !== this.socketGeneration) return;
       this.handleRawMessage(data.data);
     };
 
     ws.onclose = () => {
-      if (this.closed) return;
+      if (this.closed || generation !== this.socketGeneration) return;
       this.scheduleReconnect();
     };
 

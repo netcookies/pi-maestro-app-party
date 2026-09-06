@@ -3,7 +3,7 @@ import type { Duplex } from "node:stream";
 import type { RawData } from "ws";
 import { URL } from "node:url";
 import { WebSocketServer, type WebSocket } from "ws";
-import { readFile, open } from "node:fs/promises";
+import { readFile, open, stat } from "node:fs/promises";
 import { realpath } from "node:fs/promises";
 import { isAbsolute, normalize } from "node:path";
 import { homedir, tmpdir } from "node:os";
@@ -32,6 +32,8 @@ export interface MobileHostServerOptions {
 interface ClientSocket {
   id: string;
   ws: WebSocket;
+  /** in-flight 命令数（并发限制） */
+  inflight: number;
 }
 
 /**
@@ -45,8 +47,11 @@ interface ClientSocket {
  */
 export class MobileHostServer {
   private readonly server: Server;
-  private readonly webSocketServer = new WebSocketServer({ noServer: true });
+  private readonly webSocketServer = new WebSocketServer({ noServer: true, maxPayload: 8 * 1024 * 1024 });
   private readonly clients = new Set<ClientSocket>();
+  /** 单客户端并发命令上限：超过则拒绝，防命令洪泛（DoS） */
+  private static readonly MAX_CONNECTIONS = 32;
+  private static readonly MAX_CONCURRENT_COMMANDS = 8;
   private unsubscribeController: (() => void) | undefined;
   private boundHost = "0.0.0.0";
 
@@ -62,13 +67,24 @@ export class MobileHostServer {
     });
 
     this.webSocketServer.on("connection", (ws) => {
-      const client: ClientSocket = { id: crypto.randomUUID(), ws };
+      if (this.clients.size >= MobileHostServer.MAX_CONNECTIONS) {
+        ws.close(1013, "too many connections");
+        return;
+      }
+      const client: ClientSocket = { id: crypto.randomUUID(), ws, inflight: 0 };
       this.clients.add(client);
       // P2-1：host_status 契约是 status: string；HostStatus 对象走独立的 host_info 事件
       ws.send(JSON.stringify({ type: "host_status", status: "connected", seq: 0 }));
       ws.send(JSON.stringify({ type: "host_info", info: this.controller.getStatus(), seq: 0 }));
       ws.on("message", (data) => {
-        void this.handleClientMessage(client, data);
+        if (client.inflight >= MobileHostServer.MAX_CONCURRENT_COMMANDS) {
+          this.sendError(client, "too_many_commands", "");
+          return;
+        }
+        client.inflight++;
+        void this.handleClientMessage(client, data).finally(() => {
+          client.inflight--;
+        });
       });
       ws.on("close", () => {
         this.clients.delete(client);
@@ -617,6 +633,11 @@ const IMAGE_MIME: Record<string, string> = {
   ".bmp": "image/bmp",
 };
 
+/** stat 包装（抛错由调用方捕获） */
+function fstat(p: string): Promise<{ size: number }> {
+  return stat(p) as unknown as Promise<{ size: number }>;
+}
+
 /** 安全读取本地图片：绝对路径 + 图片扩展名 + 大小限制 + realpath 防 symlink 绕过 */
 async function serveImageFile(filePath: string): Promise<{ data: Buffer; mime: string } | undefined> {
   const trimmed = filePath.trim();
@@ -632,8 +653,10 @@ async function serveImageFile(filePath: string): Promise<{ data: Buffer; mime: s
     // P3-3：先解析真实路径，防止指向任意位置的 symlink 绕过绝对路径约束
     const resolved = await realpath(normalized);
     if (!(await isUnderAllowedRoot(resolved))) return undefined;
+    // 先 stat 校验大小再读取，避免超大文件先耗尽内存
+    const stat = await fstat(resolved);
+    if (stat.size === 0 || stat.size > MAX_IMAGE_BYTES) return undefined;
     const data = await readFile(resolved);
-    if (data.length === 0 || data.length > MAX_IMAGE_BYTES) return undefined;
     return { data, mime: IMAGE_MIME[ext] ?? "application/octet-stream" };
   } catch {
     return undefined;

@@ -70,9 +70,14 @@ export function parseUsageLine(line: string): UsageTotals {
   const message = rec.message as Record<string, unknown> | undefined;
   const usage = message?.usage as Record<string, unknown> | undefined;
   if (!usage || typeof usage !== "object") return EMPTY_TOTALS;
-  const num = (k: string): number => (typeof usage[k] === "number" && Number.isFinite(usage[k]) ? usage[k] as number : 0);
+  // token/cost 要求非负有限：损坏行产生负 totals 或精度失真会污染聚合
+  const num = (k: string): number => {
+    const v = usage[k];
+    return typeof v === "number" && Number.isFinite(v) && v >= 0 ? v : 0;
+  };
   const costObj = usage.cost as Record<string, unknown> | undefined;
-  const cost = costObj && typeof costObj.total === "number" && Number.isFinite(costObj.total) ? costObj.total : 0;
+  const costRaw = costObj?.total;
+  const cost = typeof costRaw === "number" && Number.isFinite(costRaw) && costRaw >= 0 ? costRaw : 0;
   const input = num("input"), output = num("output"), cacheRead = num("cacheRead"),
     cacheWrite = num("cacheWrite"), reasoning = num("reasoning");
   return {

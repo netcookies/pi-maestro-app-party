@@ -478,7 +478,10 @@ export class SdkSessionRunner implements SessionRunner {
   private liveMessageKey(message: Record<string, unknown>): string {
     const role = String(message.role ?? "");
     const toolCallId = String(message.toolCallId ?? "");
-    const timestamp = typeof message.timestamp === "number" ? message.timestamp : 0;
+    // 缺失 timestamp 不能统一归 0：两条同类消息会撞 key 导致 timeline 丢消息
+    const timestamp = typeof message.timestamp === "number"
+      ? message.timestamp
+      : ++this.liveSeq; // 每条缺 timestamp 的消息视为独立条目
     return `${role}:${toolCallId}:${timestamp}`;
   }
 

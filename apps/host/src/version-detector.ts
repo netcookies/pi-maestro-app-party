@@ -22,10 +22,10 @@ export interface ComponentVersions {
   maestroCliVersion?: string;
 }
 
-/** package.json 中提取 version（空/异常安全） */
-function readPkgVersion(raw: string): string | undefined {
+/** package.json 中提取 version（接受字符串或已解析对象；空/异常安全） */
+function readPkgVersion(raw: string | { version?: unknown }): string | undefined {
   try {
-    const pkg = JSON.parse(raw) as { version?: unknown };
+    const pkg = typeof raw === "string" ? JSON.parse(raw) as { version?: unknown } : raw;
     return typeof pkg.version === "string" && pkg.version.length > 0 ? pkg.version : undefined;
   } catch {
     return undefined;
@@ -124,7 +124,7 @@ export class VersionDetector {
       try {
         const { createRequire } = await import("node:module");
         const require = createRequire(import.meta.url);
-        return readPkgVersion(require(`${pkgName}/package.json`) as string);
+        return readPkgVersion(require(`${pkgName}/package.json`) as string | { version?: unknown });
       } catch {
         return undefined;
       }

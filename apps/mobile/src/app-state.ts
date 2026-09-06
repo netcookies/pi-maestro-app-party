@@ -92,6 +92,12 @@ export function reduceEvent(state: AppState, event: HostEvent | InternalEvent | 
       };
     }
 
+    case "host_info": {
+      // Host 连接后独立推送 getStatus() 元数据；与 host_status 的对象载荷同一解析路径
+      const meta = parseHostStatusMeta(event.info);
+      return meta ? { ...state, hostStatusMeta: meta } : state;
+    }
+
     case "session_updated": {
       const sessions = new Map(state.sessions);
       sessions.set(event.session.id, event.session);

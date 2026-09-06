@@ -120,7 +120,7 @@ export function deriveDashboardMetrics(input: DashboardInput, now: Date = new Da
     if (w.status === "running") {
       runningWindows.push({ key: windowKey(w), window: w, agentsTotal: agents.length, agentsRunning });
     }
-    if (w.attention.length > 0) {
+    if (Array.isArray(w.attention) && w.attention.length > 0) {
       attentionGroups.push({
         key: windowKey(w),
         windowName: w.name ?? "未命名窗口",
