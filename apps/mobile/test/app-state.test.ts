@@ -9,6 +9,29 @@ import { ExtensionUiQueue } from "../src/extension-ui-queue.js";
 import type { HostEvent, SessionState, TimelineItem, MaestroState } from "@maestro-mobile/shared";
 
 describe("AppState reducer", () => {
+  it("H4: __event_batch folds events in order with single state transition", () => {
+    let state = createInitialState();
+    const mkTimeline = (id: string, text: string): TimelineItem => ({ id, kind: "assistant", text, createdAt: "" });
+    const sessionId = "s1";
+    const batch = {
+      type: "__event_batch" as const,
+      events: [
+        { type: "session_updated", session: { id: sessionId, title: "t", status: "running" } as unknown as SessionState },
+        { type: "timeline_item", sessionId, item: mkTimeline("a1", "hel") },
+        { type: "timeline_delta", sessionId, itemId: "a1", delta: "lo world" },
+        { type: "timeline_item", sessionId, item: mkTimeline("a2", "second") },
+      ] as unknown as HostEvent[],
+    };
+    const before = state;
+    state = reduceEvent(state, batch as never);
+    // 单次状态更新（返回新对象，且结果与逐个 dispatch 相同）
+    expect(state).not.toBe(before);
+    const items = state.timelines.get(sessionId);
+    expect(items?.length).toBe(2);
+    expect(items?.[0].text).toBe("hello world"); // delta 折叠生效（顺序保持）
+    expect(items?.[1].text).toBe("second");
+  });
+
   it("creates initial state", () => {
     const state = createInitialState();
     expect(state.connectionStatus).toBe("disconnected");

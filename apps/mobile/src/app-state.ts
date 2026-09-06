@@ -63,9 +63,22 @@ export interface HistoryPrependEvent {
   seq: number;
 }
 
+/** 内部事件：H4 微批 — 同一帧内的多个 HostEvent 顺序折叠为一次状态更新 */
+export interface EventBatchEvent {
+  type: "__event_batch";
+  events: HostEvent[];
+}
+
 /** 纯 reducer：处理一个 HostEvent，返回新状态（不可变更新）
- * 额外支持内部事件 __history_load（批量替换 timeline） */
-export function reduceEvent(state: AppState, event: HostEvent | InternalEvent | HistoryPrependEvent, deps: AppStateDeps = {}): AppState {
+ * 额外支持内部事件 __history_load（批量替换 timeline）/ __event_batch（H4 微批） */
+export function reduceEvent(state: AppState, event: HostEvent | InternalEvent | HistoryPrependEvent | EventBatchEvent, deps: AppStateDeps = {}): AppState {
+  if (event && (event as EventBatchEvent).type === "__event_batch") {
+    let s = state;
+    for (const e of (event as EventBatchEvent).events) {
+      s = reduceEvent(s, e, deps);
+    }
+    return s;
+  }
   const queue = deps.dialogQueue;
   if (event.type === "__history_load") {
     const timelines = new Map(state.timelines);

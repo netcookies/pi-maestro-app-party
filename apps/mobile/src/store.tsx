@@ -67,6 +67,41 @@ export function HostStoreProvider({ children }: { children: React.ReactNode }) {
   const activeSessionRef = useRef<string | null>(null);
   const reloadGenerationRef = useRef(0);
 
+  // H4：实时事件微批 — 同一帧内的 WS 事件合并为一次 reducer 执行，
+  // 避免流式 delta 逐条触发全局重渲染。16ms 窗口上限（≈1 帧）。
+  const eventBufferRef = useRef<HostEvent[]>([]);
+  const flushTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const flushBufferedEvents = useCallback(() => {
+    flushTimerRef.current = null;
+    const buffered = eventBufferRef.current;
+    eventBufferRef.current = [];
+    if (buffered.length === 0) return;
+    if (buffered.length === 1) {
+      dispatch(buffered[0]);
+      return;
+    }
+    dispatch({ type: "__event_batch", events: buffered } as unknown as HostEvent);
+  }, []);
+  const dispatchBuffered = useCallback((event: HostEvent) => {
+    // 高优先级事件直发：连接状态/错误/弹窗不能等 16ms
+    if (
+      event.type === "host_status" || event.type === "host_info" || event.type === "error"
+      || event.type === "extension_ui_request" || event.type === "extension_ui_cleared"
+    ) {
+      // 先冲刷已缓冲事件保持顺序，再直发
+      if (flushTimerRef.current) {
+        clearTimeout(flushTimerRef.current);
+        flushBufferedEvents();
+      }
+      dispatch(event);
+      return;
+    }
+    eventBufferRef.current.push(event);
+    if (!flushTimerRef.current) {
+      flushTimerRef.current = setTimeout(flushBufferedEvents, 16);
+    }
+  }, [flushBufferedEvents]);
+
   const [state, dispatch] = useReducer(
     (s: AppState, e: HostEvent) => reduceEvent(s, e, { dialogQueue: queueRef.current }),
     undefined,
@@ -91,7 +126,7 @@ export function HostStoreProvider({ children }: { children: React.ReactNode }) {
       token: tok,
       reconnectBaseMs: 1000,
       reconnectMaxMs: 15000,
-      onEvent: (event) => dispatch(event),
+      onEvent: dispatchBuffered,
       onStateChange: (s) => {
         setConnectionState(s);
         // P2-2：断线重连成功后，为重连前活动的会话补拉 snapshot（代次号防陈旧响应覆盖新状态）
@@ -113,7 +148,7 @@ export function HostStoreProvider({ children }: { children: React.ReactNode }) {
     });
     clientRef.current = client;
     client.connect();
-  }, []);
+  }, [dispatchBuffered]);
 
   const disconnect = useCallback(() => {
     clientRef.current?.close();

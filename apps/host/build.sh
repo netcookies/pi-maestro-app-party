@@ -10,10 +10,10 @@ mkdir -p src/vendor/shared
 cp ../../packages/shared/src/*.ts src/vendor/shared/
 
 # 2. 改写引用：@maestro-mobile/shared → 相对 vendor 路径（按文件相对 src 的目录深度）
-find src -name "*.ts" -not -path "src/vendor/*" | while read -r f; do
-  sub="${f#src/}"
-  depth=$(dirname "$sub" | grep -o "/" | wc -l)
-  # 文件在 src 根：./vendor；一层目录：../vendor；两层：../../vendor
+# 注意：find|while 循环体内的命令会吃 stdin，导致 read 提前结束 —— 用 for 遍历替代
+for f in $(find src -name "*.ts" -not -path "src/vendor/*"); do
+  depth=$(dirname "$f" | grep -o "/" | wc -l)
+  # src/x.ts: dirname=src → 0 slash → ./vendor；src/pi/x.ts → 1 slash → ../vendor
   case "$depth" in
     0) prefix="." ;;
     1) prefix=".." ;;
@@ -24,7 +24,7 @@ find src -name "*.ts" -not -path "src/vendor/*" | while read -r f; do
 done
 
 # 3. 编译
-npx tsc
+echo BEFORE-TSC; npx tsc; echo AFTER-TSC
 
 # 4. 还原源码 + 清理 vendor
 git checkout -- src 2>/dev/null || true
