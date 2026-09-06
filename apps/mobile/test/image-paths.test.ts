@@ -43,12 +43,37 @@ describe("extractImagePaths", () => {
     const text = "file:///tmp/a.png 同 /tmp/a.png";
     expect(extractImagePaths(text)).toEqual(["/tmp/a.png"]);
   });
+
+  it("extracts Windows drive paths with backslashes", () => {
+    const text = "截图已保存到 C:\\Users\\me\\Pictures\\shot.png";
+    expect(extractImagePaths(text)).toEqual(["C:\\Users\\me\\Pictures\\shot.png"]);
+  });
+
+  it("extracts Windows drive paths with forward slashes", () => {
+    const text = "saved to C:/Users/me/Pictures/shot.png ok";
+    expect(extractImagePaths(text)).toEqual(["C:/Users/me/Pictures/shot.png"]);
+  });
+
+  it("extracts Windows file:///C:/ URI and strips leading slash", () => {
+    const text = "✓ resource file:///C:/Users/me/Pictures/shot.png";
+    expect(extractImagePaths(text)).toEqual(["C:/Users/me/Pictures/shot.png"]);
+  });
+
+  it("does not treat relative windows-ish text as path", () => {
+    expect(extractImagePaths("see docs D: and notes")).toEqual([]);
+  });
 });
 
 describe("isImagePath", () => {
   it("accepts absolute image paths", () => {
     expect(isImagePath("/tmp/a.png")).toBe(true);
     expect(isImagePath("/Users/x/y/photo.jpeg")).toBe(true);
+  });
+  it("accepts Windows drive image paths", () => {
+    expect(isImagePath("C:\\Users\\me\\shot.png")).toBe(true);
+    expect(isImagePath("C:/Users/me/shot.png")).toBe(true);
+    expect(isImagePath("C:/Users/me/shot.txt")).toBe(false);
+    expect(isImagePath("C:/Users/me")).toBe(false);
   });
   it("rejects others", () => {
     expect(isImagePath("a.png")).toBe(false);

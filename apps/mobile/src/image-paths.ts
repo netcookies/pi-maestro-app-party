@@ -2,7 +2,8 @@
  * 从文本中提取图片路径（供 tool 输出渲染缩略图）
  *
  * 支持：
- *  - 绝对路径：/tmp/pi-clipboard-xxx.png、/Users/foo/bar.jpg
+ *  - POSIX 绝对路径：/tmp/pi-clipboard-xxx.png、/Users/foo/bar.jpg
+ *  - Windows 路径：C:\Users\foo\bar.png、file:///C:/Users/foo/bar.png
  *  - 常见图片扩展名：png/jpg/jpeg/gif/webp/bmp
  *  - 路径周围可能有引号、括号、空白、冒号（剪贴板提示格式）
  *
@@ -12,17 +13,22 @@ const IMAGE_EXT_RE = /\.(png|jpe?g|gif|webp|bmp)(?:["')\]]?)$/i;
 
 const POSSIBLE_CHARS = /^\s*[>|:]\s*/;
 
+/** Windows 盘符路径判定：C:/ 或 C:\ 开头 */
+const WIN_DRIVE_RE = /^[A-Za-z]:[\\/]/;
+
 /** 提取文本中所有图片路径 */
 export function extractImagePaths(text: string): string[] {
   if (!text) return [];
   const seen = new Set<string>();
   const result: string[] = [];
 
-  // 先处理 file:// 前缀（如 file:///tmp/x.png → /tmp/x.png）
-  const fileUriRe = /file:\/\/(\/[^\s"']+\.(?:png|jpe?g|gif|webp|bmp))/gi;
+  // file:// URI：POSIX（file:///tmp/x.png → /tmp/x.png）与 Windows（file:///C:/x.png → C:/x.png）
+  const fileUriRe = /file:\/\/(\/[^\s"']+?\.(?:png|jpe?g|gif|webp|bmp))/gi;
   let fm: RegExpExecArray | null;
   while ((fm = fileUriRe.exec(text)) !== null) {
-    const cleaned = fm[1].trim();
+    let cleaned = fm[1].trim();
+    // Windows file URI：file:///C:/x.png 捕获组以 /C:/ 开头 → 去掉前导斜杠
+    if (/^\/[A-Za-z]:\//.test(cleaned)) cleaned = cleaned.slice(1);
     if (!seen.has(cleaned)) {
       seen.add(cleaned);
       result.push(cleaned);
@@ -31,10 +37,23 @@ export function extractImagePaths(text: string): string[] {
   // 从 file:// 之后的位置继续找裸路径（避免重复匹配已提取的）
   const textWithoutFileUri = text.replace(/file:\/\/[^\s"']+\.(?:png|jpe?g|gif|webp|bmp)/gi, "");
 
-  // 找所有可能含绝对路径的片段：以 / 开头，到扩展名结束
-  const re = /(\/(?:[A-Za-z0-9._~\-/:]|%20|\\ )+?(?:\.(?:png|jpe?g|gif|webp|bmp)(?=["')\s,<]|$)))/gi;
   let m: RegExpExecArray | null;
-  while ((m = re.exec(textWithoutFileUri)) !== null) {
+  // 先提取 Windows 盘符路径（C:\... 或 C:/...）并从文本中移除，避免 POSIX 正则把 C:/Users/... 截成 /Users/...
+  const winRe = /([A-Za-z]:[\\/](?:[A-Za-z0-9 ._~\-]+[\\/])*(?:[A-Za-z0-9 ._~\-]+)\.(?:png|jpe?g|gif|webp|bmp)(?=["')\s,<]|$))/gi;
+  let textForPosix = textWithoutFileUri;
+  while ((m = winRe.exec(textWithoutFileUri)) !== null) {
+    const raw = m[1].trim();
+    const cleaned = raw.replace(POSSIBLE_CHARS, "").trim();
+    if (WIN_DRIVE_RE.test(cleaned) && IMAGE_EXT_RE.test(cleaned) && !seen.has(cleaned)) {
+      seen.add(cleaned);
+      result.push(cleaned);
+    }
+    textForPosix = textForPosix.replace(m[1], "");
+  }
+
+  // POSIX 绝对路径：以 / 开头，到扩展名结束
+  const re = /(\/(?:[A-Za-z0-9._~\-/:]|%20|\\ )+?(?:\.(?:png|jpe?g|gif|webp|bmp)(?=["')\s,<]|$)))/gi;
+  while ((m = re.exec(textForPosix)) !== null) {
     const raw = m[1].trim();
     // 去掉行首装饰符（> | : 等）
     const cleaned = raw.replace(POSSIBLE_CHARS, "").trim();
@@ -46,8 +65,11 @@ export function extractImagePaths(text: string): string[] {
   return result;
 }
 
-/** 判断是否为图片路径 */
+/** 判断是否为图片路径（POSIX 绝对路径或 Windows 盘符路径） */
 export function isImagePath(path: string): boolean {
+  if (WIN_DRIVE_RE.test(path)) {
+    return /^[A-Za-z]:[\\/](?:[A-Za-z0-9 ._~\-]+[\\/])*(?:[A-Za-z0-9 ._~\-]+)\.(?:png|jpe?g|gif|webp|bmp)$/i.test(path);
+  }
   return /^\/(?:[A-Za-z0-9._~\-/:]+)\.(?:png|jpe?g|gif|webp|bmp)$/i.test(path);
 }
 
