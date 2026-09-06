@@ -1,9 +1,9 @@
 #!/usr/bin/env node
 /**
- * maestro-mobile-host — Host 守护进程入口
+ * maestro-mobile — Host 守护进程入口
  *
  * 用法：
- *   maestro-mobile-host [--port 4739] [--host 0.0.0.0] [--token <secret>] [--project-root <dir>] [--poll-ms 5000]
+ *   maestro-mobile [--port 4739] [--host 0.0.0.0] [--token <secret>] [--project-root <dir>] [--poll-ms 5000]
  *
  * 环境变量（与 CLI 参数等价）：
  *   MAESTRO_MOBILE_PORT / MAESTRO_MOBILE_HOST / MAESTRO_MOBILE_TOKEN / MAESTRO_MOBILE_PROJECT_ROOT
@@ -57,12 +57,12 @@ async function main(): Promise<void> {
   // P0-1：无 token 拒绝裸奔 —— 自动生成随机会话 token 并打印，避免 LAN 内无鉴权全权暴露
   const token = cli.token ?? randomBytes(24).toString("hex");
   if (!cli.token) {
-    console.log("[maestro-mobile-host] no --token provided; generated an ephemeral token for this run:");
-    console.log(`[maestro-mobile-host]   token: ${token}`);
-    console.log("[maestro-mobile-host]   (set MAESTRO_MOBILE_TOKEN or pass --token to reuse a stable token)");
+    console.log("[maestro-mobile] no --token provided; generated an ephemeral token for this run:");
+    console.log(`[maestro-mobile]   token: ${token}`);
+    console.log("[maestro-mobile]   (set MAESTRO_MOBILE_TOKEN or pass --token to reuse a stable token)");
   }
 
-  console.log(`[maestro-mobile-host] starting on ${cli.host}:${cli.port} (project: ${cli.projectRoot})`);
+  console.log(`[maestro-mobile] starting on ${cli.host}:${cli.port} (project: ${cli.projectRoot})`);
 
   const runtimeFactory = new PiSdkRuntimeFactory();
   const maestroReader = new MaestroStateReader({ projectRoot: cli.projectRoot });
@@ -72,18 +72,18 @@ async function main(): Promise<void> {
   await server.listen(cli.port, cli.host);
   await controller.startMaestroPoll(cli.pollMs);
 
-  console.log(`[maestro-mobile-host] listening on http://${cli.host}:${server.address().port}`);
-  console.log(`[maestro-mobile-host] token auth enabled (use ?token= or Bearer header)`);
+  console.log(`[maestro-mobile] listening on http://${cli.host}:${server.address().port}`);
+  console.log(`[maestro-mobile] token auth enabled (use ?token= or Bearer header)`);
 
   // 优雅关闭
   let shuttingDown = false;
   async function shutdown(signal: string): Promise<void> {
     if (shuttingDown) return;
     shuttingDown = true;
-    console.log(`[maestro-mobile-host] received ${signal}, shutting down...`);
+    console.log(`[maestro-mobile] received ${signal}, shutting down...`);
     await controller.dispose();
     await server.close();
-    console.log("[maestro-mobile-host] shutdown complete");
+    console.log("[maestro-mobile] shutdown complete");
     process.exit(0);
   }
 
@@ -91,12 +91,12 @@ async function main(): Promise<void> {
   process.on("SIGTERM", () => void shutdown("SIGTERM"));
   process.on("uncaughtException", (error) => {
     // P3-6：未捕获异常后进程状态不可信，记录后带清理退出，避免带伤继续服务
-    console.error("[maestro-mobile-host] uncaught exception, shutting down:", error);
+    console.error("[maestro-mobile] uncaught exception, shutting down:", error);
     void shutdown("uncaughtException").finally(() => process.exit(1));
   });
 }
 
 main().catch((error) => {
-  console.error("[maestro-mobile-host] fatal:", error);
+  console.error("[maestro-mobile] fatal:", error);
   process.exit(1);
 });
