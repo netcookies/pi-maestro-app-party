@@ -48,14 +48,28 @@ function hostStatus(port: number, timeoutMs = 800): Promise<Record<string, unkno
   });
 }
 
-/** 探测本机局域网 IPv4（给手机连接 URL 用；找不到回退 127.0.0.1） */
+/**
+ * 探测本机局域网 IPv4（给手机连接 URL 用；找不到回退 127.0.0.1）。
+ * 排除虚拟接口（VPN utun/tap、bridge、anpi、docker、vEthernet 等），优先 en0/eth/wlan 物理网卡。
+ */
 function lanIp(): string {
-  for (const addrs of Object.values(networkInterfaces())) {
+  const VIRTUAL = /^(utun|tap|tun|bridge|anpi|awdl|llw|docker|veth|lo|vmnet|vEthernet|WSL)/i;
+  const candidates: string[] = [];
+  for (const [name, addrs] of Object.entries(networkInterfaces())) {
+    if (VIRTUAL.test(name)) continue;
     for (const a of addrs ?? []) {
-      if (a.family === "IPv4" && !a.internal) return a.address;
+      if (a.family === "IPv4" && !a.internal) candidates.push(a.address);
     }
   }
-  return "127.0.0.1";
+  // 优先常见物理网段：192.168.x / 10.x（家庭/办公 Wi-Fi），再 172.16-31.x
+  const rank = (ip: string): number => {
+    if (ip.startsWith("192.168.")) return 0;
+    if (ip.startsWith("10.")) return 1;
+    if (/^172\.(1[6-9]|2\d|3[01])\./.test(ip)) return 2;
+    return 3;
+  };
+  candidates.sort((x, y) => rank(x) - rank(y));
+  return candidates[0] ?? "127.0.0.1";
 }
 
 /** host cli.js 入口：同包 dist（pi install npm:pi-maestro-mobile 时随包分发） */
