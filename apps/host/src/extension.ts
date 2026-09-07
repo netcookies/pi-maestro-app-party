@@ -2,21 +2,26 @@
  * maestro-mobile extension — 薄遥控器（用户提案：pi 扩展自动拉起 npm 包的 host）
  *
  * 职责边界（刻意保持薄）：
- *  - start:  幂等启动 host 子进程（detached；已在监听则跳过）
- *  - status: 探测 /api/health + /api/status
+ *  - start:  幂等启动 host 子进程（detached；已在监听则跳过；O_EXCL 竞争锁防多会话并发启动）
+ *  - status: 探测 /api/health + /api/status，显示 token 摘要
+ *  - qr:     终端二维码渲染 ws://<lan-ip>:port/ws?token=（手机 App 扫码即连）
  *  - stop:   杀掉由本扩展启动的 host（PID 文件校验，防误杀外部 launchd/systemd 实例）
+ *  - widget: 状态栏常驻一行（● :port · N 窗口），30s 刷新
  *
  * host 仍是独立常驻进程（不随 Pi 会话生灭）；本扩展只做生命周期遥控。
  * 无 npm 包的 host 时（pi install 场景），spawn 同包 dist/cli.js。
  */
-import { spawn, execFile } from "node:child_process";
+import { spawn } from "node:child_process";
+import { networkInterfaces } from "node:os";
+import qrcodeTerminal from "qrcode-terminal";
 import { readFile, writeFile, unlink } from "node:fs/promises";
 import { join } from "node:path";
 import { homedir } from "node:os";
 import { fileURLToPath } from "node:url";
-import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 
 const PID_FILE = join(homedir(), ".pi", "maestro-mobile.pid");
+const TOKEN_FILE = join(homedir(), ".pi", "maestro-mobile-token");
 const DEFAULT_PORT = 4739;
 
 function hostPort(): number {
@@ -43,6 +48,16 @@ function hostStatus(port: number, timeoutMs = 800): Promise<Record<string, unkno
   });
 }
 
+/** 探测本机局域网 IPv4（给手机连接 URL 用；找不到回退 127.0.0.1） */
+function lanIp(): string {
+  for (const addrs of Object.values(networkInterfaces())) {
+    for (const a of addrs ?? []) {
+      if (a.family === "IPv4" && !a.internal) return a.address;
+    }
+  }
+  return "127.0.0.1";
+}
+
 /** host cli.js 入口：同包 dist（pi install npm:pi-maestro-mobile 时随包分发） */
 function hostCliPath(): string {
   // dist/extension.js 与 dist/cli.js 同目录
@@ -59,9 +74,51 @@ async function readPid(): Promise<number | null> {
   }
 }
 
+/** 读取持久化 token（host start 时生成；未启动过返回空） */
+async function readToken(): Promise<string> {
+  try {
+    return (await readFile(TOKEN_FILE, "utf8")).trim();
+  } catch {
+    return "";
+  }
+}
+
+// ── 状态栏 widget ──────────────────────────────────────────────
+
+const WIDGET_KEY = "maestro-mobile-status";
+let widgetCtx: ExtensionContext | null = null;
+
+/** 刷新状态栏 widget：● 运行中 :4739 · N 窗口 / 未运行 */
+async function refreshWidget(): Promise<void> {
+  if (!widgetCtx) return;
+  const port = hostPort();
+  const alive = await probeHealth(port);
+  if (!alive) {
+    widgetCtx.ui.setWidget(WIDGET_KEY, undefined);
+    return;
+  }
+  let windows = 0;
+  try {
+    const r = await fetch(`http://127.0.0.1:${port}/api/workspace-telemetry`);
+    if (r.ok) {
+      const d = (await r.json()) as { aliveCount?: number };
+      windows = d.aliveCount ?? 0;
+    }
+  } catch { /* 探测失败按 0 显示 */ }
+  widgetCtx.ui.setWidget(WIDGET_KEY, [`● maestro-mobile :${port} · ${windows} 窗口`]);
+}
+
 export default function maestroHostExtension(pi: ExtensionAPI): void {
+  // 会话启动后挂状态栏 widget；30s 周期刷新（host 状态变化时感知）
+  pi.on("session_start", (_event, ctx) => {
+    widgetCtx = ctx;
+    void refreshWidget();
+    const timer = setInterval(() => void refreshWidget(), 30_000);
+    pi.on("session_shutdown", () => { clearInterval(timer); widgetCtx = null; });
+  });
+
   pi.registerCommand("maestro-mobile", {
-    description: "Maestro Mobile Host 遥控（status / start / stop）",
+    description: "Maestro Mobile Host 遥控（status / start / stop / qr）",
     handler: async (args: string, ctx) => {
       const sub = (args ?? "").trim().split(/\s+/)[0] || "status";
       const port = hostPort();
@@ -72,11 +129,34 @@ export default function maestroHostExtension(pi: ExtensionAPI): void {
           ctx.ui.notify(`maestro-mobile: 未运行（端口 ${port} 无响应）`, "info");
           return;
         }
+        const token = await readToken();
         const s = await hostStatus(port);
         const ver = s
           ? `${s.version} · pi ${s.piVersion ?? "?"} · flow ${s.flowVersion ?? "?"} · cli ${s.maestroCliVersion ?? "?"}`
-          : "运行中（未配 token，版本详情需在 host 侧设置 MAESTRO_MOBILE_TOKEN 后由手机 App 查看）";
-        ctx.ui.notify(`maestro-mobile: 运行中 :${port} — ${ver}`, "info");
+          : "运行中（详情需 token，见下方）";
+        const tokenLine = token
+          ? `token: ${token.slice(0, 6)}…${token.slice(-4)}（完整值: ~/.pi/maestro-mobile-token 或 /maestro-mobile qr）`
+          : "token: 未知（host 未持久化）";
+        ctx.ui.notify(`maestro-mobile: 运行中 :${port} — ${ver}\n${tokenLine}`, "info");
+        return;
+      }
+
+      if (sub === "qr") {
+        if (!alive) {
+          ctx.ui.notify("maestro-mobile: host 未运行，先 /maestro-mobile start", "warning");
+          return;
+        }
+        const token = await readToken();
+        if (!token) {
+          ctx.ui.notify("maestro-mobile: 未找到 token（~/.pi/maestro-mobile-token），先用 /maestro-mobile start 启动一次", "warning");
+          return;
+        }
+        const url = `ws://${lanIp()}:${port}/ws?token=${token}`;
+        ctx.ui.notify(`手机 App 连接地址：${url}\n扫码或手动输入：`, "info");
+        qrcodeTerminal.generate(url, { small: true }, (q: string) => {
+          // 经 notify 逐行送出（QR 用 block 字符，等宽终端可扫）
+          ctx.ui.notify(q, "info");
+        });
         return;
       }
 
@@ -84,6 +164,25 @@ export default function maestroHostExtension(pi: ExtensionAPI): void {
         if (alive) {
           ctx.ui.notify(`maestro-mobile: 已在运行（:${port}），跳过启动`, "info");
           return;
+        }
+        // 多 Pi 会话同时 start 的竞争锁：O_EXCL 抢占式创建，抢不到的会话直接退出
+        const lockFile = PID_FILE + ".lock";
+        let gotLock = false;
+        try {
+          await writeFile(lockFile, String(process.pid), { flag: "wx" });
+          gotLock = true;
+        } catch {
+          // 锁已被占 —— 检查持锁者是否还活着，死了则接管
+          try {
+            const lockPid = Number((await readFile(lockFile, "utf8")).trim());
+            process.kill(lockPid, 0);
+            ctx.ui.notify(`maestro-mobile: 另一会话正在启动（pid=${lockPid}），本次跳过`, "warning");
+            return;
+          } catch {
+            await unlink(lockFile).catch(() => { });
+            await writeFile(lockFile, String(process.pid), { flag: "wx" });
+            gotLock = true;
+          }
         }
         const child = spawn(process.execPath, [hostCliPath(), "--port", String(port)], {
           detached: true,
@@ -93,14 +192,19 @@ export default function maestroHostExtension(pi: ExtensionAPI): void {
         child.unref();
         await writeFile(PID_FILE, String(child.pid ?? ""), "utf8");
         // 等待端口就绪（最多 3s）
-        for (let i = 0; i < 10; i++) {
-          await new Promise((r) => setTimeout(r, 300));
-          if (await probeHealth(port)) {
-            ctx.ui.notify(`maestro-mobile: 已启动 :${port} pid=${child.pid}`, "info");
-            return;
+        try {
+          for (let i = 0; i < 10; i++) {
+            await new Promise((r) => setTimeout(r, 300));
+            if (await probeHealth(port)) {
+              ctx.ui.notify(`maestro-mobile: 已启动 :${port} pid=${child.pid}`, "info");
+              await refreshWidget();
+              return;
+            }
           }
+          ctx.ui.notify("maestro-mobile: 启动后 3s 内未见 health 通过，请查日志", "warning");
+        } finally {
+          await unlink(lockFile).catch(() => { }); // 释放竞争锁
         }
-        ctx.ui.notify("maestro-mobile: 启动后 3s 内未见 health 通过，请查日志", "warning");
         return;
       }
 
@@ -112,16 +216,17 @@ export default function maestroHostExtension(pi: ExtensionAPI): void {
         }
         try {
           process.kill(pid, "SIGTERM");
-          await unlink(PID_FILE).catch(() => {});
+          await unlink(PID_FILE).catch(() => { });
           ctx.ui.notify(`maestro-mobile: 已发送 SIGTERM 到 pid=${pid}`, "info");
         } catch {
-          await unlink(PID_FILE).catch(() => {});
+          await unlink(PID_FILE).catch(() => { });
           ctx.ui.notify(`maestro-mobile: pid=${pid} 已不存在，清理 PID 文件`, "info");
         }
+        await refreshWidget();
         return;
       }
 
-      ctx.ui.notify(`maestro-mobile: 未知子命令 "${sub}"（可用：status / start / stop）`, "warning");
+      ctx.ui.notify(`maestro-mobile: 未知子命令 "${sub}"（可用：status / start / stop / qr）`, "warning");
     },
   });
 }

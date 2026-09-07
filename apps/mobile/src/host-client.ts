@@ -51,8 +51,11 @@ export class HostClient {
   /** 连接代次：旧 socket 回调不接管新连接状态 */
   private socketGeneration = 0;
   private connectedAt = 0;
+  private connectStartedAt = 0;
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
   private closed = false;
+  /** 鉴权失败（token 错误）：重连无意义，停止退避并把原因报给 UI */
+  private authFailed = false;
   private pendingCommands = new Map<string, {
     resolve(result: unknown): void;
     reject(error: Error): void;
@@ -75,6 +78,7 @@ export class HostClient {
   /** 连接（首次或手动重连） */
   connect(): void {
     this.closed = false;
+    this.authFailed = false;
     this.openSocket();
   }
 
@@ -156,6 +160,7 @@ export class HostClient {
       this.scheduleReconnect();
       return;
     }
+    this.connectStartedAt = Date.now();
     // 旧 socket 延迟回调不再接管状态（连接代次防护）
     const generation = ++this.socketGeneration;
     this.ws = ws;
@@ -179,6 +184,11 @@ export class HostClient {
 
     ws.onclose = () => {
       if (this.closed || generation !== this.socketGeneration) return;
+      // RN WebSocket 拿不到 HTTP 升级状态码；启发式：开启后从未 onopen 且 2s 内即被断 → 大概率 401（token 错误）。
+      // 标记 authFailed 停止重连（重试只会持续 401），让 UI 显示明确的 token 错误提示。
+      if (this.state !== "connected" && Date.now() - this.connectStartedAt < 2_000 && this.reconnectAttempt >= 1) {
+        this.authFailed = true;
+      }
       this.scheduleReconnect();
     };
 
@@ -189,6 +199,12 @@ export class HostClient {
 
   private scheduleReconnect(): void {
     if (this.closed) return;
+    if (this.authFailed) {
+      // token 错误：停止重连，状态停在 disconnected，错误由 lastError 通道提示
+      this.setState("disconnected");
+      this.options.onEvent?.({ type: "error", message: "token 校验失败 —— 在 PC 终端执行 /maestro-mobile qr 重新扫码配对" } as never);
+      return;
+    }
     this.setState("reconnecting");
     const delay = Math.min(this.reconnectBaseMs * 2 ** this.reconnectAttempt, this.reconnectMaxMs);
     this.reconnectAttempt++;

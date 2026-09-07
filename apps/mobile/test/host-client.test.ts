@@ -161,4 +161,45 @@ describe("HostClient", () => {
     expect(capturedUrl).toBe(`ws://192.168.1.5:4739/ws?token=${encodeURIComponent("secret")}`);
     c.close();
   });
+
+  it("token 错误：从未连上且反复立即被断 → 停止重连并报明确错误", () => {
+    vi.useFakeTimers();
+    const ws = createFakeWs();
+    const c = new HostClient({
+      url: "ws://192.168.1.5:4739/ws",
+      token: "wrong",
+      wsFactory: () => ws,
+      onEvent: (e) => { events.push(e); },
+    });
+    c.connect();
+    // 第一次连接：2s 内被断（模拟 401 升级拒绝）—— 首次仍会重试（可能 host 未启动）
+    ws._close();
+    expect(c.connectionState).toBe("reconnecting");
+    vi.advanceTimersByTime(1000);
+    // 第二次立即又断：命中 authFailed 启发式（从未 onopen + 反复立即断）
+    ws._close();
+    expect(c.connectionState).toBe("disconnected");
+    expect(events.some((e) => e.type === "error")).toBe(true);
+    // 不再重连：时间前进也不再拉起
+    vi.advanceTimersByTime(30_000);
+    expect(c.connectionState).toBe("disconnected");
+    vi.useRealTimers();
+    c.close();
+  });
+
+  it("首次连接被断不误判 token 错误（host 可能未启动）", () => {
+    vi.useFakeTimers();
+    const ws = createFakeWs();
+    const c = new HostClient({
+      url: "ws://192.168.1.5:4739/ws",
+      wsFactory: () => ws,
+      onEvent: (e) => { events.push(e); },
+    });
+    c.connect();
+    ws._close();
+    expect(c.connectionState).toBe("reconnecting");
+    expect(events.some((e) => e.type === "error" && String((e as { message?: string }).message ?? "").includes("token"))).toBe(false);
+    vi.useRealTimers();
+    c.close();
+  });
 });
