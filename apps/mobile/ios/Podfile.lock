@@ -35,6 +35,10 @@ PODS:
     - Yoga
   - ExpoAsset (11.1.7):
     - ExpoModulesCore
+  - ExpoCamera (16.1.11):
+    - ExpoModulesCore
+    - ZXingObjC/OneD
+    - ZXingObjC/PDF417
   - ExpoDocumentPicker (13.1.6):
     - ExpoModulesCore
   - ExpoFileSystem (18.1.11):
@@ -1952,6 +1956,11 @@ PODS:
     - Yoga
   - SocketRocket (0.7.1)
   - Yoga (0.0.0)
+  - ZXingObjC/Core (3.6.9)
+  - ZXingObjC/OneD (3.6.9):
+    - ZXingObjC/Core
+  - ZXingObjC/PDF417 (3.6.9):
+    - ZXingObjC/Core
 
 DEPENDENCIES:
   - "boost (from `../../../node_modules/.pnpm/react-native@0.79.6_@babel+core@7.29.7_@types+react@19.0.14_react@19.0.0/node_modules/react-native/third-party-podspecs/boost.podspec`)"
@@ -1960,6 +1969,7 @@ DEPENDENCIES:
   - "EXImageLoader (from `../../../node_modules/.pnpm/expo-image-loader@5.1.0_expo@53.0.27_@babel+core@7.29.7_@expo+metro-runtime@5.0.5_react_a8ed94705edf1dcbebc545a32b96ee6e/node_modules/expo-image-loader/ios`)"
   - "Expo (from `../../../node_modules/.pnpm/expo@53.0.27_@babel+core@7.29.7_@expo+metro-runtime@5.0.5_react-native@0.79.6_@babel+co_3d639af496bc0e55983c111ed1e77554/node_modules/expo`)"
   - "ExpoAsset (from `../../../node_modules/.pnpm/expo-asset@11.1.7_expo@53.0.27_@babel+core@7.29.7_@expo+metro-runtime@5.0.5_react-nativ_821d1d10e5bdf933c0671713731b9575/node_modules/expo-asset/ios`)"
+  - "ExpoCamera (from `../../../node_modules/.pnpm/expo-camera@16.1.11_expo@53.0.27_@babel+core@7.29.7_@expo+metro-runtime@5.0.5_react-nat_39b297b21a67ebbee2240a45f1aa17d2/node_modules/expo-camera/ios`)"
   - "ExpoDocumentPicker (from `../../../node_modules/.pnpm/expo-document-picker@13.1.6_expo@53.0.27_@babel+core@7.29.7_@expo+metro-runtime@5.0.5_r_65dbef1180a3b6bd2d2d623bb1598911/node_modules/expo-document-picker/ios`)"
   - "ExpoFileSystem (from `../../../node_modules/.pnpm/expo-file-system@18.1.11_expo@53.0.27_@babel+core@7.29.7_@expo+metro-runtime@5.0.5_reac_19538197be1207fa0ba66eb42f9ad2c1/node_modules/expo-file-system/ios`)"
   - "ExpoFont (from `../../../node_modules/.pnpm/expo-font@13.3.2_expo@53.0.27_@babel+core@7.29.7_@expo+metro-runtime@5.0.5_react-native_499d90fc246085eb4e523c42ba8ceb7a/node_modules/expo-font/ios`)"
@@ -2047,6 +2057,7 @@ DEPENDENCIES:
 SPEC REPOS:
   trunk:
     - SocketRocket
+    - ZXingObjC
 
 EXTERNAL SOURCES:
   boost:
@@ -2061,6 +2072,8 @@ EXTERNAL SOURCES:
     :path: "../../../node_modules/.pnpm/expo@53.0.27_@babel+core@7.29.7_@expo+metro-runtime@5.0.5_react-native@0.79.6_@babel+co_3d639af496bc0e55983c111ed1e77554/node_modules/expo"
   ExpoAsset:
     :path: "../../../node_modules/.pnpm/expo-asset@11.1.7_expo@53.0.27_@babel+core@7.29.7_@expo+metro-runtime@5.0.5_react-nativ_821d1d10e5bdf933c0671713731b9575/node_modules/expo-asset/ios"
+  ExpoCamera:
+    :path: "../../../node_modules/.pnpm/expo-camera@16.1.11_expo@53.0.27_@babel+core@7.29.7_@expo+metro-runtime@5.0.5_react-nat_39b297b21a67ebbee2240a45f1aa17d2/node_modules/expo-camera/ios"
   ExpoDocumentPicker:
     :path: "../../../node_modules/.pnpm/expo-document-picker@13.1.6_expo@53.0.27_@babel+core@7.29.7_@expo+metro-runtime@5.0.5_r_65dbef1180a3b6bd2d2d623bb1598911/node_modules/expo-document-picker/ios"
   ExpoFileSystem:
@@ -2232,6 +2245,7 @@ SPEC CHECKSUMS:
   EXImageLoader: 4d3d3284141f1a45006cc4d0844061c182daf7ee
   Expo: 7e07803ccc34cdf144a0d51cc2684a60628b6593
   ExpoAsset: ef06e880126c375f580d4923fdd1cdf4ee6ee7d6
+  ExpoCamera: e1879906d41184e84b57d7643119f8509414e318
   ExpoDocumentPicker: b263a279685b6640b8c8bc70d71c83067aeaae55
   ExpoFileSystem: 7f92f7be2f5c5ed40a7c9efc8fa30821181d9d63
   ExpoFont: cf508bc2e6b70871e05386d71cab927c8524cc8e
@@ -2314,6 +2328,7 @@ SPEC CHECKSUMS:
   RNSVG: 794f269526df9ddc1f79b3d1a202b619df0368e3
   SocketRocket: d4aabe649be1e368d1318fdf28a022d714d65748
   Yoga: dc7c21200195acacb62fa920c588e7c2106de45e
+  ZXingObjC: 8898711ab495761b2dbbdec76d90164a6d7e14c5
 
 PODFILE CHECKSUM: afc4730330f38cb0c84e8b00bf60ad7a5fa55305
 

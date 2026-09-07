@@ -1,6 +1,6 @@
 {
   "name": "pi-maestro-mobile",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "type": "module",
   "description": "Maestro Mobile Host — PC 端常驻服务：Pi agent 会话桥 + Monitor telemetry 投影 + 移动端 WS/HTTP 服务",
   "license": "MIT",
