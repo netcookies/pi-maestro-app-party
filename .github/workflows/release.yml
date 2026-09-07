@@ -56,14 +56,15 @@ jobs:
           echo "Building maestro-mobile v$V"
 
       # ── host npm publish（Trusted Publisher OIDC：无需 NPM_TOKEN，需在 npmjs.com 包 Settings 配置本 workflow）──
-      - name: Publish npm package
+      - name: Stage npm package
         if: startsWith(github.ref, 'refs/tags/maestro-mobile-v')
         working-directory: apps/host
         run: |
-          # Trusted Publishing（OIDC）需要 npm >= 11.5.1（node 22 自带 10.x）
+          # staged publishing：CI 免 2FA 暂存，人工 approve 触发真发布（npm 官方推荐）
           npm install -g npm@11
           npm --version
-          npm publish --provenance --access public
+          npm stage publish --provenance --access public
+          npm stage list
 
       # ── Android：签名 release APK（混淆 + 资源收缩已默认启用）──
       - name: Decode keystore
