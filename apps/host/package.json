@@ -31,7 +31,7 @@
     "test:coverage": "vitest run --coverage",
     "dev": "tsx src/cli.ts",
     "start": "node dist/cli.js",
-    "prepublishOnly": "bash build.sh && vitest run"
+    "prepublishOnly": "pnpm --filter @maestro-mobile/shared build && bash build.sh && vitest run"
   },
   "dependencies": {
     "@earendil-works/pi-coding-agent": "^0.79.0",
