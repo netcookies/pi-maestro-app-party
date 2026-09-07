@@ -12,6 +12,7 @@ on:
 
 permissions:
   contents: write
+  id-token: write   # npm Trusted Publishers（OIDC）：publish 无需 NPM_TOKEN
 
 jobs:
   build:
@@ -54,15 +55,11 @@ jobs:
           echo "version=$V" >> "$GITHUB_OUTPUT"
           echo "Building maestro-mobile v$V"
 
-      # ── host npm publish ──
+      # ── host npm publish（Trusted Publisher OIDC：无需 NPM_TOKEN，需在 npmjs.com 包 Settings 配置本 workflow）──
       - name: Publish npm package
         if: startsWith(github.ref, 'refs/tags/maestro-mobile-v')
         working-directory: apps/host
-        env:
-          NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
-        run: |
-          npm config set //registry.npmjs.org/:_authToken "$NPM_TOKEN"
-          npm publish --provenance
+        run: npm publish --provenance --access public
 
       # ── Android：签名 release APK（混淆 + 资源收缩已默认启用）──
       - name: Decode keystore
@@ -116,7 +113,7 @@ jobs:
 
           - **Android**: 下载 .apk 直接安装（已用 release key 签名）
           - **iOS**: 下载 unsigned .ipa，用 [Sideloadly](https://sideloadly.io)/AltStore + 自己的 Apple ID 重签后安装
-          - **PC Host**: \`npm install -g maestro-mobile@$VERSION\`，或 \`pi install npm:maestro-mobile\`
+          - **PC Host**: \`npm install -g pi-pi-maestro-mobile@$VERSION\`，或 \`pi install npm:pi-maestro-mobile\`
 
           完整部署文档见仓库 docs/deploy.md
           EOF

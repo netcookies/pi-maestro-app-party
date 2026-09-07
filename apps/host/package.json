@@ -1,6 +1,6 @@
 {
-  "name": "maestro-mobile",
-  "version": "0.1.1",
+  "name": "pi-maestro-mobile",
+  "version": "0.1.2",
   "type": "module",
   "description": "Maestro Mobile Host — PC 端常驻服务：Pi agent 会话桥 + Monitor telemetry 投影 + 移动端 WS/HTTP 服务",
   "license": "MIT",
@@ -18,7 +18,7 @@
     }
   },
   "bin": {
-    "maestro-mobile": "./dist/cli.js"
+    "pi-maestro-mobile": "./dist/cli.js"
   },
   "files": [
     "dist",

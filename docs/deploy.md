@@ -15,7 +15,7 @@ Host 是 PC 端常驻服务，把 Pi agent 会话、Monitor 窗口 telemetry、m
 ### 安装
 
 ```bash
-npm install -g maestro-mobile
+npm install -g pi-maestro-mobile
 ```
 
 要求 Node ≥ 22.19。包自包含（vendored shared），只拉 `pi-coding-agent` SDK 和 `ws` 两个运行时依赖。
@@ -23,7 +23,7 @@ npm install -g maestro-mobile
 ### 手动运行
 
 ```bash
-maestro-mobile --port 4739
+pi-maestro-mobile --port 4739
 # 首次无 --token 会生成随机 token 并打印，手机连接时带上
 ```
 
@@ -58,7 +58,7 @@ headless 服务器需要 `sudo loginctl enable-linger $USER`（如果是 user se
 ## 形态二：pi 扩展安装
 
 ```bash
-pi install npm:maestro-mobile
+pi install npm:pi-maestro-mobile
 ```
 
 提供 `/maestro-host status|start|stop` 薄扩展命令。**扩展不承载服务**：它只 spawn/探测独立的 host 进程（`detached` + PID 文件 `~/.pi/maestro-host.pid` + `/api/health` 幂等探测），host 生命周期与 Pi 会话完全解耦——关掉 Pi 会话 host 继续跑，launchd/systemd 管理的实例也不会被误杀（stop 仅针对本扩展启动的 PID）。

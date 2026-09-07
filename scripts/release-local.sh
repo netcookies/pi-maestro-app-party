@@ -45,7 +45,7 @@ note "预检通过"
 
 # ── npm publish（host 包）───────────────────────────────────────────────
 if [[ "$SKIP_NPM" == false ]]; then
-  note "npm publish maestro-mobile@$VERSION"
+  note "npm publish pi-maestro-mobile@$VERSION"
   (cd "$REPO_ROOT/apps/host" && npm publish --provenance) || die "npm publish 失败"
 else
   note "跳过 npm publish"
@@ -99,7 +99,7 @@ gh release create "$TAG" \
 
 - **Android**: 下载 .apk 直接安装（已用 release key 签名）
 - **iOS**: 下载 unsigned .ipa，用 [Sideloadly](https://sideloadly.io)/AltStore + 自己的 Apple ID 重签后安装
-- **PC Host**: \`npm install -g maestro-mobile@$VERSION\`，或 \`pi install npm:maestro-mobile\`
+- **PC Host**: \`npm install -g pi-pi-maestro-mobile@$VERSION\`，或 \`pi install npm:pi-maestro-mobile\`
 
 完整部署文档见仓库 docs/deploy.md
 EOF

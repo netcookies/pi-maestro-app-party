@@ -25,8 +25,10 @@
 | HTTP API（健康检查、Maestro 设置、Usage） | ✅ |
 | 设备方向自适应（竖屏/横屏） | ✅ |
 | 单机单 Host（Pi Host 进程 + 移动端 App） | ✅ |
+| Pi 扩展一键启动（`pi install npm:pi-maestro-mobile` → `/maestro-mobile start`） | ✅ |
+| TUI 状态栏 widget + 手机扫码连接（二维码） | ✅ |
 
-> ⚠️ **安全说明**：默认仅监听 `127.0.0.1`。使用 `--host 0.0.0.0` 对局域网开放时请务必配置 `--token`，并注意内网设备均能访问该端口。
+> ⚠️ **安全说明**：默认监听 `0.0.0.0` 时强制生成 token（启动日志与状态栏可查）。若显式改回 `127.0.0.1` 则仅本机可访问。对局域网开放时请确认内网环境可信。
 
 ---
 
@@ -82,16 +84,33 @@
 
 ### 1. 启动 Host
 
-**方式 A · npm 全局安装（推荐）**：
+**方式 A · Pi 扩展安装（推荐，已装 pi 的用户）**：
 
 ```bash
-npm install -g maestro-mobile
-maestro-mobile --host 0.0.0.0 --port 4739 --token "your-secret-token"
+pi install npm:pi-maestro-mobile
+```
+
+然后在任意 Pi 会话里：
+
+```text
+/maestro-mobile start     # 后台启动 host（幂等，已在运行则跳过）
+/maestro-mobile status    # 查看运行状态 / 端口 / token
+/maestro-mobile qr        # 终端二维码：手机扫码即连
+/maestro-mobile stop      # 停止本扩展启动的实例
+```
+
+host 是独立常驻进程——关掉 Pi 会话它继续跑，不随会话生灭。状态栏会常驻显示运行状态。
+
+**方式 B · npm 全局安装（无 pi 或服务器场景）**：
+
+```bash
+npm install -g pi-maestro-mobile
+pi-maestro-mobile --host 0.0.0.0 --port 4739 --token "your-secret-token"
 ```
 
 常驻（launchd/systemd）、Docker 看板模式与能力边界对比，见 [部署指南](docs/deploy.md)。
 
-**方式 B · 源码运行**：
+**方式 C · 源码运行**：
 
 ```bash
 # 安装依赖
