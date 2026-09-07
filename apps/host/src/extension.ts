@@ -151,8 +151,10 @@ export default function maestroHostExtension(pi: ExtensionAPI): void {
           ctx.ui.notify("maestro-mobile: 未找到 token（~/.pi/maestro-mobile-token），先用 /maestro-mobile start 启动一次", "warning");
           return;
         }
-        const url = `ws://${lanIp()}:${port}/ws?token=${token}`;
-        ctx.ui.notify(`手机 App 连接地址：${url}\n扫码或手动输入：`, "info");
+        // v0.2 配对码：scheme 格式（App 端 extractPairing 解析；裸 ws URL 也兼容）
+        const wsUrl = `ws://${lanIp()}:${port}/ws`;
+        const url = `maestro-mobile://pair?ws=${encodeURIComponent(wsUrl)}&token=${encodeURIComponent(token)}`;
+        ctx.ui.notify(`手机 App 连接地址：${wsUrl}\n（token 见二维码 / ~/.pi/maestro-mobile-token）`, "info");
         qrcodeTerminal.generate(url, { small: true }, (q: string) => {
           // 经 notify 逐行送出（QR 用 block 字符，等宽终端可扫）
           ctx.ui.notify(q, "info");

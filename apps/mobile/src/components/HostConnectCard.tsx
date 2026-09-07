@@ -1,15 +1,20 @@
 /**
  * HostConnectCard — HyperOS 控制中心式连接卡（Miuix 设计稿 screenSessions 对齐）
  *
- * 设计语言：tertiaryContainer 大圆角(22)卡片，头部=主机图标+名称+状态 pill+chevron；
- * 点按展开控制中心面板：Host 地址 / Token 输入、保持连接 Switch、链路延迟、重连按钮。
+ * v2 连接体验（用户需求 0.2.0）：
+ * - 扫码配对：点「扫码配对」调相机扫 PC `/maestro-mobile qr` 二维码，地址+token 一次填入；
+ *   手填 token 输入框移除（地址输入保留，便于直连本机调试）。
+ * - 多 Host 实例：已配对的 host 存 AsyncStorage 列表，卡片头部下拉切换，切换即连。
+ * - 状态 pill：已连接 / 连接中 / 重连中 / 未连接 / token 错误（authFailed 停止重连时）。
  */
-import React, { useState } from "react";
-import { View, Text, StyleSheet, TouchableOpacity, TextInput, ActivityIndicator } from "react-native";
+import React, { useState, useEffect } from "react";
+import { View, Text, StyleSheet, TouchableOpacity, TextInput, ActivityIndicator, Modal } from "react-native";
 import { useTheme, MIUIX_RADIUS, MIUIX_TYPE, MIUIX_SPACE } from "../theme";
 import { useHost } from "../store";
 import { LineIcon } from "./LineIcon";
 import { MiuixSwitch } from "./MiuixSwitch";
+import { QRPairScanner } from "./QRPairScanner";
+import { loadPairedHosts, savePairedHosts, type PairedHost } from "../paired-hosts";
 
 export function HostConnectCard({ hostUrl, token, onHostUrlChange, onTokenChange }: {
   hostUrl: string;
@@ -20,27 +25,37 @@ export function HostConnectCard({ hostUrl, token, onHostUrlChange, onTokenChange
   const { theme } = useTheme();
   const { isConnected, connectionState, connect, disconnect, lastError } = useHost();
   const [open, setOpen] = useState(false);
-  // P3-5：keepAlive 接入真实语义 —— 关闭时不再自动重连（HostClient.close 后不再拉起）；
-  // 开启时（默认）断线自动重连。开关变化即时生效：关闭时若在重连中则断开，重新打开时重连。
+  const [scannerVisible, setScannerVisible] = useState(false);
+  // P3-5：keepAlive 接入真实语义 —— 关闭时不再自动重连；开启时（默认）断线自动重连。
   const [keepAlive, setKeepAlive] = useState(true);
   const [latency, setLatency] = useState<number | null>(null);
+  // 多 host 实例
+  const [paired, setPaired] = useState<PairedHost[]>([]);
+  const [pickerOpen, setPickerOpen] = useState(false);
+
+  useEffect(() => {
+    void loadPairedHosts().then(setPaired);
+  }, []);
 
   const busy = connectionState === "connecting" || connectionState === "reconnecting";
+  const tokenError = connectionState === "disconnected" && !!lastError?.includes("token");
   const styles = makeStyles(theme);
+
+  const doConnect = (url: string, tok: string) => {
+    if (!url.trim()) return;
+    connect(url.trim(), tok.trim() || undefined);
+  };
 
   const handleKeepAliveChange = (v: boolean) => {
     setKeepAlive(v);
     if (!v) {
-      // 关闭保活：断开当前连接（用户手动重连才拉起）
       if (isConnected || busy) disconnect();
     } else if (hostUrl.trim()) {
-      // 重新开启：立即按当前参数重连
-      connect(hostUrl.trim(), token.trim() || undefined);
+      doConnect(hostUrl, token);
     }
   };
 
-  // P3-5：链路延迟测真实 host 端点（/api/status），而非 Metro dev server（localhost:8081 是手机自身）。
-  // ws://ip:port/ws → http://ip:port/api/status?token=...；失败不显示数值。
+  // P3-5：链路延迟测真实 host 端点（/api/status），而非 Metro dev server。
   React.useEffect(() => {
     if (!isConnected || !hostUrl) { setLatency(null); return; }
     let alive = true;
@@ -50,7 +65,6 @@ export function HostConnectCard({ hostUrl, token, onHostUrlChange, onTokenChange
       const t0 = Date.now();
       void fetch(statusUrl)
         .then((res) => {
-          // 仅成功响应计为有效 RTT；401/5xx 不作为延迟数值
           if (alive && res.ok) setLatency(Math.max(1, Date.now() - t0));
           else if (alive) setLatency(null);
         })
@@ -63,8 +77,37 @@ export function HostConnectCard({ hostUrl, token, onHostUrlChange, onTokenChange
     return () => { alive = false; clearInterval(timer); };
   }, [isConnected, hostUrl, token]);
 
-  const statusColor = isConnected ? theme.success : busy ? theme.accent : theme.error;
-  const statusText = isConnected ? "已连接" : busy ? (connectionState === "connecting" ? "连接中" : "重连中") : "未连接";
+  /** 扫码/选择配对成功：保存到配对列表并连接 */
+  const handlePaired = (info: { hostUrl: string; token?: string; displayHost: string }) => {
+    onHostUrlChange(info.hostUrl);
+    onTokenChange(info.token ?? "");
+    void savePairedHosts([
+      { name: info.displayHost, hostUrl: info.hostUrl, token: info.token ?? "", pairedAt: new Date().toISOString() },
+      ...paired.filter((p) => p.hostUrl !== info.hostUrl),
+    ].slice(0, 8))
+      .then(() => loadPairedHosts())
+      .then(setPaired);
+    setScannerVisible(false);
+    doConnect(info.hostUrl, info.token ?? "");
+  };
+
+  const switchTo = (h: PairedHost) => {
+    setPickerOpen(false);
+    if (isConnected || busy) disconnect();
+    onHostUrlChange(h.hostUrl);
+    onTokenChange(h.token);
+    doConnect(h.hostUrl, h.token);
+  };
+
+  const removePaired = (h: PairedHost) => {
+    const next = paired.filter((p) => p.hostUrl !== h.hostUrl);
+    setPaired(next);
+    void savePairedHosts(next);
+  };
+
+  const statusColor = isConnected ? theme.success : tokenError ? theme.error : busy ? theme.accent : theme.error;
+  const statusText = isConnected ? "已连接" : tokenError ? "token 错误" : busy ? (connectionState === "connecting" ? "连接中" : "重连中") : "未连接";
+  const activePaired = paired.find((p) => p.hostUrl === hostUrl);
 
   return (
     <View style={[styles.card, { backgroundColor: theme.tertiaryContainer ?? theme.cardBg }]} accessibilityRole="button" accessibilityLabel={`Host 连接卡，${statusText}`}>
@@ -75,7 +118,7 @@ export function HostConnectCard({ hostUrl, token, onHostUrlChange, onTokenChange
         <View style={styles.meta}>
           <Text style={[styles.name, { color: theme.text }]}>MacBook · Host</Text>
           <Text style={[styles.sub, { color: theme.onBackgroundVariant ?? theme.muted }]} numberOfLines={1}>
-            {hostUrl || "ws://<PC-IP>:4739/ws"}
+            {hostUrl || "扫码配对或输入 ws://<PC-IP>:4739/ws"}
           </Text>
         </View>
         <View style={[styles.pill, { backgroundColor: theme.surfaceVariant }]}>
@@ -87,7 +130,18 @@ export function HostConnectCard({ hostUrl, token, onHostUrlChange, onTokenChange
 
       {open && (
         <View style={styles.panel}>
-          <Text style={[styles.label, { color: theme.onBackgroundVariant ?? theme.muted }]}>Host 地址</Text>
+          {/* 扫码配对主按钮 + 地址输入（token 由扫码带入，不再手填） */}
+          <TouchableOpacity
+            style={[styles.pairBtn, { backgroundColor: theme.buttonPrimary }]}
+            onPress={() => setScannerVisible(true)}
+            accessibilityRole="button"
+            accessibilityLabel="扫码配对"
+          >
+            <LineIcon name="image" size={16} color="#fff" />
+            <Text style={styles.pairBtnText}>  扫码配对（PC 执行 /maestro-mobile qr）</Text>
+          </TouchableOpacity>
+
+          <Text style={[styles.label, { color: theme.onBackgroundVariant ?? theme.muted }]}>Host 地址（可手动输入）</Text>
           <TextInput
             style={[styles.input, { backgroundColor: theme.surfaceVariant, color: theme.text, borderColor: theme.outline ?? theme.border }]}
             value={hostUrl}
@@ -97,17 +151,22 @@ export function HostConnectCard({ hostUrl, token, onHostUrlChange, onTokenChange
             autoCapitalize="none"
             autoCorrect={false}
             keyboardType="url"
+            onSubmitEditing={() => doConnect(hostUrl, token)}
           />
-          <Text style={[styles.label, { color: theme.onBackgroundVariant ?? theme.muted }]}>Token（可选）</Text>
-          <TextInput
-            style={[styles.input, { backgroundColor: theme.surfaceVariant, color: theme.text, borderColor: theme.outline ?? theme.border }]}
-            value={token}
-            onChangeText={onTokenChange}
-            placeholder="mstro_····"
-            placeholderTextColor={theme.onBackgroundVariant ?? theme.muted}
-            autoCapitalize="none"
-            secureTextEntry
-          />
+
+          {/* 多 Host 实例切换 */}
+          {paired.length > 0 && (
+            <TouchableOpacity
+              style={[styles.row, { alignSelf: "flex-start" }]}
+              onPress={() => setPickerOpen(true)}
+              accessibilityRole="button"
+              accessibilityLabel={`切换 Host（${paired.length} 个已配对）`}
+            >
+              <LineIcon name="plan" size={15} color={theme.accent} />
+              <Text style={[styles.rowLabel, { color: theme.accent }]}>  已配对 {paired.length} 台 · {activePaired?.name ?? "未选择"}</Text>
+            </TouchableOpacity>
+          )}
+
           <View style={styles.row}>
             <View style={styles.rowMain}>
               <Text style={[styles.rowLabel, { color: theme.text }]}>保持连接</Text>
@@ -134,7 +193,7 @@ export function HostConnectCard({ hostUrl, token, onHostUrlChange, onTokenChange
           ) : (
             <TouchableOpacity
               style={[styles.btn, { backgroundColor: theme.buttonPrimary, opacity: busy ? 0.6 : 1 }]}
-              onPress={() => { if (hostUrl.trim()) connect(hostUrl.trim(), token.trim() || undefined); }}
+              onPress={() => doConnect(hostUrl, token)}
               disabled={busy}
               accessibilityRole="button"
               accessibilityLabel="重新连接"
@@ -145,14 +204,47 @@ export function HostConnectCard({ hostUrl, token, onHostUrlChange, onTokenChange
               ) : (
                 <>
                   <LineIcon name="collapse" size={16} color="#fff" strokeWidth={2} />
-                  <Text style={styles.btnText}>  重新连接</Text>
+                  <Text style={styles.btnText}>  连接</Text>
                 </>
               )}
             </TouchableOpacity>
           )}
-          {lastError ? <Text style={[styles.errorText, { color: theme.error }]}>{lastError}</Text> : null}
+          {lastError ? <Text style={[styles.errorText, { color: tokenError ? theme.error : theme.muted }]}>{lastError}</Text> : null}
         </View>
       )}
+
+      {/* 扫码弹层 */}
+      <QRPairScanner
+        visible={scannerVisible}
+        onClose={() => setScannerVisible(false)}
+        onScanned={handlePaired}
+      />
+
+      {/* 已配对 Host 选择器 */}
+      <Modal visible={pickerOpen} transparent animationType="fade" onRequestClose={() => setPickerOpen(false)}>
+        <TouchableOpacity style={styles.pickerMask} activeOpacity={1} onPress={() => setPickerOpen(false)}>
+          <View style={[styles.pickerSheet, { backgroundColor: theme.cardBg }]}>
+            <Text style={[styles.pickerTitle, { color: theme.text }]}>选择 Host</Text>
+            {paired.map((h) => (
+              <View key={h.hostUrl} style={[styles.pickerRow, { borderColor: theme.border }]}>
+                <TouchableOpacity style={styles.pickerMain} onPress={() => switchTo(h)} accessibilityRole="button" accessibilityLabel={`连接 ${h.name}`}>
+                  <View style={[styles.led, { backgroundColor: h.hostUrl === hostUrl && isConnected ? theme.success : theme.onBackgroundVariant ?? theme.muted }]} />
+                  <View style={styles.pickerMeta}>
+                    <Text style={[styles.pickerName, { color: theme.text }]}>{h.name}</Text>
+                    <Text style={[styles.pickerSub, { color: theme.onBackgroundVariant ?? theme.muted }]} numberOfLines={1}>{h.hostUrl}</Text>
+                  </View>
+                </TouchableOpacity>
+                <TouchableOpacity onPress={() => removePaired(h)} accessibilityRole="button" accessibilityLabel={`删除 ${h.name}`}>
+                  <Text style={{ color: theme.error, fontWeight: "600" }}>删除</Text>
+                </TouchableOpacity>
+              </View>
+            ))}
+            <TouchableOpacity style={[styles.pickerAdd, { borderColor: theme.accent }]} onPress={() => { setPickerOpen(false); setScannerVisible(true); }} accessibilityRole="button" accessibilityLabel="扫码添加新 Host">
+              <Text style={{ color: theme.accent, fontWeight: "600" }}>+ 扫码添加新 Host</Text>
+            </TouchableOpacity>
+          </View>
+        </TouchableOpacity>
+      </Modal>
     </View>
   );
 }
@@ -175,6 +267,15 @@ function makeStyles(theme: ReturnType<typeof useTheme>["theme"]) {
     led: { width: 8, height: 8, borderRadius: 4 },
     pillText: { fontSize: MIUIX_TYPE.footnote2, fontWeight: "700" },
     panel: { marginTop: MIUIX_SPACE.lg },
+    pairBtn: {
+      flexDirection: "row",
+      alignItems: "center",
+      justifyContent: "center",
+      borderRadius: MIUIX_RADIUS.md,
+      minHeight: 44,
+      marginBottom: MIUIX_SPACE.md,
+    },
+    pairBtnText: { color: "#fff", fontWeight: "600", fontSize: MIUIX_TYPE.body2 },
     label: { fontSize: MIUIX_TYPE.footnote1, marginBottom: MIUIX_SPACE.xs },
     input: {
       borderRadius: MIUIX_RADIUS.md,
@@ -183,7 +284,7 @@ function makeStyles(theme: ReturnType<typeof useTheme>["theme"]) {
       paddingVertical: MIUIX_SPACE.sm,
       fontSize: MIUIX_TYPE.body2,
       minHeight: 44,
-      marginBottom: MIUIX_SPACE.md,
+      marginBottom: MIUIX_SPACE.sm,
     },
     row: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", paddingVertical: MIUIX_SPACE.sm },
     rowMain: { flex: 1, marginRight: MIUIX_SPACE.md },
@@ -201,5 +302,15 @@ function makeStyles(theme: ReturnType<typeof useTheme>["theme"]) {
     },
     btnText: { color: "#fff", fontWeight: "600", fontSize: MIUIX_TYPE.body2 },
     errorText: { fontSize: MIUIX_TYPE.footnote1, marginTop: MIUIX_SPACE.sm },
-  });
+    // Host 选择器
+    pickerMask: { flex: 1, backgroundColor: "rgba(0,0,0,0.45)", justifyContent: "flex-end" },
+    pickerSheet: { borderTopLeftRadius: 22, borderTopRightRadius: 22, padding: MIUIX_SPACE.lg, paddingBottom: MIUIX_SPACE.xxl },
+    pickerTitle: { fontSize: MIUIX_TYPE.body1, fontWeight: "700", marginBottom: MIUIX_SPACE.md },
+    pickerRow: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", borderWidth: 1, borderRadius: MIUIX_RADIUS.md, padding: MIUIX_SPACE.md, marginBottom: MIUIX_SPACE.sm },
+    pickerMain: { flexDirection: "row", alignItems: "center", gap: MIUIX_SPACE.md, flex: 1, marginRight: MIUIX_SPACE.md },
+    pickerMeta: { flex: 1, minWidth: 0 },
+    pickerName: { fontSize: MIUIX_TYPE.body2, fontWeight: "600" },
+    pickerSub: { fontSize: MIUIX_TYPE.footnote2, marginTop: 2 },
+    pickerAdd: { alignItems: "center", borderWidth: 1.5, borderStyle: "dashed", borderRadius: MIUIX_RADIUS.md, paddingVertical: MIUIX_SPACE.md, marginTop: MIUIX_SPACE.xs },
+  } as const);
 }

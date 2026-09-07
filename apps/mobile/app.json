@@ -18,7 +18,8 @@
       "infoPlist": {
         "NSAppTransportSecurity": {
           "NSAllowsArbitraryLoads": true
-        }
+        },
+        "NSCameraUsageDescription": "允许 Maestro Mobile 使用相机扫描 PC 上的配对二维码"
       }
     },
     "android": {
@@ -36,6 +37,12 @@
         {
           "photosPermission": "允许 Maestro Mobile 访问相册以发送图片给 Pi agent",
           "cameraPermission": "允许 Maestro Mobile 使用相机拍摄图片发送给 Pi agent"
+        }
+      ],
+      [
+        "expo-camera",
+        {
+          "cameraPermission": "允许 Maestro Mobile 使用相机扫描 PC 上的配对二维码"
         }
       ]
     ]

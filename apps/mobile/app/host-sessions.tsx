@@ -51,14 +51,18 @@ export default function HostSessionsScreen() {
 
   // 冷启动读回持久化的连接参数
   useEffect(() => {
-    void AsyncStorage.getItem(HOST_CONN_KEY).then((raw) => {
+    void (async () => {
+      // v2：旧版单 host 连接参数先导入配对列表（幂等），再回填当前连接参数
+      const { importLegacyConnection } = await import("../src/paired-hosts");
+      await importLegacyConnection();
+      const raw = await AsyncStorage.getItem(HOST_CONN_KEY);
       if (!raw) return;
       try {
         const saved = JSON.parse(raw) as { hostUrl?: string; token?: string };
         if (saved.hostUrl) setHostUrl(saved.hostUrl);
         if (saved.token) setToken(saved.token);
       } catch {}
-    });
+    })();
   }, []);
 
   const handleHostUrlChange = (v: string) => {
