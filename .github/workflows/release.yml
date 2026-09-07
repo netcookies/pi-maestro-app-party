@@ -64,7 +64,7 @@ jobs:
           npm install -g npm@11
           npm --version
           npm stage publish --provenance --access public 2>&1 | tee /tmp/stage.out
-grep -o "staged with id [a-f0-9-]*" /tmp/stage.out || true
+          grep -o "staged with id [a-f0-9-]*" /tmp/stage.out || true
 
       # ── Android：签名 release APK（混淆 + 资源收缩已默认启用）──
       - name: Decode keystore
