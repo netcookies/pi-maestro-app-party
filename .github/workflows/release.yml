@@ -61,7 +61,7 @@ jobs:
         working-directory: apps/host
         run: |
           # Trusted Publishing（OIDC）需要 npm >= 11.5.1（node 22 自带 10.x）
-          npm install -g npm@latest
+          npm install -g npm@11
           npm --version
           npm publish --provenance --access public
 
