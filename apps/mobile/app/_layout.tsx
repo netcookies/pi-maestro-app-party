@@ -48,11 +48,12 @@ function RootNavigator() {
             backgroundColor: theme.headerBg,
             borderTopColor: theme.border,
           },
-          tabBarIcon: ({ route, color }) => {
+          tabBarIcon: (opts) => {
             // P3-6：按 route name 取真实图标（此前写死 sessions 图标）；
             // 各 Screen 已自行覆盖时此处不会触发，仅作为兜底。
-            const name = TAB_ICONS[route.name] ?? "plan";
-            return <LineIcon name={name} size={22} color={color} />;
+            // 防御：深链（maestro-mobile://pair）会让非 tab 路由进入这里且部分导航版本 route 可能为空
+            const name = TAB_ICONS[opts?.route?.name ?? ""] ?? "plan";
+            return <LineIcon name={name} size={22} color={opts?.color ?? "#888"} />;
           },
         }}
       >
@@ -72,6 +73,10 @@ function RootNavigator() {
         />
         <Tabs.Screen
           name="teammate"
+          options={{ href: null }}
+        />
+        <Tabs.Screen
+          name="pair"
           options={{ href: null }}
         />
         <Tabs.Screen

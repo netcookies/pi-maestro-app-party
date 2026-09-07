@@ -29,7 +29,7 @@ export default function HostSessionsScreen() {
   const router = useRouter();
   const { theme } = useTheme();
   const styles = useMemo(() => makeStyles(theme), [theme]);
-  const { listHostSessions, listLiveSessions, openExistingSession, closeSession, loadSessionHistory, isConnected, connect, disconnect, connectionState, lastError } = useHost();
+  const { listHostSessions, listLiveSessions, openExistingSession, closeSession, loadSessionHistory, isConnected, connectionState, lastError } = useHost();
   // 当前已打开的会话（P2-4：open 新会话前先 close 旧的，避免 host 端旧 runner 泄漏）
   const openedSessionRef = useRef<string | null>(null);
   const cfg = getConfig();
@@ -74,28 +74,7 @@ export default function HostSessionsScreen() {
     void AsyncStorage.setItem(HOST_CONN_KEY, JSON.stringify({ hostUrl, token: v })).catch(() => {});
   };
 
-  // 自动重连：有持久化连接参数且当前未连接时自动 connect（App 启动/重启场景）
-  const autoReconnectRef = useRef(false);
-  useEffect(() => {
-    if (autoReconnectRef.current) return;
-    if (isConnected) { autoReconnectRef.current = true; return; }
-    // 延迟一拍等 AsyncStorage 保存值先回填 hostUrl state
-    const timer = setTimeout(() => {
-      if (autoReconnectRef.current || isConnected) return;
-      autoReconnectRef.current = true;
-      // 优先持久化参数；没有则用当前 hostUrl state（默认地址兜底）
-      void AsyncStorage.getItem(HOST_CONN_KEY).then((raw) => {
-        let url = hostUrl;
-        let tok = token;
-        try {
-          const saved = raw ? JSON.parse(raw) as { hostUrl?: string; token?: string } : null;
-          if (saved?.hostUrl) { url = saved.hostUrl; tok = saved.token ?? tok; }
-        } catch {}
-        if (url) connect(url, tok.trim() || undefined);
-      });
-    }, 600);
-    return () => clearTimeout(timer);
-  }, [isConnected, connect, hostUrl, token]);
+  // 冷启动自动连接已上移到 store（Provider 层）；本页不再重复发起
 
   const load = useCallback(async () => {
     if (!isConnected) { setLoading(false); return; } // 未连接不加载（连接卡在上面）

@@ -219,7 +219,7 @@ export class HostClient {
   /** HTTP 探测 /api/health：401 才是真 token 错误（探测期间照常退避重连，不阻塞） */
   private async verifyAuthFailure(): Promise<void> {
     try {
-      const httpBase = this.options.url.replace(/^wss:\/\//, "https://").replace(/^ws:\/\//, "http://").replace(/\/ws(\?|$)/, "$1");
+      const httpBase = this.options.url.replace(/^wss:\/\//, "https://").replace(/^ws:\/\//, "http://").replace(/\/ws$/, "").replace(/\/$/, "");
       const res = await fetch(`${httpBase}/api/health`, { signal: AbortSignal.timeout(3_000) });
       if (this.closed || this.state === "connected") return;
       if (res.status === 401) {

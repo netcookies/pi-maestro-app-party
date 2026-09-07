@@ -89,6 +89,14 @@ describe("P0-1: WS Origin 校验", () => {
     const result = await wsConnect("https://trusted.example.com");
     expect(result.ok).toBe(true);
   });
+
+  it("原生客户端同源 Origin（origin host 与请求 Host 头一致）放行 —— RN OkHttp 把 Origin 设为 WS URL 自身", async () => {
+    // 模拟器/真机 App 连 ws://10.20.35.123:4739 时 OkHttp 会发 Origin: http://10.20.35.123:4739
+    // 该 origin 非恶意（与目标 host 同源），必须放行 —— 曾导致 0.2.x 真机全部 403 连不上
+    const hostPort = `localhost:${ctx.port}`;
+    const result = await wsConnect(`http://${hostPort}`);
+    expect(result.ok).toBe(true);
+  });
 });
 
 describe("P2-1: 初始推送契约", () => {

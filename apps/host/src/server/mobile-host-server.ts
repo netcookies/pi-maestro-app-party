@@ -236,13 +236,15 @@ export class MobileHostServer {
     }
     // P0-1：浏览器发起的 WS（带 Origin）必须来自白名单，防恶意网页 drive-by 连接；
     // 非浏览器客户端（RN fetch/ws）通常无 Origin，放行后仍由 token 鉴权把关。
-    if (!this.isOriginAllowed(request.headers.origin)) {
+    if (!this.isOriginAllowed(request.headers.origin, request.headers.host)) {
+      console.error("[maestro-mobile] WS upgrade rejected: 403 origin=", request.headers.origin);
       socket.write("HTTP/1.1 403 Forbidden\r\n\r\n");
       socket.destroy();
       return;
     }
     if (!this.authorized(request, url)) {
       socket.write("HTTP/1.1 401 Unauthorized\r\n\r\n");
+      console.error("[maestro-mobile] WS upgrade rejected: 401 (token mismatch) from", request.socket.remoteAddress);
       socket.destroy();
       return;
     }
@@ -252,7 +254,7 @@ export class MobileHostServer {
   }
 
   /** WS 握手 Origin 白名单：loopback 变体 + 绑定 host（非 0.0.0.0 时）+ 显式配置 */
-  private isOriginAllowed(origin: string | undefined): boolean {
+  private isOriginAllowed(origin: string | undefined, requestHost = ""): boolean {
     if (!origin) return true; // 非浏览器客户端
     let parsed: URL;
     try {
@@ -262,6 +264,12 @@ export class MobileHostServer {
     }
     const hostname = parsed.hostname.toLowerCase();
     if (hostname === "localhost" || hostname === "127.0.0.1" || hostname === "::1" || hostname === "[::1]") {
+      return true;
+    }
+    // 原生客户端（React Native OkHttp 等）会把 Origin 设为 WS URL 自身（= 本机地址）。
+    // 这类请求 host 头与 origin 同源，放行；浏览器跨站 drive-by 的 origin 不会等于本机地址。
+    const hostHeader = requestHost.toLowerCase();
+    if (hostHeader && (hostHeader === hostname || hostHeader === `${hostname}:${parsed.port}`)) {
       return true;
     }
     const bound = this.boundHost.toLowerCase();

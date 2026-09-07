@@ -6,7 +6,7 @@
  * - 持有 AppState（事件流投影）
  * - 暴露 connect / disconnect / sendPrompt / answerDialog 等动作
  */
-import React, { createContext, useContext, useMemo, useReducer, useRef, useState, useCallback } from "react";
+import React, { createContext, useContext, useEffect, useMemo, useReducer, useRef, useState, useCallback } from "react";
 import type { ExtensionUiRequest, HostEvent, HostSessionList, LiveSessionList, TimelineItem, SessionUsageSummary } from "@maestro-mobile/shared";
 import { HostClient, type ConnectionState } from "./host-client";
 import { ExtensionUiQueue } from "./extension-ui-queue";
@@ -157,6 +157,35 @@ export function HostStoreProvider({ children }: { children: React.ReactNode }) {
     activeSessionRef.current = null;
     setConnectionState("disconnected");
   }, []);
+
+  // 冷启动自动连接：App 打开即恢复上次 Host 连接（方向 A 重构后连接卡移入 host-sessions tab，
+  // 而 bottom-tabs 默认 lazy mount —— 停留在工作台时永远没人发起连接。这里在 Provider 层兜底，
+  // 读单连接参数键；深链配对（pair.tsx）会先写该键再跳转，时序天然正确。
+  const autoConnectRef = useRef(false);
+  useEffect(() => {
+    if (autoConnectRef.current) return;
+    autoConnectRef.current = true;
+    void (async () => {
+      const AsyncStorage = (await import("@react-native-async-storage/async-storage")).default;
+      let url = "";
+      let tok = "";
+      try {
+        const raw = await AsyncStorage.getItem("maestro-mobile.host-connection");
+        const saved = raw ? (JSON.parse(raw) as { hostUrl?: string; token?: string }) : null;
+        if (saved?.hostUrl && /^wss?:\/\//.test(saved.hostUrl)) {
+          url = saved.hostUrl;
+          tok = saved.token ?? "";
+        }
+      } catch { /* 坏数据走兜底 */ }
+      if (!url) {
+        // 兜底：单键缺失时取配对列表第一条（多 Host 场景）
+        const { loadPairedHosts } = await import("./paired-hosts");
+        const list = await loadPairedHosts();
+        if (list[0]) { url = list[0].hostUrl; tok = list[0].token; }
+      }
+      if (url) connect(url, tok.trim() || undefined);
+    })();
+  }, [connect]);
 
   const openSession = useCallback(async (cwd: string): Promise<string> => {
     const result = await getClient().sendCommand({ type: "open_session", cwd, mode: "create" });

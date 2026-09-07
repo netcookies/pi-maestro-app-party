@@ -50,26 +50,31 @@ function hostStatus(port: number, timeoutMs = 800): Promise<Record<string, unkno
 
 /**
  * 探测本机局域网 IPv4（给手机连接 URL 用；找不到回退 127.0.0.1）。
- * 排除虚拟接口（VPN utun/tap、bridge、anpi、docker、vEthernet 等），优先 en0/eth/wlan 物理网卡。
+ * 双层过滤：① 接口名排虚拟（macOS utun/bridge/anpi…；Windows vEthernet/本地连接*（Wi-Fi Direct）/Loopback…）；
+ *           ② 地址排无效段（APIPA 169.254/16、CGNAT 100.64/10 VPN）；再按常见局域网网段排序。
  */
 function lanIp(): string {
-  const VIRTUAL = /^(utun|tap|tun|bridge|anpi|awdl|llw|docker|veth|lo|vmnet|vEthernet|WSL)/i;
-  const candidates: string[] = [];
-  for (const [name, addrs] of Object.entries(networkInterfaces())) {
-    if (VIRTUAL.test(name)) continue;
-    for (const a of addrs ?? []) {
-      if (a.family === "IPv4" && !a.internal) candidates.push(a.address);
-    }
-  }
-  // 优先常见物理网段：192.168.x / 10.x（家庭/办公 Wi-Fi），再 172.16-31.x
+  const VIRTUAL = /^(utun|tap|tun|bridge|anpi|awdl|llw|docker|veth|lo|vmnet|vEthernet|WSL|Loopback)/i;
+  // Windows Wi-Fi Direct 虚拟适配器的中文名（「本地连接* 1」）无固定前缀，用 * 特征识别
+  const WINDOWS_VIRTUAL = /本地连接\*|Local Area Connection\*/i;
   const rank = (ip: string): number => {
     if (ip.startsWith("192.168.")) return 0;
     if (ip.startsWith("10.")) return 1;
     if (/^172\.(1[6-9]|2\d|3[01])\./.test(ip)) return 2;
     return 3;
   };
-  candidates.sort((x, y) => rank(x) - rank(y));
-  return candidates[0] ?? "127.0.0.1";
+  const candidates: { ip: string; r: number }[] = [];
+  for (const [name, addrs] of Object.entries(networkInterfaces())) {
+    if (VIRTUAL.test(name) || WINDOWS_VIRTUAL.test(name)) continue;
+    for (const a of addrs ?? []) {
+      if (a.family !== "IPv4" || a.internal) continue;
+      if (a.address.startsWith("169.254.")) continue; // APIPA：未连上的自造地址
+      if (a.address.startsWith("100.")) continue;     // CGNAT：Tailscale/运营商级 NAT
+      candidates.push({ ip: a.address, r: rank(a.address) });
+    }
+  }
+  candidates.sort((x, y) => x.r - y.r);
+  return candidates[0]?.ip ?? "127.0.0.1";
 }
 
 /** host cli.js 入口：同包 dist（pi install npm:pi-maestro-mobile 时随包分发） */
