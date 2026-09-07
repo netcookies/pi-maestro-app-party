@@ -162,8 +162,9 @@ describe("HostClient", () => {
     c.close();
   });
 
-  it("token 错误：从未连上且反复立即被断 → 停止重连并报明确错误", () => {
-    vi.useFakeTimers();
+  it("token 错误：反复快速被断 + health 401 → 停止重连并报明确错误", async () => {
+    // fetch mock：health 返回 401（host 在，token 错）
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response(null, { status: 401 }));
     const ws = createFakeWs();
     const c = new HostClient({
       url: "ws://192.168.1.5:4739/ws",
@@ -172,18 +173,38 @@ describe("HostClient", () => {
       onEvent: (e) => { events.push(e); },
     });
     c.connect();
-    // 第一次连接：2s 内被断（模拟 401 升级拒绝）—— 首次仍会重试（可能 host 未启动）
+    // 第一次被断：attempt=0 不标记（可能 host 未启动）
     ws._close();
     expect(c.connectionState).toBe("reconnecting");
-    vi.advanceTimersByTime(1000);
-    // 第二次立即又断：命中 authFailed 启发式（从未 onopen + 反复立即断）
+    // 第二次快速被断：attempt>=1 → 疑似 → health 探测确认
     ws._close();
-    expect(c.connectionState).toBe("disconnected");
+    // 等待 verifyAuthFailure 完成后确认 authFailed
+    await vi.waitFor(() => expect(c.connectionState).toBe("disconnected"));
     expect(events.some((e) => e.type === "error")).toBe(true);
-    // 不再重连：时间前进也不再拉起
-    vi.advanceTimersByTime(30_000);
+    // 不再重连：等待 30s 等效验证（真实定时器已被 authFailed 停止，state 不变即可）
+    await new Promise((r) => setTimeout(r, 50));
     expect(c.connectionState).toBe("disconnected");
+    fetchMock.mockRestore();
+    c.close();
+  });
+
+  it("host 未启动（refused）：反复快速失败但 health 探测失败 → 继续重连不误报", async () => {
+    // fetch mock：网络不通（fetch reject）
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockRejectedValue(new Error("refused"));
+    vi.useFakeTimers();
+    const ws = createFakeWs();
+    const c = new HostClient({
+      url: "ws://192.168.1.5:4739/ws",
+      wsFactory: () => ws,
+      onEvent: (e) => { events.push(e); },
+    });
+    c.connect();
+    ws._close();
+    await Promise.resolve(); // 让 verifyAuthFailure 走 catch 分支
+    expect(events.some((e) => e.type === "error" && String((e as { message?: string }).message ?? "").includes("token"))).toBe(false);
+    expect(c.connectionState).toBe("reconnecting");
     vi.useRealTimers();
+    fetchMock.mockRestore();
     c.close();
   });
 

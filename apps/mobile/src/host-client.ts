@@ -56,6 +56,8 @@ export class HostClient {
   private closed = false;
   /** 鉴权失败（token 错误）：重连无意义，停止退避并把原因报给 UI */
   private authFailed = false;
+  /** 快速失败疑似鉴权问题（待 HTTP 探测确认） */
+  private suspectAuthFailure = false;
   private pendingCommands = new Map<string, {
     resolve(result: unknown): void;
     reject(error: Error): void;
@@ -184,10 +186,9 @@ export class HostClient {
 
     ws.onclose = () => {
       if (this.closed || generation !== this.socketGeneration) return;
-      // RN WebSocket 拿不到 HTTP 升级状态码；启发式：开启后从未 onopen 且 2s 内即被断 → 大概率 401（token 错误）。
-      // 标记 authFailed 停止重连（重试只会持续 401），让 UI 显示明确的 token 错误提示。
+      // 快速失败（从未 onopen 且 <2s）：标记疑似鉴权问题，由 verifyAuthFailure 用 HTTP 探测确认后才停连
       if (this.state !== "connected" && Date.now() - this.connectStartedAt < 2_000 && this.reconnectAttempt >= 1) {
-        this.authFailed = true;
+        this.suspectAuthFailure = true;
       }
       this.scheduleReconnect();
     };
@@ -199,11 +200,12 @@ export class HostClient {
 
   private scheduleReconnect(): void {
     if (this.closed) return;
-    if (this.authFailed) {
-      // token 错误：停止重连，状态停在 disconnected，错误由 lastError 通道提示
-      this.setState("disconnected");
-      this.options.onEvent?.({ type: "error", message: "token 校验失败 —— 在 PC 终端执行 /maestro-mobile qr 重新扫码配对" } as never);
-      return;
+    // RN WebSocket 拿不到 HTTP 升级状态码；「从未 onopen 且反复快速被断」既可能是 token 错（401），
+    // 也可能只是 host 未启动/网络不通（refused）。用 HTTP /api/health 探测区分：
+    //   401 = 服务在但 token 错 → authFailed 停止重连；其它 = 网络问题 → 继续退避重连。
+    if (this.suspectAuthFailure) {
+      this.suspectAuthFailure = false;
+      void this.verifyAuthFailure();
     }
     this.setState("reconnecting");
     const delay = Math.min(this.reconnectBaseMs * 2 ** this.reconnectAttempt, this.reconnectMaxMs);
@@ -212,6 +214,24 @@ export class HostClient {
       this.reconnectTimer = null;
       if (!this.closed) this.openSocket();
     }, delay);
+  }
+
+  /** HTTP 探测 /api/health：401 才是真 token 错误（探测期间照常退避重连，不阻塞） */
+  private async verifyAuthFailure(): Promise<void> {
+    try {
+      const httpBase = this.options.url.replace(/^wss:\/\//, "https://").replace(/^ws:\/\//, "http://").replace(/\/ws(\?|$)/, "$1");
+      const res = await fetch(`${httpBase}/api/health`, { signal: AbortSignal.timeout(3_000) });
+      if (this.closed || this.state === "connected") return;
+      if (res.status === 401) {
+        this.authFailed = true;
+        if (this.reconnectTimer) { clearTimeout(this.reconnectTimer); this.reconnectTimer = null; }
+        this.setState("disconnected");
+        this.options.onEvent?.({ type: "error", message: "token 校验失败 —— 在 PC 终端执行 /maestro-mobile qr 重新扫码配对" } as never);
+      }
+      // 200/其它状态 = 服务在且 token 未启用或路径异常，不做 auth 判定，退避重连继续
+    } catch {
+      // fetch 失败 = 网络不通，不是 token 错，继续重连
+    }
   }
 
   private handleRawMessage(raw: unknown): void {
