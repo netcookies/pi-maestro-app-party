@@ -9,7 +9,7 @@ import type { HostController } from "../host-controller.js";
 import { projectMonitorState } from "../monitor-projection.js";
 import { readSettingsOverview, updateSettingsJson } from "../maestro-settings.js";
 import { toSessionSummaryList, toSdkImageContent, listSkills } from "./helpers.js";
-import type { ClientCommand, ExtensionUiResponse } from "../vendor/shared/index.js";
+import type { ClientCommand, ExtensionUiResponse } from "@maestro-mobile/shared";
 
 export interface CommandContext {
   controller: HostController;

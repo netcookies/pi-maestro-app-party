@@ -6,7 +6,7 @@ import { readFile, open, stat, readdir } from "node:fs/promises";
 import { realpath } from "node:fs/promises";
 import { isAbsolute, normalize, join } from "node:path";
 import { homedir, tmpdir } from "node:os";
-import type { HostSessionList, HostSessionSummary } from "../vendor/shared/index.js";
+import type { HostSessionList, HostSessionSummary } from "@maestro-mobile/shared";
 
 // ── 会话摘要 ─────────────────────────────────────────────────────────────────
 

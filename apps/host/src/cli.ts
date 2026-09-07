@@ -8,7 +8,7 @@
  * 环境变量（与 CLI 参数等价）：
  *   MAESTRO_MOBILE_PORT / MAESTRO_MOBILE_HOST / MAESTRO_MOBILE_TOKEN / MAESTRO_MOBILE_PROJECT_ROOT
  *
- * 安全：token 强制启用 —— 未提供 --token/环境变量时自动生成随机 token 并打印到 stdout。
+ * 安全：token 强制启用 —— 未提供 --token/环境变量时自动生成并持久化到 ~/.pi/maestro-mobile-token。
  * WS 握手校验 Origin（loopback 与绑定 host 白名单）。
  */
 import { HostController } from "./host-controller.js";
@@ -16,6 +16,25 @@ import { MobileHostServer } from "./server/mobile-host-server.js";
 import { MaestroStateReader } from "./maestro-state.js";
 import { PiSdkRuntimeFactory } from "./pi/pi-sdk-runtime.js";
 import { randomBytes } from "node:crypto";
+import { readFile, writeFile, mkdir } from "node:fs/promises";
+import { homedir } from "node:os";
+import { join } from "node:path";
+
+const TOKEN_FILE = join(homedir(), ".pi", "maestro-mobile-token");
+
+/** 读取或创建持久化 token（重启不变号，手机连接配置不失效） */
+async function loadOrCreateToken(): Promise<string> {
+  try {
+    const saved = (await readFile(TOKEN_FILE, "utf8")).trim();
+    if (saved.length >= 24) return saved;
+  } catch {
+    // 文件不存在 → 创建
+  }
+  const token = randomBytes(24).toString("hex");
+  await mkdir(join(homedir(), ".pi"), { recursive: true });
+  await writeFile(TOKEN_FILE, token + "\n", { mode: 0o600 });
+  return token;
+}
 
 interface CliArgs {
   port: number;
@@ -38,8 +57,9 @@ function parseArgs(argv: string[]): CliArgs {
   }
 
   const port = Number(args.get("port") ?? process.env.MAESTRO_MOBILE_PORT ?? "4739");
-  // 安全默认：仅监听 loopback；显式 --host 0.0.0.0 才对 LAN 开放（README 安全节提醒配 token）
-  const host = args.get("host") ?? process.env.MAESTRO_MOBILE_HOST ?? "127.0.0.1";
+  // 默认 0.0.0.0（手机直连）；强制 token：未提供时自动生成并持久化到 ~/.pi/maestro-mobile-token，
+  // 重启不换号（手机连接配置不失效），换号需删除该文件或显式 --token
+  const host = args.get("host") ?? process.env.MAESTRO_MOBILE_HOST ?? "0.0.0.0";
   const token = args.get("token") ?? process.env.MAESTRO_MOBILE_TOKEN ?? undefined;
   const projectRoot = args.get("project-root") ?? process.env.MAESTRO_MOBILE_PROJECT_ROOT ?? process.cwd();
   const pollMs = Number(args.get("poll-ms") ?? process.env.MAESTRO_MOBILE_POLL_MS ?? "5000");
@@ -54,12 +74,11 @@ function parseArgs(argv: string[]): CliArgs {
 async function main(): Promise<void> {
   const cli = parseArgs(process.argv.slice(2));
 
-  // P0-1：无 token 拒绝裸奔 —— 自动生成随机会话 token 并打印，避免 LAN 内无鉴权全权暴露
-  const token = cli.token ?? randomBytes(24).toString("hex");
+  // P0-1：强制 token —— 未提供时生成并持久化到 ~/.pi/maestro-mobile-token（重启不变号）
+  const token = cli.token ?? (await loadOrCreateToken());
   if (!cli.token) {
-    console.log("[maestro-mobile] no --token provided; generated an ephemeral token for this run:");
+    console.log(`[maestro-mobile] no --token provided; using persisted token (${TOKEN_FILE}):`);
     console.log(`[maestro-mobile]   token: ${token}`);
-    console.log("[maestro-mobile]   (set MAESTRO_MOBILE_TOKEN or pass --token to reuse a stable token)");
   }
 
   console.log(`[maestro-mobile] starting on ${cli.host}:${cli.port} (project: ${cli.projectRoot})`);
