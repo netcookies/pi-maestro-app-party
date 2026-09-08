@@ -34,29 +34,42 @@ export function QRPairScanner({ visible, onClose, onScanned }: {
     const info = extractPairing(data);
     if (!info) return; // 非配对码，继续扫
     setLocked(true);
-    if (info.candidateIps.length <= 1) {
-      onScanned(info);
-      return;
-    }
-    // 多候选：弹选择器，并行探测每个 IP 的可达性（/api/health 任意响应=网络可达；401 也算可达）
-    setPending(info);
-    setProbing(true);
-    const map = new Map<string, "ok" | "fail" | "probing">();
-    info.candidateIps.forEach((ip) => map.set(ip, "probing"));
-    setProbeMap(new Map(map));
-    void Promise.all(
-      info.candidateIps.map(async (ip) => {
-        const url = buildCandidateUrl(info, ip);
-        const httpBase = url.replace(/^ws:\/\//, "http://").replace(/\/ws$/, "");
-        try {
-          await fetch(`${httpBase}/api/health`, { signal: AbortSignal.timeout(2500) });
-          map.set(ip, "ok");
-        } catch {
-          map.set(ip, "fail");
+    // 先尝试从 host 拉全部候选 IP（QR payload 保持短小保证终端渲染可扫；0.2.3 旧 host 无该端点则退化为单候选）
+    void (async () => {
+      let enriched = info;
+      try {
+        const httpBase = info.hostUrl.replace(/^ws:\/\//, "http://").replace(/\/ws$/, "");
+        const res = await fetch(`${httpBase}/api/pair-ips`, { signal: AbortSignal.timeout(2500) });
+        if (res.ok) {
+          const d = (await res.json()) as { ips?: string[] };
+          const ips = (d.ips ?? []).filter((s) => /^\d{1,3}(\.\d{1,3}){3}$/.test(s));
+          if (ips.length > 1) enriched = { ...info, candidateIps: ips.includes(new URL(info.hostUrl).hostname) ? ips : [new URL(info.hostUrl).hostname, ...ips] };
         }
-        setProbeMap(new Map(map));
-      }),
-    ).finally(() => setProbing(false));
+      } catch { /* 拉取失败退化为单候选（0.2.3 旧 host） */ }
+      if (enriched.candidateIps.length <= 1) {
+        onScanned(enriched);
+        return;
+      }
+      // 多候选：弹选择器，并行探测每个 IP 的可达性（/api/health 任意响应=网络可达；401 也算可达）
+      setPending(enriched);
+      setProbing(true);
+      const map = new Map<string, "ok" | "fail" | "probing">();
+      enriched.candidateIps.forEach((ip) => map.set(ip, "probing"));
+      setProbeMap(new Map(map));
+      void Promise.all(
+        enriched.candidateIps.map(async (ip) => {
+          const url = buildCandidateUrl(enriched, ip);
+          const httpBase = url.replace(/^ws:\/\//, "http://").replace(/\/ws$/, "");
+          try {
+            await fetch(`${httpBase}/api/health`, { signal: AbortSignal.timeout(2500) });
+            map.set(ip, "ok");
+          } catch {
+            map.set(ip, "fail");
+          }
+          setProbeMap(new Map(map));
+        }),
+      ).finally(() => setProbing(false));
+    })();
   };
 
   const chooseCandidate = (ip: string) => {

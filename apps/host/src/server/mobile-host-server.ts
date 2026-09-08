@@ -176,6 +176,24 @@ export class MobileHostServer {
         return;
       }
 
+      if (request.method === "GET" && url.pathname === "/api/pair-ips") {
+        // 扫码配对的候选 IP 列表（App 扫短 QR 后拉取；本机全部非内部 IPv4）
+        const { networkInterfaces } = await import("node:os");
+        const rank = (ip: string): number =>
+          ip.startsWith("192.168.") ? 0 : ip.startsWith("10.") ? 1 : /^172\.(1[6-9]|2\d|3[01])\./.test(ip) ? 2 : 3;
+        const ips: { ip: string; r: number }[] = [];
+        for (const addrs of Object.values(networkInterfaces())) {
+          for (const a of addrs ?? []) {
+            if (a.family !== "IPv4" || a.internal) continue;
+            if (a.address.startsWith("169.254.")) continue;
+            ips.push({ ip: a.address, r: rank(a.address) });
+          }
+        }
+        ips.sort((x, y) => x.r - y.r);
+        writeJson(response, 200, { ips: ips.map((c) => c.ip) });
+        return;
+      }
+
       if (request.method === "GET" && url.pathname === "/api/workspace-telemetry") {
         const telemetry = await this.controller.readTelemetry();
         writeJson(response, 200, telemetry);

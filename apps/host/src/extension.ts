@@ -211,13 +211,13 @@ export default function maestroHostExtension(pi: ExtensionAPI): void {
           ctx.ui.notify("maestro-mobile: 未找到 token（~/.pi/maestro-mobile-token），先用 /maestro-mobile start 启动一次", "warning");
           return;
         }
-        // v0.2.4：单 QR 携带全部候选 IP（ips= 参数），App 扫完弹选择器（逐个探测可达性）。
-        // payload 估算：5 IP × ~60 字符 + token 88 ≈ 400 字符，QR 容量（~2.9K 字符）内安全。
+        // v0.2.4b：短 payload QR（~115 字符 / 23 行——终端渲染保真度实测可扫的尺寸上限内）。
+        // 候选 IP 不进 QR：App 扫到后 GET /api/pair-ips 拉取全部候选再弹选择层
+        //（193 字符 / 29 行的码在终端行距下定位图案易变形导致无法扫描，实测复现）。
         const ips = lanIpCandidates();
-        const shown = ips.length > 0 ? ips : ["127.0.0.1"];
-        const primary = `ws://${shown[0]}:${port}/ws`;
-        const url = `maestro-mobile://pair?ws=${encodeURIComponent(primary)}&token=${encodeURIComponent(token)}&ips=${encodeURIComponent(shown.join(","))}`;
-        ctx.ui.notify(`手机 App 连接地址（App 内可选 IP）：${primary}`, "info");
+        const primary = `ws://${(ips[0] ?? "127.0.0.1")}:${port}/ws`;
+        const url = `maestro-mobile://pair?ws=${encodeURIComponent(primary)}&token=${encodeURIComponent(token)}`;
+        ctx.ui.notify(`手机 App 连接地址：${primary}\n（扫码后在 App 内选择其它网卡地址）`, "info");
         qrcodeTerminal.generate(url, { small: true }, (q: string) => {
           ctx.ui.notify(q, "info");
         });
