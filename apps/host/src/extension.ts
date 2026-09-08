@@ -141,11 +141,50 @@ export default function maestroHostExtension(pi: ExtensionAPI): void {
   pi.registerCommand("maestro-mobile", {
     description: "Maestro Mobile Host 遥控（status / start / stop / qr）",
     handler: async (args: string, ctx) => {
-      const sub = (args ?? "").trim().split(/\s+/)[0] || "status";
+      const sub = (args ?? "").trim().split(/\s+/)[0] || "default";
       const port = hostPort();
       const alive = await probeHealth(port);
 
-      if (sub === "status") {
+      // 默认（无子命令）：未启动 → 直接 start（与 cli 默认行为一致）
+      if (sub === "default" && !alive) {
+        const lockFile = PID_FILE + ".lock";
+        try {
+          await writeFile(lockFile, String(process.pid), { flag: "wx" });
+        } catch {
+          try {
+            const lockPid = Number((await readFile(lockFile, "utf8")).trim());
+            process.kill(lockPid, 0);
+            ctx.ui.notify(`maestro-mobile: 另一会话正在启动（pid=${lockPid}），本次跳过`, "warning");
+            return;
+          } catch {
+            await unlink(lockFile).catch(() => { });
+            await writeFile(lockFile, String(process.pid), { flag: "wx" });
+          }
+        }
+        const child = spawn(process.execPath, [hostCliPath(), "--port", String(port)], {
+          detached: true,
+          stdio: "ignore",
+          env: { ...process.env, MAESTRO_MOBILE_PORT: String(port) },
+        });
+        child.unref();
+        await writeFile(PID_FILE, String(child.pid ?? ""), "utf8");
+        try {
+          for (let i = 0; i < 10; i++) {
+            await new Promise((r) => setTimeout(r, 300));
+            if (await probeHealth(port)) {
+              ctx.ui.notify(`maestro-mobile: 已启动 :${port} pid=${child.pid}`, "info");
+              void refreshStatus();
+              return;
+            }
+          }
+          ctx.ui.notify("maestro-mobile: 启动后 3s 内未见 health 通过，请查日志", "warning");
+        } finally {
+          await unlink(lockFile).catch(() => { });
+        }
+        return;
+      }
+
+      if (sub === "status" || sub === "default") {
         if (!alive) {
           ctx.ui.notify(`maestro-mobile: 未运行（端口 ${port} 无响应）`, "info");
           return;
@@ -172,20 +211,16 @@ export default function maestroHostExtension(pi: ExtensionAPI): void {
           ctx.ui.notify("maestro-mobile: 未找到 token（~/.pi/maestro-mobile-token），先用 /maestro-mobile start 启动一次", "warning");
           return;
         }
-        // v0.2.2：全部候选 IP 逐个生成 QR（含 VPN/CGNAT），手机扫能连的那个即可。
-        // 单 QR 编多 IP 会让 payload 膨胀降低扫码成功率，逐个展示更稳。
+        // v0.2.4：单 QR 携带全部候选 IP（ips= 参数），App 扫完弹选择器（逐个探测可达性）。
+        // payload 估算：5 IP × ~60 字符 + token 88 ≈ 400 字符，QR 容量（~2.9K 字符）内安全。
         const ips = lanIpCandidates();
         const shown = ips.length > 0 ? ips : ["127.0.0.1"];
-        ctx.ui.notify(`共 ${shown.length} 个候选地址，逐个扫码尝试（手机与 PC 需在同一网络可达该地址）：`, "info");
-        for (const [i, ip] of shown.entries()) {
-          const wsUrl = `ws://${ip}:${port}/ws`;
-          const url = `maestro-mobile://pair?ws=${encodeURIComponent(wsUrl)}&token=${encodeURIComponent(token)}`;
-          const tag = ip.startsWith("100.") || /^(198\.18|198\.19)\./.test(ip) ? "（VPN/代理网段）" : "";
-          ctx.ui.notify(`── [${i + 1}/${shown.length}] ${wsUrl}${tag}`, "info");
-          qrcodeTerminal.generate(url, { small: true }, (q: string) => {
-            ctx.ui.notify(q, "info");
-          });
-        }
+        const primary = `ws://${shown[0]}:${port}/ws`;
+        const url = `maestro-mobile://pair?ws=${encodeURIComponent(primary)}&token=${encodeURIComponent(token)}&ips=${encodeURIComponent(shown.join(","))}`;
+        ctx.ui.notify(`手机 App 连接地址（App 内可选 IP）：${primary}`, "info");
+        qrcodeTerminal.generate(url, { small: true }, (q: string) => {
+          ctx.ui.notify(q, "info");
+        });
         return;
       }
 

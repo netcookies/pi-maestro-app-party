@@ -41,3 +41,23 @@ describe("pairing.extractPairing", () => {
     expect(info!.displayHost).toBe("192.168.1.5:4739");
   });
 });
+
+describe("pairing.ips 多候选解析", () => {
+  it("scheme 带 ips= 解析候选列表（首候选 + 列表去重）", () => {
+    const raw = "maestro-mobile://pair?ws=ws%3A%2F%2F192.168.1.5%3A4739%2Fws&token=t&ips=" + encodeURIComponent("192.168.1.5,10.0.0.2,100.77.76.105");
+    const info = extractPairing(raw);
+    expect(info!.candidateIps).toEqual(["192.168.1.5", "10.0.0.2", "100.77.76.105"]);
+    expect(info!.port).toBe("4739");
+  });
+
+  it("裸 ws URL 无 ips → 候选仅自身", () => {
+    const info = extractPairing("ws://10.0.0.9:4739/ws?token=t");
+    expect(info!.candidateIps).toEqual(["10.0.0.9"]);
+  });
+
+  it("ips 里的非法项被过滤", () => {
+    const raw = "maestro-mobile://pair?ws=ws%3A%2F%2F1.2.3.4%3A4739%2Fws&token=t&ips=" + encodeURIComponent("1.2.3.4,not-an-ip,5.6.7.8");
+    const info = extractPairing(raw);
+    expect(info!.candidateIps).toEqual(["1.2.3.4", "5.6.7.8"]);
+  });
+});

@@ -12,6 +12,7 @@ import { CameraView, useCameraPermissions } from "expo-camera";
 import { useTheme, MIUIX_RADIUS, MIUIX_TYPE, MIUIX_SPACE } from "../theme";
 import { LineIcon } from "./LineIcon";
 import { extractPairing, type PairingInfo } from "../pairing";
+import { buildCandidateUrl } from "./ip-picker";
 
 export function QRPairScanner({ visible, onClose, onScanned }: {
   visible: boolean;
@@ -23,13 +24,47 @@ export function QRPairScanner({ visible, onClose, onScanned }: {
   const [permission, requestPermission] = useCameraPermissions();
   const [locked, setLocked] = useState(false);
   const [openError, setOpenError] = useState<string | null>(null);
+  // 多候选 IP 选择：扫到含 ips 列表的码后先弹选择（null = 不弹）
+  const [pending, setPending] = useState<PairingInfo | null>(null);
+  const [probing, setProbing] = useState(true);
+  const [probeMap, setProbeMap] = useState<Map<string, "ok" | "fail" | "probing">>(new Map());
 
   const handleBarcode = ({ data }: { data: string }) => {
     if (locked) return;
     const info = extractPairing(data);
     if (!info) return; // 非配对码，继续扫
     setLocked(true);
-    onScanned(info);
+    if (info.candidateIps.length <= 1) {
+      onScanned(info);
+      return;
+    }
+    // 多候选：弹选择器，并行探测每个 IP 的可达性（/api/health 任意响应=网络可达；401 也算可达）
+    setPending(info);
+    setProbing(true);
+    const map = new Map<string, "ok" | "fail" | "probing">();
+    info.candidateIps.forEach((ip) => map.set(ip, "probing"));
+    setProbeMap(new Map(map));
+    void Promise.all(
+      info.candidateIps.map(async (ip) => {
+        const url = buildCandidateUrl(info, ip);
+        const httpBase = url.replace(/^ws:\/\//, "http://").replace(/\/ws$/, "");
+        try {
+          await fetch(`${httpBase}/api/health`, { signal: AbortSignal.timeout(2500) });
+          map.set(ip, "ok");
+        } catch {
+          map.set(ip, "fail");
+        }
+        setProbeMap(new Map(map));
+      }),
+    ).finally(() => setProbing(false));
+  };
+
+  const chooseCandidate = (ip: string) => {
+    if (!pending) return;
+    const url = buildCandidateUrl(pending, ip);
+    onScanned({ ...pending, hostUrl: url, displayHost: `${ip}:${pending.port}` });
+    setPending(null);
+    setProbing(false);
   };
 
   const close = () => {
@@ -41,6 +76,38 @@ export function QRPairScanner({ visible, onClose, onScanned }: {
   return (
     <Modal visible={visible} animationType="slide" onRequestClose={close}>
       <View style={[styles.container, { backgroundColor: theme.bg }]}>
+        {/* 多候选 IP 选择 sheet（绝对定位覆盖在相机上方） */}
+        {pending ? (
+          <View style={[styles.pickerSheet, { backgroundColor: theme.cardBg }]}>
+            <Text style={[styles.pickerTitle, { color: theme.text }]}>选择要连接的地址</Text>
+            <Text style={[styles.pickerHint, { color: theme.onBackgroundVariant ?? theme.muted }]}>
+              绿点 = 已探测可达 · 红 = 不可达
+            </Text>
+            {pending.candidateIps.map((ip) => {
+              const st = probeMap.get(ip) ?? "probing";
+              const color = st === "ok" ? theme.success : st === "fail" ? theme.error : theme.muted;
+              return (
+                <TouchableOpacity
+                  key={ip}
+                  style={[styles.candRow, { borderColor: theme.border }]}
+                  onPress={() => chooseCandidate(ip)}
+                  accessibilityRole="button"
+                  accessibilityLabel={`连接 ${ip}`}
+                >
+                  <View style={[styles.candDot, { backgroundColor: color }]} />
+                  <Text style={[styles.candText, { color: theme.text }]}>{ip}:{pending.port}</Text>
+                  <Text style={[styles.candTag, { color: theme.onBackgroundVariant ?? theme.muted }]}>
+                    {ip.startsWith("100.") ? "VPN" : /^(198\.18|198\.19)\./.test(ip) ? "代理" : ip.startsWith("127.") ? "本机" : "局域网"}
+                  </Text>
+                </TouchableOpacity>
+              );
+            })}
+            {probing ? <Text style={[styles.pickerHint, { color: theme.muted }]}>探测中…</Text> : null}
+            <TouchableOpacity style={[styles.cancelBtn, { borderColor: theme.border }]} onPress={() => { setPending(null); setLocked(false); }} accessibilityRole="button" accessibilityLabel="取消选择继续扫码">
+              <Text style={{ color: theme.accent, fontWeight: "600" }}>返回继续扫码</Text>
+            </TouchableOpacity>
+          </View>
+        ) : null}
         <View style={styles.header}>
           <TouchableOpacity onPress={close} accessibilityRole="button" accessibilityLabel="关闭扫码">
             <LineIcon name="collapse" size={22} color={theme.text} />
@@ -111,6 +178,14 @@ export function QRPairScanner({ visible, onClose, onScanned }: {
 
 function makeStyles(theme: ReturnType<typeof useTheme>["theme"]) {
   return StyleSheet.create({
+    pickerSheet: { position: "absolute", left: MIUIX_SPACE.lg, right: MIUIX_SPACE.lg, bottom: MIUIX_SPACE.xxl, borderRadius: MIUIX_RADIUS.lg, padding: MIUIX_SPACE.lg },
+    pickerTitle: { fontSize: MIUIX_TYPE.body1, fontWeight: "700", marginBottom: MIUIX_SPACE.xs },
+    pickerHint: { fontSize: MIUIX_TYPE.footnote2, marginBottom: MIUIX_SPACE.md },
+    candRow: { flexDirection: "row", alignItems: "center", gap: MIUIX_SPACE.md, borderWidth: 1, borderRadius: MIUIX_RADIUS.md, padding: MIUIX_SPACE.md, marginBottom: MIUIX_SPACE.sm },
+    candDot: { width: 9, height: 9, borderRadius: MIUIX_RADIUS.pill },
+    candText: { fontSize: MIUIX_TYPE.body2, fontWeight: "600", flex: 1 },
+    candTag: { fontSize: MIUIX_TYPE.footnote2 },
+    cancelBtn: { alignItems: "center", borderWidth: 1, borderRadius: MIUIX_RADIUS.md, paddingVertical: MIUIX_SPACE.md, marginTop: MIUIX_SPACE.xs },
     container: { flex: 1 },
     header: {
       flexDirection: "row",
