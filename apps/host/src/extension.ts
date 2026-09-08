@@ -13,7 +13,7 @@
  */
 import { spawn, execFile } from "node:child_process";
 import { networkInterfaces } from "node:os";
-import { readFile, writeFile, unlink } from "node:fs/promises";
+import { readFile, writeFile, unlink, chmod, readdir } from "node:fs/promises";
 import { join } from "node:path";
 import { homedir } from "node:os";
 import { fileURLToPath } from "node:url";
@@ -91,6 +91,22 @@ async function readPid(): Promise<number | null> {
   } catch {
     return null;
   }
+}
+
+/** 配对二维码 PNG 固定文件名（覆盖写，避免每次 qr 累积含 token 的图片） */
+const PAIR_QR_FILE = "maestro-mobile-pair.png";
+
+/** 删除历史遗留的配对 PNG（含旧版按 code 命名的 `maestro-mobile-pair-<code>.png`），保留 keep 自身 */
+async function sweepStalePairPng(keep: string): Promise<void> {
+  const dir = join(homedir(), ".pi");
+  try {
+    for (const name of await readdir(dir)) {
+      if (!name.startsWith("maestro-mobile-pair") || !name.endsWith(".png")) continue;
+      const p = join(dir, name);
+      if (p === keep) continue;
+      await unlink(p).catch(() => { });
+    }
+  } catch { /* 目录不可读忽略 */ }
 }
 
 /** 读取持久化 token（host start 时生成；未启动过返回空） */
@@ -224,8 +240,11 @@ export default function maestroHostExtension(pi: ExtensionAPI): void {
         const primary = `ws://${shown[0]}:${port}/ws`;
         const url = `maestro-mobile://pair?ws=${encodeURIComponent(primary)}&token=${encodeURIComponent(token)}&ips=${encodeURIComponent(shown.join(","))}&c=${code}&p=${port}`;
         const { generateQrPng } = await import("./server/qr-png.js");
-        const pngPath = join(homedir(), ".pi", `maestro-mobile-pair-${code}.png`);
-        await writeFile(pngPath, generateQrPng(url));
+        // 单一固定文件名 + 0600 权限：PNG 内嵌 token，绝不能按 code 累积成堆、也不能同机他用户可读。
+        const pngPath = join(homedir(), ".pi", PAIR_QR_FILE);
+        await sweepStalePairPng(pngPath);
+        await writeFile(pngPath, generateQrPng(url), { mode: 0o600 });
+        await chmod(pngPath, 0o600); // 已存在时 mode 选项不生效，显式收紧
         const opener = process.platform === "darwin" ? "open" : process.platform === "win32" ? "start" : "xdg-open";
         try {
           execFile(opener, process.platform === "win32" ? ["", pngPath] : [pngPath], () => { /* 忽略失败：无 GUI 环境 */ });
