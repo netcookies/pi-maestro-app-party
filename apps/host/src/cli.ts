@@ -74,6 +74,28 @@ function parseArgs(argv: string[]): CliArgs {
 async function main(): Promise<void> {
   const cli = parseArgs(process.argv.slice(2));
 
+  // 默认行为（无子命令）：已启动 → 打印 status 退出；未启动 → 继续正常启动。
+  // 显式传 --port/-host 等参数时跳过该探测（用户明确要起一个实例）。
+  const hasPositional = process.argv.slice(2).some((a) => !a.startsWith("--") && !/^(4739|\d+|0\.0\.0\.0|127\.0\.0\.1|localhost)$/.test(a));
+  const explicitFlags = process.argv.slice(2).filter((a) => a === "--port" || a === "--host").length > 0;
+  if (!hasPositional && !explicitFlags) {
+    try {
+      const res = await fetch(`http://127.0.0.1:${cli.port}/api/health`, { signal: AbortSignal.timeout(1200) });
+      // 已有实例：打印 status 后退出（不重复起进程）
+      const persisted = await loadOrCreateToken();
+      const s = await fetch(`http://127.0.0.1:${cli.port}/api/status`, {
+        headers: { Authorization: `Bearer ${persisted}` },
+        signal: AbortSignal.timeout(1500),
+      });
+      if (s.ok) {
+        const d = (await s.json()) as { version?: string; sessions?: number; uptimeMs?: number; piVersion?: string };
+        console.log(`[maestro-mobile] 已在运行 :${cli.port} — v${d.version ?? "?"} · ${d.sessions ?? 0} 会话 · 运行 ${Math.round((d.uptimeMs ?? 0) / 60000)} 分钟 · pi ${d.piVersion ?? "?"}`);
+        console.log(`[maestro-mobile] token: ${persisted.slice(0, 6)}…${persisted.slice(-4)}（完整值 ${TOKEN_FILE} 或 /maestro-mobile qr）`);
+        return;
+      }
+    } catch { /* 未启动 → 继续启动 */ }
+  }
+
   // P0-1：强制 token —— 未提供时生成并持久化到 ~/.pi/maestro-mobile-token（重启不变号）
   const token = cli.token ?? (await loadOrCreateToken());
   if (!cli.token) {

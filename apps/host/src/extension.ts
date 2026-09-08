@@ -125,7 +125,8 @@ async function refreshWidget(): Promise<void> {
       windows = d.aliveCount ?? 0;
     }
   } catch { /* 探测失败按 0 显示 */ }
-  widgetCtx.ui.setWidget(WIDGET_KEY, [`● maestro-mobile :${port} · ${windows} 窗口`]);
+  // belowEditor：编辑器下方、状态栏（EVOL 行）上方 —— 用户指定位置（默认 aboveEditor 会挤在 Todo 区下）
+  widgetCtx.ui.setWidget(WIDGET_KEY, [`● maestro-mobile :${port} · ${windows} 窗口`], { placement: "belowEditor" });
 }
 
 export default function maestroHostExtension(pi: ExtensionAPI): void {
