@@ -16,11 +16,13 @@ import { MobileHostServer } from "./server/mobile-host-server.js";
 import { MaestroStateReader } from "./maestro-state.js";
 import { PiSdkRuntimeFactory } from "./pi/pi-sdk-runtime.js";
 import { randomBytes } from "node:crypto";
-import { readFile, writeFile, mkdir } from "node:fs/promises";
+import { readFile, writeFile, unlink, mkdir } from "node:fs/promises";
 import { homedir } from "node:os";
 import { join } from "node:path";
 
 const TOKEN_FILE = join(homedir(), ".pi", "maestro-mobile-token");
+/** PID 文件（与 extension start/stop 共用同一语义：谁起的都能被 /maestro-mobile stop 停掉） */
+const PID_FILE = join(homedir(), ".pi", "maestro-mobile.pid");
 
 /** 读取或创建持久化 token（重启不变号，手机连接配置不失效） */
 async function loadOrCreateToken(): Promise<string> {
@@ -115,6 +117,8 @@ async function main(): Promise<void> {
 
   console.log(`[maestro-mobile] listening on http://${cli.host}:${server.address().port}`);
   console.log(`[maestro-mobile] token auth enabled (use ?token= or Bearer header)`);
+  // 写 PID 文件：/maestro-mobile stop 能停掉 cli 直接启动的实例（与 extension start 一致）
+  await writeFile(PID_FILE, String(process.pid), "utf8");
 
   // 优雅关闭
   let shuttingDown = false;
@@ -124,6 +128,7 @@ async function main(): Promise<void> {
     console.log(`[maestro-mobile] received ${signal}, shutting down...`);
     await controller.dispose();
     await server.close();
+    await unlink(PID_FILE).catch(() => {});
     console.log("[maestro-mobile] shutdown complete");
     process.exit(0);
   }
