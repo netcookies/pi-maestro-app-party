@@ -1,4 +1,13 @@
 apply plugin: "com.android.application"
+
+// ── 版本号单一来源：apps/mobile/app.json 的 expo.version ──────────────
+// versionCode 由 semver 自动推导（major*10000 + minor*100 + patch），保证单调递增；
+// bump 版本时只改 app.json，iOS Info.plist 由 expo prebuild 同步，Android 从这里读取。
+def appJson = new groovy.json.JsonSlurper().parseText(file("../../app.json").text)
+def appVersion = appJson.expo.version
+def (vMaj, vMin, vPatch) = appVersion.tokenize('.').collect { it.toInteger() }
+def appVersionCode = vMaj * 10000 + vMin * 100 + vPatch
+def appVersionName = appVersion
 apply plugin: "org.jetbrains.kotlin.android"
 apply plugin: "com.facebook.react"
 
@@ -96,8 +105,8 @@ android {
         applicationId 'dev.maestromobile.app'
         minSdkVersion rootProject.ext.minSdkVersion
         targetSdkVersion rootProject.ext.targetSdkVersion
-        versionCode 1
-        versionName "0.1.0"
+        versionCode appVersionCode
+        versionName appVersionName
     }
     signingConfigs {
         debug {
