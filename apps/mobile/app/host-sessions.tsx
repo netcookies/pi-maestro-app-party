@@ -29,7 +29,7 @@ export default function HostSessionsScreen() {
   const router = useRouter();
   const { theme } = useTheme();
   const styles = useMemo(() => makeStyles(theme), [theme]);
-  const { listHostSessions, listLiveSessions, openExistingSession, closeSession, loadSessionHistory, isConnected, connectionState, lastError } = useHost();
+  const { listHostSessions, listLiveSessions, openExistingSession, closeSession, loadSessionHistory, isConnected, connectionState, lastError, state: hostState } = useHost();
   // 当前已打开的会话（P2-4：open 新会话前先 close 旧的，避免 host 端旧 runner 泄漏）
   const openedSessionRef = useRef<string | null>(null);
   const cfg = getConfig();
@@ -132,13 +132,39 @@ export default function HostSessionsScreen() {
     }
   };
 
+  // Monitor running 窗口按 cwd 归并：这些窗口的「最近会话」也算活跃（窗口 running 但 agent 空闲时
+  // jsonl mtime 超过 live 阈值，纯 liveSessions 判定会漏掉 —— 用户在工作台/Monitor 看得到它却
+  // 在活跃 tab 找不到）
+  const runningWindowCwds = useMemo(() => {
+    const set = new Set<string>();
+    for (const w of hostState.monitor?.windows ?? []) {
+      if (w.status === "running" && w.cwd) set.add(w.cwd);
+    }
+    return set;
+  }, [hostState.monitor]);
+
+  /** 每个 cwd 的最新会话 id（sessions 无全局排序保证，这里自行推导） */
+  const latestPerCwd = useMemo(() => {
+    const m = new Map<string, HostSessionSummary>();
+    for (const s of sessions) {
+      const cur = m.get(s.cwd);
+      if (!cur || new Date(s.updatedAt).getTime() > new Date(cur.updatedAt).getTime()) m.set(s.cwd, s);
+    }
+    return m;
+  }, [sessions]);
+
+  const isSessionActive = useCallback((s: HostSessionSummary) =>
+    liveSessions.has(s.id)
+    || (runningWindowCwds.has(s.cwd) && latestPerCwd.get(s.cwd)?.id === s.id),
+  [liveSessions, runningWindowCwds, latestPerCwd]);
+
   // 过滤：Tab + 搜索
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase();
     return sessions.filter((s) => {
       // Tab 过滤
-      if (tab === "active" && !liveSessions.has(s.id)) return false;
-      if (tab === "history" && liveSessions.has(s.id)) return false;
+      if (tab === "active" && !isSessionActive(s)) return false;
+      if (tab === "history" && isSessionActive(s)) return false;
       // 搜索：标题/id/cwd/模型/名称
       if (!q) return true;
       return (
@@ -149,7 +175,7 @@ export default function HostSessionsScreen() {
         || (s.name ?? "").toLowerCase().includes(q)
       );
     });
-  }, [sessions, tab, query, liveSessions]);
+  }, [sessions, tab, query, liveSessions, isSessionActive]);
 
   // 按项目分组并扁平化为一维行：分组头按最新会话时间排序，组内保持原序
   const flatRows = useMemo<Row[]>(() => {
@@ -248,7 +274,7 @@ export default function HostSessionsScreen() {
     );
   }
 
-  const liveCount = filtered.filter((s) => liveSessions.has(s.id)).length;
+  const liveCount = filtered.filter(isSessionActive).length;
 
   return (
     <View style={styles.container}>

@@ -49,14 +49,13 @@ function hostStatus(port: number, timeoutMs = 800): Promise<Record<string, unkno
 }
 
 /**
- * 探测本机局域网 IPv4（给手机连接 URL 用；找不到回退 127.0.0.1）。
- * 双层过滤：① 接口名排虚拟（macOS utun/bridge/anpi…；Windows vEthernet/本地连接*（Wi-Fi Direct）/Loopback…）；
- *           ② 地址排无效段（APIPA 169.254/16、CGNAT 100.64/10 VPN）；再按常见局域网网段排序。
+ * 探测本机全部候选 IPv4（给手机连接 URL 用；找不到回退 127.0.0.1）。
+ * 决策（用户确认）：不过滤接口类型 —— VPN utun/Tailscale、Mac 桥接 bridge、Docker 网段全部保留，
+ * 手机可能恰好通过其中某个网段可达；安全边界靠强制 token，不靠网段隐藏。
+ * 仅排除 loopback 与无效 APIPA 自造地址；排序按常见家庭/办公网段优先（192.168 > 10.x > 172.16-31 > 其它），
+ * QR 逐个渲染由用户挑能连的。
  */
-function lanIp(): string {
-  const VIRTUAL = /^(utun|tap|tun|bridge|anpi|awdl|llw|docker|veth|lo|vmnet|vEthernet|WSL|Loopback)/i;
-  // Windows Wi-Fi Direct 虚拟适配器的中文名（「本地连接* 1」）无固定前缀，用 * 特征识别
-  const WINDOWS_VIRTUAL = /本地连接\*|Local Area Connection\*/i;
+function lanIpCandidates(): string[] {
   const rank = (ip: string): number => {
     if (ip.startsWith("192.168.")) return 0;
     if (ip.startsWith("10.")) return 1;
@@ -64,17 +63,19 @@ function lanIp(): string {
     return 3;
   };
   const candidates: { ip: string; r: number }[] = [];
-  for (const [name, addrs] of Object.entries(networkInterfaces())) {
-    if (VIRTUAL.test(name) || WINDOWS_VIRTUAL.test(name)) continue;
+  for (const addrs of Object.values(networkInterfaces())) {
     for (const a of addrs ?? []) {
       if (a.family !== "IPv4" || a.internal) continue;
       if (a.address.startsWith("169.254.")) continue; // APIPA：未连上的自造地址
-      if (a.address.startsWith("100.")) continue;     // CGNAT：Tailscale/运营商级 NAT
       candidates.push({ ip: a.address, r: rank(a.address) });
     }
   }
   candidates.sort((x, y) => x.r - y.r);
-  return candidates[0]?.ip ?? "127.0.0.1";
+  return candidates.map((c) => c.ip);
+}
+
+function lanIp(): string {
+  return lanIpCandidates()[0] ?? "127.0.0.1";
 }
 
 /** host cli.js 入口：同包 dist（pi install npm:pi-maestro-mobile 时随包分发） */
@@ -170,14 +171,20 @@ export default function maestroHostExtension(pi: ExtensionAPI): void {
           ctx.ui.notify("maestro-mobile: 未找到 token（~/.pi/maestro-mobile-token），先用 /maestro-mobile start 启动一次", "warning");
           return;
         }
-        // v0.2 配对码：scheme 格式（App 端 extractPairing 解析；裸 ws URL 也兼容）
-        const wsUrl = `ws://${lanIp()}:${port}/ws`;
-        const url = `maestro-mobile://pair?ws=${encodeURIComponent(wsUrl)}&token=${encodeURIComponent(token)}`;
-        ctx.ui.notify(`手机 App 连接地址：${wsUrl}\n（token 见二维码 / ~/.pi/maestro-mobile-token）`, "info");
-        qrcodeTerminal.generate(url, { small: true }, (q: string) => {
-          // 经 notify 逐行送出（QR 用 block 字符，等宽终端可扫）
-          ctx.ui.notify(q, "info");
-        });
+        // v0.2.2：全部候选 IP 逐个生成 QR（含 VPN/CGNAT），手机扫能连的那个即可。
+        // 单 QR 编多 IP 会让 payload 膨胀降低扫码成功率，逐个展示更稳。
+        const ips = lanIpCandidates();
+        const shown = ips.length > 0 ? ips : ["127.0.0.1"];
+        ctx.ui.notify(`共 ${shown.length} 个候选地址，逐个扫码尝试（手机与 PC 需在同一网络可达该地址）：`, "info");
+        for (const [i, ip] of shown.entries()) {
+          const wsUrl = `ws://${ip}:${port}/ws`;
+          const url = `maestro-mobile://pair?ws=${encodeURIComponent(wsUrl)}&token=${encodeURIComponent(token)}`;
+          const tag = ip.startsWith("100.") || /^(198\.18|198\.19)\./.test(ip) ? "（VPN/代理网段）" : "";
+          ctx.ui.notify(`── [${i + 1}/${shown.length}] ${wsUrl}${tag}`, "info");
+          qrcodeTerminal.generate(url, { small: true }, (q: string) => {
+            ctx.ui.notify(q, "info");
+          });
+        }
         return;
       }
 

@@ -14,7 +14,7 @@ import { useHost } from "../store";
 import { LineIcon } from "./LineIcon";
 import { MiuixSwitch } from "./MiuixSwitch";
 import { QRPairScanner } from "./QRPairScanner";
-import { loadPairedHosts, savePairedHosts, type PairedHost } from "../paired-hosts";
+import { loadPairedHosts, savePairedHosts, rememberRemovedHost, forgetRemovedHost, type PairedHost } from "../paired-hosts";
 
 export function HostConnectCard({ hostUrl, token, onHostUrlChange, onTokenChange }: {
   hostUrl: string;
@@ -81,6 +81,7 @@ export function HostConnectCard({ hostUrl, token, onHostUrlChange, onTokenChange
   const handlePaired = (info: { hostUrl: string; token?: string; displayHost: string }) => {
     onHostUrlChange(info.hostUrl);
     onTokenChange(info.token ?? "");
+    void forgetRemovedHost(info.hostUrl); // 重新配对成功：解除删除记忆
     void savePairedHosts([
       { name: info.displayHost, hostUrl: info.hostUrl, token: info.token ?? "", pairedAt: new Date().toISOString() },
       ...paired.filter((p) => p.hostUrl !== info.hostUrl),
@@ -103,6 +104,7 @@ export function HostConnectCard({ hostUrl, token, onHostUrlChange, onTokenChange
     const next = paired.filter((p) => p.hostUrl !== h.hostUrl);
     setPaired(next);
     void savePairedHosts(next);
+    void rememberRemovedHost(h.hostUrl); // 幽灵修复：删除过的地址不再被 legacy 导入重建
   };
 
   const statusColor = isConnected ? theme.success : tokenError ? theme.error : busy ? theme.accent : theme.error;

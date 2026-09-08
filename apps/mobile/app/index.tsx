@@ -33,7 +33,7 @@ function formatTokens(n: number): string {
 
 export default function DashboardScreen() {
   const router = useRouter();
-  const { state, isConnected, fetchMonitorState, fetchSessionUsage } = useHost();
+  const { state, isConnected, fetchMonitorState, fetchSessionUsage, openSessionContinue } = useHost();
   const { theme } = useTheme();
   const styles = React.useMemo(() => makeStyles(theme), [theme]);
 
@@ -90,8 +90,21 @@ export default function DashboardScreen() {
   const renderWindowRow = useCallback(({ item }: { item: MonitorWindowSummary }) => {
     const statusColor = item.status === "running" ? theme.success : item.status === "sleeping" ? theme.warning : theme.muted;
     const agents = metrics.runningWindows.find((r) => r.key === windowKey(item));
+    const openWindow = async () => {
+      if (!item.cwd) return; // 无 cwd 的窗口无法定位会话
+      try {
+        const sessionId = await openSessionContinue(item.cwd);
+        if (sessionId) router.push({ pathname: "/session", params: { id: sessionId } });
+      } catch { /* host 打开失败静默（窗口可能已关闭） */ }
+    };
     return (
-      <View style={styles.row}>
+      <TouchableOpacity
+        style={styles.row}
+        onPress={() => void openWindow()}
+        disabled={!item.cwd}
+        accessibilityRole="button"
+        accessibilityLabel={`打开窗口 ${item.name ?? "未命名"} 的会话`}
+      >
         <View style={[styles.dot, { backgroundColor: statusColor }]} />
         <View style={styles.rowMain}>
           <Text style={styles.rowTitle} numberOfLines={1}>{item.name ?? "未命名窗口"}</Text>
@@ -100,9 +113,9 @@ export default function DashboardScreen() {
             {agents && agents.agentsTotal > 0 ? ` · ${agents.agentsRunning}/${agents.agentsTotal} teammates` : ""}
           </Text>
         </View>
-      </View>
+      </TouchableOpacity>
     );
-  }, [theme, styles, metrics.runningWindows]);
+  }, [theme, styles, metrics.runningWindows, openSessionContinue, router]);
 
   const renderAttentionGroup = useCallback(({ item }: { item: { key: string; windowName: string; items: { code: string; severity: string; message: string }[] } }) => (
     <View style={styles.alert}>
@@ -119,7 +132,7 @@ export default function DashboardScreen() {
         {/* Hero：Token 用量卡（首个已打开会话的 usage；无打开会话时显示待接入提示） */}
         <View style={styles.hero}>
           <View style={styles.heroTop}>
-            <Text style={styles.heroLabel}>当前会话用量</Text>
+            <Text style={styles.heroLabel}>已打开会话用量</Text>
             <View style={styles.live}>
               <View style={[styles.liveDot, { backgroundColor: isConnected ? theme.success : theme.error }]} />
               <Text style={styles.liveText}>{isConnected ? "Host 在线" : "未连接"}</Text>

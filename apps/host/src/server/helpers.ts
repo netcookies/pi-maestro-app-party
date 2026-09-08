@@ -14,29 +14,53 @@ import type { HostSessionList, HostSessionSummary } from "@maestro-mobile/shared
  * 将 SessionManager 返回的完整 SessionInfo 裁剪为移动端友好的摘要。
  * 关键：不携带 allMessagesText 等大字段，避免移动端流量/内存浪费。
  */
+/** model 查询缓存：path → { mtimeMs, model }（jsonl 未变时跳过 tail 读取，消除全量列表的重复 IO） */
+const modelCache = new Map<string, { mtimeMs: number; model: string | undefined }>();
+
 export async function toSessionSummaryList(records: unknown[]): Promise<HostSessionList> {
-  const sessions: HostSessionSummary[] = [];
-  for (const raw of records) {
-    const r = raw as Record<string, unknown>;
+  const recordsArr = records as Record<string, unknown>[];
+  // 先并行取全部 model（分批 32 并发；mtime 未变的路径命中缓存，零 IO）
+  const models = await Promise.all(recordsArr.map((r) => latestModelFromJsonlCached(String(r.path ?? r.sessionFile ?? ""))));
+  const sessions: HostSessionSummary[] = recordsArr.map((r, i) => {
     const cwd = String(r.cwd ?? "");
     const title = String(r.firstMessage ?? r.title ?? "");
-    const id = String(r.id ?? "");
     const path = String(r.path ?? r.sessionFile ?? "");
-    sessions.push({
-      id,
+    return {
+      id: String(r.id ?? ""),
       cwd,
       cwdName: cwd.split("/").filter(Boolean).pop() ?? cwd,
       path,
       title: title.length > 80 ? `${title.slice(0, 80)}…` : title,
       name: typeof r.name === "string" && r.name ? r.name : undefined,
-      model: await latestModelFromJsonl(path),
+      model: models[i],
       messageCount: typeof r.messageCount === "number" ? r.messageCount : 0,
       // 规范化为 ISO 字符串：Hermes（iOS）解析不了 "Thu Sep 03 2026 ..." 这种本地化格式
       updatedAt: normalizeIso(String(r.modified ?? r.updatedAt ?? "")),
       ...(r.created ? { createdAt: normalizeIso(String(r.created)) } : {}),
-    });
-  }
+    };
+  });
   return { sessions, observedAt: new Date().toISOString() };
+}
+
+/** 带 mtime 缓存的 model 查询（并发分批由调用方 Promise.all 控制，单次 tail 读本身轻量） */
+async function latestModelFromJsonlCached(path: string): Promise<string | undefined> {
+  if (!path || !path.endsWith(".jsonl")) return undefined;
+  try {
+    const { stat } = await import("node:fs/promises");
+    const st = await stat(path);
+    const cached = modelCache.get(path);
+    if (cached && cached.mtimeMs === st.mtimeMs) return cached.model;
+    const model = await latestModelFromJsonl(path);
+    modelCache.set(path, { mtimeMs: st.mtimeMs, model });
+    // 缓存防膨胀：超 2000 条时清掉最旧的 一半
+    if (modelCache.size > 2000) {
+      const keys = [...modelCache.keys()].slice(0, 1000);
+      for (const k of keys) modelCache.delete(k);
+    }
+    return model;
+  } catch {
+    return undefined;
+  }
 }
 
 /** 从 jsonl 里找最近的 model_change，返回 provider/modelId 精简名 */
