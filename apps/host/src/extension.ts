@@ -11,9 +11,8 @@
  * host 仍是独立常驻进程（不随 Pi 会话生灭）；本扩展只做生命周期遥控。
  * 无 npm 包的 host 时（pi install 场景），spawn 同包 dist/cli.js。
  */
-import { spawn } from "node:child_process";
+import { spawn, execFile } from "node:child_process";
 import { networkInterfaces } from "node:os";
-import qrcodeTerminal from "qrcode-terminal";
 import { readFile, writeFile, unlink } from "node:fs/promises";
 import { join } from "node:path";
 import { homedir } from "node:os";
@@ -211,19 +210,28 @@ export default function maestroHostExtension(pi: ExtensionAPI): void {
           ctx.ui.notify("maestro-mobile: 未找到 token（~/.pi/maestro-mobile-token），先用 /maestro-mobile start 启动一次", "warning");
           return;
         }
-        // v0.2.8 短码 + 全候选 IP 列表：QR 带 8 位短码和逗号分隔的全部候选 IP（~107 字符 / 21 行，
-        // 在实测可扫尺寸内；逗号不编码省 30+ 字符）。App 对每个候选并行换码，任一可达即可配对
-        // ——修复 0.2.7「首选 IP 恰好不可达则死锁」（4 候选 3 可达但首选不可达的场景）。
+        // v0.2.9 配对码 + 高对比度 PNG：终端 ▀▄█ 半块 QR 的颜色取自终端主题，
+        // 暗色主题下对比度仅 ~72 灰度级（实测 37..109），微信可容忍但 iOS Vision / expo-camera 扫不出。
+        // 改为生成纯黑白 PNG（对比度 255）并自动打开；同时在 App 里支持手动输入配对码（不依赖相机）。
         const ips = lanIpCandidates();
         const shown = ips.length > 0 ? ips : ["127.0.0.1"];
         const code = Array.from({ length: 8 }, () => "ABCDEFGHJKMNPQRSTUVWXYZ23456789"[Math.floor(Math.random() * 31)]).join("");
         const { setPairingCode } = await import("./server/pairing-codes.js");
         await setPairingCode(code, { token, ips: shown, port });
         const url = `maestro-mobile://pair?c=${code}&i=${shown.join(",")}&p=${port}`;
-        ctx.ui.notify(`配对短码: ${code}（5 分钟内有效）· ${shown.length} 个候选地址`, "info");
-        qrcodeTerminal.generate(url, { small: true }, (q: string) => {
-          ctx.ui.notify(q, "info");
-        });
+        const { generateQrPng } = await import("./server/qr-png.js");
+        const pngPath = join(homedir(), ".pi", `maestro-mobile-pair-${code}.png`);
+        await writeFile(pngPath, generateQrPng(url));
+        const opener = process.platform === "darwin" ? "open" : process.platform === "win32" ? "start" : "xdg-open";
+        try {
+          execFile(opener, process.platform === "win32" ? ["", pngPath] : [pngPath], () => { /* 忽略失败：无 GUI 环境 */ });
+        } catch { /* 无 GUI 环境（Docker/SSH）忽略，路径已打印 */ }
+        ctx.ui.notify(
+          `配对短码: ${code}（5 分钟有效）· ${shown.length} 个候选地址\n` +
+          `二维码已打开（图片对比度足够，任何扫码器可识别）；如未弹出请手动打开：${pngPath}\n` +
+          `或在 App 里选「输入配对码」直接填 ${code}`,
+          "info",
+        );
         return;
       }
 
