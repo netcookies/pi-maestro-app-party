@@ -28,13 +28,60 @@ export function QRPairScanner({ visible, onClose, onScanned }: {
   const [pending, setPending] = useState<PairingInfo | null>(null);
   const [probing, setProbing] = useState(true);
   const [probeMap, setProbeMap] = useState<Map<string, "ok" | "fail" | "probing">>(new Map());
+  const [pairError, setPairError] = useState<string | null>(null);
+
+  const startProbing = (enriched: PairingInfo) => {
+    setPending(enriched);
+    setProbing(true);
+    const map = new Map<string, "ok" | "fail" | "probing">();
+    enriched.candidateIps.forEach((ip) => map.set(ip, "probing"));
+    setProbeMap(new Map(map));
+    void Promise.all(
+      enriched.candidateIps.map(async (ip) => {
+        const url = buildCandidateUrl(enriched, ip);
+        const httpBase = url.replace(/^ws:\/\//, "http://").replace(/\/ws$/, "");
+        try {
+          await fetch(`${httpBase}/api/health`, { signal: AbortSignal.timeout(2500) });
+          map.set(ip, "ok");
+        } catch {
+          map.set(ip, "fail");
+        }
+        setProbeMap(new Map(map));
+      }),
+    ).finally(() => setProbing(false));
+  };
 
   const handleBarcode = ({ data }: { data: string }) => {
     if (locked) return;
     const info = extractPairing(data);
     if (!info) return; // 非配对码，继续扫
     setLocked(true);
-    // 先尝试从 host 拉全部候选 IP（QR payload 保持短小保证终端渲染可扫；0.2.3 旧 host 无该端点则退化为单候选）
+
+    // 两段式短码（v0.2.7）：GET /api/pair-short?code= 换取 {token, ips}
+    if (info.shortCode) {
+      void (async () => {
+        try {
+          const httpBase = info.hostUrl.replace(/^ws:\/\//, "http://").replace(/\/ws$/, "");
+          const res = await fetch(`${httpBase}/api/pair-short?code=${encodeURIComponent(info.shortCode!)}`, { signal: AbortSignal.timeout(2500) });
+          if (!res.ok) throw new Error(`pair-short ${res.status}`);
+          const d = (await res.json()) as { token: string; ips: string[]; port: number };
+          const ips = (d.ips ?? []).filter((s) => /^\d{1,3}(\.\d{1,3}){3}$/.test(s));
+          const enriched: PairingInfo = {
+            ...info,
+            token: d.token || undefined,
+            candidateIps: ips.length > 0 ? ips : [new URL(info.hostUrl).hostname],
+          };
+          startProbing(enriched);
+        } catch {
+          // 短码换取失败（网络不通/过期）：仍弹层让用户看到候选与状态，不再静默直连
+          setPairError("配对码换取失败（网络不可达或已过期），请确认手机与 PC 网络后重试");
+          startProbing(info);
+        }
+      })();
+      return;
+    }
+
+    // 旧格式（token 在 QR 里）：尝试拉候选，失败也弹层（可观测）
     void (async () => {
       let enriched = info;
       try {
@@ -50,25 +97,7 @@ export function QRPairScanner({ visible, onClose, onScanned }: {
         onScanned(enriched);
         return;
       }
-      // 多候选：弹选择器，并行探测每个 IP 的可达性（/api/health 任意响应=网络可达；401 也算可达）
-      setPending(enriched);
-      setProbing(true);
-      const map = new Map<string, "ok" | "fail" | "probing">();
-      enriched.candidateIps.forEach((ip) => map.set(ip, "probing"));
-      setProbeMap(new Map(map));
-      void Promise.all(
-        enriched.candidateIps.map(async (ip) => {
-          const url = buildCandidateUrl(enriched, ip);
-          const httpBase = url.replace(/^ws:\/\//, "http://").replace(/\/ws$/, "");
-          try {
-            await fetch(`${httpBase}/api/health`, { signal: AbortSignal.timeout(2500) });
-            map.set(ip, "ok");
-          } catch {
-            map.set(ip, "fail");
-          }
-          setProbeMap(new Map(map));
-        }),
-      ).finally(() => setProbing(false));
+      startProbing(enriched);
     })();
   };
 
@@ -93,6 +122,7 @@ export function QRPairScanner({ visible, onClose, onScanned }: {
         {pending ? (
           <View style={[styles.pickerSheet, { backgroundColor: theme.cardBg }]}>
             <Text style={[styles.pickerTitle, { color: theme.text }]}>选择要连接的地址</Text>
+            {pairError ? <Text style={[styles.pickerHint, { color: theme.error }]}>{pairError}</Text> : null}
             <Text style={[styles.pickerHint, { color: theme.onBackgroundVariant ?? theme.muted }]}>
               绿点 = 已探测可达 · 红 = 不可达
             </Text>

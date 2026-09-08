@@ -18,6 +18,8 @@ export interface PairingInfo {
   candidateIps: string[];
   /** WS 端口（拼候选地址用） */
   port: string;
+  /** 两段式短码（v0.2.7）：非空时需先 GET /api/pair-short?code= 换取 token+ips */
+  shortCode?: string;
 }
 
 export function extractPairing(raw: string): PairingInfo | null {
@@ -25,6 +27,26 @@ export function extractPairing(raw: string): PairingInfo | null {
   if (!text) return null;
 
   // maestro-mobile://pair?ws=...&token=...
+  if (text.includes("c=") && text.includes("ip=") && !text.includes("token=")) {
+    try {
+      const u = new URL(text.replace("maestro-mobile://", "maestro-mobile-pair://"));
+      const code = u.searchParams.get("c");
+      const ip = u.searchParams.get("ip");
+      const port = u.searchParams.get("port") ?? "4739";
+      if (code && ip && /^\d{1,3}(\.\d{1,3}){3}$/.test(ip)) {
+        return {
+          hostUrl: `ws://${ip}:${port}/ws`,
+          displayHost: `${ip}:${port}`,
+          candidateIps: [ip],
+          port,
+          shortCode: code,
+        };
+      }
+    } catch {
+      return null;
+    }
+  }
+
   if (text.startsWith("maestro-mobile://")) {
     try {
       const u = new URL(text.replace("maestro-mobile://", "maestro-mobile-pair://"));
@@ -39,6 +61,7 @@ export function extractPairing(raw: string): PairingInfo | null {
     }
   }
 
+  // 两段式短码：maestro-mobile://pair?c=<code>&ip=<首选>&port=<port>
   // 裸 ws URL：ws://<ip>:<port>/ws?token=...
   if (/^wss?:\/\//i.test(text)) {
     try {

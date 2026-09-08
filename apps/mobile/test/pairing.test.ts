@@ -61,3 +61,25 @@ describe("pairing.ips 多候选解析", () => {
     expect(info!.candidateIps).toEqual(["1.2.3.4", "5.6.7.8"]);
   });
 });
+
+describe("pairing.两段式短码", () => {
+  it("解析 ?c=&ip=&port= 形态（v0.2.7 短码）", () => {
+    const raw = "maestro-mobile://pair?c=AB3D5K7M&ip=172.30.30.17&port=4739";
+    const info = extractPairing(raw);
+    expect(info!.shortCode).toBe("AB3D5K7M");
+    expect(info!.hostUrl).toBe("ws://172.30.30.17:4739/ws");
+    expect(info!.candidateIps).toEqual(["172.30.30.17"]);
+    expect(info!.token).toBeUndefined();
+  });
+
+  it("短码形态缺 c 或 ip 无效 → null", () => {
+    expect(extractPairing("maestro-mobile://pair?ip=1.2.3.4&port=4739")).toBeNull();
+    expect(extractPairing("maestro-mobile://pair?c=CODE&ip=not-an-ip&port=4739")).toBeNull();
+  });
+
+  it("token 形态不被误判为短码", () => {
+    const info = extractPairing("maestro-mobile://pair?ws=ws%3A%2F%2F1.2.3.4%3A4739%2Fws&token=t");
+    expect(info!.shortCode).toBeUndefined();
+    expect(info!.token).toBe("t");
+  });
+});

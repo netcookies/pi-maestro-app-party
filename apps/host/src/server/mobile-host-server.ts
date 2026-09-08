@@ -140,6 +140,20 @@ export class MobileHostServer {
         return;
       }
 
+      if (request.method === "GET" && url.pathname === "/api/pair-short") {
+        // 两段式配对：短码换取 {token, ips}。此端点不做 token 鉴权——短码本身就是一次性凭证（5 分钟 TTL）。
+        const code = url.searchParams.get("code") ?? "";
+        const { consumePairingCode } = await import("./pairing-codes.js");
+        const entry = await consumePairingCode(code);
+        if (!entry) {
+          writeJson(response, 404, { error: "pairing code invalid or expired" });
+          return;
+        }
+        writeJson(response, 200, { token: entry.token, ips: entry.ips, port: entry.port });
+        return;
+      }
+
+
       if (!this.authorized(request, url)) {
         writeJson(response, 401, { error: "Unauthorized" });
         return;
