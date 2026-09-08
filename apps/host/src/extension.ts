@@ -103,18 +103,18 @@ async function readToken(): Promise<string> {
   }
 }
 
-// ── 状态栏 widget ──────────────────────────────────────────────
+// ── 状态栏 status（嵌在 footer，与 EVOL 同一行）─────────────────
 
-const WIDGET_KEY = "maestro-mobile-status";
-let widgetCtx: ExtensionContext | null = null;
+const STATUS_KEY = "maestro-mobile";
+let statusCtx: ExtensionContext | null = null;
 
-/** 刷新状态栏 widget：● 运行中 :4739 · N 窗口 / 未运行 */
-async function refreshWidget(): Promise<void> {
-  if (!widgetCtx) return;
+/** 刷新 footer status：● maestro-mobile :4739 · N 窗口（未运行时清除） */
+async function refreshStatus(): Promise<void> {
+  if (!statusCtx) return;
   const port = hostPort();
   const alive = await probeHealth(port);
   if (!alive) {
-    widgetCtx.ui.setWidget(WIDGET_KEY, undefined);
+    statusCtx.ui.setStatus(STATUS_KEY, undefined);
     return;
   }
   let windows = 0;
@@ -125,17 +125,17 @@ async function refreshWidget(): Promise<void> {
       windows = d.aliveCount ?? 0;
     }
   } catch { /* 探测失败按 0 显示 */ }
-  // belowEditor：编辑器下方、状态栏（EVOL 行）上方 —— 用户指定位置（默认 aboveEditor 会挤在 Todo 区下）
-  widgetCtx.ui.setWidget(WIDGET_KEY, [`● maestro-mobile :${port} · ${windows} 窗口`], { placement: "belowEditor" });
+  // setStatus 嵌入 footer 状态栏（与 EVOL/relay 同一行），不再占独立行
+  statusCtx.ui.setStatus(STATUS_KEY, `● maestro-mobile :${port} · ${windows} 窗口`);
 }
 
 export default function maestroHostExtension(pi: ExtensionAPI): void {
-  // 会话启动后挂状态栏 widget；30s 周期刷新（host 状态变化时感知）
+  // 会话启动后挂 footer status（与 EVOL 同行）；30s 周期刷新（host 状态变化时感知）
   pi.on("session_start", (_event, ctx) => {
-    widgetCtx = ctx;
-    void refreshWidget();
-    const timer = setInterval(() => void refreshWidget(), 30_000);
-    pi.on("session_shutdown", () => { clearInterval(timer); widgetCtx = null; });
+    statusCtx = ctx;
+    void refreshStatus();
+    const timer = setInterval(() => void refreshStatus(), 30_000);
+    pi.on("session_shutdown", () => { clearInterval(timer); statusCtx = null; });
   });
 
   pi.registerCommand("maestro-mobile", {
@@ -226,7 +226,7 @@ export default function maestroHostExtension(pi: ExtensionAPI): void {
             await new Promise((r) => setTimeout(r, 300));
             if (await probeHealth(port)) {
               ctx.ui.notify(`maestro-mobile: 已启动 :${port} pid=${child.pid}`, "info");
-              await refreshWidget();
+              void refreshStatus();
               return;
             }
           }
@@ -251,7 +251,7 @@ export default function maestroHostExtension(pi: ExtensionAPI): void {
           await unlink(PID_FILE).catch(() => { });
           ctx.ui.notify(`maestro-mobile: pid=${pid} 已不存在，清理 PID 文件`, "info");
         }
-        await refreshWidget();
+        void refreshStatus();
         return;
       }
 
