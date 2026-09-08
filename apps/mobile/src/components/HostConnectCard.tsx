@@ -32,6 +32,11 @@ export function HostConnectCard({ hostUrl, token, onHostUrlChange, onTokenChange
   // 多 host 实例
   const [paired, setPaired] = useState<PairedHost[]>([]);
   const [pickerOpen, setPickerOpen] = useState(false);
+  const [codeInputVisible, setCodeInputVisible] = useState(false);
+  const [codeValue, setCodeValue] = useState("");
+  const [codeHost, setCodeHost] = useState("");
+  const [codeError, setCodeError] = useState<string | null>(null);
+  const [codeBusy, setCodeBusy] = useState(false);
 
   useEffect(() => {
     void loadPairedHosts().then(setPaired);
@@ -76,6 +81,25 @@ export function HostConnectCard({ hostUrl, token, onHostUrlChange, onTokenChange
     const timer = setInterval(tick, 5000);
     return () => { alive = false; clearInterval(timer); };
   }, [isConnected, hostUrl, token]);
+
+  /** 配对码手动换码：GET /api/pair-short?code= → token+ips → 连接首选可达地址 */
+  const submitCode = async () => {
+    setCodeError(null);
+    setCodeBusy(true);
+    try {
+      const host = codeHost.trim();
+      const res = await fetch(`http://${host}:4739/api/pair-short?code=${encodeURIComponent(codeValue)}`, { signal: AbortSignal.timeout(4000) });
+      if (!res.ok) throw new Error(res.status === 404 ? "配对码无效或已过期，请在 PC 重新执行 /maestro-mobile qr" : `host 返回 ${res.status}`);
+      const d = (await res.json()) as { token: string; ips: string[]; port: number };
+      const ip = (d.ips ?? [])[0] ?? host;
+      setCodeInputVisible(false);
+      handlePaired({ hostUrl: `ws://${ip}:${d.port ?? 4739}/ws`, token: d.token, displayHost: `${ip}:${d.port ?? 4739}` });
+    } catch (e) {
+      setCodeError(e instanceof Error ? e.message : "换取失败，请检查 PC 地址与网络");
+    } finally {
+      setCodeBusy(false);
+    }
+  };
 
   /** 扫码/选择配对成功：保存到配对列表并连接 */
   const handlePaired = (info: { hostUrl: string; token?: string; displayHost: string }) => {
@@ -141,6 +165,15 @@ export function HostConnectCard({ hostUrl, token, onHostUrlChange, onTokenChange
           >
             <LineIcon name="image" size={16} color="#fff" />
             <Text style={styles.pairBtnText}>  扫码配对（PC 执行 /maestro-mobile qr）</Text>
+          </TouchableOpacity>
+
+          <TouchableOpacity
+            style={[styles.codeBtn, { backgroundColor: theme.secondaryContainer ?? theme.cardBg }]}
+            onPress={() => setCodeInputVisible(true)}
+            accessibilityRole="button"
+            accessibilityLabel="输入配对码"
+          >
+            <Text style={[styles.codeBtnText, { color: theme.text }]}>输入配对码（相机不可用时）</Text>
           </TouchableOpacity>
 
           <Text style={[styles.label, { color: theme.onBackgroundVariant ?? theme.muted }]}>Host 地址（可手动输入）</Text>
@@ -214,6 +247,50 @@ export function HostConnectCard({ hostUrl, token, onHostUrlChange, onTokenChange
           {lastError ? <Text style={[styles.errorText, { color: tokenError ? theme.error : theme.muted }]}>{lastError}</Text> : null}
         </View>
       )}
+
+      {/* 配对码手动输入弹层（相机不可用兜底：PC /maestro-mobile qr 通知里有 8 位码） */}
+      <Modal visible={codeInputVisible} transparent animationType="fade" onRequestClose={() => setCodeInputVisible(false)}>
+        <View style={[styles.codeMask, { backgroundColor: "rgba(0,0,0,0.45)" }]}>
+          <View style={[styles.codeSheet, { backgroundColor: theme.cardBg }]}>
+            <Text style={[styles.codeTitle, { color: theme.text }]}>输入配对码</Text>
+            <Text style={[styles.codeHint, { color: theme.onBackgroundVariant ?? theme.muted }]}>
+              PC 执行 /maestro-mobile qr 后，通知里显示 8 位配对码（5 分钟有效）
+            </Text>
+            <TextInput
+              style={[styles.input, { backgroundColor: theme.surfaceVariant, color: theme.text, borderColor: theme.border }]}
+              value={codeValue}
+              onChangeText={(t) => setCodeValue(t.toUpperCase().replace(/[^A-Z0-9]/g, "").slice(0, 8))}
+              placeholder="如 AB3D5K7M"
+              placeholderTextColor={theme.onBackgroundVariant ?? theme.muted}
+              autoCapitalize="characters"
+              autoCorrect={false}
+            />
+            <TextInput
+              style={[styles.input, { backgroundColor: theme.surfaceVariant, color: theme.text, borderColor: theme.border }]}
+              value={codeHost}
+              onChangeText={setCodeHost}
+              placeholder="PC 地址，如 192.168.1.5"
+              placeholderTextColor={theme.onBackgroundVariant ?? theme.muted}
+              autoCapitalize="none"
+              autoCorrect={false}
+              keyboardType="numbers-and-punctuation"
+            />
+            {codeError ? <Text style={[styles.errorText, { color: theme.error }]}>{codeError}</Text> : null}
+            <TouchableOpacity
+              style={[styles.btn, { backgroundColor: theme.buttonPrimary, opacity: codeBusy || codeValue.length < 6 || !codeHost.trim() ? 0.5 : 1 }]}
+              disabled={codeBusy || codeValue.length < 6 || !codeHost.trim()}
+              onPress={() => void submitCode()}
+              accessibilityRole="button"
+              accessibilityLabel="用配对码连接"
+            >
+              <Text style={styles.btnText}>{codeBusy ? "换取中…" : "连接"}</Text>
+            </TouchableOpacity>
+            <TouchableOpacity style={{ alignItems: "center", paddingVertical: MIUIX_SPACE.md }} onPress={() => setCodeInputVisible(false)} accessibilityRole="button" accessibilityLabel="取消">
+              <Text style={{ color: theme.muted }}>取消</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      </Modal>
 
       {/* 扫码弹层 */}
       <QRPairScanner
@@ -304,6 +381,12 @@ function makeStyles(theme: ReturnType<typeof useTheme>["theme"]) {
     },
     btnText: { color: "#fff", fontWeight: "600", fontSize: MIUIX_TYPE.body2 },
     errorText: { fontSize: MIUIX_TYPE.footnote1, marginTop: MIUIX_SPACE.sm },
+    codeBtn: { borderRadius: MIUIX_RADIUS.md, minHeight: 40, alignItems: "center", justifyContent: "center", marginBottom: MIUIX_SPACE.md },
+    codeBtnText: { fontSize: MIUIX_TYPE.footnote1, fontWeight: "600" },
+    codeMask: { flex: 1, justifyContent: "center", padding: MIUIX_SPACE.xl },
+    codeSheet: { borderRadius: MIUIX_RADIUS.lg, padding: MIUIX_SPACE.lg },
+    codeTitle: { fontSize: MIUIX_TYPE.body1, fontWeight: "700", marginBottom: MIUIX_SPACE.xs },
+    codeHint: { fontSize: MIUIX_TYPE.footnote2, marginBottom: MIUIX_SPACE.md },
     // Host 选择器
     pickerMask: { flex: 1, backgroundColor: "rgba(0,0,0,0.45)", justifyContent: "flex-end" },
     pickerSheet: { borderTopLeftRadius: 22, borderTopRightRadius: 22, padding: MIUIX_SPACE.lg, paddingBottom: MIUIX_SPACE.xxl },

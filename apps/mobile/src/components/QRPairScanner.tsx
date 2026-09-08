@@ -29,6 +29,7 @@ export function QRPairScanner({ visible, onClose, onScanned }: {
   const [probing, setProbing] = useState(true);
   const [probeMap, setProbeMap] = useState<Map<string, "ok" | "fail" | "probing">>(new Map());
   const [pairError, setPairError] = useState<string | null>(null);
+  const [unrecognized, setUnrecognized] = useState<string | null>(null);
 
   const startProbing = (enriched: PairingInfo) => {
     setPending(enriched);
@@ -54,7 +55,15 @@ export function QRPairScanner({ visible, onClose, onScanned }: {
   const handleBarcode = ({ data }: { data: string }) => {
     if (locked) return;
     const info = extractPairing(data);
-    if (!info) return; // 非配对码，继续扫
+    if (!info) {
+      // 不静默忽略：相机识别到内容但不是可解析的配对码时，必须显示原文，
+      // 否则用户无法区分「相机没看到码」和「看到了但版本不匹配解析失败」
+      if (data?.trim()) {
+        setUnrecognized(data.trim());
+        setLocked(true);
+      }
+      return;
+    }
     setLocked(true);
 
     // 两段式短码（v0.2.8）：对 QR 里的每个候选 IP 并行换码，任一可达即拿到 token
@@ -121,6 +130,7 @@ export function QRPairScanner({ visible, onClose, onScanned }: {
   const close = () => {
     setLocked(false);
     setOpenError(null);
+    setUnrecognized(null);
     onClose();
   };
 
@@ -157,6 +167,18 @@ export function QRPairScanner({ visible, onClose, onScanned }: {
             {probing ? <Text style={[styles.pickerHint, { color: theme.muted }]}>探测中…</Text> : null}
             <TouchableOpacity style={[styles.cancelBtn, { borderColor: theme.border }]} onPress={() => { setPending(null); setLocked(false); }} accessibilityRole="button" accessibilityLabel="取消选择继续扫码">
               <Text style={{ color: theme.accent, fontWeight: "600" }}>返回继续扫码</Text>
+            </TouchableOpacity>
+          </View>
+        ) : null}
+        {unrecognized ? (
+          <View style={[styles.pickerSheet, { backgroundColor: theme.cardBg }]}>
+            <Text style={[styles.pickerTitle, { color: theme.error }]}>无法解析的配对码</Text>
+            <Text style={[styles.pickerHint, { color: theme.onBackgroundVariant ?? theme.muted }]}>
+              相机已识别到内容，但 App 无法解析（可能 App 版本与 PC host 不匹配）。原文：
+            </Text>
+            <Text selectable style={[styles.rawText, { color: theme.text }]} numberOfLines={3}>{unrecognized}</Text>
+            <TouchableOpacity style={[styles.cancelBtn, { borderColor: theme.accent }]} onPress={() => { setUnrecognized(null); setLocked(false); }} accessibilityRole="button" accessibilityLabel="重新扫码">
+              <Text style={{ color: theme.accent, fontWeight: "600" }}>重新扫码</Text>
             </TouchableOpacity>
           </View>
         ) : null}
@@ -238,6 +260,7 @@ function makeStyles(theme: ReturnType<typeof useTheme>["theme"]) {
     candText: { fontSize: MIUIX_TYPE.body2, fontWeight: "600", flex: 1 },
     candTag: { fontSize: MIUIX_TYPE.footnote2 },
     cancelBtn: { alignItems: "center", borderWidth: 1, borderRadius: MIUIX_RADIUS.md, paddingVertical: MIUIX_SPACE.md, marginTop: MIUIX_SPACE.xs },
+    rawText: { fontSize: MIUIX_TYPE.footnote2, fontFamily: "monospace", marginBottom: MIUIX_SPACE.md },
     container: { flex: 1 },
     header: {
       flexDirection: "row",
