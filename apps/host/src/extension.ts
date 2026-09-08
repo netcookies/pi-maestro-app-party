@@ -218,7 +218,11 @@ export default function maestroHostExtension(pi: ExtensionAPI): void {
         const code = Array.from({ length: 8 }, () => "ABCDEFGHJKMNPQRSTUVWXYZ23456789"[Math.floor(Math.random() * 31)]).join("");
         const { setPairingCode } = await import("./server/pairing-codes.js");
         await setPairingCode(code, { token, ips: shown, port });
-        const url = `maestro-mobile://pair?c=${code}&i=${shown.join(",")}&p=${port}`;
+        // 全兼容 payload：token 与候选 IP 直接内联（PNG 输出后不再受终端行距尺寸约束），
+        // 0.2.4~0.2.8 的 App 走 scheme 分支即可解析出 ws+token+ips 弹选择层；
+        // c= 短码保留给未来「token 轮换/免内联」模式（App 侧优先短码，无则用内联 token）。
+        const primary = `ws://${shown[0]}:${port}/ws`;
+        const url = `maestro-mobile://pair?ws=${encodeURIComponent(primary)}&token=${encodeURIComponent(token)}&ips=${encodeURIComponent(shown.join(","))}&c=${code}&p=${port}`;
         const { generateQrPng } = await import("./server/qr-png.js");
         const pngPath = join(homedir(), ".pi", `maestro-mobile-pair-${code}.png`);
         await writeFile(pngPath, generateQrPng(url));
