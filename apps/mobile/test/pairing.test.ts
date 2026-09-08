@@ -63,13 +63,28 @@ describe("pairing.ips 多候选解析", () => {
 });
 
 describe("pairing.两段式短码", () => {
-  it("解析 ?c=&ip=&port= 形态（v0.2.7 短码）", () => {
+  it("解析 ?c=&ip=&port= 形态（v0.2.7 短码，向后兼容）", () => {
     const raw = "maestro-mobile://pair?c=AB3D5K7M&ip=172.30.30.17&port=4739";
     const info = extractPairing(raw);
     expect(info!.shortCode).toBe("AB3D5K7M");
     expect(info!.hostUrl).toBe("ws://172.30.30.17:4739/ws");
     expect(info!.candidateIps).toEqual(["172.30.30.17"]);
     expect(info!.token).toBeUndefined();
+  });
+
+  it("解析 ?c=&i=<逗号列表>&p= 形态（v0.2.8 多候选，逗号不编码）", () => {
+    const raw = "maestro-mobile://pair?c=AB3D5K7M&i=192.168.1.5,10.0.0.2,100.77.76.105&p=4739";
+    const info = extractPairing(raw);
+    expect(info!.shortCode).toBe("AB3D5K7M");
+    expect(info!.candidateIps).toEqual(["192.168.1.5", "10.0.0.2", "100.77.76.105"]);
+    expect(info!.hostUrl).toBe("ws://192.168.1.5:4739/ws");
+    expect(info!.port).toBe("4739");
+  });
+
+  it("多候选里的非法项被过滤，全非法则 null", () => {
+    const info = extractPairing("maestro-mobile://pair?c=AB3D5K7M&i=1.2.3.4,not-an-ip,5.6.7.8&p=4739");
+    expect(info!.candidateIps).toEqual(["1.2.3.4", "5.6.7.8"]);
+    expect(extractPairing("maestro-mobile://pair?c=AB3D5K7M&i=bad,also-bad&p=4739")).toBeNull();
   });
 
   it("短码形态缺 c 或 ip 无效 → null", () => {

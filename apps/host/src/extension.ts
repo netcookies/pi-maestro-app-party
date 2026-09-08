@@ -211,17 +211,16 @@ export default function maestroHostExtension(pi: ExtensionAPI): void {
           ctx.ui.notify("maestro-mobile: 未找到 token（~/.pi/maestro-mobile-token），先用 /maestro-mobile start 启动一次", "warning");
           return;
         }
-        // v0.2.7 两段式短码配对：QR 只带 8 位短码 + 首选 IP（~60 字符 / 15 行，稳扫）。
-        // App 扫到后 GET /api/pair-short?code= 换取 {token, ips}，再弹 IP 选择层。
-        // （此前 token+候选全塞 QR 导致 29 行，终端行距下定位图案变形无法扫描——实测复现）
+        // v0.2.8 短码 + 全候选 IP 列表：QR 带 8 位短码和逗号分隔的全部候选 IP（~107 字符 / 21 行，
+        // 在实测可扫尺寸内；逗号不编码省 30+ 字符）。App 对每个候选并行换码，任一可达即可配对
+        // ——修复 0.2.7「首选 IP 恰好不可达则死锁」（4 候选 3 可达但首选不可达的场景）。
         const ips = lanIpCandidates();
         const shown = ips.length > 0 ? ips : ["127.0.0.1"];
         const code = Array.from({ length: 8 }, () => "ABCDEFGHJKMNPQRSTUVWXYZ23456789"[Math.floor(Math.random() * 31)]).join("");
         const { setPairingCode } = await import("./server/pairing-codes.js");
         await setPairingCode(code, { token, ips: shown, port });
-        const primary = `ws://${shown[0]}:${port}/ws`;
-        const url = `maestro-mobile://pair?c=${code}&ip=${encodeURIComponent(shown[0])}&port=${port}`;
-        ctx.ui.notify(`配对短码: ${code}（5 分钟内有效）`, "info");
+        const url = `maestro-mobile://pair?c=${code}&i=${shown.join(",")}&p=${port}`;
+        ctx.ui.notify(`配对短码: ${code}（5 分钟内有效）· ${shown.length} 个候选地址`, "info");
         qrcodeTerminal.generate(url, { small: true }, (q: string) => {
           ctx.ui.notify(q, "info");
         });

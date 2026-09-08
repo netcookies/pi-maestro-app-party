@@ -57,24 +57,33 @@ export function QRPairScanner({ visible, onClose, onScanned }: {
     if (!info) return; // 非配对码，继续扫
     setLocked(true);
 
-    // 两段式短码（v0.2.7）：GET /api/pair-short?code= 换取 {token, ips}
+    // 两段式短码（v0.2.8）：对 QR 里的每个候选 IP 并行换码，任一可达即拿到 token
+    //（修复 0.2.7「首选恰好不可达则死锁」）
     if (info.shortCode) {
       void (async () => {
-        try {
-          const httpBase = info.hostUrl.replace(/^ws:\/\//, "http://").replace(/\/ws$/, "");
-          const res = await fetch(`${httpBase}/api/pair-short?code=${encodeURIComponent(info.shortCode!)}`, { signal: AbortSignal.timeout(2500) });
-          if (!res.ok) throw new Error(`pair-short ${res.status}`);
-          const d = (await res.json()) as { token: string; ips: string[]; port: number };
-          const ips = (d.ips ?? []).filter((s) => /^\d{1,3}(\.\d{1,3}){3}$/.test(s));
+        const tryExchange = async (ip: string): Promise<{ token: string; ips: string[] } | null> => {
+          try {
+            const res = await fetch(`http://${ip}:${info.port}/api/pair-short?code=${encodeURIComponent(info.shortCode!)}`, { signal: AbortSignal.timeout(2500) });
+            if (!res.ok) return null;
+            const d = (await res.json()) as { token: string; ips: string[] };
+            return d && typeof d.token === "string" ? d : null;
+          } catch {
+            return null;
+          }
+        };
+        const results = await Promise.all(info.candidateIps.map(tryExchange));
+        const hit = results.find((r) => r !== null) ?? null;
+        if (hit) {
+          const ips = (hit.ips ?? []).filter((s) => /^\d{1,3}(\.\d{1,3}){3}$/.test(s));
           const enriched: PairingInfo = {
             ...info,
-            token: d.token || undefined,
-            candidateIps: ips.length > 0 ? ips : [new URL(info.hostUrl).hostname],
+            token: hit.token || undefined,
+            candidateIps: ips.length > 0 ? ips : info.candidateIps,
           };
           startProbing(enriched);
-        } catch {
-          // 短码换取失败（网络不通/过期）：仍弹层让用户看到候选与状态，不再静默直连
-          setPairError("配对码换取失败（网络不可达或已过期），请确认手机与 PC 网络后重试");
+        } else {
+          // 全部候选换码失败（网络不通/码过期）：仍弹层展示候选可达性，不再静默直连
+          setPairError("配对码换取失败（所有地址均不可达或已过期），请确认手机与 PC 在同一网络");
           startProbing(info);
         }
       })();

@@ -26,18 +26,20 @@ export function extractPairing(raw: string): PairingInfo | null {
   const text = (raw ?? "").trim();
   if (!text) return null;
 
-  // maestro-mobile://pair?ws=...&token=...
-  if (text.includes("c=") && text.includes("ip=") && !text.includes("token=")) {
+  // 两段式短码 + 全候选：maestro-mobile://pair?c=<code>&i=<ip1,ip2,...>&p=<port>
+  // 逗号在 query 里合法且 WHATWG 解析不转义 → 不编码省 30+ 字符。兼容 0.2.7 的 ip= 单候选形态。
+  if (text.includes("c=") && !text.includes("token=")) {
     try {
       const u = new URL(text.replace("maestro-mobile://", "maestro-mobile-pair://"));
       const code = u.searchParams.get("c");
-      const ip = u.searchParams.get("ip");
-      const port = u.searchParams.get("port") ?? "4739";
-      if (code && ip && /^\d{1,3}(\.\d{1,3}){3}$/.test(ip)) {
+      const rawIps = u.searchParams.get("i") ?? u.searchParams.get("ip") ?? "";
+      const port = u.searchParams.get("p") ?? u.searchParams.get("port") ?? "4739";
+      const ips = rawIps.split(",").map((s) => s.trim()).filter((s) => /^\d{1,3}(\.\d{1,3}){3}$/.test(s));
+      if (code && ips.length > 0) {
         return {
-          hostUrl: `ws://${ip}:${port}/ws`,
-          displayHost: `${ip}:${port}`,
-          candidateIps: [ip],
+          hostUrl: `ws://${ips[0]}:${port}/ws`,
+          displayHost: `${ips[0]}:${port}`,
+          candidateIps: ips,
           port,
           shortCode: code,
         };
