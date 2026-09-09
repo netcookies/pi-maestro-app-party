@@ -32,7 +32,7 @@ export interface HostStoreValue {
   openExistingSession(sessionFile: string, cwd: string): Promise<string>;
   /** 关闭 host 上的会话 runner（P2-4：避免重复 open 泄漏旧实例） */
   closeSession(sessionId: string): Promise<void>;
-  listHostSessions(cwd?: string): Promise<HostSessionList>;
+  listHostSessions(options?: { cwd?: string; limit?: number; cursor?: string; query?: string; sessionIds?: string[]; latestForCwds?: string[] }): Promise<HostSessionList>;
   listLiveSessions(): Promise<LiveSessionList>;
   loadSessionHistory(sessionId: string): Promise<void>;
   loadMoreHistory(sessionId: string, count?: number): Promise<{ items: TimelineItem[]; hasMore: boolean; totalEntries: number }>;
@@ -216,8 +216,8 @@ export function HostStoreProvider({ children }: { children: React.ReactNode }) {
     }
   }, [getClient]);
 
-  const listHostSessions = useCallback(async (cwd?: string): Promise<HostSessionList> => {
-    const result = await getClient().sendCommand({ type: "list_host_sessions", cwd });
+  const listHostSessions = useCallback(async (options: { cwd?: string; limit?: number; cursor?: string; query?: string; sessionIds?: string[]; latestForCwds?: string[] } = {}): Promise<HostSessionList> => {
+    const result = await getClient().sendCommand({ type: "list_host_sessions", ...options });
     return result as HostSessionList;
   }, [getClient]);
 

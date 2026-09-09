@@ -8,12 +8,12 @@
  * - 状态 pill：已连接 / 连接中 / 重连中 / 未连接 / token 错误（authFailed 停止重连时）。
  */
 import React, { useState, useEffect } from "react";
+import { useRouter } from "expo-router";
 import { View, Text, StyleSheet, TouchableOpacity, TextInput, ActivityIndicator, Modal } from "react-native";
 import { useTheme, MIUIX_RADIUS, MIUIX_TYPE, MIUIX_SPACE } from "../theme";
 import { useHost } from "../store";
 import { LineIcon } from "./LineIcon";
 import { MiuixSwitch } from "./MiuixSwitch";
-import { QRPairScanner } from "./QRPairScanner";
 import { loadPairedHosts, savePairedHosts, rememberRemovedHost, forgetRemovedHost, type PairedHost } from "../paired-hosts";
 
 export function HostConnectCard({ hostUrl, token, onHostUrlChange, onTokenChange }: {
@@ -23,9 +23,9 @@ export function HostConnectCard({ hostUrl, token, onHostUrlChange, onTokenChange
   onTokenChange: (v: string) => void;
 }) {
   const { theme } = useTheme();
+  const router = useRouter();
   const { isConnected, connectionState, connect, disconnect, lastError } = useHost();
   const [open, setOpen] = useState(false);
-  const [scannerVisible, setScannerVisible] = useState(false);
   // P3-5：keepAlive 接入真实语义 —— 关闭时不再自动重连；开启时（默认）断线自动重连。
   const [keepAlive, setKeepAlive] = useState(true);
   const [latency, setLatency] = useState<number | null>(null);
@@ -112,7 +112,6 @@ export function HostConnectCard({ hostUrl, token, onHostUrlChange, onTokenChange
     ].slice(0, 8))
       .then(() => loadPairedHosts())
       .then(setPaired);
-    setScannerVisible(false);
     doConnect(info.hostUrl, info.token ?? "");
   };
 
@@ -159,7 +158,7 @@ export function HostConnectCard({ hostUrl, token, onHostUrlChange, onTokenChange
           {/* 扫码配对主按钮 + 地址输入（token 由扫码带入，不再手填） */}
           <TouchableOpacity
             style={[styles.pairBtn, { backgroundColor: theme.buttonPrimary }]}
-            onPress={() => setScannerVisible(true)}
+            onPress={() => router.push("/pair-scan")}
             accessibilityRole="button"
             accessibilityLabel="扫码配对"
           >
@@ -292,13 +291,6 @@ export function HostConnectCard({ hostUrl, token, onHostUrlChange, onTokenChange
         </View>
       </Modal>
 
-      {/* 扫码弹层 */}
-      <QRPairScanner
-        visible={scannerVisible}
-        onClose={() => setScannerVisible(false)}
-        onScanned={handlePaired}
-      />
-
       {/* 已配对 Host 选择器 */}
       <Modal visible={pickerOpen} transparent animationType="fade" onRequestClose={() => setPickerOpen(false)}>
         <TouchableOpacity style={styles.pickerMask} activeOpacity={1} onPress={() => setPickerOpen(false)}>
@@ -318,7 +310,7 @@ export function HostConnectCard({ hostUrl, token, onHostUrlChange, onTokenChange
                 </TouchableOpacity>
               </View>
             ))}
-            <TouchableOpacity style={[styles.pickerAdd, { borderColor: theme.accent }]} onPress={() => { setPickerOpen(false); setScannerVisible(true); }} accessibilityRole="button" accessibilityLabel="扫码添加新 Host">
+            <TouchableOpacity style={[styles.pickerAdd, { borderColor: theme.accent }]} onPress={() => { setPickerOpen(false); router.push("/pair-scan"); }} accessibilityRole="button" accessibilityLabel="扫码添加新 Host">
               <Text style={{ color: theme.accent, fontWeight: "600" }}>+ 扫码添加新 Host</Text>
             </TouchableOpacity>
           </View>

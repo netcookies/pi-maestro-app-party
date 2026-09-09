@@ -8,11 +8,14 @@
 import type { HostController } from "../host-controller.js";
 import { projectMonitorState } from "../monitor-projection.js";
 import { readSettingsOverview, updateSettingsJson } from "../maestro-settings.js";
-import { toSessionSummaryList, toSdkImageContent, listSkills } from "./helpers.js";
+import { toSdkImageContent, listSkills, HostSessionListService } from "./helpers.js";
+import { homedir } from "node:os";
+import { join } from "node:path";
 import type { ClientCommand, ExtensionUiResponse } from "@maestro-mobile/shared";
 
 export interface CommandContext {
   controller: HostController;
+  hostSessionList?: HostSessionListService;
   /** 某些命令（get_snapshot）需要直接写 WS 帧 */
   sendFrame: (payload: unknown) => void;
 }
@@ -121,8 +124,9 @@ export const COMMAND_HANDLERS: Record<string, CommandHandler> = {
   },
 
   list_host_sessions: async (ctx, cmd) => {
-    const sessions = await ctx.controller.listSessions((cmd as { cwd?: string }).cwd);
-    return toSessionSummaryList(sessions);
+    const c = cmd as { cwd?: string; limit?: number; cursor?: string; query?: string; sessionIds?: string[]; latestForCwds?: string[] };
+    const service = ctx.hostSessionList ?? new HostSessionListService({ indexPath: join(homedir(), ".pi", "agent", "mobile-session-index.json") });
+    return service.list(() => ctx.controller.listSessions(c.cwd), c);
   },
 
   open_session: async (ctx, cmd) => {

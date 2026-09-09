@@ -5,7 +5,7 @@ import { URL } from "node:url";
 import { WebSocketServer, type WebSocket } from "ws";
 import { readFile, open, stat } from "node:fs/promises";
 import { realpath } from "node:fs/promises";
-import { isAbsolute, normalize } from "node:path";
+import { isAbsolute, normalize, join } from "node:path";
 import { homedir, tmpdir } from "node:os";
 import type {
   ClientCommand,
@@ -21,6 +21,7 @@ import type { RuntimeFactory } from "../types.js";
 import type { LiveSessionList } from "../live-sessions.js";
 import { readSettingsOverview, updateSettingsJson } from "../maestro-settings.js";
 import { validateClientCommand } from "@maestro-mobile/shared";
+import { HostSessionListService } from "./helpers.js";
 
 export interface MobileHostServerOptions {
   token?: string;
@@ -54,6 +55,9 @@ export class MobileHostServer {
   private static readonly MAX_CONCURRENT_COMMANDS = 8;
   private unsubscribeController: (() => void) | undefined;
   private boundHost = "0.0.0.0";
+  private readonly hostSessionList = new HostSessionListService({
+    indexPath: join(homedir(), ".pi", "agent", "mobile-session-index.json"),
+  });
 
   constructor(
     private readonly controller: HostController,
@@ -172,8 +176,7 @@ export class MobileHostServer {
 
       if (request.method === "GET" && url.pathname === "/api/sessions") {
         const cwd = url.searchParams.get("cwd") ?? undefined;
-        const sessions = await this.controller.listSessions(cwd);
-        const list = await toSessionSummaryList(sessions);
+        const list = await this.hostSessionList.list(() => this.controller.listSessions(cwd), { cwd });
         writeJson(response, 200, list);
         return;
       }
@@ -421,8 +424,10 @@ export class MobileHostServer {
           break;
         }
         case "list_host_sessions": {
-          const sessions = await this.controller.listSessions(command.cwd);
-          const list = await toSessionSummaryList(sessions);
+          const list = await this.hostSessionList.list(
+            () => this.controller.listSessions(command.cwd),
+            command,
+          );
           this.sendAck(client, command, list);
           break;
         }

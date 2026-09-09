@@ -73,6 +73,14 @@ export interface HostSessionSummary {
 export interface HostSessionList {
   sessions: HostSessionSummary[];
   observedAt: string;
+  /** 稳定 keyset cursor；仅分页请求返回。 */
+  nextCursor?: string;
+  /** 是否还有下一页；仅分页请求返回。 */
+  hasMore?: boolean;
+  /** cwd/query 过滤后的会话总数；仅分页请求返回。 */
+  total?: number;
+  /** 定向摘要请求的能力确认；旧 Host 忽略请求字段时不会返回。 */
+  targeted?: boolean;
 }
 
 /** 活跃会话（vibe coding 中）摘要 */
@@ -331,7 +339,7 @@ export type HostEvent =
 
 export type ClientCommand =
   | { type: "open_session"; cwd: string; mode?: "create" | "continue"; sessionFile?: string }
-  | { type: "list_host_sessions"; cwd?: string }
+  | { type: "list_host_sessions"; cwd?: string; limit?: number; cursor?: string; query?: string; sessionIds?: string[]; latestForCwds?: string[] }
   | { type: "list_live_sessions" }
   | { type: "load_more_history"; sessionId: string; count?: number }
   | { type: "search_history"; sessionId: string; keyword: string; maxResults?: number; previewLength?: number }

@@ -33,7 +33,7 @@ function formatTokens(n: number): string {
 
 export default function DashboardScreen() {
   const router = useRouter();
-  const { state, isConnected, fetchMonitorState, fetchSessionUsage, openSessionContinue } = useHost();
+  const { state, isConnected, connectionState, fetchMonitorState, fetchSessionUsage, openSessionContinue } = useHost();
   const { theme } = useTheme();
   const styles = React.useMemo(() => makeStyles(theme), [theme]);
 
@@ -57,6 +57,13 @@ export default function DashboardScreen() {
     }
     return () => { cancelled = true; };
   }, [firstSessionId, fetchSessionUsage, isConnected]);
+
+  const pairingPrompt = connectionState === "connecting"
+    ? "正在连接 Host…"
+    : connectionState === "reconnecting"
+      ? "正在重新连接 Host…"
+      : "请前往会话页面扫码配对";
+  const canOpenPairing = connectionState === "disconnected";
 
   // 待处理 ask 弹窗投影（extension-ui 队列 pending 项，来自 AppState.dialogs）
   const pendingAsks = React.useMemo<PendingAskItem[]>(
@@ -130,12 +137,20 @@ export default function DashboardScreen() {
     <View style={styles.container}>
       <ScrollView contentContainerStyle={styles.content}>
         {/* Hero：Token 用量卡（首个已打开会话的 usage；无打开会话时显示待接入提示） */}
-        <View style={styles.hero}>
+        <TouchableOpacity
+          style={styles.hero}
+          onPress={() => router.push("/host-sessions")}
+          disabled={!canOpenPairing}
+          activeOpacity={canOpenPairing ? 0.75 : 1}
+          accessibilityRole={canOpenPairing ? "button" : undefined}
+          accessibilityLabel={canOpenPairing ? "请前往会话页面扫码配对" : undefined}
+          accessibilityState={{ disabled: !canOpenPairing }}
+        >
           <View style={styles.heroTop}>
             <Text style={styles.heroLabel}>已打开会话用量</Text>
             <View style={styles.live}>
               <View style={[styles.liveDot, { backgroundColor: isConnected ? theme.success : theme.error }]} />
-              <Text style={styles.liveText}>{isConnected ? "Host 在线" : "未连接"}</Text>
+              <Text style={styles.liveText}>{isConnected ? "Host 在线" : pairingPrompt}</Text>
             </View>
           </View>
           {usage && usage.entries > 0 ? (
@@ -149,12 +164,10 @@ export default function DashboardScreen() {
           ) : (
             <>
               <Text style={styles.heroValue}>--</Text>
-              <Text style={styles.heroCaption}>{isConnected ? "在会话页打开一个会话后显示用量" : "连接 Host 后显示用量"}</Text>
+              <Text style={styles.heroCaption}>{isConnected ? "在会话页打开一个会话后显示用量" : pairingPrompt}</Text>
             </>
           )}
-        </View>
-
-        {/* 2x2 指标卡 */}
+        </TouchableOpacity>
         <View style={styles.grid}>
           {metricCards.map((c) => (
             <View key={c.label} style={styles.metric}>

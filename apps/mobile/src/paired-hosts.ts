@@ -17,6 +17,7 @@ export interface PairedHost {
 }
 
 const KEY = "maestro-mobile.paired-hosts";
+export const HOST_CONN_KEY = "maestro-mobile.host-connection";
 
 export async function loadPairedHosts(): Promise<PairedHost[]> {
   try {
@@ -37,6 +38,18 @@ export async function savePairedHosts(list: PairedHost[]): Promise<void> {
   } catch {
     // 存储失败静默（下次配对重建）
   }
+}
+
+/** Persist both current connection and the bounded paired-host list. */
+export async function persistPairedHost(host: Omit<PairedHost, "pairedAt">): Promise<void> {
+  const { default: AsyncStorage } = await import("@react-native-async-storage/async-storage");
+  const paired = await loadPairedHosts();
+  await AsyncStorage.setItem(HOST_CONN_KEY, JSON.stringify({ hostUrl: host.hostUrl, token: host.token }));
+  await savePairedHosts([
+    { ...host, pairedAt: new Date().toISOString() },
+    ...paired.filter((item) => item.hostUrl !== host.hostUrl),
+  ]);
+  await forgetRemovedHost(host.hostUrl);
 }
 
 const REMOVED_KEY = "maestro-mobile.removed-hosts";
@@ -78,7 +91,7 @@ export async function forgetRemovedHost(hostUrl: string): Promise<void> {
 export async function importLegacyConnection(): Promise<PairedHost[]> {
   try {
     const { default: AsyncStorage } = await import("@react-native-async-storage/async-storage");
-    const raw = await AsyncStorage.getItem("maestro-mobile.host-connection");
+    const raw = await AsyncStorage.getItem(HOST_CONN_KEY);
     if (!raw) return [];
     const saved = JSON.parse(raw) as { hostUrl?: string; token?: string };
     if (!saved.hostUrl || !/^wss?:\/\//.test(saved.hostUrl)) return [];

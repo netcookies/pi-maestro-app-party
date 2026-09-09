@@ -56,25 +56,8 @@ export class PiSdkRuntimeFactory implements RuntimeFactory {
     return runtime as unknown as MobileAgentRuntime;
   }
 
-  /** listSessions 响应缓存：SessionManager.listAll 逐会话解析（201 会话 ~3.8s），结果按 TTL 复用。
-   *  失效条件：TTL 过期（默认 5s）——新会话/重命名最迟 5s 可见，换来列表页毫秒级响应。 */
-  private static listCache = new Map<string, { at: number; sessions: SessionInfo[] }>();
-  private static readonly LIST_CACHE_TTL_MS = 10_000;
-
   async listSessions(cwd?: string): Promise<SessionInfo[]> {
-    const cacheKey = cwd ?? "(all)";
-    const cached = PiSdkRuntimeFactory.listCache.get(cacheKey);
-    if (cached && Date.now() - cached.at < PiSdkRuntimeFactory.LIST_CACHE_TTL_MS) {
-      return cached.sessions;
-    }
-    const sessions = cwd ? await SessionManager.list(cwd) : await SessionManager.listAll();
-    PiSdkRuntimeFactory.listCache.set(cacheKey, { at: Date.now(), sessions });
-    // 防膨胀
-    if (PiSdkRuntimeFactory.listCache.size > 16) {
-      const oldest = [...PiSdkRuntimeFactory.listCache.entries()].sort((a, b) => a[1].at - b[1].at)[0];
-      if (oldest) PiSdkRuntimeFactory.listCache.delete(oldest[0]);
-    }
-    return sessions;
+    return cwd ? SessionManager.list(cwd) : SessionManager.listAll();
   }
 }
 

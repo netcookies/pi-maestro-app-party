@@ -30,6 +30,19 @@ describe("protocol", () => {
     expect(isClientCommand(null)).toBe(false);
   });
 
+  it("supports backward-compatible host session pagination fields", () => {
+    const command: ClientCommand = {
+      type: "list_host_sessions",
+      cwd: "/work/app",
+      query: "model",
+      limit: 25,
+      cursor: "opaque",
+      sessionIds: ["live-1"],
+      latestForCwds: ["/work/running"],
+    };
+    expect(isClientCommand(command)).toBe(true);
+  });
+
   it("builds a valid MaestroState with schedules", () => {
     const state: MaestroState = {
       schedules: [

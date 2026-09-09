@@ -80,6 +80,10 @@ function RootNavigator() {
           options={{ href: null }}
         />
         <Tabs.Screen
+          name="pair-scan"
+          options={{ href: null, headerShown: false }}
+        />
+        <Tabs.Screen
           name="monitor"
           options={{
             title: "Monitor",

@@ -2,7 +2,7 @@
  * server/helpers — MobileHostServer 与 ws-command-handlers 共用的纯函数
  * （H9 拆分：会话摘要、图片编解码、skill 扫描、安全文件读取）
  */
-import { readFile, open, stat, readdir } from "node:fs/promises";
+import { readFile, open, stat, readdir, mkdir, rename, writeFile } from "node:fs/promises";
 import { realpath } from "node:fs/promises";
 import { isAbsolute, normalize, join } from "node:path";
 import { homedir, tmpdir } from "node:os";
@@ -32,14 +32,110 @@ export async function toSessionSummaryList(records: unknown[]): Promise<HostSess
       path,
       title: title.length > 80 ? `${title.slice(0, 80)}…` : title,
       name: typeof r.name === "string" && r.name ? r.name : undefined,
-      model: models[i],
+      model: typeof r.model === "string" ? r.model : models[i],
       messageCount: typeof r.messageCount === "number" ? r.messageCount : 0,
       // 规范化为 ISO 字符串：Hermes（iOS）解析不了 "Thu Sep 03 2026 ..." 这种本地化格式
       updatedAt: normalizeIso(String(r.modified ?? r.updatedAt ?? "")),
-      ...(r.created ? { createdAt: normalizeIso(String(r.created)) } : {}),
+      ...(r.created || r.createdAt ? { createdAt: normalizeIso(String(r.created ?? r.createdAt)) } : {}),
     };
   });
   return { sessions, observedAt: new Date().toISOString() };
+}
+
+export interface HostSessionListOptions {
+  cwd?: string;
+  limit?: number;
+  cursor?: string;
+  query?: string;
+  sessionIds?: string[];
+  latestForCwds?: string[];
+}
+
+export class HostSessionListService {
+  private summaries: HostSessionSummary[] | undefined;
+  private loadedAt = 0;
+  private refresh: Promise<void> | undefined;
+
+  constructor(private readonly options: { indexPath: string; staleAfterMs?: number; now?: () => number }) {}
+
+  async list(load: () => Promise<unknown[]>, options: HostSessionListOptions = {}): Promise<HostSessionList> {
+    this.validate(options);
+    await this.ensureLoaded(load);
+    const now = (this.options.now ?? Date.now)();
+    if (now - this.loadedAt > (this.options.staleAfterMs ?? 10_000) && !this.refresh) {
+      this.refresh = this.reload(load).finally(() => { this.refresh = undefined; });
+    }
+    const all = this.summaries ?? [];
+    if (options.sessionIds || options.latestForCwds) {
+      const ids = new Set(options.sessionIds ?? []);
+      const cwds = new Set(options.latestForCwds ?? []);
+      const latest = new Set<string>();
+      for (const session of all) if (cwds.has(session.cwd) && !latest.has(session.cwd)) latest.add(session.cwd), ids.add(session.id);
+      return { sessions: all.filter((session) => ids.has(session.id)), observedAt: new Date(now).toISOString(), targeted: true };
+    }
+    let filtered = options.cwd ? all.filter((session) => session.cwd === options.cwd) : all;
+    const query = options.query?.trim().toLocaleLowerCase();
+    if (query) filtered = filtered.filter((session) => [session.title, session.id, session.cwd, session.model, session.name].some((value) => value?.toLocaleLowerCase().includes(query)));
+    if (options.limit === undefined) return { sessions: filtered, observedAt: new Date(now).toISOString() };
+    let start = 0;
+    if (options.cursor) {
+      const cursor = decodeCursor(options.cursor);
+      start = filtered.findIndex((session) => session.updatedAt < cursor.updatedAt || (session.updatedAt === cursor.updatedAt && session.id < cursor.id));
+      if (start < 0) start = filtered.length;
+    }
+    const sessions = filtered.slice(start, start + options.limit);
+    const hasMore = start + sessions.length < filtered.length;
+    const last = sessions.at(-1);
+    return { sessions, observedAt: new Date(now).toISOString(), hasMore, total: filtered.length, ...(hasMore && last ? { nextCursor: encodeCursor(last) } : {}) };
+  }
+
+  private validate(options: HostSessionListOptions): void {
+    const targeted = options.sessionIds !== undefined || options.latestForCwds !== undefined;
+    for (const values of [options.sessionIds, options.latestForCwds]) {
+      if (values && values.length > 100) throw new Error("targeted filters accept at most 100 values");
+      if (values?.some((value) => typeof value !== "string" || value.length === 0)) throw new Error("targeted filters require non-empty strings");
+    }
+    if (targeted && (options.limit !== undefined || options.cursor !== undefined || options.query !== undefined || options.cwd !== undefined)) throw new Error("targeted session lookup cannot be combined with paging or search filters");
+    if (options.limit !== undefined && (!Number.isInteger(options.limit) || options.limit < 1 || options.limit > 100)) throw new Error("limit must be between 1 and 100");
+    if (options.cursor && options.limit === undefined) throw new Error("cursor requires limit");
+    if (options.cursor) decodeCursor(options.cursor);
+  }
+
+  private async ensureLoaded(load: () => Promise<unknown[]>): Promise<void> {
+    if (this.summaries) return;
+    try {
+      const parsed = JSON.parse(await readFile(this.options.indexPath, "utf8")) as { sessions?: HostSessionSummary[]; loadedAt?: number };
+      if (!Array.isArray(parsed.sessions)) throw new Error("invalid index");
+      this.summaries = parsed.sessions;
+      this.loadedAt = parsed.loadedAt ?? (this.options.now ?? Date.now)();
+    } catch {
+      await this.reload(load);
+    }
+  }
+
+  private async reload(load: () => Promise<unknown[]>): Promise<void> {
+    const list = await toSessionSummaryList(await load());
+    this.summaries = [...list.sessions].sort((a, b) => b.updatedAt.localeCompare(a.updatedAt) || b.id.localeCompare(a.id));
+    this.loadedAt = (this.options.now ?? Date.now)();
+    await mkdir(join(this.options.indexPath, ".."), { recursive: true });
+    const temp = `${this.options.indexPath}.tmp`;
+    await writeFile(temp, JSON.stringify({ sessions: this.summaries, loadedAt: this.loadedAt }), "utf8");
+    await rename(temp, this.options.indexPath);
+  }
+}
+
+function encodeCursor(session: HostSessionSummary): string {
+  return Buffer.from(JSON.stringify({ updatedAt: session.updatedAt, id: session.id })).toString("base64url");
+}
+
+function decodeCursor(raw: string): { updatedAt: string; id: string } {
+  try {
+    const value = JSON.parse(Buffer.from(raw, "base64url").toString("utf8")) as Record<string, unknown>;
+    if (typeof value.updatedAt !== "string" || typeof value.id !== "string") throw new Error();
+    return { updatedAt: value.updatedAt, id: value.id };
+  } catch {
+    throw new Error("invalid session cursor");
+  }
 }
 
 /** 带 mtime 缓存的 model 查询（并发分批由调用方 Promise.all 控制，单次 tail 读本身轻量） */
