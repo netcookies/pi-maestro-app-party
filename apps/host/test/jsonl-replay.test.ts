@@ -1,5 +1,5 @@
 import { describe, expect, it, beforeEach, afterEach } from "vitest";
-import { mkdir, writeFile, rm } from "node:fs/promises";
+import { mkdir, writeFile, rm, stat } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { randomUUID } from "node:crypto";
@@ -57,6 +57,45 @@ describe("replayFromJsonl", () => {
     expect(items[3].kind).toBe("user");
     expect(items[3].text).toContain("/tmp/pi-clipboard-abc.png");
     expect(items[4].kind).toBe("thinking");
+  });
+
+  it("materializes user image blocks as bounded host file references", async () => {
+    const path = join(dir, "image.jsonl");
+    await writeFile(path, JSON.stringify({
+      type: "message",
+      message: {
+        role: "user",
+        content: [
+          { type: "text", text: "请看图" },
+          { type: "image", data: "AQID", mimeType: "image/png" },
+        ],
+        timestamp: 1756800000000,
+      },
+    }) + "\n");
+
+    const { items } = await replayFromJsonl(path);
+    expect(items).toHaveLength(1);
+    expect(items[0].text).toBe("请看图");
+    expect(items[0].images).toHaveLength(1);
+    expect(items[0].images?.[0]).toMatch(/pi-maestro-image-cache[\\/]\d+-0-[^\\/]+\.png$/);
+    const imageStat = await stat(items[0].images![0]);
+    expect(imageStat.size).toBe(3);
+    expect(imageStat.mode & 0o777).toBe(0o600);
+  });
+
+  it("extracts read-image toolCall even when it has no text block", async () => {
+    const path = join(dir, "readimg-empty.jsonl");
+    await writeFile(path, JSON.stringify({
+      type: "message",
+      message: {
+        role: "assistant",
+        content: [{ type: "toolCall", name: "read", arguments: JSON.stringify({ path: "/tmp/pi-clipboard-empty.png" }) }],
+        timestamp: 1756800000000,
+      },
+    }) + "\n");
+    const { items } = await replayFromJsonl(path);
+    expect(items).toHaveLength(1);
+    expect(items[0]).toMatchObject({ kind: "tool", toolName: "read", text: "/tmp/pi-clipboard-empty.png" });
   });
 
   it("deduplicates toolResult by toolCallId", async () => {

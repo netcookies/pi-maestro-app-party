@@ -176,7 +176,24 @@ export class MobileHostServer {
 
       if (request.method === "GET" && url.pathname === "/api/sessions") {
         const cwd = url.searchParams.get("cwd") ?? undefined;
-        const list = await this.hostSessionList.list(() => this.controller.listSessions(cwd), { cwd });
+        const limitRaw = url.searchParams.get("limit");
+        const limit = limitRaw === null ? undefined : Number(limitRaw);
+        const cursor = url.searchParams.get("cursor") ?? undefined;
+        const query = url.searchParams.get("query") ?? undefined;
+        const sessionIds = url.searchParams.getAll("sessionIds").flatMap((value) => value.split(",")).filter(Boolean);
+        const latestForCwds = url.searchParams.getAll("latestForCwds").flatMap((value) => value.split(",")).filter(Boolean);
+        const listOptions = {
+          ...(cwd ? { cwd } : {}),
+          ...(limitRaw !== null ? { limit } : {}),
+          ...(cursor ? { cursor } : {}),
+          ...(query ? { query } : {}),
+          ...(sessionIds.length ? { sessionIds } : {}),
+          ...(latestForCwds.length ? { latestForCwds } : {}),
+        };
+        // Targeted/search requests need the shared service's complete index; cwd-only
+        // requests can retain the runtime's narrower listing behavior.
+        const loadCwd = sessionIds.length || latestForCwds.length || query ? undefined : cwd;
+        const list = await this.hostSessionList.list(() => this.controller.listSessions(loadCwd), listOptions);
         writeJson(response, 200, list);
         return;
       }

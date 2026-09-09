@@ -7,7 +7,9 @@ import { HostStoreProvider } from "../src/store";
 import { ThemeProvider, useTheme } from "../src/theme";
 import { LineIcon, type LineIconName } from "../src/components/LineIcon";
 import { loadConfig } from "../src/config";
-import { useEffect } from "react";
+import { useEffect, useRef } from "react";
+import * as Camera from "expo-camera";
+import * as ImagePicker from "expo-image-picker";
 
 /**
  * 导航架构（方向 A：Dashboard 工作台为首页）：
@@ -107,6 +109,18 @@ function RootNavigator() {
 }
 
 export default function RootLayout() {
+  const permissionsRequested = useRef(false);
+
+  // Ask once at app entry. Camera and library are independent; neither implies microphone access.
+  useEffect(() => {
+    if (permissionsRequested.current) return;
+    permissionsRequested.current = true;
+    void (async () => {
+      try { await Camera.requestCameraPermissionsAsync(); } catch { /* permission prompt unavailable */ }
+      try { await ImagePicker.requestMediaLibraryPermissionsAsync(); } catch { /* permission prompt unavailable */ }
+    })();
+  }, []);
+
   // 启动即加载持久化配置（设置页参数 / 主题共享加载时机）
   useEffect(() => {
     void loadConfig();

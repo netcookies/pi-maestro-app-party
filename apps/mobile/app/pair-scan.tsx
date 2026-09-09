@@ -4,15 +4,13 @@ import { router, useNavigation } from "expo-router";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { QRPairScanner } from "../src/components/QRPairScanner";
 import { LineIcon } from "../src/components/LineIcon";
-import { buildCandidateUrl } from "../src/components/ip-picker";
 import { isPairingFlowActive, resolvePairingCandidate, requiresCandidateSelection, shouldBlockPairingBack } from "../src/pair-scan-logic";
 import { extractPairing, type PairingInfo } from "../src/pairing";
 import { persistPairedHost } from "../src/paired-hosts";
 import { useHost } from "../src/store";
 import { MIUIX_RADIUS, MIUIX_SPACE, MIUIX_TYPE, useTheme } from "../src/theme";
 
-type ScanState = "scanning" | "exchanging" | "probing" | "selecting" | "saving" | "error";
-type ProbeStatus = "probing" | "ok" | "fail";
+type ScanState = "scanning" | "exchanging" | "selecting" | "saving" | "error";
 
 const isIp = (value: string) => /^\d{1,3}(\.\d{1,3}){3}$/.test(value);
 
@@ -49,7 +47,6 @@ export default function PairScanScreen() {
   const [state, setState] = useState<ScanState>("scanning");
   const [pairing, setPairing] = useState<PairingInfo | null>(null);
   const [selectedIp, setSelectedIp] = useState<string | null>(null);
-  const [probeMap, setProbeMap] = useState<Record<string, ProbeStatus>>({});
   const [error, setError] = useState("");
 
   useEffect(() => {
@@ -67,6 +64,27 @@ export default function PairScanScreen() {
       hardwareBack.remove();
     };
   }, [navigation, state]);
+
+  useEffect(() => {
+    const removeFocus = navigation.addListener("focus", () => {
+      if (!commitInProgressRef.current) reset();
+    });
+    const removeBlur = navigation.addListener("blur", () => {
+      if (commitInProgressRef.current) return;
+      // 让离开页面时的异步换码请求失效；重新进入时 focus 会建立全新扫描状态。
+      cancelledRef.current = true;
+      abortControllerRef.current.abort();
+      scanLocked.current = false;
+      setPairing(null);
+      setSelectedIp(null);
+      setError("");
+      setState("scanning");
+    });
+    return () => {
+      removeFocus();
+      removeBlur();
+    };
+  }, [navigation]);
 
   const saveAndConnect = useCallback(async (info: PairingInfo) => {
     if (!isActive()) return;
@@ -88,28 +106,20 @@ export default function PairScanScreen() {
     }
   }, [connect, isActive]);
 
-  const probeCandidates = useCallback(async (info: PairingInfo) => {
-    setPairing(info);
-    setState("probing");
-    setProbeMap(Object.fromEntries(info.candidateIps.map((ip) => [ip, "probing"])));
-    const results = await Promise.all(info.candidateIps.map(async (ip): Promise<[string, ProbeStatus]> => {
-      const httpBase = buildCandidateUrl(info, ip).replace(/^wss:/, "https:").replace(/^ws:/, "http:").replace(/\/ws$/, "");
-      try {
-        const response = await fetch(`${httpBase}/api/health`, { signal: requestSignal(abortControllerRef.current.signal) });
-        if (!isActive()) return [ip, "fail"];
-        return [ip, response.ok ? "ok" : "fail"];
-      } catch {
-        return [ip, "fail"];
-      }
-    }));
+  const processPairing = useCallback(async (info: PairingInfo) => {
     if (!isActive()) return;
-    setProbeMap(Object.fromEntries(results));
+    setPairing(info);
     if (requiresCandidateSelection(info)) {
       setState("selecting");
       return;
     }
     const resolved = resolvePairingCandidate(info);
-    if (resolved) await saveAndConnect(resolved);
+    if (!resolved) {
+      setError("二维码中没有可用的 Host 地址，请重新生成二维码");
+      setState("error");
+      return;
+    }
+    await saveAndConnect(resolved);
   }, [isActive, saveAndConnect]);
 
   const exchangeShortCode = useCallback(async (info: PairingInfo) => {
@@ -133,8 +143,8 @@ export default function PairScanScreen() {
       return;
     }
     const ips = (hit.ips ?? []).filter(isIp);
-    await probeCandidates({ ...info, token: hit.token, candidateIps: ips.length > 0 ? ips : info.candidateIps });
-  }, [isActive, probeCandidates]);
+    await processPairing({ ...info, token: hit.token, candidateIps: ips.length > 0 ? ips : info.candidateIps });
+  }, [isActive, processPairing]);
 
   const handleScanned = useCallback((raw: string) => {
     if (scanLocked.current || state !== "scanning") return;
@@ -146,28 +156,32 @@ export default function PairScanScreen() {
       return;
     }
     if (info.shortCode) void exchangeShortCode(info);
-    else void probeCandidates(info);
-  }, [exchangeShortCode, probeCandidates, state]);
+    else void processPairing(info);
+  }, [exchangeShortCode, processPairing, state]);
 
   const cancelAndBack = () => {
     if (commitInProgressRef.current || shouldBlockPairingBack(state, navigationAllowedRef.current)) return;
+    if (state === "selecting" || state === "error" || state === "exchanging") {
+      reset();
+      return;
+    }
     cancelledRef.current = true;
     abortControllerRef.current.abort();
     router.back();
   };
 
-  const reset = () => {
+  function reset() {
     abortControllerRef.current.abort();
     abortControllerRef.current = new AbortController();
     cancelledRef.current = false;
+    navigationAllowedRef.current = false;
     commitInProgressRef.current = false;
     setPairing(null);
     setSelectedIp(null);
-    setProbeMap({});
     setError("");
     scanLocked.current = false;
     setState("scanning");
-  };
+  }
 
   const continueWithSelection = () => {
     if (!pairing) return;
@@ -190,12 +204,10 @@ export default function PairScanScreen() {
       ) : state === "selecting" && pairing ? (
         <View style={styles.content}>
           <Text style={[styles.heading, { color: theme.text }]}>选择要连接的地址</Text>
-          <Text style={[styles.hint, { color: theme.onBackgroundVariant ?? theme.muted }]}>请选择一个地址，然后点下一步。探测结果仅用于辅助判断。</Text>
+          <Text style={[styles.hint, { color: theme.onBackgroundVariant ?? theme.muted }]}>请选择一个地址，然后点下一步。</Text>
           <ScrollView contentContainerStyle={styles.list}>
             {pairing.candidateIps.map((ip) => {
               const selected = selectedIp === ip;
-              const status = probeMap[ip] ?? "probing";
-              const statusColor = status === "ok" ? theme.success : status === "fail" ? theme.error : theme.muted;
               return (
                 <TouchableOpacity
                   key={ip}
@@ -210,8 +222,6 @@ export default function PairScanScreen() {
                     <Text style={[styles.candidateText, { color: theme.text }]}>{ip}:{pairing.port}</Text>
                     <Text style={[styles.candidateType, { color: theme.onBackgroundVariant ?? theme.muted }]}>{addressType(ip)}</Text>
                   </View>
-                  <View style={[styles.probeDot, { backgroundColor: statusColor }]} />
-                  <Text style={[styles.probeText, { color: theme.onBackgroundVariant ?? theme.muted }]}>{status === "ok" ? "可达" : status === "fail" ? "不可达" : "探测中"}</Text>
                 </TouchableOpacity>
               );
             })}
@@ -248,7 +258,6 @@ export default function PairScanScreen() {
 
 function stateLabel(state: ScanState): string {
   if (state === "exchanging") return "正在换取配对凭证…";
-  if (state === "probing") return "正在探测可用地址…";
   if (state === "saving") return "正在保存并连接…";
   return "正在处理…";
 }
@@ -279,8 +288,6 @@ function makeStyles() {
     candidateMeta: { flex: 1 },
     candidateText: { fontSize: MIUIX_TYPE.body2, fontWeight: "600" },
     candidateType: { fontSize: MIUIX_TYPE.footnote2, marginTop: 2 },
-    probeDot: { width: 8, height: 8, borderRadius: 4 },
-    probeText: { width: 44, fontSize: MIUIX_TYPE.footnote2 },
     primaryButton: { minHeight: 48, minWidth: 180, borderRadius: MIUIX_RADIUS.md, alignItems: "center", justifyContent: "center", paddingHorizontal: MIUIX_SPACE.xl },
     primaryButtonText: { color: "#fff", fontSize: MIUIX_TYPE.body2, fontWeight: "700" },
   });

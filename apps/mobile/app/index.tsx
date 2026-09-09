@@ -9,7 +9,7 @@
  * 指标推导集中在 src/dashboard-logic.ts（纯函数，可单测）。
  */
 import React, { useCallback, useMemo } from "react";
-import { View, Text, StyleSheet, FlatList, TouchableOpacity, ScrollView } from "react-native";
+import { View, Text, StyleSheet, FlatList, TouchableOpacity, ScrollView, ActivityIndicator } from "react-native";
 import { useRouter } from "expo-router";
 import { useHost } from "../src/store";
 import { useTheme, MIUIX_RADIUS, MIUIX_TYPE, MIUIX_SPACE } from "../src/theme";
@@ -39,10 +39,21 @@ export default function DashboardScreen() {
 
   const windows = state.monitor?.windows ?? [];
 
-  // 进入页面主动拉取一次（host 只在变化时推送，后连接会错过）
+  const [monitorStatus, setMonitorStatus] = React.useState<"loading" | "ready" | "error">("loading");
+
+  // 进入页面主动拉取一次（host 只在变化时推送，后连接会错过）；断开时不显示无限加载。
   React.useEffect(() => {
-    void fetchMonitorState();
-  }, [fetchMonitorState]);
+    if (!isConnected) {
+      setMonitorStatus("ready");
+      return;
+    }
+    let cancelled = false;
+    setMonitorStatus("loading");
+    void fetchMonitorState().then((ok) => {
+      if (!cancelled) setMonitorStatus(ok ? "ready" : "error");
+    });
+    return () => { cancelled = true; };
+  }, [fetchMonitorState, isConnected]);
 
   // 已打开会话的 usage（仅第一个可控会话作为代表；usage 协议是会话级）
   const [usage, setUsage] = React.useState<SessionUsageSummary | null>(null);
@@ -184,9 +195,18 @@ export default function DashboardScreen() {
             <Text style={styles.linkText}>全部窗口</Text>
           </TouchableOpacity>
         </View>
-        {windows.length === 0 ? (
+        {monitorStatus === "loading" ? (
+          <View style={styles.row} accessibilityLabel="正在加载窗口数据">
+            <ActivityIndicator size="small" color={theme.accent} />
+            <Text style={styles.emptyText}>正在加载窗口数据…</Text>
+          </View>
+        ) : monitorStatus === "error" ? (
           <View style={styles.row}>
-            <Text style={styles.emptyText}>暂无窗口数据 · 等待 Host 推送</Text>
+            <Text style={styles.emptyText}>{isConnected ? "窗口数据加载失败，请稍后重试" : "请前往会话页面扫码配对"}</Text>
+          </View>
+        ) : windows.length === 0 ? (
+          <View style={styles.row}>
+            <Text style={styles.emptyText}>{isConnected ? "暂无窗口数据 · 等待 Host 推送" : "请前往会话页面扫码配对"}</Text>
           </View>
         ) : (
           <FlatList

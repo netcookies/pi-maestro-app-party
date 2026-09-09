@@ -10,6 +10,7 @@
  */
 import { readFile } from "node:fs/promises";
 import type { TimelineItem } from "@maestro-mobile/shared";
+import { imageBlocksFromContent, materializeImages } from "./image-cache.js";
 
 export interface JsonlReplayResult {
   items: TimelineItem[];
@@ -80,14 +81,22 @@ export async function replayFromJsonl(filePath: string): Promise<JsonlReplayResu
 
     const text = extractText(msg.content);
     if (role === "user") {
-      items.push({ id: `replay-user-${items.length}`, kind: "user", text, createdAt });
+      const imagePaths = materializeImages(imageBlocksFromContent(msg.content));
+      if (!text && imagePaths.length === 0) continue;
+      items.push({
+        id: `replay-user-${items.length}`,
+        kind: "user",
+        text: imagePaths.length > 0 && !text ? `[🖼 ${imagePaths.length} 张图片]` : text,
+        createdAt,
+        ...(imagePaths.length > 0 ? { images: imagePaths } : {}),
+      });
     } else if (role === "assistant" || role === "system") {
-      if (!text) continue;
-      items.push({ id: `replay-assistant-${items.length}`, kind: "assistant", text, createdAt });
-      // assistant 消息里可能嵌 toolCall（read 图片等）——提取图片参数渲染为 tool 项
       const callItems = toolCallImageItems(msg.content);
+      if (!text && callItems.length === 0) continue;
+      if (text) items.push({ id: `replay-assistant-${items.length}`, kind: "assistant", text, createdAt });
+      // assistant 消息里可能嵌 toolCall（read 图片等）——提取图片参数渲染为 tool 项
       for (const callItem of callItems) {
-        items.push({ ...callItem, id: `replay-toolcall-${items.length}` });
+        items.push({ ...callItem, id: `replay-toolcall-${items.length}`, createdAt });
       }
     } else if (role === "thinking") {
       if (!text) continue;
@@ -107,22 +116,22 @@ function toolCallImageItems(content: unknown): TimelineItem[] {
   const items: TimelineItem[] = [];
   for (const block of content) {
     const b = block as Record<string, unknown>;
-    if (b.type !== "toolCall") continue;
-    const name = String(b.name ?? "");
-    const args = b.arguments;
-    if (!args || typeof args !== "object") continue;
-    // read 工具的 path 参数；若为图片路径则渲染
-    if (name === "read") {
-      const path = (args as Record<string, unknown>).path;
-      if (typeof path === "string" && TOOL_IMAGE_EXT.test(path.trim())) {
-        items.push({
-          id: "",
-          kind: "tool",
-          text: path.trim(),
-          createdAt: "",
-          toolName: "read",
-        });
+    if (b.type !== "toolCall" || b.name !== "read") continue;
+    const argsValue = b.arguments;
+    let args: Record<string, unknown> | undefined;
+    if (argsValue && typeof argsValue === "object") {
+      args = argsValue as Record<string, unknown>;
+    } else if (typeof argsValue === "string") {
+      try {
+        const parsed = JSON.parse(argsValue) as unknown;
+        if (parsed && typeof parsed === "object") args = parsed as Record<string, unknown>;
+      } catch {
+        args = undefined;
       }
+    }
+    const path = typeof args?.path === "string" ? args.path.trim() : "";
+    if (path && TOOL_IMAGE_EXT.test(path)) {
+      items.push({ id: "", kind: "tool", text: path, createdAt: "", toolName: "read" });
     }
   }
   return items;

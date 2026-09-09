@@ -42,7 +42,7 @@ export interface HostStoreValue {
   getMaestroSettings(): Promise<{ files: { key: string; label: string; path: string; data: Record<string, unknown> }[]; observedAt: string }>;
   /** 会话 token 用量（JSONL 聚合 + SDK context）；目标会话未打开时返回 null */
   fetchSessionUsage(sessionId: string): Promise<SessionUsageSummary | null>;
-  fetchMonitorState(): Promise<void>;
+  fetchMonitorState(): Promise<boolean>;
   updateMaestroSettings(patch: Record<string, unknown>): Promise<{ ok: boolean; error?: string }>;
   setModel(sessionId: string, modelId: string): Promise<{ ok: boolean; error?: string }>;
   setThinking(sessionId: string, level: string): Promise<{ ok: boolean; error?: string }>;
@@ -259,7 +259,7 @@ export function HostStoreProvider({ children }: { children: React.ReactNode }) {
     }
   }, [getClient]);
 
-  const fetchMonitorState = useCallback(async (): Promise<void> => {
+  const fetchMonitorState = useCallback(async (): Promise<boolean> => {
     try {
       // host 已用共享 projector 投影好 MonitorState；运行时校验后再 dispatch（防异常/恶意载荷）
       const result = await getClient().sendCommand({ type: "get_monitor_state" }) as unknown;
@@ -268,9 +268,11 @@ export function HostStoreProvider({ children }: { children: React.ReactNode }) {
         && Array.isArray((result as { windows?: unknown }).windows)
       ) {
         dispatch({ type: "monitor_state", state: result } as unknown as Parameters<typeof dispatch>[0]);
+        return true;
       }
+      return false;
     } catch {
-      // 静默
+      return false;
     }
   }, [getClient]);
 

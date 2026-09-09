@@ -209,6 +209,21 @@ describe("P1-1: live 会话 timeline 投影", () => {
     await runner.dispose();
   });
 
+  it("message_end 提取无文本的 read 图片工具调用", async () => {
+    const runtime = makeRuntime(path);
+    const runner = await openRunner(runtime);
+
+    runtime.emit("assistant", "", 1756800100000, {
+      content: [{ type: "toolCall", name: "read", arguments: { path: "/tmp/pi-clipboard-live.png" } }],
+    });
+
+    const items = events.filter((e) => e.type === "timeline_item").map((e) => (e as { item: TimelineItem }).item);
+    expect(items).toHaveLength(1);
+    expect(items[0]).toMatchObject({ kind: "tool", toolName: "read", text: "/tmp/pi-clipboard-live.png" });
+
+    await runner.dispose();
+  });
+
   it("同一条消息 end 后再次 end（同 key）走替换而非追加", async () => {
     const runtime = makeRuntime(path);
     const runner = await openRunner(runtime);

@@ -12,6 +12,7 @@ import { EventLog } from "./event-log.js";
 import { replayTailFromJsonl, replayPageFromJsonl, searchInJsonl } from "./jsonl-pager.js";
 import { readSessionUsage } from "./usage-reader.js";
 import { MobileExtensionUiBridge } from "./mobile-ui-context.js";
+import { imageBlocksFromContent, materializeImages } from "./image-cache.js";
 
 const HISTORY_PAGE_SIZE = 80;
 /** 流式 delta 节流间隔：每个条目最多每 200ms 发一次，避免刷屏事件环 */
@@ -392,12 +393,28 @@ export class SdkSessionRunner implements SessionRunner {
       }
 
       const content = extractText(msg.content);
-      if (!content && role !== "thinking" && role !== "system") continue;
+      const imageBlocks = imageBlocksFromContent(msg.content);
+      const imageCallItems = role === "assistant" || role === "system"
+        ? toolCallImageItems(msg.content, createdAt)
+        : [];
+      if (!content && imageBlocks.length === 0 && imageCallItems.length === 0 && role !== "thinking" && role !== "system") continue;
 
       if (role === "user") {
-        items.push({ id: `replay-user-${items.length}`, kind: "user", text: content, createdAt });
+        const imagePaths = materializeImages(imageBlocks);
+        items.push({
+          id: `replay-user-${items.length}`,
+          kind: "user",
+          text: imagePaths.length > 0 && !content
+            ? `[🖼 ${imagePaths.length} 张图片]`
+            : content,
+          createdAt,
+          ...(imagePaths.length > 0 ? { images: imagePaths } : {}),
+        });
       } else if (role === "assistant" || role === "system") {
-        items.push({ id: `replay-assistant-${items.length}`, kind: "assistant", text: content, createdAt });
+        if (content) items.push({ id: `replay-assistant-${items.length}`, kind: "assistant", text: content, createdAt });
+        for (const imageItem of imageCallItems) {
+          items.push({ ...imageItem, id: `replay-toolcall-${items.length}` });
+        }
       } else if (role === "thinking") {
         items.push({ id: `replay-thinking-${items.length}`, kind: "thinking", text: content, createdAt });
       }
@@ -435,10 +452,17 @@ export class SdkSessionRunner implements SessionRunner {
 
     if (type === "message_end") {
       const item = this.liveMessageToTimelineItem(message);
-      if (!item) return;
-      this.upsertTimelineItem(item);
-      this.liveDeltaAt.delete(item.id);
-      this.emit(this.eventLog.record({ type: "timeline_item", sessionId: this.id, item }));
+      if (item) {
+        this.upsertTimelineItem(item);
+        this.liveDeltaAt.delete(item.id);
+        this.emit(this.eventLog.record({ type: "timeline_item", sessionId: this.id, item }));
+      }
+      const imageItems = this.liveToolCallImageItems(message);
+      for (const imageItem of imageItems) {
+        imageItem.id = `live-toolcall-image-${++this.liveSeq}`;
+        this.upsertTimelineItem(imageItem);
+        this.emit(this.eventLog.record({ type: "timeline_item", sessionId: this.id, item: imageItem }));
+      }
       return;
     }
 
@@ -460,6 +484,14 @@ export class SdkSessionRunner implements SessionRunner {
   }
 
   private readonly lastSentText = new Map<string, string>();
+
+  /** 为 assistant 工具调用中的图片路径生成独立 timeline 条目。 */
+  private liveToolCallImageItems(message: Record<string, unknown>): TimelineItem[] {
+    const timestamp = typeof message.timestamp === "number"
+      ? new Date(message.timestamp).toISOString()
+      : new Date().toISOString();
+    return toolCallImageItems(message.content, timestamp);
+  }
 
   /** 为 assistant/thinking/system 消息分配（或复用）稳定 id；其他角色返回 undefined */
   private ensureLiveId(message: Record<string, unknown>): string | undefined {
@@ -556,10 +588,12 @@ export class SdkSessionRunner implements SessionRunner {
   }
 
   private recordUserMessage(message: string, images?: unknown[]): void {
+    const imagePaths = materializeImages(images);
     const item: TimelineItem = {
       id: `user-${this.eventLog.nextSequence}`,
       kind: "user",
-      text: images && images.length > 0 ? `${message}${message ? "\n" : ""}[🖼 ${images.length} 张图片]` : message,
+      text: imagePaths.length > 0 ? `${message}${message ? "\n" : ""}[🖼 ${imagePaths.length} 张图片]` : message,
+      ...(imagePaths.length > 0 ? { images: imagePaths } : {}),
       createdAt: new Date().toISOString(),
     };
     this.timeline.push(item);
@@ -585,6 +619,32 @@ export class SdkSessionRunner implements SessionRunner {
     };
   }
 }
+
+function toolCallImageItems(content: unknown, createdAt: string): TimelineItem[] {
+  if (!Array.isArray(content)) return [];
+  const items: TimelineItem[] = [];
+  for (const block of content) {
+    const value = block as Record<string, unknown>;
+    if (value.type !== "toolCall" || value.name !== "read") continue;
+    let args: Record<string, unknown> | undefined;
+    if (value.arguments && typeof value.arguments === "object") {
+      args = value.arguments as Record<string, unknown>;
+    } else if (typeof value.arguments === "string") {
+      try {
+        const parsed = JSON.parse(value.arguments) as unknown;
+        if (parsed && typeof parsed === "object") args = parsed as Record<string, unknown>;
+      } catch {
+        args = undefined;
+      }
+    }
+    const path = typeof args?.path === "string" ? args.path.trim() : "";
+    if (!path || !TOOL_IMAGE_EXT.test(path)) continue;
+    items.push({ id: "", kind: "tool", text: path, createdAt, toolName: "read" });
+  }
+  return items;
+}
+
+const TOOL_IMAGE_EXT = /\.(png|jpe?g|gif|webp|bmp)$/i;
 
 function toJsonValue(value: unknown): JsonValue {
   return JSON.parse(JSON.stringify(value)) as JsonValue;

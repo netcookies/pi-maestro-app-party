@@ -204,9 +204,13 @@ export default function SessionScreen() {
     const isTool = item.kind === "tool";
     const isThinking = item.kind === "thinking";
     const isAssistant = item.kind === "assistant";
-    // 所有消息类型都做图片分段（user 贴图、assistant 引用、tool 输出）
-    const segments = splitImageSegments(item.text);
-    const hasImages = segments.some((s) => s.type === "image");
+    // 所有消息类型都做图片分段（tool 输出路径和历史图片引用）
+    const imagePaths = item.images ?? [];
+    const displayText = imagePaths.length > 0
+      ? item.text.replace(/\n?\[🖼 \d+ 张图片\]$/, "")
+      : item.text;
+    const segments = splitImageSegments(displayText);
+    const hasImages = imagePaths.length > 0 || segments.some((s) => s.type === "image");
 
     // tool 消息：折叠/展开/全屏卡片（图片路径由 InlineImage 在展开区显示）
     if (isTool) {
@@ -219,8 +223,11 @@ export default function SessionScreen() {
           />
           {hasImages && (
             <View style={styles.toolImages}>
+              {imagePaths.map((path, i) => (
+                <InlineImage key={`item-img-${i}`} path={path} />
+              ))}
               {segments.filter((s) => s.type === "image").map((seg, i) => (
-                <InlineImage key={`img-${i}`} path={seg.path} />
+                <InlineImage key={`path-img-${i}`} path={seg.path} />
               ))}
             </View>
           )}
@@ -239,6 +246,9 @@ export default function SessionScreen() {
         {isThinking && <Text style={styles.thinkingLabel}>思考</Text>}
         {hasImages ? (
           <View>
+            {imagePaths.map((path, i) => (
+              <InlineImage key={`item-img-${i}`} path={path} />
+            ))}
             {segments.map((seg, i) =>
               seg.type === "image" ? (
                 <InlineImage key={`img-${i}`} path={seg.path} />
@@ -254,10 +264,10 @@ export default function SessionScreen() {
             )}
           </View>
         ) : isAssistant ? (
-          <MarkdownText text={item.text} />
+          <MarkdownText text={displayText} />
         ) : (
           <Text style={[isUser ? styles.textUser : styles.textAgent]} selectable>
-            {item.text}
+            {displayText}
           </Text>
         )}
       </View>

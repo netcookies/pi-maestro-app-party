@@ -19,7 +19,8 @@
         "NSAppTransportSecurity": {
           "NSAllowsArbitraryLoads": true
         },
-        "NSCameraUsageDescription": "允许 Maestro Mobile 使用相机扫描 PC 上的配对二维码"
+        "NSCameraUsageDescription": "允许 Maestro Mobile 使用相机扫描 PC 上的配对二维码",
+        "NSLocalNetworkUsageDescription": "允许 Maestro Mobile 连接本地网络中的 Host"
       }
     },
     "android": {

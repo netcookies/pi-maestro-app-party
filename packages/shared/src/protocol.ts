@@ -31,6 +31,8 @@ export interface TimelineItem {
   toolArgs?: JsonValue;
   toolResult?: JsonValue;
   isError?: boolean;
+  /** Host-cache absolute image paths; raw image bytes never travel in timeline events. */
+  images?: string[];
 }
 
 export interface SessionState {

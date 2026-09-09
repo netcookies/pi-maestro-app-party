@@ -42,6 +42,10 @@ export function HostConnectCard({ hostUrl, token, onHostUrlChange, onTokenChange
     void loadPairedHosts().then(setPaired);
   }, []);
 
+  useEffect(() => {
+    if (isConnected) setOpen(false);
+  }, [isConnected]);
+
   const busy = connectionState === "connecting" || connectionState === "reconnecting";
   const tokenError = connectionState === "disconnected" && !!lastError?.includes("token");
   const styles = makeStyles(theme);
