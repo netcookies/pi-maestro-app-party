@@ -17,6 +17,7 @@
  */
 import { open } from "node:fs/promises";
 import type { TimelineItem } from "@maestro-mobile/shared";
+import { imageBlocksFromContent, materializeImages } from "./image-cache.js";
 
 export interface PageResult {
   items: TimelineItem[];
@@ -69,7 +70,7 @@ async function scanWindow(filePath: string, opts: WindowOptions): Promise<PageRe
     }
     // ring 保存 TimelineItem | null（null = message 未产生可渲染 item，如重复 toolResult）；
     // 长度按 message 数维护，cursor/hasMore 因此与 message 序号一致。
-    const ring: (TimelineItem | null)[] = [];
+    const ring: (TimelineItem[] | null)[] = [];
     const seenToolResults = new Set<string>();
     let totalEntries = 0;
     let buf = "";
@@ -84,8 +85,8 @@ async function scanWindow(filePath: string, opts: WindowOptions): Promise<PageRe
       if (ring.length >= want) {
         ring.shift();
       }
-      const item = parseMessageLine(line, totalEntries - 1, seenToolResults);
-      ring.push(item ?? null);
+      const parsed = parseMessageLineItems(line, totalEntries - 1, seenToolResults);
+      ring.push(parsed.length > 0 ? parsed : null);
     };
 
     const { size } = await fd.stat();
@@ -112,7 +113,7 @@ async function scanWindow(filePath: string, opts: WindowOptions): Promise<PageRe
     const start = Math.max(0, end - opts.limit);
     const items: TimelineItem[] = ring
       .slice(start, end)
-      .filter((x): x is TimelineItem => x !== null);
+      .flatMap((messageItems) => messageItems ?? []);
     // hasMore：ring 里还有比窗口更早的 message（含占位）
     const hasMore = start > 0;
     const cursor = opts.skip + (end - start);
@@ -128,13 +129,21 @@ export function parseMessageLine(
   index: number,
   seenToolResults: Set<string>,
 ): TimelineItem | undefined {
+  return parseMessageLineItems(line, index, seenToolResults)[0];
+}
+
+function parseMessageLineItems(
+  line: string,
+  index: number,
+  seenToolResults: Set<string>,
+): TimelineItem[] {
   let entry: Record<string, unknown>;
   try {
     entry = JSON.parse(line) as Record<string, unknown>;
   } catch {
-    return undefined;
+    return [];
   }
-  if (entry.type !== "message") return undefined;
+  if (entry.type !== "message") return [];
   const msg = (entry.message ?? {}) as Record<string, unknown>;
   const role = String(msg.role ?? "");
   const timestamp = typeof msg.timestamp === "number" ? msg.timestamp : 0;
@@ -142,11 +151,11 @@ export function parseMessageLine(
 
   if (role === "toolResult") {
     const toolCallId = String(msg.toolCallId ?? "");
-    if (toolCallId && seenToolResults.has(toolCallId)) return undefined;
+    if (toolCallId && seenToolResults.has(toolCallId)) return [];
     if (toolCallId) seenToolResults.add(toolCallId);
     const text = extractText(msg.content);
-    if (!text) return undefined;
-    return {
+    if (!text) return [];
+    return [{
       id: `replay-tool-${index}`,
       kind: "tool",
       text,
@@ -154,33 +163,45 @@ export function parseMessageLine(
       toolName: String(msg.toolName ?? "tool"),
       toolCallId,
       isError: msg.isError === true,
-    };
+    }];
   }
   if (role === "tool" || role === "toolCall") {
     const toolName = String(msg.toolName ?? "tool");
     const text = extractText(msg.content);
-    return {
+    return [{
       id: `replay-toolcall-${index}`,
       kind: "tool",
       text: text || `调用 ${toolName}`,
       createdAt,
       toolName,
-    };
+    }];
   }
 
   const text = extractText(msg.content);
   if (role === "user") {
-    return { id: `replay-user-${index}`, kind: "user", text, createdAt };
+    const imagePaths = materializeImages(imageBlocksFromContent(msg.content));
+    if (!text && imagePaths.length === 0) return [];
+    return [{
+      id: `replay-user-${index}`,
+      kind: "user",
+      text: imagePaths.length > 0 && !text ? `[🖼 ${imagePaths.length} 张图片]` : text,
+      createdAt,
+      ...(imagePaths.length > 0 ? { images: imagePaths } : {}),
+    }];
   }
   if (role === "assistant" || role === "system") {
-    if (!text) return undefined;
-    return { id: `replay-assistant-${index}`, kind: "assistant", text, createdAt };
+    const items: TimelineItem[] = [];
+    if (text) items.push({ id: `replay-assistant-${index}`, kind: "assistant", text, createdAt });
+    for (const callItem of toolCallImageItems(msg.content, createdAt)) {
+      items.push({ ...callItem, id: `replay-toolcall-${index}-${items.length}` });
+    }
+    return items;
   }
   if (role === "thinking") {
-    if (!text) return undefined;
-    return { id: `replay-thinking-${index}`, kind: "thinking", text, createdAt };
+    if (!text) return [];
+    return [{ id: `replay-thinking-${index}`, kind: "thinking", text, createdAt }];
   }
-  return undefined;
+  return [];
 }
 
 /**
@@ -241,6 +262,34 @@ export async function searchInJsonl(
     await fd?.close();
   }
 }
+
+function toolCallImageItems(content: unknown, createdAt: string): TimelineItem[] {
+  if (!Array.isArray(content)) return [];
+  const items: TimelineItem[] = [];
+  for (const block of content) {
+    const value = block as Record<string, unknown>;
+    if (value.type !== "toolCall" || value.name !== "read") continue;
+    const argsValue = value.arguments;
+    let args: Record<string, unknown> | undefined;
+    if (argsValue && typeof argsValue === "object") {
+      args = argsValue as Record<string, unknown>;
+    } else if (typeof argsValue === "string") {
+      try {
+        const parsed = JSON.parse(argsValue) as unknown;
+        if (parsed && typeof parsed === "object") args = parsed as Record<string, unknown>;
+      } catch {
+        args = undefined;
+      }
+    }
+    const path = typeof args?.path === "string" ? args.path.trim() : "";
+    if (path && TOOL_IMAGE_EXT.test(path)) {
+      items.push({ id: "", kind: "tool", text: path, createdAt, toolName: "read" });
+    }
+  }
+  return items;
+}
+
+const TOOL_IMAGE_EXT = /\.(png|jpe?g|gif|webp|bmp)$/i;
 
 function extractText(content: unknown): string {
   if (typeof content === "string") return content;

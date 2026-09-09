@@ -93,6 +93,36 @@ describe("jsonl-pager", () => {
     expect(tail.totalEntries).toBe(4);
   });
 
+  it("retains image references and read image calls in paged history", async () => {
+    await writeLines([
+      JSON.stringify({
+        type: "message",
+        message: {
+          role: "user",
+          content: [
+            { type: "text", text: "请看图" },
+            { type: "image", data: "AQID", mimeType: "image/png" },
+          ],
+          timestamp: 1000,
+        },
+      }),
+      JSON.stringify({
+        type: "message",
+        message: {
+          role: "assistant",
+          content: [{ type: "toolCall", name: "read", arguments: { path: "/tmp/pi-clipboard-paged.png" } }],
+          timestamp: 1001,
+        },
+      }),
+    ]);
+
+    const page = await replayTailFromJsonl(path, 10);
+    expect(page.items).toHaveLength(2);
+    expect(page.items[0].images).toHaveLength(1);
+    expect(page.items[0].text).toBe("请看图");
+    expect(page.items[1]).toMatchObject({ kind: "tool", toolName: "read", text: "/tmp/pi-clipboard-paged.png" });
+  });
+
   it("returns empty for missing file", async () => {
     const tail = await replayTailFromJsonl(join(dir, "missing.jsonl"), 10);
     expect(tail.items).toEqual([]);
