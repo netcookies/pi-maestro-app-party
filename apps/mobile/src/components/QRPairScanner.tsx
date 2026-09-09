@@ -7,8 +7,8 @@
  * 扫描成功回调 onScanned({ hostUrl, token })，由调用方持久化并连接。
  */
 import React, { useState } from "react";
-import { View, Text, StyleSheet, TouchableOpacity, Modal, Linking, ActivityIndicator } from "react-native";
-import { CameraView, useCameraPermissions } from "expo-camera";
+import { View, Text, StyleSheet, TouchableOpacity, Modal, Linking } from "react-native";
+import { CameraView, useCameraPermissions, type ScanningResult } from "expo-camera";
 import { useTheme, MIUIX_RADIUS, MIUIX_TYPE, MIUIX_SPACE } from "../theme";
 import { LineIcon } from "./LineIcon";
 import { extractPairing, type PairingInfo } from "../pairing";
@@ -117,6 +117,24 @@ export function QRPairScanner({ visible, onClose, onScanned }: {
       }
       startProbing(enriched);
     })();
+  };
+
+  React.useEffect(() => {
+    if (!visible) return;
+    const subscription = CameraView.onModernBarcodeScanned((result: ScanningResult) => {
+      handleBarcode(result);
+      void CameraView.dismissScanner();
+    });
+    return () => subscription.remove();
+  }, [visible, locked]);
+
+  const launchSystemScanner = async () => {
+    setOpenError(null);
+    try {
+      await CameraView.launchScanner({ barcodeTypes: ["qr"] });
+    } catch (error) {
+      setOpenError(error instanceof Error ? error.message : "系统扫码器启动失败");
+    }
   };
 
   const chooseCandidate = (ip: string) => {
@@ -240,10 +258,15 @@ export function QRPairScanner({ visible, onClose, onScanned }: {
         </View>
 
         <View style={styles.footer}>
-          <ActivityIndicator size="small" />
-          <Text style={[styles.hintSub, { color: theme.onBackgroundVariant ?? theme.muted }]}>
-            识别后自动填入地址并连接，无需手动输入 token
-          </Text>
+          <TouchableOpacity
+            style={[styles.systemScannerBtn, { backgroundColor: theme.buttonPrimary }]}
+            onPress={() => void launchSystemScanner()}
+            accessibilityRole="button"
+            accessibilityLabel="使用系统扫码器"
+          >
+            <Text style={styles.permBtnText}>使用系统扫码器</Text>
+          </TouchableOpacity>
+          <Text style={[styles.hintSub, { color: theme.onBackgroundVariant ?? theme.muted }]}>嵌入式预览无法识别时，改用 Android Google Code Scanner 或 iOS VisionKit</Text>
         </View>
       </View>
     </Modal>
@@ -252,7 +275,7 @@ export function QRPairScanner({ visible, onClose, onScanned }: {
 
 function makeStyles(theme: ReturnType<typeof useTheme>["theme"]) {
   return StyleSheet.create({
-    pickerSheet: { position: "absolute", left: MIUIX_SPACE.lg, right: MIUIX_SPACE.lg, bottom: MIUIX_SPACE.xxl, borderRadius: MIUIX_RADIUS.lg, padding: MIUIX_SPACE.lg },
+    pickerSheet: { position: "absolute", zIndex: 10, elevation: 10, left: MIUIX_SPACE.lg, right: MIUIX_SPACE.lg, bottom: MIUIX_SPACE.xxl, borderRadius: MIUIX_RADIUS.lg, padding: MIUIX_SPACE.lg },
     pickerTitle: { fontSize: MIUIX_TYPE.body1, fontWeight: "700", marginBottom: MIUIX_SPACE.xs },
     pickerHint: { fontSize: MIUIX_TYPE.footnote2, marginBottom: MIUIX_SPACE.md },
     candRow: { flexDirection: "row", alignItems: "center", gap: MIUIX_SPACE.md, borderWidth: 1, borderRadius: MIUIX_RADIUS.md, padding: MIUIX_SPACE.md, marginBottom: MIUIX_SPACE.sm },
@@ -280,6 +303,7 @@ function makeStyles(theme: ReturnType<typeof useTheme>["theme"]) {
     hintSub: { fontSize: MIUIX_TYPE.footnote1, textAlign: "center", paddingHorizontal: MIUIX_SPACE.xl },
     permBtn: { borderRadius: MIUIX_RADIUS.md, paddingHorizontal: MIUIX_SPACE.xl, paddingVertical: MIUIX_SPACE.md, marginTop: MIUIX_SPACE.md },
     permBtnText: { color: "#fff", fontWeight: "600", fontSize: MIUIX_TYPE.body2 },
-    footer: { flexDirection: "row", alignItems: "center", justifyContent: "center", gap: MIUIX_SPACE.sm, paddingVertical: MIUIX_SPACE.lg },
+    footer: { alignItems: "center", justifyContent: "center", gap: MIUIX_SPACE.sm, paddingHorizontal: MIUIX_SPACE.lg, paddingVertical: MIUIX_SPACE.lg },
+    systemScannerBtn: { alignItems: "center", justifyContent: "center", borderRadius: MIUIX_RADIUS.md, minHeight: 44, width: "100%" },
   });
 }
