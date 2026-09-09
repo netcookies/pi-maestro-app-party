@@ -1,5 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { SdkSessionRunner } from "../src/session-runner.js";
+import { mkdtemp, writeFile, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { MAX_TIMELINE_ITEMS, SdkSessionRunner } from "../src/session-runner.js";
 import type { HostEvent, TimelineItem } from "@maestro-mobile/shared";
 
 /** 构造带历史消息的 fake session */
@@ -159,5 +162,89 @@ describe("SdkSessionRunner history replay", () => {
     expect(items).toHaveLength(1);
     expect(items[0].text).toBe("内容A");
     await runner.dispose();
+  });
+});
+
+describe("SdkSessionRunner timeline history cap", () => {
+  /** 写一个含 n 条 message 的真实 jsonl，驱动 loadMoreHistory 向前翻页 */
+  async function makeJsonl(path: string, n: number): Promise<void> {
+    const lines: string[] = [];
+    for (let i = 0; i < n; i++) {
+      lines.push(JSON.stringify({
+        type: "message", id: `m${i}`,
+        message: { role: i % 2 === 0 ? "user" : "assistant", content: `msg-${i}`, timestamp: 1756800000000 + i * 1000 },
+      }));
+    }
+    await writeFile(path, lines.join("\n"));
+  }
+
+  async function openWithFile(totalMessages: number) {
+    const dir = await mkdtemp(join(tmpdir(), "mm-timeline-cap-"));
+    const file = join(dir, "sess.jsonl");
+    await makeJsonl(file, totalMessages);
+    const runtime = makeSessionWithHistory([]);
+    runtime.session.sessionFile = file;
+    const runner = await SdkSessionRunner.open(
+      { createRuntime: async () => runtime.runtime, listSessions: async () => [] },
+      { cwd: "/tmp", mode: "create", sessionFile: file },
+      () => undefined,
+    );
+    return { dir, runner };
+  }
+
+  it("stops paging once the cap is reached, without dropping delivered items", async () => {
+    const { dir, runner } = await openWithFile(MAX_TIMELINE_ITEMS * 3);
+    let delivered = runner.snapshot().timeline.length;
+    let pages = 0;
+    let last: { items: TimelineItem[]; hasMore: boolean } = { items: [], hasMore: true };
+
+    // 持续翻页直到 hasMore=false，模拟客户端自动加载不断叠加
+    while (last.hasMore && pages < 500) {
+      last = await runner.loadMoreHistory(80);
+      pages++;
+      delivered += last.items.length;
+      const now = runner.snapshot().timeline.length;
+      // 已交付条目永不丢失：驻留长度只能等于「已交付总数」或被上限截断
+      expect(now).toBeGreaterThanOrEqual(Math.min(delivered, MAX_TIMELINE_ITEMS));
+    }
+
+    const final = runner.snapshot().timeline.length;
+    expect(final).toBeLessThanOrEqual(MAX_TIMELINE_ITEMS);
+    expect(last.hasMore).toBe(false);
+    // 到顶即停：驻留长度恰好等于交付总数（未被裁剪）
+    expect(final).toBe(delivered);
+    // 保留最新尾部内容
+    expect(runner.snapshot().timeline[final - 1].text).toContain(`msg-${MAX_TIMELINE_ITEMS * 3 - 1}`);
+    await runner.dispose();
+    await rm(dir, { recursive: true, force: true });
+  });
+
+  it("clamps an oversized page request to the remaining room", async () => {
+    const { dir, runner } = await openWithFile(MAX_TIMELINE_ITEMS + 1000);
+    // 先把 timeline 填到接近上限：逐页翻到 room < 一次大请求
+    let guard = 0;
+    while (runner.hasMoreHistory && guard++ < 200) {
+      const snapshot = runner.snapshot().timeline;
+      if (snapshot.length > MAX_TIMELINE_ITEMS - 20) break;
+      await runner.loadMoreHistory(80);
+    }
+    const before = runner.snapshot().timeline.length;
+    const big = await runner.loadMoreHistory(MAX_TIMELINE_ITEMS);
+    const after = runner.snapshot().timeline.length;
+    expect(after).toBeLessThanOrEqual(MAX_TIMELINE_ITEMS);
+    expect(after).toBeGreaterThanOrEqual(before);
+    await runner.dispose();
+    await rm(dir, { recursive: true, force: true });
+  });
+
+  it("keeps paging while below the cap", async () => {
+    const { dir, runner } = await openWithFile(MAX_TIMELINE_ITEMS + 400);
+    const before = runner.snapshot().timeline.length;
+    const page = await runner.loadMoreHistory(80);
+    expect(page.items.length).toBeGreaterThan(0);
+    expect(runner.snapshot().timeline.length).toBe(before + page.items.length);
+    expect(runner.hasMoreHistory).toBe(true);
+    await runner.dispose();
+    await rm(dir, { recursive: true, force: true });
   });
 });

@@ -13,7 +13,8 @@
  */
 import { spawn, execFile } from "node:child_process";
 import { networkInterfaces } from "node:os";
-import { readFile, writeFile, unlink, chmod, readdir } from "node:fs/promises";
+import { readFile, writeFile, unlink, chmod, readdir, appendFile, stat, rename } from "node:fs/promises";
+import { openSync, closeSync, chmodSync } from "node:fs";
 import { join } from "node:path";
 import { homedir } from "node:os";
 import { fileURLToPath } from "node:url";
@@ -21,7 +22,39 @@ import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-a
 
 const PID_FILE = join(homedir(), ".pi", "maestro-mobile.pid");
 const TOKEN_FILE = join(homedir(), ".pi", "maestro-mobile-token");
+/** host 日志：以前 stdio:"ignore" 丢弃了崩溃原因，host “无声消失”无从查起 */
+const LOG_FILE = join(homedir(), ".pi", "maestro-mobile.log");
+const LOG_MAX_BYTES = 5 * 1024 * 1024;
 const DEFAULT_PORT = 4739;
+
+/** 追写一行扩展侧诊断（失败不影响主流程） */
+async function appendHostLog(line: string): Promise<void> {
+  try {
+    await appendFile(LOG_FILE, `${new Date().toISOString()} [extension] ${line}\n`, { mode: 0o600 });
+  } catch { /* 日志不可写时忽略 */ }
+}
+
+/**
+ * 以追加模式打开 host 日志，供 spawn 的 stdout/stderr 继承。
+ * 权限必须 0600：cli 启动横幅会打印完整 token。
+ */
+function openHostLogFd(): number | undefined {
+  try {
+    const fd = openSync(LOG_FILE, "a", 0o600);
+    try { chmodSync(LOG_FILE, 0o600); } catch { /* 已存在时尽力修正 */ }
+    return fd;
+  } catch {
+    return undefined;
+  }
+}
+
+/** 超阈值轮转一份 .1，避免日志无限增长 */
+async function rotateHostLog(): Promise<void> {
+  try {
+    const info = await stat(LOG_FILE);
+    if (info.size >= LOG_MAX_BYTES) await rename(LOG_FILE, `${LOG_FILE}.1`);
+  } catch { /* 文件不存在则无需轮转 */ }
+}
 
 function hostPort(): number {
   const raw = process.env.MAESTRO_MOBILE_PORT;
@@ -81,6 +114,74 @@ function lanIp(): string {
 function hostCliPath(): string {
   // dist/extension.js 与 dist/cli.js 同目录
   return join(fileURLToPath(new URL(".", import.meta.url)), "cli.js");
+}
+
+/**
+ * 启动 host 子进程（detached）并等待 health 通过。
+ * O_EXCL 竞争锁防多 Pi 会话并发 start；stdout/stderr 继承日志 fd 使退出原因可查。
+ */
+async function startHostDetached(
+  port: number,
+  notify: (message: string, level: "info" | "warning") => void,
+): Promise<void> {
+  const lockFile = PID_FILE + ".lock";
+  try {
+    await writeFile(lockFile, String(process.pid), { flag: "wx" });
+  } catch {
+    // 锁已被占 —— 持锁者还活着则跳过，死了则接管
+    try {
+      const lockPid = Number((await readFile(lockFile, "utf8")).trim());
+      process.kill(lockPid, 0);
+      notify(`maestro-mobile: 另一会话正在启动（pid=${lockPid}），本次跳过`, "warning");
+      return;
+    } catch {
+      await unlink(lockFile).catch(() => { });
+      await writeFile(lockFile, String(process.pid), { flag: "wx" });
+    }
+  }
+
+  try {
+    await rotateHostLog();
+    const logFd = openHostLogFd();
+    const child = spawn(process.execPath, [hostCliPath(), "--port", String(port)], {
+      detached: true,
+      // 以前固定 "ignore"：host 的退出原因（OOM / EADDRINUSE / uncaught / 被信号杀）全进 /dev/null，
+      // 只能表现为“无声消失”。日志必须 0600：cli 启动横幅会打印完整 token。
+      stdio: logFd === undefined ? "ignore" : ["ignore", logFd, logFd],
+      env: { ...process.env, MAESTRO_MOBILE_PORT: String(port) },
+    });
+    if (logFd !== undefined) closeSync(logFd); // 子进程已持有副本
+    child.unref();
+
+    if (child.pid === undefined) {
+      await appendHostLog(`spawn 失败：无 pid（cli=${hostCliPath()}）`);
+      notify("maestro-mobile: 启动失败 —— 未能创建子进程", "warning");
+      return;
+    }
+    const spawnedPid = child.pid;
+    child.on("error", (error) => {
+      void appendHostLog(`spawn error pid=${spawnedPid}: ${error.message}`);
+    });
+    child.on("exit", (code, signal) => {
+      void appendHostLog(`child exit pid=${spawnedPid} code=${code ?? "null"} signal=${signal ?? "none"}`);
+    });
+    await writeFile(PID_FILE, String(spawnedPid), "utf8");
+
+    // 等待端口就绪（最多 3s）
+    for (let i = 0; i < 10; i++) {
+      await new Promise((r) => setTimeout(r, 300));
+      if (await probeHealth(port)) {
+        await appendHostLog(`started pid=${spawnedPid} :${port}`);
+        notify(`maestro-mobile: 已启动 :${port} pid=${spawnedPid}（日志 ${LOG_FILE}）`, "info");
+        void refreshStatus();
+        return;
+      }
+    }
+    await appendHostLog(`health 未在 3s 内通过 pid=${spawnedPid} :${port}`);
+    notify(`maestro-mobile: 启动后 3s 内未见 health 通过，请查日志 ${LOG_FILE}`, "warning");
+  } finally {
+    await unlink(lockFile).catch(() => { }); // 释放竞争锁
+  }
 }
 
 async function readPid(): Promise<number | null> {
@@ -162,40 +263,7 @@ export default function maestroHostExtension(pi: ExtensionAPI): void {
 
       // 默认（无子命令）：未启动 → 直接 start（与 cli 默认行为一致）
       if (sub === "default" && !alive) {
-        const lockFile = PID_FILE + ".lock";
-        try {
-          await writeFile(lockFile, String(process.pid), { flag: "wx" });
-        } catch {
-          try {
-            const lockPid = Number((await readFile(lockFile, "utf8")).trim());
-            process.kill(lockPid, 0);
-            ctx.ui.notify(`maestro-mobile: 另一会话正在启动（pid=${lockPid}），本次跳过`, "warning");
-            return;
-          } catch {
-            await unlink(lockFile).catch(() => { });
-            await writeFile(lockFile, String(process.pid), { flag: "wx" });
-          }
-        }
-        const child = spawn(process.execPath, [hostCliPath(), "--port", String(port)], {
-          detached: true,
-          stdio: "ignore",
-          env: { ...process.env, MAESTRO_MOBILE_PORT: String(port) },
-        });
-        child.unref();
-        await writeFile(PID_FILE, String(child.pid ?? ""), "utf8");
-        try {
-          for (let i = 0; i < 10; i++) {
-            await new Promise((r) => setTimeout(r, 300));
-            if (await probeHealth(port)) {
-              ctx.ui.notify(`maestro-mobile: 已启动 :${port} pid=${child.pid}`, "info");
-              void refreshStatus();
-              return;
-            }
-          }
-          ctx.ui.notify("maestro-mobile: 启动后 3s 内未见 health 通过，请查日志", "warning");
-        } finally {
-          await unlink(lockFile).catch(() => { });
-        }
+        await startHostDetached(port, (msg, level) => ctx.ui.notify(msg, level));
         return;
       }
 
@@ -264,45 +332,7 @@ export default function maestroHostExtension(pi: ExtensionAPI): void {
           return;
         }
         // 多 Pi 会话同时 start 的竞争锁：O_EXCL 抢占式创建，抢不到的会话直接退出
-        const lockFile = PID_FILE + ".lock";
-        let gotLock = false;
-        try {
-          await writeFile(lockFile, String(process.pid), { flag: "wx" });
-          gotLock = true;
-        } catch {
-          // 锁已被占 —— 检查持锁者是否还活着，死了则接管
-          try {
-            const lockPid = Number((await readFile(lockFile, "utf8")).trim());
-            process.kill(lockPid, 0);
-            ctx.ui.notify(`maestro-mobile: 另一会话正在启动（pid=${lockPid}），本次跳过`, "warning");
-            return;
-          } catch {
-            await unlink(lockFile).catch(() => { });
-            await writeFile(lockFile, String(process.pid), { flag: "wx" });
-            gotLock = true;
-          }
-        }
-        const child = spawn(process.execPath, [hostCliPath(), "--port", String(port)], {
-          detached: true,
-          stdio: "ignore",
-          env: { ...process.env, MAESTRO_MOBILE_PORT: String(port) },
-        });
-        child.unref();
-        await writeFile(PID_FILE, String(child.pid ?? ""), "utf8");
-        // 等待端口就绪（最多 3s）
-        try {
-          for (let i = 0; i < 10; i++) {
-            await new Promise((r) => setTimeout(r, 300));
-            if (await probeHealth(port)) {
-              ctx.ui.notify(`maestro-mobile: 已启动 :${port} pid=${child.pid}`, "info");
-              void refreshStatus();
-              return;
-            }
-          }
-          ctx.ui.notify("maestro-mobile: 启动后 3s 内未见 health 通过，请查日志", "warning");
-        } finally {
-          await unlink(lockFile).catch(() => { }); // 释放竞争锁
-        }
+        await startHostDetached(port, (msg, level) => ctx.ui.notify(msg, level));
         return;
       }
 

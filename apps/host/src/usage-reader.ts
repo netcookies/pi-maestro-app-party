@@ -13,7 +13,7 @@
  *  - 条目 id 可能因流式补写重复出现，必须按 id 去重
  *  - usage 缺失（用户消息/工具消息）直接跳过
  */
-import { readFile, readdir, stat } from "node:fs/promises";
+import { readdir, stat, open } from "node:fs/promises";
 import { join, basename } from "node:path";
 import { homedir } from "node:os";
 
@@ -89,35 +89,133 @@ export function parseUsageLine(line: string): UsageTotals {
 }
 
 /**
- * 聚合一个 JSONL 文件的 usage（全量读取；大文件流式逐行，按 id 去重）
- * 返回 EMPTY_TOTALS 也可能是「文件存在但无 usage」——调用方用 stat 区分
+ * 聚合一个 JSONL 文件的 usage（流式分块逐行，内存恒定；按 id 去重）。
+ * 返回 EMPTY_TOTALS 也可能是「文件存在但无 usage」——调用方用 stat 区分。
+ *
+ * 不采用 readFile + raw.split("\n")：实测单文件可达 165MB，完整字符串 + split 数组 +
+ * UTF-16 行内容同时驻留，峰值远高于文件体积，多次/并发扫描会撞 V8 堆上限（~4.2GB）直接 OOM abort。
+ * 同时受限于全局并发闸 + 同文件 single-flight，避免多客户端重复扫同一份大文件。
  */
 export async function readSessionUsage(sessionFile: string): Promise<UsageTotals> {
-  let raw: string;
-  try {
-    raw = await readFile(sessionFile, "utf8");
-  } catch {
-    return EMPTY_TOTALS;
-  }
-  const seenIds = new Set<string>();
-  let totals = EMPTY_TOTALS;
-  for (const line of raw.split("\n")) {
-    if (!line.includes('"usage"')) continue;
-    // id 去重：流式补写同一条 message 可能重复出现
-    let id: string | undefined;
+  const existing = inflightScans.get(sessionFile);
+  if (existing) return existing;
+  const scan = (async (): Promise<UsageTotals> => {
+    await acquireScanSlot();
     try {
-      const parsed = JSON.parse(line) as { id?: unknown };
-      if (typeof parsed.id === "string") id = parsed.id;
+      return await scanUsageFile(sessionFile);
     } catch {
-      // 解析失败仍尝试聚合 usage 行本身
+      // 文件不存在 / 不可读：保持原有语义，返回零值
+      return EMPTY_TOTALS;
+    } finally {
+      releaseScanSlot();
     }
-    if (id) {
-      if (seenIds.has(id)) continue;
-      seenIds.add(id);
-    }
-    totals = addTotals(totals, parseUsageLine(line));
+  })();
+  inflightScans.set(sessionFile, scan);
+  try {
+    return await scan;
+  } finally {
+    inflightScans.delete(sessionFile);
   }
-  return totals;
+}
+
+/** 分块读取字节数；与 live-sessions countLinesStreamed 保持同一量级 */
+const SCAN_CHUNK_BYTES = 512 * 1024;
+/** 单行上限：与 jsonl-pager MAX_LINE_BYTES 对齐（实测真实 jsonl 最长行 2.30MB，不会漏算 usage） */
+const MAX_USAGE_LINE_BYTES = 4 * 1024 * 1024;
+/** 全局同时扫描的文件数上限：防多客户端并发大文件扫描叠加导致 OOM */
+const MAX_CONCURRENT_USAGE_SCANS = 2;
+
+let activeScans = 0;
+const scanWaiters: (() => void)[] = [];
+const inflightScans = new Map<string, Promise<UsageTotals>>();
+
+async function acquireScanSlot(): Promise<void> {
+  if (activeScans >= MAX_CONCURRENT_USAGE_SCANS) {
+    await new Promise<void>((resolve) => scanWaiters.push(resolve));
+  }
+  activeScans++;
+}
+
+function releaseScanSlot(): void {
+  activeScans--;
+  scanWaiters.shift()?.();
+}
+
+/** 流式逐行扫描：以 0x0A 字节切行（UTF-8 多字节序列不会出现该字节，安全） */
+async function scanUsageFile(sessionFile: string): Promise<UsageTotals> {
+  const handle = await open(sessionFile, "r");
+  try {
+    const { size } = await handle.stat();
+    const seenIds = new Set<string>();
+    let totals = EMPTY_TOTALS;
+    // 跳过的超长行计数：不静默归因于“无 usage”
+    let skippedLines = 0;
+    let pending: Buffer[] = [];
+    let pendingBytes = 0;
+    const chunk = Buffer.alloc(SCAN_CHUNK_BYTES);
+    let pos = 0;
+
+    const consume = (line: Buffer): void => {
+      if (line.length === 0 || line.indexOf('"usage"') === -1) return;
+      if (line.length > MAX_USAGE_LINE_BYTES) {
+        skippedLines++;
+        return;
+      }
+      const text = line.toString("utf8");
+      // id 去重：流式补写同一条 message 可能重复出现
+      let id: string | undefined;
+      try {
+        const parsed = JSON.parse(text) as { id?: unknown };
+        if (typeof parsed.id === "string") id = parsed.id;
+      } catch {
+        // 解析失败仍尝试聚合 usage 行本身
+      }
+      if (id) {
+        if (seenIds.has(id)) return;
+        seenIds.add(id);
+      }
+      totals = addTotals(totals, parseUsageLine(text));
+    };
+
+    while (pos < size) {
+      const { bytesRead } = await handle.read(chunk, 0, Math.min(SCAN_CHUNK_BYTES, size - pos), pos);
+      if (bytesRead === 0) break;
+      pos += bytesRead;
+      const data = chunk.subarray(0, bytesRead);
+
+      let lineStart = 0;
+      for (let i = 0; i < data.length; i++) {
+        if (data[i] !== 0x0a) continue;
+        const segment = data.subarray(lineStart, i);
+        consume(pendingBytes > 0 ? Buffer.concat([...pending, segment]) : segment);
+        pending = [];
+        pendingBytes = 0;
+        lineStart = i + 1;
+      }
+      if (lineStart < data.length) {
+        // 必须拷贝：data 是复用的 chunk 视图，下一轮 handle.read 会就地覆盖，
+        // 直接存视图会让跨块残行读到被污染的字节（实测会丢 usage 行）
+        pending.push(Buffer.from(data.subarray(lineStart)));
+        pendingBytes += data.length - lineStart;
+        // 单行本身超大时直接丢弃残行，不把无上限的行堆进内存
+        if (pendingBytes > MAX_USAGE_LINE_BYTES) {
+          skippedLines++;
+          pending = [];
+          pendingBytes = 0;
+        }
+      }
+    }
+
+    // 无换行结尾的残行
+    if (pendingBytes > 0) consume(Buffer.concat(pending));
+
+    if (skippedLines > 0) {
+      console.warn(`[maestro-mobile] usage: ${sessionFile} 跳过 ${skippedLines} 行超 ${MAX_USAGE_LINE_BYTES} 字节的异常行`);
+    }
+    return totals;
+  } finally {
+    await handle.close();
+  }
 }
 
 /**

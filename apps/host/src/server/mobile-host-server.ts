@@ -54,6 +54,8 @@ export class MobileHostServer {
   private static readonly MAX_CONNECTIONS = 32;
   private static readonly MAX_CONCURRENT_COMMANDS = 8;
   private unsubscribeController: (() => void) | undefined;
+  /** listen() 等待中的错误回调；非空表示正在绑定端口 */
+  private listenError: ((error: Error) => void) | undefined;
   private boundHost = "0.0.0.0";
   private readonly hostSessionList = new HostSessionListService({
     indexPath: join(homedir(), ".pi", "agent", "mobile-session-index.json"),
@@ -68,6 +70,14 @@ export class MobileHostServer {
     });
     this.server.on("upgrade", (request, socket, head) => {
       this.handleUpgrade(request, socket, head);
+    });
+    // 常驻单一 error 入口：启动期错误只交给 listen() 的 reject，以免与友好提示重复打印原始错误；
+    // listen 成功后的 server error（EMFILE 等）无监听者时会以 uncaughtException 崩掉守护进程，故仅记录不抛出。
+    this.server.on("error", (error) => {
+      const pending = this.listenError;
+      this.listenError = undefined;
+      if (pending) pending(error);
+      else console.error("[maestro-mobile] http server error:", error);
     });
 
     this.webSocketServer.on("connection", (ws) => {
@@ -107,8 +117,14 @@ export class MobileHostServer {
 
   listen(port: number, hostname = "0.0.0.0"): Promise<void> {
     this.boundHost = hostname;
-    return new Promise((resolve) => {
-      this.server.listen(port, hostname, () => resolve());
+    return new Promise((resolve, reject) => {
+      // EADDRINUSE / EACCES / 非法绑定地址都以 server 的 error 事件产生。此前无监听者：
+      // 该 Promise 永不 settle，错误以 uncaughtException 裸崩（而此时 cli 的 handler 尚未注册）。
+      this.listenError = reject;
+      this.server.listen(port, hostname, () => {
+        this.listenError = undefined;
+        resolve();
+      });
     });
   }
 

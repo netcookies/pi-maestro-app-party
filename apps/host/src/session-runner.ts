@@ -15,6 +15,18 @@ import { MobileExtensionUiBridge } from "./mobile-ui-context.js";
 import { imageBlocksFromContent, materializeImages } from "./image-cache.js";
 
 const HISTORY_PAGE_SIZE = 80;
+/**
+ * timeline 历史驻留上限。历史只因客户端翻页而增长，而自动加载（滚动近顶即触发）
+ * 可连续叠加，无上限时单个大会话会把全量历史常驻在服务端内存（实测单会话 jsonl 可达 165MB）。
+ *
+ * 策略：达到上限就停止继续向前翻页（hasMore=false），而不是丢弃已交付的条目——
+ * 因为断线重连补拉 snapshot 时客户端是整体替换 timeline（mobile/src/app-state.ts __history_load），
+ * 删除已交付条目会造成可见的历史丢失。
+ * 实时条目不在此限制范围（由 SDK 上下文窗口 / compact 自然约束）。
+ * 注：room 按条目数计，而 pager 的 limit 按 message 数计（一条 message 可产生 0~多个条目），
+ * 因此本上限是「到顶即停」的软上限，不要求与消息数精确对齐。
+ */
+export const MAX_TIMELINE_ITEMS = 4000;
 /** 流式 delta 节流间隔：每个条目最多每 200ms 发一次，避免刷屏事件环 */
 const DELTA_THROTTLE_MS = 200;
 
@@ -333,7 +345,14 @@ export class SdkSessionRunner implements SessionRunner {
     if (!this.session.sessionFile || this.historyCursor <= 0) {
       return { items: [], hasMore: false, totalEntries: this.historyTotalEntries };
     }
-    const pageSize = Number.isInteger(count) && (count as number) > 0 ? (count as number) : HISTORY_PAGE_SIZE;
+    // 驻留已达上限：停止继续向前翻页，保住已展示的历史不被丢弃
+    const room = MAX_TIMELINE_ITEMS - this.timeline.length;
+    if (room <= 0) {
+      this.hasMoreHistoryFlag = false;
+      return { items: [], hasMore: false, totalEntries: this.historyTotalEntries };
+    }
+    // 本页按剩余额度限量（而非取到后再裁）：保证硬上限的同时不丢弃已交付条目
+    const pageSize = Math.min(Number.isInteger(count) && (count as number) > 0 ? (count as number) : HISTORY_PAGE_SIZE, room);
     const page = await replayPageFromJsonl(this.session.sessionFile, this.historyCursor, pageSize);
     if (page.items.length === 0) {
       this.hasMoreHistoryFlag = false;
@@ -341,10 +360,12 @@ export class SdkSessionRunner implements SessionRunner {
     }
     // 追加到 timeline 最前面（更早的内容）
     this.timeline.unshift(...page.items);
-    this.hasMoreHistoryFlag = page.hasMore;
+    // 用真实 timeline 长度判断是否触顶：不能用 page.items.length 推算（message 与条目不相等）
+    this.hasMoreHistoryFlag = page.hasMore && this.timeline.length < MAX_TIMELINE_ITEMS;
     this.historyCursor = page.cursor;
     if (page.totalEntries > 0) this.historyTotalEntries = page.totalEntries;
-    return { items: page.items, hasMore: page.hasMore, totalEntries: this.historyTotalEntries };
+    // 返回与 flag 同一个值，避免客户端按已触顶的 hasMore 再发一次空往返
+    return { items: page.items, hasMore: this.hasMoreHistoryFlag, totalEntries: this.historyTotalEntries };
   }
 
   /** 将 session.messages（AgentMessage[]）投影为 TimelineItem[] */

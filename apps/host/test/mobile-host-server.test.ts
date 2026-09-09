@@ -183,3 +183,31 @@ describe("MobileHostServer", () => {
     ws.close();
   });
 });
+describe("MobileHostServer.listen error propagation", () => {
+  // 回归：端口被占时 listen() 必须 reject（而非永不 settle 导致 uncaughtException 裸崩）
+  it("rejects with EADDRINUSE when the port is already in use", async () => {
+    const first = await createTestServer();
+    const second = new MobileHostServer(first.controller, {});
+    let error: NodeJS.ErrnoException | undefined;
+    try {
+      await second.listen(first.port, "127.0.0.1");
+    } catch (caught) {
+      error = caught as NodeJS.ErrnoException;
+    }
+    expect(error?.code).toBe("EADDRINUSE");
+    await first.server.close();
+    await first.controller.dispose();
+    await rm(first.tmpDir, { recursive: true, force: true });
+  });
+
+  it("resolves normally on a free port", async () => {
+    const probe = await createTestServer();
+    const port = probe.port;
+    await probe.server.close();
+    const reuse = new MobileHostServer(probe.controller, {});
+    await reuse.listen(port, "127.0.0.1");
+    await reuse.close();
+    await probe.controller.dispose();
+    await rm(probe.tmpDir, { recursive: true, force: true });
+  });
+});

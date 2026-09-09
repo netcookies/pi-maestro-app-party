@@ -73,8 +73,53 @@ function parseArgs(argv: string[]): CliArgs {
   return { port, host, token, projectRoot, pollMs };
 }
 
+/** 仅当 PID 文件指向本进程时删除，避免误删其他实例的 PID */
+async function unlinkIfOwned(path: string, ownPid: number): Promise<void> {
+  try {
+    const saved = Number((await readFile(path, "utf8")).trim());
+    if (saved === ownPid) await unlink(path);
+  } catch { /* 文件不存在或不可读：无需清理 */ }
+}
+
 async function main(): Promise<void> {
   const cli = parseArgs(process.argv.slice(2));
+
+  // P0-3：进程级 handler 必须在任何 await 之前注册。原先它们挂在 listen() 之后，
+  // 启动期（token 读写、listen、版本探测）的异常会绕过统一清理路径，以原生栈崩溃。
+  // controller/server 此时尚未构造，用 late 绑定延后注入。
+  const late: { controller?: HostController; server?: MobileHostServer } = {};
+  let shuttingDown = false;
+  async function shutdown(reason: string, exitCode: number): Promise<void> {
+    if (shuttingDown) return;
+    shuttingDown = true;
+    console.log(`[maestro-mobile] received ${reason}, shutting down...`);
+    // 关闭失败不应阻断退出（例如 listen 未成功时 close 会抛 ERR_SERVER_NOT_RUNNING）
+    await late.controller?.dispose().catch(() => { });
+    await late.server?.close().catch(() => { });
+    // 只能删自己写的 PID：崩在 writeFile 之前时，文件属于另一个存活实例，误删会使 /maestro-mobile stop 失效
+    await unlinkIfOwned(PID_FILE, process.pid);
+    console.log("[maestro-mobile] shutdown complete");
+    // exitCode 必须是参数：原先固定 exit(0) 会让 launchd/systemd（KeepAlive.SuccessfulExit=false）
+    // 把崩溃当成正常退出而永不拉起，表现为“host 无声消失”
+    process.exit(exitCode);
+  }
+  const fatal = (label: string, error: unknown): void => {
+    console.error(`[maestro-mobile] ${label}, shutting down:`, error);
+    // 附带现场信息：extension 以 stdio:"ignore" 拉起时无终端输出，日志是唯一线索
+    console.error(`[maestro-mobile]   pid=${process.pid} node=${process.version} cwd=${process.cwd()} argv=${process.argv.slice(1).join(" ")}`);
+    void shutdown(label, 1);
+  };
+  process.on("SIGINT", () => void shutdown("SIGINT", 0));
+  process.on("SIGTERM", () => void shutdown("SIGTERM", 0));
+  // SIGHUP：Node 默认动作是「静默终止」——实测无输出、无退出码打印、也不会生成 macOS .ips 报告，
+  // 表现为 host “无声消失”且无从查起。它可由终端挂断 / 登录会话结束传导过来，
+  // 即使 spawn 已 detached 也不能完全依赖。
+  // 这里仍保持“终止”语义（不改成忽略，避免留下没人管的孤儿进程），但走优雅关闭：
+  // 留日志 + 删自己写的 PID 文件，不再留下 stale PID 让 /maestro-mobile stop 失效。
+  process.on("SIGHUP", () => void shutdown("SIGHUP", 0));
+  process.on("uncaughtException", (error) => fatal("uncaught exception", error));
+  // Node 22+ 默认把未处理 Promise rejection 抛成 uncaughtException，这里显式接管以拿到上下文并走优雅关闭
+  process.on("unhandledRejection", (reason) => fatal("unhandled rejection", reason));
 
   // 默认行为（无子命令）：已启动 → 打印 status 退出；未启动 → 继续正常启动。
   // 显式传 --port/-host 等参数时跳过该探测（用户明确要起一个实例）。
@@ -112,34 +157,28 @@ async function main(): Promise<void> {
   const controller = new HostController(runtimeFactory, maestroReader);
   const server = new MobileHostServer(controller, { token });
 
-  await server.listen(cli.port, cli.host);
+  late.controller = controller;
+  late.server = server;
+  try {
+    await server.listen(cli.port, cli.host);
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code;
+    if (code === "EADDRINUSE") {
+      console.error(`[maestro-mobile] 端口 ${cli.port} 已被占用 —— 很可能已有实例在运行。`);
+      console.error(`[maestro-mobile] 查看状态：/maestro-mobile status；停止：/maestro-mobile stop`);
+      console.error(`[maestro-mobile] 需要并行起第二个实例请用 --port <其他端口>`);
+    } else {
+      console.error(`[maestro-mobile] 监听 ${cli.host}:${cli.port} 失败（${code ?? "unknown"}）:`, error);
+    }
+    await controller.dispose().catch(() => { });
+    process.exit(1);
+  }
   await controller.startMaestroPoll(cli.pollMs);
 
   console.log(`[maestro-mobile] listening on http://${cli.host}:${server.address().port}`);
   console.log(`[maestro-mobile] token auth enabled (use ?token= or Bearer header)`);
   // 写 PID 文件：/maestro-mobile stop 能停掉 cli 直接启动的实例（与 extension start 一致）
   await writeFile(PID_FILE, String(process.pid), "utf8");
-
-  // 优雅关闭
-  let shuttingDown = false;
-  async function shutdown(signal: string): Promise<void> {
-    if (shuttingDown) return;
-    shuttingDown = true;
-    console.log(`[maestro-mobile] received ${signal}, shutting down...`);
-    await controller.dispose();
-    await server.close();
-    await unlink(PID_FILE).catch(() => {});
-    console.log("[maestro-mobile] shutdown complete");
-    process.exit(0);
-  }
-
-  process.on("SIGINT", () => void shutdown("SIGINT"));
-  process.on("SIGTERM", () => void shutdown("SIGTERM"));
-  process.on("uncaughtException", (error) => {
-    // P3-6：未捕获异常后进程状态不可信，记录后带清理退出，避免带伤继续服务
-    console.error("[maestro-mobile] uncaught exception, shutting down:", error);
-    void shutdown("uncaughtException").finally(() => process.exit(1));
-  });
 }
 
 main().catch((error) => {

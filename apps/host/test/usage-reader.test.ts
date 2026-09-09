@@ -123,3 +123,54 @@ describe("listSessionFiles / resolveSessionFile", () => {
     expect(await resolveSessionFile("missing", dir)).toBeUndefined();
   });
 });
+
+describe("readSessionUsage streaming", () => {
+  // 512KB 分块边界：行被切成多块时，残行必须拼接后再解析。
+  // 关键设计：超大行本身必须含 "usage"（否则被 consume 预筛直接 return，污染不会显现），
+  // 且填充逐字节变化（全同字节无法区分“读到本行原数据”还是“读到被下一轮 read 覆盖后的脏数据”）。
+  it("aggregates correctly across chunk boundaries for large files", async () => {
+    const file = join(dir, "big.jsonl");
+    const filler = (seed: number): string =>
+      Array.from({ length: 600 * 1024 }, (_, i) => String.fromCharCode(97 + ((i + seed) % 26))).join("");
+    const bigUsage = (id: string, input: number, seed: number): string => JSON.stringify({
+      type: "message", id, blob: filler(seed),
+      message: { role: "assistant", usage: { input, output: 3, cacheRead: 0, cacheWrite: 0, reasoning: 0 } },
+    });
+    const rows = [
+      usageLine("m1", { input: 100, output: 10, cacheRead: 0, cacheWrite: 0, reasoning: 0 }),
+      bigUsage("m2", 200, 1),                       // 跨多块，且 >512KB
+      usageLine("m3", { input: 7, output: 3, cacheRead: 0, cacheWrite: 0, reasoning: 0 }),
+      bigUsage("m4", 400, 7),                       // 再次跳块，末尾无换行
+    ];
+    await writeFile(file, rows.join("\n"));
+
+    const t = await readSessionUsage(file);
+    expect(t.entries).toBe(4);
+    expect(t.input).toBe(100 + 200 + 7 + 400);
+    expect(t.output).toBe(10 + 3 + 3 + 3);
+    expect(t.totalTokens).toBe(t.input + t.output);
+  });
+
+  it("handles files whose last line has no trailing newline", async () => {
+    const file = join(dir, "noeol.jsonl");
+    await writeFile(file, usageLine("a", { input: 5, output: 1, cacheRead: 0, cacheWrite: 0, reasoning: 0 })
+      + "\n" + usageLine("b", { input: 6, output: 2, cacheRead: 0, cacheWrite: 0, reasoning: 0 }));
+    const t = await readSessionUsage(file);
+    expect(t.entries).toBe(2);
+    expect(t.input).toBe(11);
+  });
+
+  it("deduplicates ids and returns identical results for concurrent calls on the same file", async () => {
+    const file = join(dir, "dup.jsonl");
+    const line = usageLine("m1", { input: 100, output: 10, cacheRead: 0, cacheWrite: 0, reasoning: 0 });
+    await writeFile(file, [line, line, usageLine("m2", { input: 1, output: 1, cacheRead: 0, cacheWrite: 0, reasoning: 0 })].join("\n"));
+    const [a, b, c] = await Promise.all([
+      readSessionUsage(file), readSessionUsage(file), readSessionUsage(file),
+    ]);
+    // single-flight：并发调用结果必须一致，且 id 去重仍生效
+    expect(a.entries).toBe(2);
+    expect(b).toEqual(a);
+    expect(c).toEqual(a);
+    expect(a.input).toBe(101);
+  });
+});
