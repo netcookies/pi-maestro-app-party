@@ -194,6 +194,22 @@ describe("P1-1: live 会话 timeline 投影", () => {
     await runner.dispose();
   });
 
+  it("raw_event 不广播用户图片 base64", async () => {
+    const runtime = makeRuntime(path);
+    const runner = await openRunner(runtime);
+
+    runtime.emit("user", "", 1756800000000, {
+      content: [{ type: "image", data: "AQID-secret-base64", mimeType: "image/png" }],
+    });
+
+    const raw = events.find((event) => event.type === "raw_event");
+    expect(raw).toBeDefined();
+    expect(JSON.stringify(raw)).not.toContain("AQID-secret-base64");
+    expect(JSON.stringify(raw)).toContain("[image data omitted]");
+
+    await runner.dispose();
+  });
+
   it("toolResult 投影为 tool 条目且带 toolCallId", async () => {
     const runtime = makeRuntime(path);
     const runner = await openRunner(runtime);

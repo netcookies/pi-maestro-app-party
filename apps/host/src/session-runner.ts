@@ -425,7 +425,7 @@ export class SdkSessionRunner implements SessionRunner {
 
   private handleSessionEvent(event: unknown): void {
     const jsonEvent = toJsonValue(event);
-    this.emit(this.eventLog.record({ type: "raw_event", sessionId: this.id, event: jsonEvent }));
+    this.emit(this.eventLog.record({ type: "raw_event", sessionId: this.id, event: sanitizeForClient(jsonEvent) }));
 
     // P1-1：将 assistant/thinking/toolResult 消息实时投影为 timeline，
     // 否则 live 会话中客户端只能看到用户消息（重连后才能从 jsonl 重放看到回复）。
@@ -618,6 +618,21 @@ export class SdkSessionRunner implements SessionRunner {
       ...(session.thinkingLevel ? { thinkingLevel: session.thinkingLevel } : {}),
     };
   }
+}
+
+function sanitizeForClient(value: JsonValue): JsonValue {
+  if (Array.isArray(value)) return value.map((entry) => sanitizeForClient(entry));
+  if (value === null || typeof value !== "object") return value;
+  const object = value as { [key: string]: JsonValue };
+  const sanitized: { [key: string]: JsonValue } = {};
+  for (const [key, entry] of Object.entries(object)) {
+    if (key === "data" && object.type === "image" && typeof entry === "string") {
+      sanitized[key] = "[image data omitted]";
+    } else {
+      sanitized[key] = sanitizeForClient(entry);
+    }
+  }
+  return sanitized;
 }
 
 function toolCallImageItems(content: unknown, createdAt: string): TimelineItem[] {
