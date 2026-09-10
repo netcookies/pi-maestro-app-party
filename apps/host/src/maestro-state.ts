@@ -21,6 +21,17 @@ const SCHEDULES_DIR = "schedules";
 const DISPATCHES_DIR = "dispatches";
 const MAX_FILE_SIZE = 1 * 1024 * 1024; // 1MB
 
+/**
+ * 先 stat 校验字节上限再读。此前顺序是「readFile 完整内容 → 才比长度」：
+ * 上限检查无法阻止分配（异常大文件先 OOM 再被拒），且 `raw.length` 是 UTF-16 单元数、不是字节数。
+ * 文件不存在/为空/超限 → undefined（由调用方的 try/catch 或判空处理）。
+ */
+async function readCappedFile(path: string, maxBytes: number): Promise<string | undefined> {
+  const info = await stat(path);
+  if (!info.isFile() || info.size === 0 || info.size > maxBytes) return undefined;
+  return readFile(path, "utf8");
+}
+
 export interface MaestroReaderOptions {
   /** 项目根路径，默认 process.cwd() */
   projectRoot?: string;
@@ -103,8 +114,8 @@ export class MaestroStateReader {
   private async readSchedule(scheduleId: string): Promise<MaestroScheduleSummary | undefined> {
     const filePath = join(this.schedulesDir, `${scheduleId}.json`);
     try {
-      const raw = await readFile(filePath, "utf8");
-      if (raw.length > MAX_FILE_SIZE) return undefined;
+      const raw = await readCappedFile(filePath, MAX_FILE_SIZE);
+      if (raw === undefined) return undefined;
       const record = JSON.parse(raw) as Record<string, unknown>;
 
       const steps = record.steps as Record<string, Record<string, unknown>> | undefined;
@@ -178,7 +189,8 @@ export class MaestroStateReader {
 
       // 检查 completion 文件
       try {
-        const completionRaw = await readFile(completionPath, "utf8");
+        const completionRaw = await readCappedFile(completionPath, MAX_FILE_SIZE);
+        if (completionRaw === undefined) throw new Error("skip");
         const completion = JSON.parse(completionRaw) as Record<string, unknown>;
         state = String(completion.outcome ?? "completed") as MaestroDispatchState;
         if (state === "failed" || state === "timeout") {
@@ -206,7 +218,8 @@ export class MaestroStateReader {
       let agent: string | undefined;
       let task: string | undefined;
       try {
-        const intentRaw = await readFile(intentPath, "utf8");
+        const intentRaw = await readCappedFile(intentPath, MAX_FILE_SIZE);
+        if (intentRaw === undefined) throw new Error("skip");
         const intent = JSON.parse(intentRaw) as Record<string, unknown>;
         agent = String(intent.agent ?? intent.targetSelector ?? "");
         task = String(intent.instruction ?? "").slice(0, 120);

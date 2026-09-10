@@ -151,3 +151,48 @@ describe("MaestroStateReader (P1)", () => {
     expect(third!.schedules[0].state).toBe("completed");
   });
 });
+
+// 泛化发现回归：readFile 之后再比 raw.length 的顺序缺陷。
+// 旧写法两处问题：(1) 先分配完整内容再判超限（异常大文件先 OOM 再被拒）；
+// (2) raw.length 是 UTF-16 单元数、不是字节数，含 CJK 的文件会「字节已超限但字符数未超」而被放行。
+describe("MaestroStateReader oversized schedule guard (stat-before-read)", () => {
+  let tmpDir: string;
+
+  beforeEach(async () => {
+    tmpDir = join(tmpdir(), `maestro-cap-${randomUUID()}`);
+    await mkdir(tmpDir, { recursive: true });
+  });
+
+  afterEach(async () => {
+    await rm(tmpDir, { recursive: true, force: true });
+  });
+
+  async function writeRaw(scheduleId: string, content: string) {
+    const dir = join(tmpDir, ".pi", "flow-schedule", "v1", "schedules");
+    await mkdir(dir, { recursive: true });
+    await writeFile(join(dir, `${scheduleId}.json`), content, "utf8");
+  }
+
+  it("CJK 内容字节数超限（字符数未超）时整份丢弃 —— 旧实现会因 raw.length 按字符计而放行", async () => {
+    const reader = new MaestroStateReader({ projectRoot: tmpDir });
+    // 300k 个 CJK 字符：UTF-16 长度 300_000 (< 1_048_576)，UTF-8 字节 900_000...
+    // 需要字节数 > MAX_FILE_SIZE(1MB) 且字符数 < 1MB → 用 500k 字符 = 1.5MB 字节
+    const pad = "字".repeat(500_000);
+    expect(pad.length).toBeLessThan(1024 * 1024);
+    expect(Buffer.byteLength(pad, "utf8")).toBeGreaterThan(1024 * 1024);
+    const body = JSON.stringify({ scheduleId: "sch-cjk", state: "active", stepIds: [], steps: {}, note: pad, createdAt: 1, updatedAt: 1 });
+    await writeRaw("sch-cjk", body);
+
+    const state = await reader.readState();
+    // 新实现：stat.size 已超限 → 不读也不计入；旧实现：按字符数没超限 → 读入并算作 1 个 schedule
+    expect(state.schedules).toHaveLength(0);
+  });
+
+  it("未超限的调度仍正常读取（守卫不能误杀合法文件）", async () => {
+    const reader = new MaestroStateReader({ projectRoot: tmpDir });
+    await writeRaw("sch-ok", JSON.stringify({ scheduleId: "sch-ok", state: "active", stepIds: [], steps: {}, createdAt: 1, updatedAt: 2 }));
+    const state = await reader.readState();
+    expect(state.schedules).toHaveLength(1);
+    expect(state.schedules[0]?.scheduleId).toBe("sch-ok");
+  });
+});
