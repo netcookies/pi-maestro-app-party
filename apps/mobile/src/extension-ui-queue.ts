@@ -11,6 +11,14 @@ export type DialogStatus = "pending" | "answered" | "cancelled" | "expired";
 /** 交互类方法：需要用户响应，作为弹窗显示 */
 const INTERACTIVE_METHODS = new Set(["select", "confirm", "input", "editor"]);
 
+/**
+ * 驻留上限：dialogs Map 此前只改 status 从不 delete（expired/answered/cancelled 永久驻留），
+ * 长时间运行 + 频繁 ask 会话下无界增长。上限只在唯一的增长点（enqueue）上修剪，
+ * 因此不改变 pendingDialogs/get 的现有可见语义（过期条目仍可被 get 查到一次）。
+ * 取 64：同一时刻待用户作完的弹窗远小于此值，超出部分必为已终态/已过期的残留。
+ */
+export const MAX_QUEUED_DIALOGS = 64;
+
 export function isInteractiveMethod(method: string): boolean {
   return INTERACTIVE_METHODS.has(method);
 }
@@ -37,16 +45,40 @@ export class ExtensionUiQueue {
     this.now = options.now ?? Date.now;
   }
 
-  get pendingDialogs(): DialogEntry[] {
+  /** 惰性过期：把超时的 pending 条目标为 expired（两处共用同一判定） */
+  private sweepExpired(): void {
     const now = this.now();
-    // 惰性过期：返回前清理超时的
-    const result: DialogEntry[] = [];
     for (const [id, entry] of this.dialogs) {
       if (entry.status !== "pending") continue;
       if (now - entry.receivedAt > (entry.request.timeout ?? this.defaultTimeoutMs)) {
         this.dialogs.set(id, { ...entry, status: "expired" });
-        continue;
       }
+    }
+  }
+
+  /**
+   * 回收终态条目（answered/cancelled/expired），优先最早的插入。
+   * 若全为未过期 pending 则不强制丢（它们仍然用户可见），
+   * 下一次过期后会被 sweep 标终态并可被修剪。
+   */
+  private pruneFinished(): void {
+    this.sweepExpired();
+    while (this.dialogs.size > MAX_QUEUED_DIALOGS) {
+      let victim: string | undefined;
+      for (const [id, entry] of this.dialogs) {
+        if (entry.status !== "pending") { victim = id; break; }
+      }
+      if (!victim) break;
+      this.dialogs.delete(victim);
+    }
+  }
+
+  get pendingDialogs(): DialogEntry[] {
+    // 惰性过期：返回前清理超时的
+    this.sweepExpired();
+    const result: DialogEntry[] = [];
+    for (const entry of this.dialogs.values()) {
+      if (entry.status !== "pending") continue;
       result.push(entry);
     }
     return result;
@@ -67,6 +99,8 @@ export class ExtensionUiQueue {
       status: "pending",
     };
     this.dialogs.set(request.id, entry);
+    // 唯一会增大 Map 的入口：在同一处修剪，保证驻留有界
+    this.pruneFinished();
     return entry;
   }
 
