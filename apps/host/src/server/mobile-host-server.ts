@@ -547,7 +547,26 @@ export class MobileHostServer {
     });
   }
 
-  /** WS 握手 Origin 白名单：loopback 变体 + 绑定 host（非 0.0.0.0 时）+ 显式配置 */
+  /**
+   * WS 握手 Origin 白名单：scheme 限定 + loopback 变体 + 绑定 host（非 0.0.0.0 时）
+   * + 同源 Host 头 + 显式配置。
+   *
+   * ISS-20260910-005 收紧（以下均为实测 new URL() 行为，非推断）：
+   *  1. scheme 必须落在 http/https/ws/wss：旧实现完全不看 protocol，
+   *     `file://`、`data:` 等只要 hostname 对上就放行。
+   *  2. 同源比较改用 parsed.host。旧写法 `${hostname}:${parsed.port}` 在无端口时
+   *     产生尾冒号（`new URL("http://192.168.1.10").port === ""`）⇒ 永不匹配，
+   *     是无效果死比较。parsed.host 已含非默认端口、并规范掉默认端口
+   *     （`https://a.example:443`.host === "a.example"），语义止于「主机+非默认端口」。
+   *  3. allowedOrigins 支持两种写法：完整 URL（可精确到端口）或裸 hostname。
+   *     旧实现用 new URL(o) 解析，而 `new URL("trusted.example.com")` 抛错 ⇒ 该配置
+   *     静默永不生效（只能配成完整 URL 才有效），属配置陷阱。
+   *
+   * 不变的两条（刻意的宽松，改它们会锁死现有使用）：
+   *  - 无 Origin 一律放行（:552 原样保留）：RN/原生客户端不发 Origin，仍有 token 把关。
+   *  - loopback 与 boundHost 分支只看 hostname、忽略 port：本地开发页面常在随机端口
+   *    （http://localhost:3000 连 4739 的 host），纳port 比较会直接打断现有用法。
+   */
   private isOriginAllowed(origin: string | undefined, requestHost = ""): boolean {
     if (!origin) return true; // 非浏览器客户端
     let parsed: URL;
@@ -556,28 +575,69 @@ export class MobileHostServer {
     } catch {
       return false;
     }
+    // scheme 限定：Origin 只可能是页面来源（http/https）或原生客户端回填的 WS URL 自身（ws/wss）
+    if (parsed.protocol !== "http:" && parsed.protocol !== "https:"
+      && parsed.protocol !== "ws:" && parsed.protocol !== "wss:") {
+      return false;
+    }
     const hostname = parsed.hostname.toLowerCase();
+    const originHost = parsed.host.toLowerCase(); // hostname + 非默认端口（无端口时即 hostname）
     if (hostname === "localhost" || hostname === "127.0.0.1" || hostname === "::1" || hostname === "[::1]") {
       return true;
     }
     // 原生客户端（React Native OkHttp 等）会把 Origin 设为 WS URL 自身（= 本机地址）。
     // 这类请求 host 头与 origin 同源，放行；浏览器跨站 drive-by 的 origin 不会等于本机地址。
+    // 只比 originHost：实测 new URL("http://[::1]:80").hostname 已带方括号，
+    // 再拼 `[${hostname}]` 会得到 `[[::1]]` ⇒ 永不匹配（同族死比较，已删除）；
+    // 而 hostHeader === hostname 也冗余（无端口时 parsed.host 本来就 === hostname）。
     const hostHeader = requestHost.toLowerCase();
-    if (hostHeader && (hostHeader === hostname || hostHeader === `${hostname}:${parsed.port}`)) {
+    if (hostHeader && hostHeader === originHost) {
       return true;
     }
     const bound = this.boundHost.toLowerCase();
-    if (bound !== "0.0.0.0" && bound !== "::" && hostname === bound) {
+    if (bound !== "0.0.0.0" && bound !== "::" && bareHost(hostname) === bareHost(bound)) {
+      // IPv6 归一：boundHost 来自 server.address()/命令行（无括号），Origin 的 hostname 带括号
       return true;
     }
     const allowed = this.options.allowedOrigins ?? [];
-    return allowed.some((o) => {
+    return allowed.some((o) => this.matchesAllowedOrigin(o, hostname, parsed.port));
+  }
+
+  /**
+   * 白名单条目匹配（实测：new URL("http://[::1]:4739").hostname === "[::1]"，带括号）：
+   *  - 完整 URL 条目：hostname 相等；若条目显式写了非默认端口则端口也必须相等。
+   *  - 裸 hostname / hostname:port 条目：new URL() 会抛错（实测 `new URL("a.example.com")`
+   *    = Invalid URL），旧实现因此让这类配置静默永不生效；现在按字符串解析后同样参与匹配。
+   *  - IPv6 条目带/不带括号两种写法都归一后比较，与 Origin 的带括号 hostname 对齐。
+   */
+  private matchesAllowedOrigin(configured: string, hostname: string, originPort: string): boolean {
+    const entry = configured.trim().toLowerCase();
+    if (!entry) return false;
+    let entryHost: string;
+    let entryPort: string | undefined; // undefined = 条目未精确指定端口
+    if (entry.includes("://")) {
       try {
-        return new URL(o).hostname.toLowerCase() === hostname;
+        const u = new URL(entry);
+        entryHost = u.hostname;
+        entryPort = u.port === "" ? undefined : u.port; // 默认端口归一为「未指定」（实测 :443/:80 会被 URL 丢掉）
       } catch {
         return false;
       }
-    });
+    } else {
+      const bracket = entry.lastIndexOf("]");
+      const cut = entry.indexOf(":", bracket >= 0 ? bracket : 0);
+      if (cut > 0) {
+        entryHost = entry.slice(0, cut);
+        entryPort = entry.slice(cut + 1) || undefined;
+      } else {
+        entryHost = entry;
+      }
+    }
+    const normalizedEntry = bareHost(entryHost);
+    const normalizedOrigin = bareHost(hostname);
+    if (normalizedEntry !== normalizedOrigin) return false;
+    if (entryPort !== undefined && entryPort !== originPort) return false;
+    return true;
   }
 
   // ── WS 命令 ───────────────────────────────────────────────────────────────
@@ -858,6 +918,14 @@ const MAX_SEARCH_PREVIEW_LENGTH = 400;
  */
 export function clampCommandInt(raw: number | undefined, dflt: number, max: number): number {
   return Number.isFinite(raw) ? Math.min(Math.max(1, Math.floor(raw as number)), max) : dflt;
+}
+
+/**
+ * 去 IPv6 方括号。实测 new URL("http://[::1]:80").hostname === "[::1]"（带括号），
+ * 而 server.address().address / 命令行传入的绑定地址不带括号，两侧必须归一后才能比较。
+ */
+function bareHost(host: string): string {
+  return host.replace(/^\[(.*)\]$/, "$1");
 }
 
 /**
