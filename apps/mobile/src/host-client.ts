@@ -25,6 +25,8 @@ export interface HostClientOptions {
   reconnectMaxMs?: number;
   /** 测试注入的 WebSocket 工厂 */
   wsFactory?: (url: string, token?: string) => WebSocketLike;
+  /** 测试注入的随机源（0~1），用于重连退避 jitter；默认 Math.random */
+  random?: () => number;
   onEvent?: (event: HostEvent) => void;
   onStateChange?: (state: ConnectionState) => void;
   /**
@@ -73,6 +75,7 @@ export class HostClient {
   private state: ConnectionState = "disconnected";
   private readonly reconnectBaseMs: number;
   private readonly reconnectMaxMs: number;
+  private readonly random: () => number;
   private reconnectAttempt = 0;
   /** 连接代次：旧 socket 回调不接管新连接状态 */
   private socketGeneration = 0;
@@ -95,6 +98,7 @@ export class HostClient {
   constructor(private readonly options: HostClientOptions) {
     this.reconnectBaseMs = options.reconnectBaseMs ?? 1000;
     this.reconnectMaxMs = options.reconnectMaxMs ?? 15000;
+    this.random = options.random ?? Math.random;
   }
 
   get connectionState(): ConnectionState {
@@ -267,7 +271,12 @@ export class HostClient {
       void this.verifyAuthFailure();
     }
     this.setState("reconnecting");
-    const delay = Math.min(this.reconnectBaseMs * 2 ** this.reconnectAttempt, this.reconnectMaxMs);
+    // 指数退避 + jitter：host 重启/网络闪断时，已配对的 ≤MAX_CONNECTIONS 台设备
+    // 若用相同 delay 会同刻重连，形成周期性同步冲击（把刚起来的 host 又打满）。
+    // 取 [0.5, 1) × 退避值：jitter 只向下，因此 delay 恒不超 reconnectMaxMs，
+    // 退避单调递增与 reconnectAttempt/authFailed 语义均不变。
+    const backoff = Math.min(this.reconnectBaseMs * 2 ** this.reconnectAttempt, this.reconnectMaxMs);
+    const delay = backoff * (0.5 + this.random() * 0.5);
     this.reconnectAttempt++;
     this.reconnectTimer = setTimeout(() => {
       this.reconnectTimer = null;

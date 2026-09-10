@@ -324,3 +324,80 @@ describe("HostClient 意外断连时 settle 在途命令（ISS-002）", () => {
     expect(msg).toBe("HostClient closed");
   });
 });
+
+/**
+ * ISS-20260910-006：重连退避必须带 jitter，避免 host 重启时多台设备同刻重连。
+ * 反向验证：把 delay 改回纯 backoff（去掉 jitter 因子）后，本 describe 前三条必挂。
+ */
+describe("HostClient 重连退避 jitter（ISS-006）", () => {
+  /** 记录 scheduleReconnect 安排的 delay：spy 只采集参数、不登记真实 timer
+   *  （回调永不执行 → 不会有 mock 立即触发造成的级联重入；实测级联会产生 499 假值） */
+  function captureDelays(random: () => number, triggers: number): number[] {
+    const seen: number[] = [];
+    // stub fetch：否则第 2 次 close 触发 verifyAuthFailure → undici AbortSignal.timeout 内部
+    // 注册 FastTimer(499)，混进采集结果（实测栈帧 node:internal/deps/undici refreshTimeout）
+    const fetchSpy = vi.spyOn(globalThis, "fetch").mockRejectedValue(new Error("stubbed: no network"));
+    const spy = vi.spyOn(globalThis, "setTimeout").mockImplementation(((fn: () => void, ms?: number) => {
+      seen.push(typeof ms === "number" ? ms : -1);
+      void fn;
+      return 0 as unknown as ReturnType<typeof setTimeout>;
+    }) as unknown as typeof setTimeout);
+    const ws = createFakeWs();
+    const client = new HostClient({
+      url: "ws://localhost:0",
+      reconnectBaseMs: 1000,
+      reconnectMaxMs: 15000,
+      wsFactory: () => ws,
+      onEvent: () => {},
+      random,
+    });
+    client.connect();
+    ws._open();
+    for (let i = 0; i < triggers; i++) ws._close();
+    fetchSpy.mockRestore();
+    spy.mockRestore();
+    client.close();
+    // 剔除 onopen 的「稳定 30s 后清零退避」timer（:234）
+    return seen.filter((ms) => ms !== 30_000 && ms !== -1);
+  }
+
+  it("random=0 → delay 恰为退避值的一半（jitter 只向下，不放大退避）", () => {
+    const delays = captureDelays(() => 0, 3);
+    expect(delays, "应捕获 3 次退避 timer").toHaveLength(3);
+    // attempt 0,1,2 → backoff 1000/2000/4000；random=0 → ×0.5
+    expect(delays).toEqual([500, 1000, 2000]);
+  });
+
+  it("random=1 → delay 趋近退避值但不超过，且恒 ≤ reconnectMaxMs", () => {
+    const delays = captureDelays(() => 0.9999, 8);
+    expect(delays).toHaveLength(8);
+    expect(delays[0]).toBeGreaterThanOrEqual(999);
+    expect(delays[0]).toBeLessThan(1000);
+    // 上限断言须在「未过滤越界值」的样本上生效（回归保护：jitter 只能向下）
+    for (const d of delays) expect(d).toBeLessThanOrEqual(15000);
+    // 退避仍单调不减（jitter 不得破坏指数递增语义）
+    for (let i = 1; i < delays.length; i++) expect(delays[i]).toBeGreaterThanOrEqual(delays[i - 1]);
+    // 饱和后不再增长
+    expect(delays[delays.length - 1]).toBeLessThanOrEqual(15000);
+  });
+
+  it("不同 random 产生不同 delay（设备间去同步）", () => {
+    const a = captureDelays(() => 0.2, 1)[0];
+    const b = captureDelays(() => 0.8, 1)[0];
+    expect(a).toBe(600);
+    expect(b).toBe(900);
+    expect(a).not.toBe(b);
+  });
+
+  it("不注入 random 时走 Math.random（默认有 jitter 且不抛）", () => {
+    const spy = vi.spyOn(Math, "random").mockReturnValue(0.5);
+    const ws = createFakeWs();
+    const client = new HostClient({ url: "ws://localhost:0", wsFactory: () => ws, onEvent: () => {} });
+    client.connect();
+    ws._open();
+    ws._close();
+    expect(spy).toHaveBeenCalled();
+    client.close();
+    spy.mockRestore();
+  });
+});
