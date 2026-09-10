@@ -120,7 +120,7 @@ export class LiveSessionsService {
     const cached = this.lineCountCache.get(path);
     if (cached && cached.mtimeMs === mtimeMs) return cached.count;
     try {
-      const count = await countLinesStreamed(handle);
+      const count = await countLinesStreamed(handle, path);
       this.lineCountCache.set(path, { mtimeMs, count });
       return count;
     } catch {
@@ -216,11 +216,18 @@ function extractFirstMessage(head: string): string {
  * 并按 mtime 缓存 —— 文件未变化时直接复用上次计数，轮询时不再整读大文件。
  */
 const COUNT_CHUNK_BYTES = 512 * 1024;
+/**
+ * 残行上限：本函数只判断「该行是否非空」，所以截断不改变计数（用 carryNonEmpty 保留已见非空白的事实）。
+ * 不封顶时，畸形无换行文件会让 carry 逐块增长到接近文件大小（与 usage-reader/jsonl-pager 同族问题）。
+ */
+const MAX_CARRY_CHARS = 64 * 1024;
 
-async function countLinesStreamed(handle: Awaited<ReturnType<typeof open>>): Promise<number> {
+async function countLinesStreamed(handle: Awaited<ReturnType<typeof open>>, pathForLog: string): Promise<number> {
   const { size } = await handle.stat();
   let count = 0;
   let carry = ""; // 块边界的残行，拼入下一块后再按行处理
+  let carryTruncated = false; // carry 被截断后，它「原本非空」这个事实
+  let skippedOversize = 0;
   let pos = 0;
   while (pos < size) {
     const readLen = Math.min(COUNT_CHUNK_BYTES, size - pos);
@@ -230,12 +237,22 @@ async function countLinesStreamed(handle: Awaited<ReturnType<typeof open>>): Pro
     const text = carry + chunk.toString("utf8");
     const lines = text.split("\n");
     // 最后一段可能是残行（后面还有块），留到下一轮；末块时一并处理
-    carry = pos < size ? (lines.pop() ?? "") : (lines.pop() ?? "");
+    carry = lines.pop() ?? "";
     for (const line of lines) {
-      if (line.trim().length > 0) count++;
+      if (carryTruncated || line.trim().length > 0) count++;
+      carryTruncated = false;
+    }
+    if (carry.length > MAX_CARRY_CHARS) {
+      carryTruncated = carry.trim().length > 0;
+      carry = "";
+      skippedOversize++;
     }
   }
-  if (carry.trim().length > 0) count++; // 无换行结尾的残行
+  if (carryTruncated || carry.trim().length > 0) count++; // 无换行结尾的残行
+  if (skippedOversize > 0) {
+    // 可观测性：旧实现静默把残行堆到接近文件大小。告警频率受 mtime 缓存约束（文件未变不重扫）。
+    console.warn(`[maestro-mobile] live-sessions: ${pathForLog} 残行超 ${MAX_CARRY_CHARS} 字符被截断（${skippedOversize} 次），行数仍按 1 行计`);
+  }
   return count;
 }
 

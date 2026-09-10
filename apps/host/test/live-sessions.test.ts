@@ -1,5 +1,5 @@
-import { describe, expect, it, beforeEach, afterEach } from "vitest";
-import { mkdir, writeFile, rm } from "node:fs/promises";
+import { describe, expect, it, beforeEach, afterEach, vi } from "vitest";
+import { mkdir, writeFile, rm, utimes } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { randomUUID } from "node:crypto";
@@ -99,4 +99,59 @@ describe("decodeCwdDir", () => {
     expect(decodeCwdDir("--Users-isulewli-Projects-foo--")).toBe("/Users/isulewli/Projects/foo");
     expect(decodeCwdDir("--opt-homebrew-lib--")).toBe("/opt/homebrew/lib");
   });
+});
+// 泛化发现回归：countLinesStreamed 的残行上限（与 usage-reader / jsonl-pager 同族）。
+// 旧实现 carry 无上限：畸形无换行文件会把它堆到接近文件大小。
+// 本函数只判断「该行是否非空」，所以截断后仍须按 1 行计（carryTruncated 传递该事实），
+// 且截断位点不能把同一行重复计数。
+describe("LiveSessionsService oversized carry bound", () => {
+  const MB = 1024 * 1024;
+  let root: string;
+
+  beforeEach(async () => {
+    root = join(tmpdir(), `live-carry-${randomUUID()}`);
+    await mkdir(join(root, "--tmp-x--"), { recursive: true });
+  });
+
+  afterEach(async () => {
+    await rm(root, { recursive: true, force: true });
+  });
+
+  async function entryCount(content: string): Promise<number | undefined> {
+    const path = join(root, "--tmp-x--", `${randomUUID()}.jsonl`);
+    await writeFile(path, content);
+    const t = new Date(Date.now() - 1000);
+    await utimes(path, t, t);
+    const svc = new LiveSessionsService({ sessionsRoot: root, now: () => Date.now() });
+    try {
+      const list = await svc.list();
+      // 目录里必须只有本次写入的文件，否则 sessions[0] 取到谁取决于排序，用例不传递确定语义
+      expect(list.sessions.length, "fixture 泄漏：应仅有本次写入的文件").toBe(1);
+      return list.sessions[0]?.entryCount;
+    } finally {
+      await rm(path, { force: true }); // 不删则下次调用多文件共存
+    }
+  }
+
+  it("无换行巨行仍计为 1 行，且截断不重复计数后续行", async () => {
+    const warns: string[] = [];
+    const spy = vi.spyOn(console, "warn").mockImplementation((...args: unknown[]) => { warns.push(args.map(String).join(" ")); });
+    try {
+      const huge = "x".repeat(3 * MB); // 远超 MAX_CARRY_CHARS，且必然跨多个 512KB chunk
+      const baseline = warns.length;
+      expect(await entryCount(huge)).toBe(1);
+      expect(await entryCount(`${huge}\nsecond\n`)).toBe(2);
+      // 截断行的尾巴只剩空白：不得被当成新的一行重复计数
+      expect(await entryCount(`${huge} \n`)).toBe(1);
+      // 只断言「新增」的告警：vitest 仍会把 console.warn 写进 reporter，绝对条数不稳定
+      const afterHuge = warns.length;
+      expect(afterHuge, "巨行必须产生截断告警（否则退回到静默无上限累积）").toBeGreaterThan(baseline);
+      expect(warns.slice(baseline).some((w) => w.includes("残行超"))).toBe(true);
+      // 守卫不能误杀正常文件：正常内容不再新增告警
+      expect(await entryCount('{"a":1}\n{"b":2}\n{"c":3}\n')).toBe(3);
+      expect(warns.length).toBe(afterHuge);
+    } finally {
+      spy.mockRestore();
+    }
+  }, 60_000);
 });
