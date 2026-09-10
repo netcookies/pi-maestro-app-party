@@ -15,6 +15,8 @@ import {
   reduceEvent,
   createAppActions,
   type AppState,
+  type AppAction,
+  type DialogSendFailedEvent,
 } from "./app-state";
 
 export interface HostStoreValue {
@@ -82,7 +84,7 @@ export function HostStoreProvider({ children }: { children: React.ReactNode }) {
       dispatch(buffered[0]);
       return;
     }
-    dispatch({ type: "__event_batch", events: buffered } as unknown as HostEvent);
+    dispatch({ type: "__event_batch", events: buffered });
   }, []);
   const dispatchBuffered = useCallback((event: HostEvent) => {
     // 高优先级事件直发：连接状态/错误/弹窗不能等 16ms
@@ -105,7 +107,8 @@ export function HostStoreProvider({ children }: { children: React.ReactNode }) {
   }, [flushBufferedEvents]);
 
   const [state, dispatch] = useReducer(
-    (s: AppState, e: HostEvent) => reduceEvent(s, e, { dialogQueue: queueRef.current }),
+    // action 类型必须是 reducer 实际接受的 union；之前窄化为 HostEvent 使所有内部事件都要 as never 强转
+    (s: AppState, e: AppAction) => reduceEvent(s, e, { dialogQueue: queueRef.current }),
     undefined,
     createInitialState,
   );
@@ -129,10 +132,11 @@ export function HostStoreProvider({ children }: { children: React.ReactNode }) {
       reconnectBaseMs: 1000,
       reconnectMaxMs: 15000,
       onEvent: dispatchBuffered,
-      // ISS-002：断连导致的命令失败走 error 事件进 reducer（与 host 推的 error 同一通道，
-      // app-state.ts:164 已处理），补上「错误由 store.lastError 提示」这一之前断掉的链路。
+      // ISS-002：断连导致的命令失败必须提示到 UI（app/session.tsx 承诺「错误由 store.lastError 提示」，
+      // 但 lastError 原本只由 host 推的事件写入，本地 reject 进不了 reducer）。
+      // ISS-20260910 review F-002：走本地内部事件而非合成 host `error` 帧，避免 seq 占位 0 的域歧义。
       onConnectionError: (message) => {
-        dispatch({ type: "error", code: "connection_lost", message, seq: 0 } as HostEvent);
+        dispatch({ type: "__local_error", message });
       },
       onStateChange: (s) => {
         setConnectionState(s);
@@ -346,13 +350,24 @@ export function HostStoreProvider({ children }: { children: React.ReactNode }) {
     () =>
       createAppActions(
         queueRef.current,
-        (sessionId, requestId, response) => {
+        (sessionId, requestId, response, request) => {
           void getClient()
             .respondExtensionUi(sessionId, requestId, response as never)
-            .catch(() => undefined);
+            // ISS-20260910 review F-001：不得静默吞掉。弹窗只在 request/cleared 两个事件时重投影，
+            // 而 host 的 cleared 依赖它收到本响应 ⇒ 断连时弹窗永不消失、用户答案丢失且无提示。
+            // 走本地内部事件（不冒充 host 事件流的 error 帧，避开其必填 seq 语义）把弹窗重新入队并写 lastError。
+            .catch((error: unknown) => {
+              const event: DialogSendFailedEvent = {
+                type: "__dialog_send_failed",
+                request,
+                message: error instanceof Error ? error.message : `ask 响应发送失败 (${requestId})`,
+              };
+              dispatch(event);
+            });
         },
       ),
-    [getClient],
+    // dispatch 是 useReducer 返回的稳定标识，列入依赖不改变 memo 生命周期
+    [getClient, dispatch],
   );
 
   const answerDialog = useCallback(

@@ -167,3 +167,49 @@ describe("createAppActions", () => {
     expect(responded).toBe(true);
   });
 });
+
+/**
+ * ISS-20260910 review F-001 / F-002：断连时弹窗答案不得静默丢失，
+ * 本地错误不得冒充 host 事件流帧。
+ * 反向验证：删除 reducer 的 __dialog_send_failed / __local_error 分支后，前两条必挂。
+ */
+describe("__dialog_send_failed 与 __local_error（review F-001/F-002）", () => {
+  const req = { id: "r9", sessionId: "s1", method: "select", title: "Pick", options: ["A"] };
+
+  it("发送失败：弹窗重新入队且写 lastError（旧实现弹窗永不消失、无提示）", () => {
+    const queue = new ExtensionUiQueue();
+    queue.enqueue(req);
+    let state = reduceEvent(createInitialState(), { type: "extension_ui_request", request: req, seq: 1 } as HostEvent, { dialogQueue: queue });
+    expect(state.dialogs.map((d) => d.request.id)).toEqual(["r9"]);
+
+    // 用户作答 ⇒ answer 把条目变终态；此时弹窗从 pending 视图消失
+    let sent = 0;
+    const actions = createAppActions(queue, (_s, _id, _r, request) => { sent++; void request; });
+    actions.answerDialog("r9", "A");
+    expect(sent).toBe(1);
+    state = reduceEvent(state, { type: "__dialog_send_failed", request: req, message: "Connection lost before response (extension_ui_response)" } as never, { dialogQueue: queue });
+
+    // 断连 ⇒ 响应永不到达：弹窗必须回来（答案未丢失），并提示错误
+    expect(state.dialogs.map((d) => d.request.id), "弹窗须重新出现，否则用户以为已提交").toEqual(["r9"]);
+    expect(state.dialogs[0].status).toBe("pending");
+    expect(state.lastError).toContain("Connection lost");
+  });
+
+  it("__local_error 写 lastError 但不产生 host 帧（域分离，无 seq 占位）", () => {
+    let state = reduceEvent(createInitialState(), { type: "__local_error", message: "boom" } as never);
+    expect(state.lastError).toBe("boom");
+    // 不得污染任何 host 事件流可观察状态
+    expect(state.dialogs).toEqual([]);
+    expect(state.timelines.size).toBe(0);
+  });
+
+  it("answerDialog 把原 request 交给 responder；已 answered 时 cancelDialog 早退不重复发送", () => {
+    const queue = new ExtensionUiQueue();
+    queue.enqueue(req);
+    const seen: string[] = [];
+    const actions = createAppActions(queue, (_s, _id, _r, request) => seen.push(request.id));
+    actions.answerDialog("r9", "A");
+    actions.cancelDialog("r9"); // 已 answered ⇒ cancelDialog 早退，不重复发送
+    expect(seen).toEqual(["r9"]);
+  });
+});

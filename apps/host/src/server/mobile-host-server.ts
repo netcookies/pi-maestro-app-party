@@ -624,9 +624,18 @@ export class MobileHostServer {
         return false;
       }
     } else {
-      const bracket = entry.lastIndexOf("]");
-      const cut = entry.indexOf(":", bracket >= 0 ? bracket : 0);
-      if (cut > 0) {
+      // 裸写法的三种形态，必须分开处理（否则都是静默失效的配置陷阱）：
+      //   a) `[fd00::42]:4739` 带括号+端口 → 括号内为 host，] 之后为 port
+      //   b) `app.example.com:3000` 单冒号 → host:port
+      //   c) `fd00::42` 多冒号且无括号 → 未加括号的 IPv6 字面量（整体作 host）；
+      //      若不单独判分会被 indexOf(':') 切成 entryHost="fd00"（实测永不匹配）
+      const bracketEnd = entry.lastIndexOf("]");
+      if (entry.startsWith("[") && bracketEnd > 0) {
+        entryHost = entry.slice(0, bracketEnd + 1);
+        const rest = entry.slice(bracketEnd + 1);
+        entryPort = rest.startsWith(":") ? (rest.slice(1) || undefined) : undefined;
+      } else if ((entry.match(/:/g) || []).length === 1) {
+        const cut = entry.indexOf(":");
         entryHost = entry.slice(0, cut);
         entryPort = entry.slice(cut + 1) || undefined;
       } else {

@@ -13,6 +13,7 @@ import type {
   MonitorState,
   SessionState,
   TimelineItem,
+  ExtensionUiRequest,
   ExtensionUiResponse,
 } from "@maestro-mobile/shared";
 import { ExtensionUiQueue, type DialogEntry } from "./extension-ui-queue";
@@ -69,9 +70,48 @@ export interface EventBatchEvent {
   events: HostEvent[];
 }
 
+/**
+ * 内部事件：弹窗应答发送失败（断连/连接丢失）。
+ *
+ * 为什么单独开一个本地类型而不复用 host 的 `error`（ISS-20260910 review F-002）：
+ * `error` 是 HostEvent，`seq` 必填且属于 host 事件流序列；本地合成帧只能填 seq:0，
+ * 一旦引入 seq 去重/回放过滤就会不一致。本类型不进入 HostEvent 域，语义上也不声称是 host 推的。
+ *
+ * 为什么需要它（F-001）：弹窗只在 extension_ui_request / extension_ui_cleared 时重投影，
+ * 而 host 的 cleared 依赖它收到我们的响应 ⇒ 断连时响应永不会送达，弹窗既不消失
+ * 也无错误提示（原 responder 的 .catch(() => undefined) 静默吞掉）。本事件同时负责
+ * 把弹窗重新入队（保留用户已选答案）与提示错误。
+ */
+export interface DialogSendFailedEvent {
+  type: "__dialog_send_failed";
+  request: ExtensionUiRequest;
+  message: string;
+}
+
+/**
+ * 内部事件：客户端本地产生的错误提示（如断连导致命令被 settle）。
+ *
+ * 为什么不复用 host 的 `error`（ISS-20260910 review F-002）：`error` 属于 HostEvent 结合类型，
+ * `seq` 为必填且语义上是 host 事件流序号；本地合成帧只能填占位 0，一旦引入 seq 去重/
+ * 增量回放过滤就会与真 host 帧歧义。展示行为与 `error` 一致（写 lastError），但域分离。
+ */
+export interface LocalErrorEvent {
+  type: "__local_error";
+  message: string;
+}
+
+/** reducer 可接受的全部 action：host 事件流 + 本地内部事件 */
+export type AppAction =
+  | HostEvent
+  | InternalEvent
+  | HistoryPrependEvent
+  | EventBatchEvent
+  | DialogSendFailedEvent
+  | LocalErrorEvent;
+
 /** 纯 reducer：处理一个 HostEvent，返回新状态（不可变更新）
- * 额外支持内部事件 __history_load（批量替换 timeline）/ __event_batch（H4 微批） */
-export function reduceEvent(state: AppState, event: HostEvent | InternalEvent | HistoryPrependEvent | EventBatchEvent, deps: AppStateDeps = {}): AppState {
+ * 额外支持内部事件 __history_load（批量替换 timeline）/ __event_batch（H4 微批）/ __dialog_send_failed */
+export function reduceEvent(state: AppState, event: AppAction, deps: AppStateDeps = {}): AppState {
   if (event && (event as EventBatchEvent).type === "__event_batch") {
     let s = state;
     for (const e of (event as EventBatchEvent).events) {
@@ -80,6 +120,16 @@ export function reduceEvent(state: AppState, event: HostEvent | InternalEvent | 
     return s;
   }
   const queue = deps.dialogQueue;
+  if (event.type === "__dialog_send_failed") {
+    // 重新入队同 id 弹窗（enqueue 按 id set，不会重复）并刷新计时，使用户已选答案不丢；
+    // 同时写 lastError，否则从用户视角看是「点了没反应」。
+    let dialogs = state.dialogs;
+    if (queue) {
+      queue.enqueue(event.request);
+      dialogs = queue.pendingDialogs;
+    }
+    return { ...state, dialogs, lastError: event.message };
+  }
   if (event.type === "__history_load") {
     const timelines = new Map(state.timelines);
     timelines.set(event.sessionId, event.items.length > 0 ? event.items : []);
@@ -165,6 +215,9 @@ export function reduceEvent(state: AppState, event: HostEvent | InternalEvent | 
     case "error":
       return { ...state, lastError: event.message };
 
+    case "__local_error":
+      return { ...state, lastError: event.message };
+
     default:
       return state;
   }
@@ -177,7 +230,13 @@ export interface AppActions {
 
 export function createAppActions(
   queue: ExtensionUiQueue,
-  responder: (sessionId: string, requestId: string, response: unknown) => void,
+  responder: (
+    sessionId: string,
+    requestId: string,
+    response: unknown,
+    /** 原 request：发送失败时由调用方交给 reducer 重新入队（ISS-20260910 review F-001） */
+    request: ExtensionUiRequest,
+  ) => void,
 ): AppActions {
   return {
     answerDialog(requestId, value) {
@@ -185,7 +244,7 @@ export function createAppActions(
       if (!entry) return;
       const response = buildDialogResponse(queue, requestId, value);
       if (response) {
-        responder(entry.request.sessionId, requestId, response);
+        responder(entry.request.sessionId, requestId, response, entry.request);
       }
     },
     cancelDialog(requestId) {
@@ -193,7 +252,7 @@ export function createAppActions(
       if (!entry) return;
       const response = queue.cancel(requestId);
       if (response) {
-        responder(entry.request.sessionId, requestId, response);
+        responder(entry.request.sessionId, requestId, response, entry.request);
       }
     },
   };

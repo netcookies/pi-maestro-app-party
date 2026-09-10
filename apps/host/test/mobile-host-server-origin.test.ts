@@ -165,6 +165,19 @@ describe("allowedOrigins 配置解析（ISS-005）", () => {
     expect(check("https://app.example.com:3001")).toBe(false);
   });
 
+  it("F-004：裸 IPv6 条目不被误切成端口（旧实现 entryHost 变 \"fd00\" 永不匹配）", async () => {
+    const check = await makeServer({ allowedOrigins: ["fd00::42"] });
+    // 旧实现：entry.indexOf(':') 命中第一个冒号 ⇒ entryHost="fd00" ⇒ 恒 false
+    expect(check("http://[fd00::42]:4739")).toBe(true);
+    expect(check("http://[fd00::99]:4739")).toBe(false);
+  });
+
+  it("F-004：带括号 + 端口的裸 IPv6 条目按端口精确匹配", async () => {
+    const check = await makeServer({ allowedOrigins: ["[fd00::42]:4739"] });
+    expect(check("http://[fd00::42]:4739")).toBe(true);
+    expect(check("http://[fd00::42]:9999")).toBe(false);
+  });
+
   it("大小写与首尾空白不影响匹配", async () => {
     const check = await makeServer({ allowedOrigins: ["  Trusted.Example.COM  "] });
     expect(check("https://trusted.example.com")).toBe(true);
