@@ -30,9 +30,9 @@ export interface MobileHostServerOptions {
   allowedOrigins?: string[];
   /** 入站单帧上限（字节）。默认 8MB；测试可注入小值验证超限隔离 */
   maxPayload?: number;
-  /** 背压软高水位（字节），默认 2MB */
+  /** 背压软高水位（字节），默认 1MB */
   highWaterMarkBytes?: number;
-  /** 背压硬上限（字节），默认 8MB */
+  /** 背压硬上限（字节，约束队列驻留），默认 32MB */
   hardLimitBytes?: number;
   /** required 帧持续越阈的宽限期（ms），默认 5000 */
   slowGraceMs?: number;
@@ -72,11 +72,12 @@ export class MobileHostServer {
   /** 单客户端并发命令上限：超过则拒绝，防命令洪泛（DoS） */
   private static readonly MAX_CONNECTIONS = 32;
   private static readonly MAX_CONCURRENT_COMMANDS = 8;
-  /** 软高水位：best_effort 帧越阈即丢；required 帧持续越阈达宽限期才断线 */
-  private static readonly HIGH_WATER_MARK_BYTES = 2 * 1024 * 1024;
-  /** 硬上限：required 帧遇到即断线。宽限期只容忍短突发；若无硬顶，对端 TCP 窗口卡死时
-   * 高码率广播可使队列在宽限窗口内膨胀到百 MB 级——内存有界靠的是硬顶，不是宽限期 */
-  private static readonly HARD_LIMIT_BYTES = 8 * 1024 * 1024;
+  /** 软高水位：best_effort 帧越阈即丢；required 帧持续越阈达宽限期才断线。
+   * 必须显著低于硬顶，否则「required 宽限投递」区间被压缩到几乎不存在 */
+  private static readonly HIGH_WATER_MARK_BYTES = 1 * 1024 * 1024;
+  /** 硬上限：约束队列驻留（buffered + 新帧）。默认 32MB：实测合法最大帧（4000 条 snapshot）≈7.4MB，
+   * 留 4× 余量；单帧自身越顶不阻断（防重连死循环），只告警 */
+  private static readonly HARD_LIMIT_BYTES = 32 * 1024 * 1024;
   private static readonly SLOW_GRACE_MS = 5_000;
   private static readonly DROP_LOG_INTERVAL_MS = 60_000;
   private unsubscribeController: (() => void) | undefined;
@@ -128,7 +129,7 @@ export class MobileHostServer {
       ws.on("error", (error: Error & { code?: string }) => {
         // 注意：ws 在协议错误路径（receiverOnError）已同步发过 close 帧，此处不得 terminate，
         // 否则抢掉 1009 通知，客户端只能看到裸 TCP 断。幂等 closing 标记下走 graceful 重复 close（无副作用）。
-        console.error(`[maestro-mobile] ws error client=${client.id} code=${error.code ?? "-"} message=${sanitizeWsErrorMessage(error.message)} (isolated)`);
+        console.error(`[maestro-mobile] ws error client=${client.id} code=${error.code ?? "-"} message=${sanitizeWsErrorMessage(error.message, [this.options.token ?? ""])} (isolated)`);
         this.closeClient(client, "ws_error");
       });
       // 活性由标准 ping/pong 心跳维护（见 startHeartbeat）：客户端栈（RN OkHttp/浏览器/Node ws）
@@ -146,7 +147,7 @@ export class MobileHostServer {
         // .catch 不可省：void 链上任何 rejection（含未来新增分支）都会经 unhandledRejection 冒到 cli fatal() 退进程
         void this.handleClientMessage(client, data)
           .catch((error: unknown) => {
-            console.error(`[maestro-mobile] ws command crashed client=${client.id}:`, error instanceof Error ? sanitizeWsErrorMessage(error.message) : error);
+            console.error(`[maestro-mobile] ws command crashed client=${client.id}:`, error instanceof Error ? sanitizeWsErrorMessage(error.message, [this.options.token ?? ""]) : error);
           })
           .finally(() => {
             client.inflight--;
@@ -157,7 +158,7 @@ export class MobileHostServer {
         if (client.droppedFrames > 0) {
           console.warn(`[maestro-mobile] ws closed client=${client.id} code=${code} droppedTotal=${client.droppedFrames}`);
         } else if (code !== 1000 && code !== 1001) {
-          console.warn(`[maestro-mobile] ws closed client=${client.id} code=${code} reason=${sanitizeWsErrorMessage(reason.toString()).slice(0, 60)}`);
+          console.warn(`[maestro-mobile] ws closed client=${client.id} code=${code} reason=${sanitizeWsErrorMessage(reason.toString(), [this.options.token ?? ""]).slice(0, 60)}`);
         }
         this.clients.delete(client);
       });
@@ -232,9 +233,18 @@ export class MobileHostServer {
       return false;
     }
     const buffered = client.ws.bufferedAmount;
-    if (buffered >= this.hardLimitBytes) {
+    // 硬顶语义：约束的是「队列驻留」，不是「单帧大小」。
+    // 实测合法最大帧 = 4000 条 timeline 的 snapshot ≈ 7.4MB（本机 164MB 会话），
+    // 若把超限单帧也断线，客户端重连后会再次拉到同一帧 → 重连死循环，比 OOM 更糟。
+    // 因此：单帧自身越顶 → 照发（它是唯一副本）+ 告警；积压+新帧越顶 → 断线重连自愈。
+    const payloadBytes = Buffer.byteLength(payload);
+    if (payloadBytes > this.hardLimitBytes) {
+      console.warn(`[maestro-mobile] ws oversized required frame client=${client.id} kind=${kind} bytes=${payloadBytes} limit=${this.hardLimitBytes} (sent anyway; data-layer budget is separate concern)`);
+      return this.rawSend(client, payload);
+    }
+    if (buffered + payloadBytes > this.hardLimitBytes) {
       // 硬顶：无论何种投递都先断线；required 走到这里绝不静默丢数据（断线重连才是既定自愈路径）
-      console.warn(`[maestro-mobile] ws buffer hard limit client=${client.id} remote=${this.remoteOf(client.ws)} buffered=${buffered} dropped=${client.droppedFrames} → close(1013)`);
+      console.warn(`[maestro-mobile] ws buffer hard limit client=${client.id} remote=${this.remoteOf(client.ws)} buffered=${buffered} frame=${payloadBytes} → close(1013)`);
       this.closeClient(client, "slow_consumer");
       return false;
     }
@@ -797,7 +807,8 @@ export class MobileHostServer {
       type: "command_result",
       in_reply_to: replyTo,
       ok: false,
-      error: { code, message: message ? sanitizeWsErrorMessage(message) : code },
+      // 回传网络的唯一脉络：必须带上本实例 token 作为已知密串（底层错误文本可能回显含 ?token= 的 URL）
+      error: { code, message: message ? sanitizeWsErrorMessage(message, [this.options.token ?? ""]) : code },
     }, "required", "command_result");
   }
 }
@@ -814,20 +825,28 @@ export function clampCommandInt(raw: number | undefined, dflt: number, max: numb
 }
 
 /**
- * WS/日志/响应用错误文本脱敏：限长 + 去换行 + 抹掉绝对路径与 token 痕迹。
- * 背景：command_failed 曾把底层 fs/SDK 的 Error.message（含绝对路径）原样回传网络；
- * 日志面同理（token 可能出现在 URL/argv 形态的错误文本里）。完整堆栈只进服务端日志的
- * 结构化字段，不经此函数回传客户端。
+ * WS/日志/响应用错误文本脱敏：限长 + 去换行 + 抹掉已知敏感根。
+ * 背景：command_failed 曾把底层 fs/SDK 的 Error.message（含用户目录绝对路径）原样回传网络。
+ *
+ * 设计：只替换「已知敏感值」（token 本体、home 目录、cwd、盘符路径），不用泛用正则猜“这段像不像路径”——
+ * 后者会把 `/api/v1/users`、`http://host/api/v1` 这类诊断信息误删（独立评审 RV-002）。
+ * 完整堆栈只进服务端日志的结构化字段，不经此函数回传客户端。
  */
-function sanitizeWsErrorMessage(raw: string): string {
+export function sanitizeWsErrorMessage(raw: string, secrets: string[] = []): string {
   if (!raw) return "";
-  return raw
-    .replace(/[ \t\r\n]+/g, " ")
-    // 绝对路径（类 Unix）与 Windows 盘符路径 → 只保留文件名
-    .replace(/(?:[A-Za-z]:)?[\\/][^\\/:*?"<>|]+(?:[\\/][^\\/:*?"<>|]+)*/g, (m) => m.split(/[\\/]/).filter(Boolean).pop() ?? "[path]")
-    // 形态似密串的长 token（≥32 位连续 base64/hex 字符）
-    .replace(/\b[A-Za-z0-9+/=\-_]{32,}\b/g, "[redacted]")
-    .slice(0, 200);
+  let out = raw.replace(/[ \t\r\n]+/g, " ").slice(0, 200);
+  // 1) 显式已知密串（如本实例 token）：只要出现在文本里就抹掉，不限形态
+  for (const secret of secrets) {
+    if (secret && secret.length >= 8) out = out.split(secret).join("[redacted]");
+  }
+  // 2) 用户主目录与进程 cwd：局域网工具里这两个值会泄露用户名/项目位置
+  for (const root of [homedir(), process.cwd()]) {
+    if (root && root.length > 1) out = out.split(root).join("~");
+  }
+  // 3) Windows 盘符路径形态无歧义，可直接折叠到文件名。负向后顾防 URL scheme 误伤：
+  //    "http://host/x" 里的 p:// 会被 [A-Za-z]:[\/] 命中，但它前面是字母 t → 排除
+  out = out.replace(/(?<![A-Za-z0-9])[A-Za-z]:[\\/][^\s"']*/g, (m) => m.split(/[\\/]/).filter(Boolean).pop() ?? "[path]");
+  return out;
 }
 
 function writeJson(response: ServerResponse, status: number, body: unknown): void {

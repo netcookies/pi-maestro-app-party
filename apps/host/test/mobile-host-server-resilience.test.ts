@@ -1,5 +1,5 @@
 import { describe, expect, it, afterEach } from "vitest";
-import { MobileHostServer, clampCommandInt } from "../src/server/mobile-host-server.js";
+import { MobileHostServer, clampCommandInt, sanitizeWsErrorMessage } from "../src/server/mobile-host-server.js";
 import { HostController } from "../src/host-controller.js";
 import { MaestroStateReader } from "../src/maestro-state.js";
 import { mkdir, rm } from "node:fs/promises";
@@ -198,6 +198,31 @@ describe("WS outbound backpressure", () => {
   // 软阈 100KB / 硬顶 200KB；宽限设极大，使「硬顶优先」成为唯一断线路径，用例保持确定性
   const BP = { highWaterMarkBytes: 100_000, hardLimitBytes: 200_000, slowGraceMs: 600_000, heartbeatIntervalMs: 10_000 };
 
+  it("RV-001：队列积压 + 新帧越过硬顶 → 断线（旧实现只看发送前 buffered，会放行使队列破顶）", async () => {
+    ctx = await createServer(BP);
+    const { fake, restore } = await stubClientSocket(ctx);
+    // buffered=190KB < 硬顶 200KB，但加上 ~60KB 帧后越顶：旧实现此时判定"未超限"直接 send
+    fake.bufferedAmount = 190_000;
+    const big = { type: "session_updated", sessionId: "s", session: { id: "s", pad: "x".repeat(60_000) }, seq: 11 };
+    emitBroadcast(ctx, big);
+    expect(fake.sent.length).toBe(0);
+    expect(fake.closeCalls[0]?.code).toBe(1013);
+    await restore();
+  }, 10_000);
+
+  it("单帧自身超硬顶：照发不断线（防合法大 snapshot 触发重连死循环）", async () => {
+    // 实测：4000 条 timeline 的 snapshot ≈ 7.4MB，逼近默认硬顶。若把超限单帧断掉，
+    // 客户端重连后会拉到同一帧 → 无限循环。语义是"队列驻留有界"，不是"单帧有界"。
+    ctx = await createServer(BP);
+    const { fake, restore } = await stubClientSocket(ctx);
+    fake.bufferedAmount = 0;
+    const huge = { type: "session_updated", sessionId: "s", session: { id: "s", pad: "y".repeat(300_000) }, seq: 12 };
+    emitBroadcast(ctx, huge);
+    expect(fake.sent.length).toBe(1); // 唯一副本：宁发不丢
+    expect(fake.closeCalls.length).toBe(0);
+    await restore();
+  }, 10_000);
+
   it("软阈以上：best_effort 丢弃、required 不静默丢、不断线", async () => {
     ctx = await createServer(BP);
     const { fake, restore } = await stubClientSocket(ctx);
@@ -321,6 +346,22 @@ describe("search_history 参数钳制", () => {
 });
 
 describe("错误响应脱敏", () => {
+  it("RV-002：只抹已知敏感值，不误删 API 路径与 URL 等诊断信息", async () => {
+    const home = require("node:os").homedir() as string;
+    // 保留：普通 API 路径、URL、相对路径（旧实现用泛用正则会把它们折叠成最后一段）
+    expect(sanitizeWsErrorMessage("request failed for /api/v1/users")).toContain("/api/v1/users");
+    expect(sanitizeWsErrorMessage("see http://host:4739/api/v1 for status")).toContain("http://host:4739/api/v1");
+    expect(sanitizeWsErrorMessage("ENOENT: no such file ./relative/config.json")).toContain("./relative/config.json");
+    // 抹除：home 目录、显式密串、Windows 盘符
+    expect(sanitizeWsErrorMessage(`open failed ${home}/.pi/secrets.json`)).not.toContain(home);
+    expect(sanitizeWsErrorMessage("url ws://x/ws?token=abc123def456", ["abc123def456"])).not.toContain("abc123def456");
+    expect(sanitizeWsErrorMessage("read C:\\Users\\bob\\project\\a.ts failed")).not.toMatch(/[A-Za-z]:\\Users/);
+    // 限长与去换行
+    expect(sanitizeWsErrorMessage("a\r\nb").length).toBeLessThanOrEqual(200);
+    expect(sanitizeWsErrorMessage("line1\nline2")).toBe("line1 line2");
+  });
+
+
   it("command_failed 不回传绝对路径", async () => {
     ctx = await createServer();
     const conn = connect(ctx.port);
