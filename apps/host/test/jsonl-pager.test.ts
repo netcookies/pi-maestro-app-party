@@ -1,4 +1,4 @@
-import { describe, expect, it, beforeEach, afterEach } from "vitest";
+import { describe, expect, it, beforeEach, afterEach, vi } from "vitest";
 import { mkdir, writeFile, rm } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
@@ -219,5 +219,62 @@ describe("jsonl-pager", () => {
     const second = await replayTailFromJsonl(path, 10);
     expect(second.totalEntries).toBe(32);
     expect(second.items[second.items.length - 1].text).toBe("u31");
+  });
+});
+
+// 泛化发现回归：流式扫描的残行上限（与 usage-reader 同族）。
+// MAX_LINE_BYTES 只拦「完整行」，修复前 buf 在遇到换行前无上限累积，
+// 畸形无换行文件会把它堆到接近文件大小。
+describe("jsonl-pager oversized-line carry bound", () => {
+  const MB = 1024 * 1024;
+
+  it("单条 4.2MB 无换行巨行：整行丢弃且后续正常行仍解析（scanWindow）", async () => {
+    const dir2 = join(tmpdir(), `jsonl-huge-${randomUUID()}`);
+    await mkdir(dir2, { recursive: true });
+    const p = join(dir2, "s.jsonl");
+    const warns: string[] = [];
+    const spy = vi.spyOn(console, "warn").mockImplementation((...args: unknown[]) => { warns.push(args.map(String).join(" ")); });
+    try {
+      const header = JSON.stringify({ type: "session", id: "s", createdAt: "2026-01-01T00:00:00.000Z", cwd: "/p", parentSession: null });
+      const huge = JSON.stringify({ type: "message", message: { role: "assistant", content: [{ type: "text", text: "A".repeat(Math.ceil(4.2 * MB)) }], timestamp: 1 } });
+      const tail = msg("user", "after-marker");
+      expect(huge.length).toBeGreaterThan(4 * MB); // 确实越过 MAX_LINE_BYTES
+      await writeFile(p, `${header}\n${huge}\n${tail}\n`);
+      invalidateIndex(p);
+
+      const page = await replayTailFromJsonl(p, 100);
+      // 巨行被整行丢弃：不计入 totalEntries，也不进 ring（无占位 null）
+      expect(page.totalEntries).toBe(1);
+      // 关键：截断不能污染后续解析（skipToNewline 只丢该行的尾巴）
+      expect(page.items.map((i) => i.text).join("|")).toContain("after-marker");
+      // 区分点：旧实现同样会丢弃「已完整读完」的超限行（handleLine 早先就有长度检查），
+      // 所以 totalEntries/items 在新旧代码上相同 —— 只有峰值内存不同（非确定性，不能断言）。
+      // 唯一稳定的可观测差异是这条告警（与 usage-reader 同口径）：旧实现不计数、不告警。
+      expect(warns.some((w) => w.includes("跳过 1 行")), `warns=${JSON.stringify(warns)}`).toBe(true);
+    } finally {
+      spy.mockRestore();
+      await rm(dir2, { recursive: true, force: true });
+    }
+  });
+
+  it("searchInJsonl 同样受残行上限保护，且不丢后续匹配", async () => {
+    const dir2 = join(tmpdir(), `jsonl-huge-s-${randomUUID()}`);
+    await mkdir(dir2, { recursive: true });
+    const p = join(dir2, "s.jsonl");
+    try {
+      const header = JSON.stringify({ type: "session", id: "s", createdAt: "2026-01-01T00:00:00.000Z", cwd: "/p", parentSession: null });
+      const huge = JSON.stringify({ type: "message", message: { role: "assistant", content: [{ type: "text", text: "B".repeat(Math.ceil(4.2 * MB)) }], timestamp: 1 } });
+      await writeFile(p, `${header}\n${huge}\n${msg("user", "needle-after")}\n`);
+      const { searchInJsonl } = await import("../src/jsonl-pager.js");
+      const r = await searchInJsonl(p, "needle-after", 50);
+      // totalEntries 只计 "type":"message" 行（header 不算）。修复前 searchInJsonl 连单行上限都没有，
+      // 巨行会被计入→2；修复后整行丢弃→1。这个差异就是本用例的区分点。
+      expect(r.totalEntries).toBe(1);
+      expect(r.matches.length).toBe(1);
+      expect(r.matches[0].text).toContain("needle-after");
+      expect(r.matches[0].index).toBe(0); // 索引不受丢弃行影响地重新连续
+    } finally {
+      await rm(dir2, { recursive: true, force: true });
+    }
   });
 });

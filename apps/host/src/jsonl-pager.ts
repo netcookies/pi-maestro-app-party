@@ -76,9 +76,15 @@ async function scanWindow(filePath: string, opts: WindowOptions): Promise<PageRe
     let buf = "";
     // 异常超长行被截断后，直到下个换行前的内容都属于同一行，整行丢弃（与 usage-reader 同族修法）
     let skipToNewline = false;
+    let skippedOversize = 0;
 
     const handleLine = (line: string) => {
-      if (!line.trim() || line.length > MAX_LINE_BYTES) return;
+      if (!line.trim()) return;
+      // 计数与丢弃统一在此：完整行超限 → 不计 totalEntries、不占 ring 位（避免窗口被无内容占位项吃掉）
+      if (line.length > MAX_LINE_BYTES) {
+        skippedOversize++;
+        return;
+      }
       if (!line.trimStart().startsWith("{")) return;
       // 只有 message 类型计入总数（session/model_change 等忽略）
       if (!line.includes('"type":"message"')) return;
@@ -113,9 +119,13 @@ async function scanWindow(filePath: string, opts: WindowOptions): Promise<PageRe
       if (buf.length > MAX_LINE_BYTES) {
         buf = "";
         skipToNewline = true;
+        skippedOversize++; // 残行形态的超限：同一计数口径（否则旧实现下 16MB 单行会默默堆满内存）
       }
     }
     if (!skipToNewline && buf.trim()) handleLine(buf); // 最后无换行的行
+    if (skippedOversize > 0) {
+      console.warn(`[maestro-mobile] pager: ${filePath} 跳过 ${skippedOversize} 行超 ${MAX_LINE_BYTES} 字节的异常行`);
+    }
 
     // ring 现在 = 最后 want 条 message（含 null 占位）。返回窗口 [skip, skip+limit) 的 item
     const end = Math.max(0, ring.length - opts.skip);
@@ -231,8 +241,15 @@ export async function searchInJsonl(
     const matches: { index: number; text: string; kind: string }[] = [];
     let totalEntries = 0;
     let buf = "";
+    let skippedOversize = 0;
     const handleLine = (line: string) => {
-      if (!line.trim() || !line.includes('"type":"message"')) return;
+      if (!line.trim()) return;
+      // 单行上限：旧实现连这一层都没有， malformed 巨行会进入 JSON.parse；而真正无上限的是 buf 残行（见下方守卫）
+      if (line.length > MAX_LINE_BYTES) {
+        skippedOversize++;
+        return;
+      }
+      if (!line.includes('"type":"message"')) return;
       totalEntries++;
       if (matches.length >= maxResults) return;
       try {
@@ -267,13 +284,17 @@ export async function searchInJsonl(
         if (skipToNewline) { skipToNewline = false; continue; }
         handleLine(line);
       }
-      // 同 scanWindow：searchInJsonl 原本连单行上限都没有
+      // 同 scanWindow：残行必须有上限，否则畸形无换行文件会把 buf 堆到接近文件大小
       if (buf.length > MAX_LINE_BYTES) {
         buf = "";
         skipToNewline = true;
+        skippedOversize++;
       }
     }
     if (!skipToNewline && buf.trim()) handleLine(buf);
+    if (skippedOversize > 0) {
+      console.warn(`[maestro-mobile] pager.search: ${filePath} 跳过 ${skippedOversize} 行超 ${MAX_LINE_BYTES} 字节的异常行`);
+    }
     return { matches, totalEntries };
   } finally {
     await fd?.close();
