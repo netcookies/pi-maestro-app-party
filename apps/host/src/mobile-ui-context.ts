@@ -146,17 +146,32 @@ export class MobileExtensionUiBridge {
     });
   }
 
-  /** 关闭所有挂起的弹窗（会话中止/关闭时调用），返回已取消的数量 */
+  /**
+   * 关闭所有挂起的弹窗（会话中止/关闭时调用），返回已取消的数量。
+   *
+   * 先快照并清空再做副作用（S_CONFIRM RV-003）：上一版在 for-of 里直接 emitCleared，
+   * 若某次 emit 抛错则循环中断、末尾的 clear() 不执行 ⇒ 剩余条目留在 Map 里、
+   * timeout 仍会事后再触发一次重复取消。先清空使「cancelAll 后 pendingCount 必为 0」
+   * 成为与 emit 无关的硬不变量；单条 emit 失败也不阻断其余通知。
+   * （当前生产 emit 已逐 listener try/catch（host-controller.ts:43-46）⇒ 实际不可达，
+   * 但本类的 emit 是外部注入函数，不应依赖注入方的异常纪律。）
+   */
   cancelAll(): number {
-    let count = 0;
-    for (const [requestId, pending] of this.pendingDialogs) {
+    const entries = [...this.pendingDialogs];
+    this.pendingDialogs.clear();
+    for (const [requestId, pending] of entries) {
       clearTimeout(pending.timeout);
       pending.resolve({ id: requestId, cancelled: true });
-      this.emitCleared(requestId);
-      count++;
     }
-    this.pendingDialogs.clear();
-    return count;
+    for (const [requestId] of entries) {
+      try {
+        this.emitCleared(requestId);
+      } catch (error) {
+        // 通知失败不能留下未取消的弹窗：条目已清空，仅丢失一次 cleared 投影
+        console.warn("[maestro-mobile] extension_ui_cleared emit failed:", error instanceof Error ? error.message : error);
+      }
+    }
+    return entries.length;
   }
 
   get pendingCount(): number {

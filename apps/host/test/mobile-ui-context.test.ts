@@ -131,6 +131,32 @@ describe("MobileExtensionUiBridge", () => {
     await Promise.all([p1, p2]);
   });
 
+  it("S_CONFIRM RV-003: cancelAll 中单条 emit 抛错不得留下未取消条目、也不得吞掉其余通知", async () => {
+    // 上一版在 for-of 里边遍历边 emitCleared，末尾才 clear() ⇒ 某次 emit 抛错就会
+    // 中断循环：剩余弹窗仍留在 Map（timeout 会事后再触发一次重复取消）。
+    const throwing = new MobileExtensionUiBridge(
+      "session-throw",
+      (event) => {
+        if (event.type === "extension_ui_cleared") throw new Error("emit exploded");
+        events.push(event);
+      },
+    );
+    const ctx = throwing.createContext();
+    const p1 = ctx.select("Q1", ["A"]);
+    const p2 = ctx.input("Q2");
+    await Promise.resolve();
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    let cancelled = 0;
+    expect(() => { cancelled = throwing.cancelAll(); }).not.toThrow();
+    expect(cancelled).toBe(2);
+    expect(throwing.pendingCount, "cancelAll 后必须恒为 0，与 emit 是否抛错无关").toBe(0);
+    // 两条通知都尝试过（不是抛一次就放弃其余）
+    expect(warn.mock.calls.length).toBeGreaterThanOrEqual(2);
+    warn.mockRestore();
+    expect(await p1).toBeUndefined();
+    expect(await p2).toBeUndefined();
+  });
+
   it("notify is fire-and-forget", async () => {
     const ctx = bridge.createContext();
     ctx.notify("Hello", "info");
