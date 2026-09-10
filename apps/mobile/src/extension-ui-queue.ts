@@ -104,6 +104,23 @@ export class ExtensionUiQueue {
     return entry;
   }
 
+  /**
+   * 发送失败时把弹窗恢复为 pending（保留用户已选答案）。
+   *
+   * 不能用 enqueue 代替（S_CONFIRM 实测发现的回归）：enqueue 会用 now() 重建 receivedAt，
+   * 使一个早已过期、host 侧已放弃的 ask 复活并重获完整超时。
+   * 因此：保留原 receivedAt；已过期则保持终态；条目已被修剪时无法判定原始时限，保守不恢复。
+   */
+  reopen(request: ExtensionUiRequest): boolean {
+    const existing = this.dialogs.get(request.id);
+    if (!existing) return false;
+    const timeout = request.timeout ?? this.defaultTimeoutMs;
+    if (this.now() - existing.receivedAt > timeout) return false;
+    this.dialogs.set(request.id, { ...existing, status: "pending" });
+    this.pruneFinished(); // 保持驻留有界；只删终态条目，不会误删刚恢复的 pending
+    return true;
+  }
+
   /** 获取弹窗 */
   get(requestId: string): DialogEntry | undefined {
     return this.dialogs.get(requestId);

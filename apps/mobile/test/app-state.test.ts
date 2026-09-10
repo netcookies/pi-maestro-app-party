@@ -195,6 +195,33 @@ describe("__dialog_send_failed 与 __local_error（review F-001/F-002）", () =>
     expect(state.lastError).toContain("Connection lost");
   });
 
+  it("S_CONFIRM 回归：发送失败不得使已过期的弹窗复活并重获完整超时", () => {
+    // 上一版修复用 enqueue 重建条目 ⇒ receivedAt 被刷新（实测 revived:1,status:pending,ageMs:0）。
+    // 现由 reopen 保留原 receivedAt；已过期 ⇒ 不恢复，只提示无需重试。
+    let now = 1000;
+    const queue = new ExtensionUiQueue({ defaultTimeoutMs: 1, now: () => now });
+    queue.enqueue(req);
+    createAppActions(queue, () => undefined).answerDialog("r9", "A");
+    now = 5000; // 早已过期：host 侧已放弃这个 ask，复活它只会误导用户
+    const state = reduceEvent(createInitialState(), { type: "__dialog_send_failed", request: req, message: "lost" } as never, { dialogQueue: queue });
+    expect(state.dialogs, "过期弹窗不得复活").toHaveLength(0);
+    expect(state.lastError).toContain("已超时或已清理");
+  });
+
+  it("S_CONFIRM：窗口内恢复保留原 receivedAt，并按原时限正常过期（不永不过期）", () => {
+    let now = 1000;
+    const queue = new ExtensionUiQueue({ defaultTimeoutMs: 10_000, now: () => now });
+    queue.enqueue(req);
+    createAppActions(queue, () => undefined).answerDialog("r9", "A");
+    now = 6000;
+    const state = reduceEvent(createInitialState(), { type: "__dialog_send_failed", request: req, message: "lost" } as never, { dialogQueue: queue });
+    expect(state.dialogs.map((d) => d.status)).toEqual(["pending"]);
+    expect(queue.get("r9")?.receivedAt, "receivedAt 必须保留原值（enqueue 会刷新）").toBe(1000);
+    expect(state.lastError).toBe("lost");
+    now = 11_001; // 越过原时限 (1000 + 10_000) ⇒ 正常过期
+    expect(queue.pendingDialogs).toHaveLength(0);
+  });
+
   it("__local_error 写 lastError 但不产生 host 帧（域分离，无 seq 占位）", () => {
     let state = reduceEvent(createInitialState(), { type: "__local_error", message: "boom" } as never);
     expect(state.lastError).toBe("boom");

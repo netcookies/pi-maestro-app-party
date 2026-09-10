@@ -121,14 +121,12 @@ export function reduceEvent(state: AppState, event: AppAction, deps: AppStateDep
   }
   const queue = deps.dialogQueue;
   if (event.type === "__dialog_send_failed") {
-    // 重新入队同 id 弹窗（enqueue 按 id set，不会重复）并刷新计时，使用户已选答案不丢；
-    // 同时写 lastError，否则从用户视角看是「点了没反应」。
-    let dialogs = state.dialogs;
-    if (queue) {
-      queue.enqueue(event.request);
-      dialogs = queue.pendingDialogs;
-    }
-    return { ...state, dialogs, lastError: event.message };
+    // 恢复弹窗使用户已选答案不丢，同时写 lastError（否则从用户视角看是「点了没反应」）。
+    // reopen 而非 enqueue：保留原 receivedAt，且已过期/已被修剪时不恢复（S_CONFIRM 回归修正）。
+    const reopened = queue ? queue.reopen(event.request) : false;
+    const dialogs = queue ? queue.pendingDialogs : state.dialogs;
+    const suffix = reopened ? "" : "（该 ask 已超时或已清理，无需重试）";
+    return { ...state, dialogs, lastError: `${event.message}${suffix}` };
   }
   if (event.type === "__history_load") {
     const timelines = new Map(state.timelines);
@@ -233,7 +231,9 @@ export function createAppActions(
   responder: (
     sessionId: string,
     requestId: string,
-    response: unknown,
+    /** buildDialogResponse 的产物必为 ExtensionUiResponse（protocol.ts:298-302）。
+     *  之前声明为 unknown 使调用点不得不 `as never` 强转（S_CONFIRM 指出属未完成的类型清理）。 */
+    response: ExtensionUiResponse,
     /** 原 request：发送失败时由调用方交给 reducer 重新入队（ISS-20260910 review F-001） */
     request: ExtensionUiRequest,
   ) => void,

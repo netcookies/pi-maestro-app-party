@@ -149,8 +149,8 @@ export function HostStoreProvider({ children }: { children: React.ReactNode }) {
               .getSnapshot(sessionId)
               .then((snapshot) => {
                 if (generation !== reloadGenerationRef.current) return; // 已被更新的拉取取代
-                dispatch({ type: "__history_load", sessionId, items: snapshot.timeline, seq: snapshot.nextSeq } as never);
-                dispatch({ type: "session_updated", session: snapshot.session, seq: snapshot.nextSeq } as never);
+                dispatch({ type: "__history_load", sessionId, items: snapshot.timeline, seq: snapshot.nextSeq });
+                dispatch({ type: "session_updated", session: snapshot.session, seq: snapshot.nextSeq });
               })
               .catch(() => undefined);
           }
@@ -324,9 +324,9 @@ export function HostStoreProvider({ children }: { children: React.ReactNode }) {
     try {
       const snapshot = await getClient().getSnapshot(sessionId);
       const generation = ++reloadGenerationRef.current;
-      dispatch({ type: "__history_load", sessionId, items: snapshot.timeline, seq: snapshot.nextSeq } as never);
+      dispatch({ type: "__history_load", sessionId, items: snapshot.timeline, seq: snapshot.nextSeq });
       // 同时写入 session 状态（model/title 等），否则会话页显示 no model
-      dispatch({ type: "session_updated", session: snapshot.session, seq: snapshot.nextSeq } as never);
+      dispatch({ type: "session_updated", session: snapshot.session, seq: snapshot.nextSeq });
     } catch {
       // snapshot 失败静默（历史不可见但不阻塞）
     }
@@ -336,7 +336,7 @@ export function HostStoreProvider({ children }: { children: React.ReactNode }) {
     const result = await getClient().sendCommand({ type: "load_more_history", sessionId, count });
     const r = result as { items: TimelineItem[]; hasMore: boolean; totalEntries: number };
     if (r.items?.length > 0) {
-      dispatch({ type: "__history_prepend", sessionId, items: r.items, seq: 0 } as never);
+      dispatch({ type: "__history_prepend", sessionId, items: r.items, seq: 0 });
     }
     return r;
   }, [getClient]);
@@ -352,7 +352,7 @@ export function HostStoreProvider({ children }: { children: React.ReactNode }) {
         queueRef.current,
         (sessionId, requestId, response, request) => {
           void getClient()
-            .respondExtensionUi(sessionId, requestId, response as never)
+            .respondExtensionUi(sessionId, requestId, response)
             // ISS-20260910 review F-001：不得静默吞掉。弹窗只在 request/cleared 两个事件时重投影，
             // 而 host 的 cleared 依赖它收到本响应 ⇒ 断连时弹窗永不消失、用户答案丢失且无提示。
             // 走本地内部事件（不冒充 host 事件流的 error 帧，避开其必填 seq 语义）把弹窗重新入队并写 lastError。
