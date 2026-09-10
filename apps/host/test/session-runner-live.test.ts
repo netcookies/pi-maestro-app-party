@@ -3,7 +3,7 @@ import { mkdir, writeFile, rm } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { randomUUID } from "node:crypto";
-import { SdkSessionRunner } from "../src/session-runner.js";
+import { MAX_TIMELINE_ITEMS, SdkSessionRunner } from "../src/session-runner.js";
 import type { HostEvent, TimelineItem } from "@maestro-mobile/shared";
 
 /** 构造带 sessionFile 的 fake runtime（历史回放走真实 jsonl） */
@@ -251,6 +251,75 @@ describe("P1-1: live 会话 timeline 投影", () => {
     expect(snap.timeline).toHaveLength(1);
     expect(snap.timeline[0].text).toBe("新文本");
 
+    await runner.dispose();
+  });
+});
+
+/**
+ * 实时条目驻留上限（run-cea14fb1822d / P4-structural 泛化命中）。
+ * 反向验证：把 pushTimelineItem 的 splice 剪除逻辑去掉后，本 describe 两条必挂
+ * （旧实现只在 loadMoreHistory 有 room 钳制，写入路径无界）。
+ */
+describe("live 条目受 MAX_TIMELINE_ITEMS 约束（写入路径不得无界）", () => {
+  let dir: string;
+  let path: string;
+  let events: HostEvent[];
+
+  beforeEach(async () => {
+    dir = join(tmpdir(), `runner-cap-${randomUUID()}`);
+    await mkdir(dir, { recursive: true });
+    path = join(dir, "s.jsonl");
+    await writeFile(path, "");
+    events = [];
+  });
+  afterEach(async () => { await rm(dir, { recursive: true, force: true }); });
+
+  function internals(runner: SdkSessionRunner) {
+    return runner as unknown as {
+      timeline: TimelineItem[];
+      lastSentText: Map<string, string>;
+      liveItemIds: Map<string, string>;
+      recordUserMessage(message: string, images?: unknown[]): void;
+    };
+  }
+
+  it("message_end 投影到顶时剪除最旧条目，并回收以 id 为键的旁路状态", async () => {
+    const runtime = makeRuntime(path);
+    const runner = await SdkSessionRunner.open(
+      { createRuntime: async () => runtime.runtime, listSessions: async () => [] },
+      { cwd: "/tmp", mode: "continue", sessionFile: path },
+      (e: HostEvent) => events.push(e),
+    );
+    const it = internals(runner);
+    // 白盒预填到上限：避免 4000 次事件驱动（upsert 用 findIndex，O(n²) 会拖慢用例）
+    const prefill = Array.from({ length: MAX_TIMELINE_ITEMS }, (_, i) => ({
+      id: `pre-${i}`, kind: "assistant" as const, text: `t${i}`, createdAt: "2026-01-01T00:00:00.000Z",
+    }));
+    it.timeline.splice(0, it.timeline.length, ...prefill);
+    it.lastSentText.set("pre-0", "x".repeat(2048));
+
+    // 新消息 → 触发 push 分支（id 不存在于 timeline）
+    runtime.emit("assistant", "全新的一条", 1900000000000);
+
+    expect(it.timeline.length, "到顶后驻留长度不得增长").toBe(MAX_TIMELINE_ITEMS);
+    expect(it.timeline[it.timeline.length - 1].text).toBe("全新的一条");
+    expect(it.timeline[0].id, "最旧条目应被剪除").toBe("pre-1");
+    expect(it.lastSentText.has("pre-0"), "被剪除条目的全文缓存必须回收").toBe(false);
+    await runner.dispose();
+  });
+
+  it("recordUserMessage 连续推 5000 条：驻留恒等于上限，尾部保留最新", async () => {
+    const runtime = makeRuntime(path);
+    const runner = await SdkSessionRunner.open(
+      { createRuntime: async () => runtime.runtime, listSessions: async () => [] },
+      { cwd: "/tmp", mode: "continue", sessionFile: path },
+      (e: HostEvent) => events.push(e),
+    );
+    const it = internals(runner);
+    for (let i = 0; i < MAX_TIMELINE_ITEMS + 1000; i++) it.recordUserMessage(`u-${i}`);
+    expect(it.timeline.length).toBe(MAX_TIMELINE_ITEMS);
+    expect(it.snapshot().timeline.length).toBe(MAX_TIMELINE_ITEMS);
+    expect(it.timeline[it.timeline.length - 1].text).toBe(`u-${MAX_TIMELINE_ITEMS + 999}`);
     await runner.dispose();
   });
 });

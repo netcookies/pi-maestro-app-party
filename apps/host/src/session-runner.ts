@@ -22,7 +22,7 @@ const HISTORY_PAGE_SIZE = 80;
  * 策略：达到上限就停止继续向前翻页（hasMore=false），而不是丢弃已交付的条目——
  * 因为断线重连补拉 snapshot 时客户端是整体替换 timeline（mobile/src/app-state.ts __history_load），
  * 删除已交付条目会造成可见的历史丢失。
- * 实时条目不在此限制范围（由 SDK 上下文窗口 / compact 自然约束）。
+ * 实时条目与历史条目走同一上限（pushTimelineItem 剪除最旧）。
  * 注：room 按条目数计，而 pager 的 limit 按 message 数计（一条 message 可产生 0~多个条目），
  * 因此本上限是「到顶即停」的软上限，不要求与消息数精确对齐。
  */
@@ -588,7 +588,31 @@ export class SdkSessionRunner implements SessionRunner {
     if (index >= 0) {
       this.timeline[index] = item;
     } else {
-      this.timeline.push(item);
+      this.pushTimelineItem(item);
+    }
+  }
+
+  /**
+   * 实时条目与历史翻页走同一驻留上限。原注释称「实时条目由 SDK 上下文窗口/compact 自然约束」
+   * 未经证实（AgentMessage[] 无上限声明），而 live 会话可持续推条目（本工具会长期后台跑），
+   * 故必须在此剪除最旧条目；否则只有 loadMoreHistory 有 room 钳制、写入路径无界。
+   */
+  private pushTimelineItem(item: TimelineItem): void {
+    this.timeline.push(item);
+    if (this.timeline.length <= MAX_TIMELINE_ITEMS) return;
+    const evicted = this.timeline.splice(0, this.timeline.length - MAX_TIMELINE_ITEMS);
+    this.releaseTimelineRefs(evicted);
+  }
+
+  /** 剪除头部条目后回收以 id 为键的旁路状态（lastSentText 的 value 是全文，为大头） */
+  private releaseTimelineRefs(evicted: TimelineItem[]): void {
+    const ids = new Set(evicted.map((t) => t.id));
+    for (const id of ids) {
+      this.lastSentText.delete(id);
+      this.liveDeltaAt.delete(id);
+    }
+    for (const [key, id] of [...this.liveItemIds]) {
+      if (ids.has(id)) this.liveItemIds.delete(key);
     }
   }
 
@@ -617,7 +641,7 @@ export class SdkSessionRunner implements SessionRunner {
       ...(imagePaths.length > 0 ? { images: imagePaths } : {}),
       createdAt: new Date().toISOString(),
     };
-    this.timeline.push(item);
+    this.pushTimelineItem(item);
     this.emit(this.eventLog.record({ type: "timeline_item", sessionId: this.id, item }));
   }
 
