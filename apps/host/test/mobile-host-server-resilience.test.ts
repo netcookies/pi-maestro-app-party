@@ -437,6 +437,25 @@ describe("command_result 关联 id（in_reply_to）", () => {
     }, 10_000);
   }
 
+  it("ISS-003：数值 id 被校验拒绝，且仍立即回 command_result（不挂 30s）", async () => {
+    // 修复前：validateClientCommand 只检 type → 数值 id 被服务端原样回显进 in_reply_to，
+    // 客户端 host-client.ts:263 把非字符串归一为 "" 后匹配不到 → 该命令挂满 30s 超时。
+    // 修复后：shared 侧拒绝非 string id（validation.ts），服务端回 invalid_command。
+    // 非字符串 id 无法被客户端匹配，因此 in_reply_to 必须是空串（不伪造可匹配 id）。
+    ctx = await createServer();
+    const conn = connect(ctx.port);
+    await conn.opened;
+    await conn.nextType("host_status");
+    const reply = conn.nextType("command_result");
+    conn.ws.send(JSON.stringify({ id: 42, type: "abort", sessionId: "s1" }));
+    const msg = await reply; // 超时即失败：本用例的判据就是「立即返回」
+    expect((msg.error as { code?: string }).code).toBe("invalid_command");
+    expect((msg.error as { message?: string }).message).toContain("id must be a string");
+    expect(msg.in_reply_to).toBe("");
+    expect(msg.ok).toBe(false);
+    conn.ws.close();
+  }, 10_000);
+
   it("非法 JSON 无法取 id：回裸 error 事件且不崩", async () => {
     ctx = await createServer();
     const conn = connect(ctx.port);

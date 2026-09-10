@@ -598,16 +598,18 @@ export class MobileHostServer {
     // P3-2：分发前真正走 shared 校验（激活 validation 模块，拦截缺 type 的任意载荷）
     try {
       command = validateClientCommand(command);
-    } catch {
+    } catch (error) {
       // JSON 已解析成功→可取 id：必须回 command_result 而非裸 error 事件，
       // 否则客户端 pendingCommands 匹配不到，该命令挂满 30s 超时
       const rawId = (command as unknown as { id?: unknown })?.id;
       const replyTo = typeof rawId === "string" ? rawId : "";
+      // 文案跟随实际拒因（缺 type / id 非 string），不再硬编码 “missing type” 误报
+      const reason = error instanceof Error ? error.message : "Invalid ClientCommand";
       this.sendFrame(client, {
         type: "command_result",
         in_reply_to: replyTo,
         ok: false,
-        error: { code: "invalid_command", message: "Invalid ClientCommand: missing type" },
+        error: { code: "invalid_command", message: reason },
       }, "required", "command_result");
       return;
     }
