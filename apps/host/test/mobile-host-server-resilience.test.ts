@@ -38,13 +38,17 @@ async function createServer(options: ConstructorParameters<typeof MobileHostServ
 function connect(port: number) {
   const ws = new WebSocket(`ws://127.0.0.1:${port}/ws`);
   const messages: Record<string, unknown>[] = [];
-  const waiters: ((m: Record<string, unknown>) => void)[] = [];
+  const waiters: { type: string; resolve: (m: Record<string, unknown>) => void }[] = [];
   let error: Error | undefined;
-  ws.on("message", (data: WebSocket.RawData) => {
-    const msg = JSON.parse(data.toString()) as Record<string, unknown>;
-    const waiter = waiters.shift();
-    if (waiter) waiter(msg);
+  const deliver = (msg: Record<string, unknown>) => {
+    // 必须按 type 路由：服务端连接时会连发 host_status/host_info 等多帧，
+    // 先进先出的 waiters.shift() 会把 host_info 误交给正在等 command_result 的用例。
+    const at = waiters.findIndex((w) => w.type === msg.type);
+    if (at >= 0) waiters.splice(at, 1)[0].resolve(msg);
     else messages.push(msg);
+  };
+  ws.on("message", (data: WebSocket.RawData) => {
+    deliver(JSON.parse(data.toString()) as Record<string, unknown>);
   });
   ws.on("error", (e: Error) => { error = e; });
   const opened = new Promise<void>((resolve, reject) => {
@@ -56,7 +60,7 @@ function connect(port: number) {
       const buffered = messages.findIndex((m) => m.type === type);
       if (buffered >= 0) { resolve(messages.splice(buffered, 1)[0]); return; }
       if (error) { reject(error); return; }
-      waiters.push(resolve);
+      waiters.push({ type, resolve });
     });
   return { ws, opened, nextType };
 }

@@ -574,7 +574,11 @@ export class MobileHostServer {
     try {
       command = JSON.parse(data.toString()) as ClientCommand;
     } catch {
-      this.sendFrame(client, { type: "error", code: "invalid_json", message: "Invalid JSON" }, "required", "error");
+      // seq 是 HostEvent 必填字段（protocol.ts:336），且客户端 host-client.ts:255 只派发
+      // typeof seq === "number" 的帧——缺 seq 会使本错误帧被客户端丢弃。与 :173-174 握手帧同用 0
+      // （已核：全客户端域无任何 seq 数值比较，0 不干扰回放语义）。
+      // 不进 EventLog：那是跳连接增量回放日志，单连接协议层错误不应回放给其他客户端。
+      this.sendFrame(client, { type: "error", code: "invalid_json", message: "Invalid JSON", seq: 0 }, "required", "error");
       return;
     }
 

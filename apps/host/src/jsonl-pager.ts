@@ -74,6 +74,8 @@ async function scanWindow(filePath: string, opts: WindowOptions): Promise<PageRe
     const seenToolResults = new Set<string>();
     let totalEntries = 0;
     let buf = "";
+    // 异常超长行被截断后，直到下个换行前的内容都属于同一行，整行丢弃（与 usage-reader 同族修法）
+    let skipToNewline = false;
 
     const handleLine = (line: string) => {
       if (!line.trim() || line.length > MAX_LINE_BYTES) return;
@@ -103,10 +105,17 @@ async function scanWindow(filePath: string, opts: WindowOptions): Promise<PageRe
       while ((nl = buf.indexOf("\n")) !== -1) {
         const line = buf.slice(0, nl);
         buf = buf.slice(nl + 1);
+        if (skipToNewline) { skipToNewline = false; continue; } // 超限行的尾巴
         handleLine(line);
       }
+      // 残行必须有上限：handleLine 的 MAX_LINE_BYTES 只拦完整行，而 buf 本身无上限时
+      // 畸形无换行文件会把它堆到接近文件大小
+      if (buf.length > MAX_LINE_BYTES) {
+        buf = "";
+        skipToNewline = true;
+      }
     }
-    if (buf.trim()) handleLine(buf); // 最后无换行的行
+    if (!skipToNewline && buf.trim()) handleLine(buf); // 最后无换行的行
 
     // ring 现在 = 最后 want 条 message（含 null 占位）。返回窗口 [skip, skip+limit) 的 item
     const end = Math.max(0, ring.length - opts.skip);
@@ -244,6 +253,7 @@ export async function searchInJsonl(
       }
     };
     let pos = 0;
+    let skipToNewline = false;
     while (pos < size) {
       const readLen = Math.min(READ_CHUNK, size - pos);
       const chunk = Buffer.alloc(readLen);
@@ -252,11 +262,18 @@ export async function searchInJsonl(
       buf += chunk.toString("utf8");
       let nl: number;
       while ((nl = buf.indexOf("\n")) !== -1) {
-        handleLine(buf.slice(0, nl));
+        const line = buf.slice(0, nl);
         buf = buf.slice(nl + 1);
+        if (skipToNewline) { skipToNewline = false; continue; }
+        handleLine(line);
+      }
+      // 同 scanWindow：searchInJsonl 原本连单行上限都没有
+      if (buf.length > MAX_LINE_BYTES) {
+        buf = "";
+        skipToNewline = true;
       }
     }
-    if (buf.trim()) handleLine(buf);
+    if (!skipToNewline && buf.trim()) handleLine(buf);
     return { matches, totalEntries };
   } finally {
     await fd?.close();
