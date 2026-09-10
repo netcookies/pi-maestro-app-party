@@ -1,0 +1,338 @@
+import { describe, expect, it, afterEach } from "vitest";
+import { MobileHostServer, clampCommandInt } from "../src/server/mobile-host-server.js";
+import { HostController } from "../src/host-controller.js";
+import { MaestroStateReader } from "../src/maestro-state.js";
+import { mkdir, rm } from "node:fs/promises";
+import { join } from "node:path";
+import { tmpdir } from "node:os";
+import { randomUUID } from "node:crypto";
+import WebSocket from "ws";
+
+/**
+ * WS 故障隔离与出站背压回归（odyssey-improve run-cea14fb1822d）。
+ * 反向验证约定：回滚修复后本文件必须以「worker 崩溃 / 断言失败」暴露问题，
+ * 不允许出现「回滚了还全绿」的空测试。
+ */
+
+function stubRuntimeFactory() {
+  return {
+    createRuntime: async () => { throw new Error("Not implemented in test"); },
+    listSessions: async () => [],
+  };
+}
+
+async function createServer(options: ConstructorParameters<typeof MobileHostServer>[1] = {}) {
+  const tmpDir = join(tmpdir(), `maestro-ws-resil-${randomUUID()}`);
+  await mkdir(tmpDir, { recursive: true });
+  const controller = new HostController(stubRuntimeFactory(), new MaestroStateReader({ projectRoot: tmpDir }));
+  const server = new MobileHostServer(controller, options);
+  await server.listen(0, "127.0.0.1");
+  return { tmpDir, controller, server, port: server.address().port };
+}
+
+/**
+ * 连接 + 首帧等待必须原子完成：服务端把 101 响应与 host_status 放在同一批 TCP 数据里时，
+ * ws 客户端会在同一个 socket data 事件内连续 emit('open')→emit('message')。若 await open 之后
+ * 才挂 message 监听，首帧会静默丢失（本文件初版即栽在此处，12 用例全部超时）。
+ */
+function connect(port: number) {
+  const ws = new WebSocket(`ws://127.0.0.1:${port}/ws`);
+  const messages: Record<string, unknown>[] = [];
+  const waiters: ((m: Record<string, unknown>) => void)[] = [];
+  let error: Error | undefined;
+  ws.on("message", (data: WebSocket.RawData) => {
+    const msg = JSON.parse(data.toString()) as Record<string, unknown>;
+    const waiter = waiters.shift();
+    if (waiter) waiter(msg);
+    else messages.push(msg);
+  });
+  ws.on("error", (e: Error) => { error = e; });
+  const opened = new Promise<void>((resolve, reject) => {
+    ws.on("open", () => resolve());
+    ws.on("error", reject);
+  });
+  const nextType = (type: string): Promise<Record<string, unknown>> =>
+    new Promise((resolve, reject) => {
+      const buffered = messages.findIndex((m) => m.type === type);
+      if (buffered >= 0) { resolve(messages.splice(buffered, 1)[0]); return; }
+      if (error) { reject(error); return; }
+      waiters.push(resolve);
+    });
+  return { ws, opened, nextType };
+}
+
+/** 服务端 ClientSocket 的发送面替身；事件监听仍留在真实 socket 上 */
+interface FakeSocket {
+  readyState: number;
+  OPEN: number;
+  bufferedAmount: number;
+  sent: string[];
+  closeCalls: { code?: number; reason?: string }[];
+  terminated: boolean;
+  send(data: string): void;
+  close(code?: number, reason?: string): void;
+  terminate(): void;
+  on(event: string, cb: unknown): void;
+  off(event: string, cb: unknown): void;
+  ping(): void;
+  _socket?: unknown;
+}
+
+interface Stubbed {
+  fake: FakeSocket;
+  client: { closing: boolean; droppedFrames: number; slowSince: number; [k: string]: unknown };
+  restore: () => Promise<void>;
+}
+
+/**
+ * 关键约束：restore 前不得关闭真实 socket——服务端 close 监听会把 client.closing 置真，
+ * 背压用例会因「已关闭短路」这一错误原因假通过。
+ */
+async function stubClientSocket(ctx: Awaited<ReturnType<typeof createServer>>): Promise<Stubbed> {
+  const conn = connect(ctx.port);
+  await conn.opened;
+  await conn.nextType("host_status");
+  const clients = (ctx.server as unknown as { clients: Set<Stubbed["client"] & { ws: WebSocket }> }).clients;
+  const client = [...clients][0] as Stubbed["client"] & { ws: WebSocket };
+  const realWs = client.ws;
+  const fake: FakeSocket = {
+    readyState: 1,
+    OPEN: 1,
+    bufferedAmount: 0,
+    sent: [],
+    closeCalls: [],
+    terminated: false,
+    send(data: string) { this.sent.push(data); },
+    close(code?: number, reason?: string) { this.closeCalls.push({ code, reason }); },
+    terminate() { this.terminated = true; },
+    on() { /* 替身不承接事件 */ },
+    off() {},
+    ping() {},
+    _socket: undefined,
+  };
+  client.ws = fake as unknown as WebSocket;
+  return {
+    fake,
+    client,
+    restore: async () => {
+      client.ws = realWs;
+      // 恢复真实 socket 再关，否则 server.close() 只关替身、真实 socket 泄漏 → vitest 挂起
+      if (conn.ws.readyState === WebSocket.OPEN || conn.ws.readyState === WebSocket.CONNECTING) conn.ws.close();
+    },
+  };
+}
+
+/** 直接驱动服务端注册的广播 listener（走真实广播代码路径，不复制逻辑） */
+function emitBroadcast(ctx: Awaited<ReturnType<typeof createServer>>, event: unknown): void {
+  const listeners = (ctx.controller as unknown as { listeners: Set<(e: unknown) => void> }).listeners;
+  for (const listener of listeners) listener(event);
+}
+
+const sessionUpdated = (seq: number) => ({ type: "session_updated", sessionId: "s", session: { id: "s" }, seq });
+
+let ctx: Awaited<ReturnType<typeof createServer>> | undefined;
+
+afterEach(async () => {
+  await ctx?.server.close();
+  await ctx?.controller.dispose();
+  if (ctx) await rm(ctx.tmpDir, { recursive: true, force: true });
+  ctx = undefined;
+});
+
+describe("WS inbound error isolation", () => {
+  it("超限帧只断开该连接（1009），进程存活且后续连接仍可握手", async () => {
+    ctx = await createServer({ maxPayload: 1024 });
+    const conn = connect(ctx.port);
+    await conn.opened;
+    await conn.nextType("host_status");
+
+    const closed = new Promise<number>((resolve) => conn.ws.on("close", (code: number) => resolve(code)));
+    conn.ws.send(Buffer.alloc(2048));
+
+    // 能执行到这里 = worker 没被 uncaughtException RangeError 带走（修复前必崩）
+    expect(await closed).toBe(1009); // ws 协议超限码，且不被 terminate 抢掉
+
+    const conn2 = connect(ctx.port);
+    await conn2.opened;
+    const msg = await conn2.nextType("host_status");
+    expect(msg.status).toBe("connected");
+    conn2.ws.close();
+  }, 10_000);
+
+  it("协议级非法帧（RSV1/未掩码/非法 UTF-8）逐一隔离在连接粒度，进程存活", async () => {
+    // 必须绕过 ws 客户端直接写 socket：ws.send(buffer) 会重新分帧，构造不出协议错误
+    // （初版用例栽在此处——RSV1 校验根本没发生，连接被静默保持）。
+    // 期望码取自 ws@8.21.3 receiver 实测：RSV1→1002、未掩码→1002、非法 UTF-8→1007。
+    const cases: { name: string; frame: number[]; code: number }[] = [
+      { name: "RSV1 set", frame: [0xc1, 0x80, 1, 2, 3, 4], code: 1002 },
+      { name: "unmasked client frame", frame: [0x81, 0x00], code: 1002 },
+      { name: "invalid utf-8 text", frame: [0x81, 0x82, 0, 0, 0, 0, 0xff, 0xfe], code: 1007 },
+    ];
+    for (const testCase of cases) {
+      const ctx = await createServer({ maxPayload: 4096 });
+      try {
+        const conn = connect(ctx.port);
+        await conn.opened;
+        await conn.nextType("host_status");
+        const closed = new Promise<number>((resolve) => conn.ws.on("close", (c: number) => resolve(c)));
+        (conn.ws as unknown as { _socket: { write(b: Buffer): void } })._socket.write(Buffer.from(testCase.frame));
+        // 能收到 close = 未被 terminate 抢掉通知帧，且 worker 未被 uncaughtException 带走
+        expect(await closed, testCase.name).toBe(testCase.code);
+        conn.ws.terminate();
+      } finally {
+        await ctx.server.close();
+        await ctx.controller.dispose();
+        await rm(ctx.tmpDir, { recursive: true, force: true });
+      }
+    }
+    // 三种协议错误后 host 仍能服务新连接
+    ctx = await createServer({ maxPayload: 4096 });
+    const survivor = connect(ctx.port);
+    await survivor.opened;
+    expect((await survivor.nextType("host_status")).status).toBe("connected");
+    survivor.ws.close();
+  }, 20_000);
+});
+
+describe("WS outbound backpressure", () => {
+  // 软阈 100KB / 硬顶 200KB；宽限设极大，使「硬顶优先」成为唯一断线路径，用例保持确定性
+  const BP = { highWaterMarkBytes: 100_000, hardLimitBytes: 200_000, slowGraceMs: 600_000, heartbeatIntervalMs: 10_000 };
+
+  it("软阈以上：best_effort 丢弃、required 不静默丢、不断线", async () => {
+    ctx = await createServer(BP);
+    const { fake, restore } = await stubClientSocket(ctx);
+    fake.bufferedAmount = 150_000;
+
+    emitBroadcast(ctx, { type: "timeline_delta", sessionId: "s", itemId: "i", delta: "x", seq: 3 });
+    expect(fake.sent.length).toBe(0); // 流式增量可丢：终态由 timeline_item 补齐
+
+    emitBroadcast(ctx, sessionUpdated(4));
+    expect(fake.sent.length).toBe(1); // 非 delta 事件一律 required
+    expect(JSON.parse(fake.sent[0]).type).toBe("session_updated");
+    expect(fake.closeCalls.length).toBe(0);
+    await restore();
+  }, 10_000);
+
+  it("硬顶以上：required 立即 close(1013)，不等宽限期", async () => {
+    ctx = await createServer(BP);
+    const { fake, restore } = await stubClientSocket(ctx);
+    fake.bufferedAmount = 250_000;
+
+    emitBroadcast(ctx, sessionUpdated(5));
+    expect(fake.sent.length).toBe(0);
+    expect(fake.closeCalls[0]?.code).toBe(1013); // retryable，与满载拒绝同码 → 重连 + snapshot 补拉
+    await restore();
+  }, 10_000);
+
+  it("宽限期内 required 继续投递（宁缓冲不丢），缓冲退去后 slowSince 清零", async () => {
+    ctx = await createServer({ highWaterMarkBytes: 100_000, hardLimitBytes: 10_000_000, slowGraceMs: 600_000, heartbeatIntervalMs: 10_000 });
+    const { fake, client, restore } = await stubClientSocket(ctx);
+    fake.bufferedAmount = 150_000;
+
+    emitBroadcast(ctx, sessionUpdated(6));
+    expect(fake.sent.length).toBe(1);
+    expect(fake.closeCalls.length).toBe(0);
+    expect(client.slowSince).toBeGreaterThan(0);
+
+    fake.bufferedAmount = 0;
+    emitBroadcast(ctx, sessionUpdated(7));
+    expect(fake.sent.length).toBe(2);
+    expect(client.slowSince).toBe(0);
+    await restore();
+  }, 10_000);
+
+  it("持续越阈超过宽限期 → close(1013)", async () => {
+    ctx = await createServer({ highWaterMarkBytes: 100_000, hardLimitBytes: 10_000_000, slowGraceMs: 0, heartbeatIntervalMs: 10_000 });
+    const { fake, restore } = await stubClientSocket(ctx);
+    fake.bufferedAmount = 150_000;
+
+    // grace 判定在「后续帧」：首帧记录 slowSince，宽限期到期后的下一帧才关（单帧内不可能既计时又超时）
+    emitBroadcast(ctx, sessionUpdated(8));
+    expect(fake.closeCalls.length).toBe(0);
+    emitBroadcast(ctx, sessionUpdated(9));
+    expect(fake.closeCalls[0]?.code).toBe(1013);
+    await restore();
+  }, 10_000);
+
+  it("closing 后 sendFrame 短路：断连竞态不向死 socket 写出", async () => {
+    ctx = await createServer(BP);
+    const { fake, client, restore } = await stubClientSocket(ctx);
+    client.closing = true;
+    emitBroadcast(ctx, sessionUpdated(9));
+    expect(fake.sent.length).toBe(0);
+    await restore();
+  }, 10_000);
+
+  it("广播事件序列化失败只记一次并 return，不抛出", async () => {
+    ctx = await createServer(BP);
+    const { restore } = await stubClientSocket(ctx);
+    const circular: Record<string, unknown> = { type: "maestro_state", seq: 1 };
+    circular.state = circular;
+    expect(() => emitBroadcast(ctx, circular)).not.toThrow();
+    await restore();
+  }, 10_000);
+
+  it("慢客户端被关后从 clients 移除：后续广播不再遍历该连接", async () => {
+    ctx = await createServer(BP);
+    const { fake, client, restore } = await stubClientSocket(ctx);
+    fake.bufferedAmount = 250_000;
+    emitBroadcast(ctx, sessionUpdated(10));
+    const clients = (ctx.server as unknown as { clients: Set<unknown> }).clients;
+    expect(clients.has(client)).toBe(false);
+    expect(client.closing).toBe(true);
+    await restore();
+  }, 10_000);
+});
+
+describe("WS heartbeat", () => {
+  it("应答 pong 的活连接不被心跳误杀（ws.setTimeout 方案会误杀无 message 流量的连接）", async () => {
+    ctx = await createServer({ heartbeatIntervalMs: 60 });
+    const conn = connect(ctx.port);
+    await conn.opened;
+    await conn.nextType("host_status");
+    await new Promise((r) => setTimeout(r, 400)); // ≥6 个心跳周期
+    expect(conn.ws.readyState).toBe(WebSocket.OPEN);
+    conn.ws.close();
+  }, 10_000);
+});
+
+describe("search_history 参数钳制", () => {
+  it("越界 maxResults 走 session_not_found 且不抛；钳制算式落在 [1, 上限]", async () => {
+    ctx = await createServer();
+    const conn = connect(ctx.port);
+    await conn.opened;
+    await conn.nextType("host_status");
+
+    const reply = conn.nextType("command_result");
+    conn.ws.send(JSON.stringify({ id: "q1", type: "search_history", sessionId: "missing", keyword: "x", maxResults: 1e9, previewLength: 1e9 }));
+    const msg = await reply;
+    expect((msg.error as { code: string }).code).toBe("session_not_found");
+    conn.ws.close();
+
+    // 直接钉生产函数本体（测试复制算式会假通过）
+    expect(clampCommandInt(1e9, 50, 200)).toBe(200);
+    expect(clampCommandInt(-5, 50, 200)).toBe(1);
+    expect(clampCommandInt(0, 50, 200)).toBe(1);
+    expect(clampCommandInt(NaN, 50, 200)).toBe(50);
+    expect(clampCommandInt(Infinity, 50, 200)).toBe(50);
+    expect(clampCommandInt(undefined, 50, 200)).toBe(50);
+    expect(clampCommandInt(7.9, 50, 200)).toBe(7);
+  }, 10_000);
+});
+
+describe("错误响应脱敏", () => {
+  it("command_failed 不回传绝对路径", async () => {
+    ctx = await createServer();
+    const conn = connect(ctx.port);
+    await conn.opened;
+    await conn.nextType("host_status");
+
+    const reply = conn.nextType("command_result");
+    // open_session 走 stubRuntimeFactory 抛错 → 命中 command_failed 分支
+    conn.ws.send(JSON.stringify({ id: "e1", type: "open_session", cwd: "/Users/secret-user/some-project" }));
+    const msg = await reply;
+    const message = String((msg.error as { message?: string }).message ?? "");
+    expect(message).not.toMatch(/\/Users\/|\\\\Users\\\\/);
+    conn.ws.close();
+  }, 10_000);
+});
