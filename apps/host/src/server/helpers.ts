@@ -1,8 +1,8 @@
 /**
- * server/helpers — MobileHostServer 与 ws-command-handlers 共用的纯函数
- * （H9 拆分：会话摘要、图片编解码、skill 扫描、安全文件读取）
+ * server/helpers — MobileHostServer 复用的纯函数（会话索引服务 + 安全文件读取）
+ * （H9 拆分：会话摘要索引服务 + 安全图片文件读取）
  */
-import { readFile, open, stat, readdir, mkdir, rename, writeFile } from "node:fs/promises";
+import { readFile, open, stat, mkdir, rename, writeFile } from "node:fs/promises";
 import { realpath } from "node:fs/promises";
 import { isAbsolute, normalize, join } from "node:path";
 import { homedir, tmpdir } from "node:os";
@@ -216,36 +216,6 @@ function normalizeIso(raw: string): string {
   if (!raw) return "";
   const t = Date.parse(raw);
   return Number.isFinite(t) ? new Date(t).toISOString() : raw;
-}
-
-// ── 图片协议转换 ─────────────────────────────────────────────────────────────
-
-/** 协议 images 元素 → Pi SDK ImageContent（type/data/mimeType）；非法返回 undefined */
-export function toSdkImageContent(img: { data: string; mime: string }): { type: "image"; data: string; mimeType: string } | undefined {
-  if (typeof img?.data !== "string" || img.data.length === 0) return undefined;
-  if (typeof img?.mime !== "string" || !img.mime.startsWith("image/")) return undefined;
-  return { type: "image", data: img.data, mimeType: img.mime };
-}
-
-// ── skill 扫描 ───────────────────────────────────────────────────────────────
-
-/** 扫描可用的 skill 名录（agent 全局 + 项目本地） */
-export async function listSkills(cwd: string): Promise<string[]> {
-  const dirs: string[] = [];
-  try { dirs.push(join(homedir(), ".pi", "agent", "skills")); } catch { /* skip */ }
-  try { dirs.push(join(cwd, ".pi", "skills")); } catch { /* skip */ }
-  const names = new Set<string>();
-  for (const dir of dirs) {
-    try {
-      const entries = await readdir(dir, { withFileTypes: true });
-      for (const e of entries) {
-        if (e.isDirectory() && !e.name.startsWith(".")) names.add(e.name);
-      }
-    } catch {
-      // skip
-    }
-  }
-  return [...names].sort();
 }
 
 // ── 安全文件读取（图片预览）───────────────────────────────────────────────
