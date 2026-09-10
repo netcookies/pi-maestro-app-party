@@ -1,4 +1,4 @@
-import { describe, expect, it, afterEach } from "vitest";
+import { describe, expect, it, afterEach, vi } from "vitest";
 import { MobileHostServer, clampCommandInt, sanitizeWsErrorMessage } from "../src/server/mobile-host-server.js";
 import { HostController } from "../src/host-controller.js";
 import { MaestroStateReader } from "../src/maestro-state.js";
@@ -270,7 +270,7 @@ describe("WS outbound backpressure", () => {
     await restore();
   }, 10_000);
 
-  it("持续越阈超过宽限期 → close(1013)", async () => {
+  it("持续越阈超过宽限期 → close(1013)，且不得向已关连接再写一帧", async () => {
     ctx = await createServer({ highWaterMarkBytes: 100_000, hardLimitBytes: 10_000_000, slowGraceMs: 0, heartbeatIntervalMs: 10_000 });
     const { fake, restore } = await stubClientSocket(ctx);
     fake.bufferedAmount = 150_000;
@@ -280,6 +280,10 @@ describe("WS outbound backpressure", () => {
     expect(fake.closeCalls.length).toBe(0);
     emitBroadcast(ctx, sessionUpdated(9));
     expect(fake.closeCalls[0]?.code).toBe(1013);
+    // RV-001：旧实现在 closeClient() 后缺 return，会落到 rawSend 向 CLOSING socket 再写一帧。
+    // 真实 ws 探针实测：该 send 不抛错、callback 会回调、bufferedAmount +14，但因连接已关而永不到达
+    // ——即「已判定必须送达」的帧静默丢失。新实现必须由 closing 守卫短接，sent 保持 1。
+    expect(fake.sent.length, "close 后不得再写（旧代码此处为 2）").toBe(1);
     await restore();
   }, 10_000);
 
@@ -323,6 +327,63 @@ describe("WS heartbeat", () => {
     expect(conn.ws.readyState).toBe(WebSocket.OPEN);
     conn.ws.close();
   }, 10_000);
+});
+
+describe("listen 失败不得泄漏心跳 interval（RV-003）", () => {
+  it("EADDRINUSE 路径：setInterval 一次都不被调用；成功路径：恰好一次且 close() 后置空", async () => {
+    const first = await createServer();
+    const spy = vi.spyOn(globalThis, "setInterval");
+    const second = new MobileHostServer(first.controller, { heartbeatIntervalMs: 50 });
+    let error: NodeJS.ErrnoException | undefined;
+    try {
+      await second.listen(first.port, "127.0.0.1");
+    } catch (caught) {
+      error = caught as NodeJS.ErrnoException;
+    }
+    expect(error?.code).toBe("EADDRINUSE");
+    // 旧实现：startHeartbeat 在 listen() 之前同步执行 → 失败后留下无人 cleanup 的 interval
+    expect(spy.mock.calls.length, "listen 失败不得启动心跳").toBe(0);
+    spy.mockRestore();
+
+    // 成功路径必须启动且只启动一次，close() 后句柄置空（否则幂等守卫阻止重启）
+    const probe = new MobileHostServer(first.controller, { heartbeatIntervalMs: 50 });
+    const okSpy = vi.spyOn(globalThis, "setInterval");
+    await probe.listen(0, "127.0.0.1");
+    expect(okSpy.mock.calls.length).toBe(1);
+    okSpy.mockRestore();
+    const asTimer = probe as unknown as { heartbeatTimer: unknown };
+    expect(asTimer.heartbeatTimer, "listen 成功后心跳必须在跑").toBeDefined();
+    await probe.close();
+    expect(asTimer.heartbeatTimer, "close() 必须置空句柄").toBeUndefined();
+    await first.server.close();
+    await first.controller.dispose();
+  }, 15_000);
+});
+
+describe("WS heartbeat miss tolerance", () => {
+  // 钉住 HEARTBEAT_MAX_MISSES=2 的语义：单次 pong 漏答（event loop 卡顿即可造成）
+  // 不得 terminate 健康连接；连续漏答达上限才断。修复前（!alive 即杀）本用例第一跳就挂。
+  // 不依赖时间窗判定“还没被杀”（固定窗口会跨多个 tick，在高负载下必然竞态）：
+  // 而是记录 terminate 发生时的状态——新实现需漏答 2 次才杀，旧实现（!alive 即杀）1 次就杀。
+  it("漏答不立即杀连接：terminate 时已连续漏答达上限", async () => {
+    ctx = await createServer({ heartbeatIntervalMs: 40 });
+    const { fake, client, restore } = await stubClientSocket(ctx);
+    fake.on = () => {}; // 替身不派发事件 → pong 永不到达，模拟对端无响应
+    const asClient = client as unknown as { heartbeatMisses: number };
+    let pings = 0;
+    let killedAt: { misses: number; pings: number } | undefined;
+    fake.ping = () => { pings++; };
+    fake.terminate = () => {
+      killedAt ??= { misses: asClient.heartbeatMisses, pings };
+    };
+
+    await vi.waitFor(() => expect(killedAt, "无响应的连接最终必须被回收").toBeDefined(), { timeout: 4000, interval: 20 });
+    // 区分点：MAX_MISSES=2 下，服务端在杀掉前已发出 2 次 ping（即容忍了一次漏答）；
+    // 旧语义（单次漏答即 terminate）只来得及 1 次 ping，misses 为 1。
+    expect(killedAt!.pings, "至少要给健康连接一次重答机会（旧实现在此只有 1）").toBeGreaterThanOrEqual(2);
+    expect(killedAt!.misses).toBeGreaterThanOrEqual(2);
+    await restore();
+  }, 15_000);
 });
 
 describe("search_history 参数钳制", () => {

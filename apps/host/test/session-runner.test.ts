@@ -166,6 +166,11 @@ describe("SdkSessionRunner history replay", () => {
 });
 
 describe("SdkSessionRunner timeline history cap", () => {
+  // 实测（load 36）：12000 行写盘 + ~150 页翻页 = 1404ms。默认 5s 在高负载机器上无余量，
+  // 会报成假失败（同文件另一用例实测 load 155 时超 5s、load 36 时 <1.5s）。
+  // 两条重 IO 用例自带循环守卫（pages<500 / guard<200），真死循环由断言暴露，超时只是机器慢的兜底。
+  const TIMELINE_CAP_TEST_TIMEOUT = 30_000;
+
   /** 写一个含 n 条 message 的真实 jsonl，驱动 loadMoreHistory 向前翻页 */
   async function makeJsonl(path: string, n: number): Promise<void> {
     const lines: string[] = [];
@@ -217,7 +222,7 @@ describe("SdkSessionRunner timeline history cap", () => {
     expect(runner.snapshot().timeline[final - 1].text).toContain(`msg-${MAX_TIMELINE_ITEMS * 3 - 1}`);
     await runner.dispose();
     await rm(dir, { recursive: true, force: true });
-  });
+  }, TIMELINE_CAP_TEST_TIMEOUT);
 
   it("clamps an oversized page request to the remaining room", async () => {
     const { dir, runner } = await openWithFile(MAX_TIMELINE_ITEMS + 1000);
@@ -235,7 +240,7 @@ describe("SdkSessionRunner timeline history cap", () => {
     expect(after).toBeGreaterThanOrEqual(before);
     await runner.dispose();
     await rm(dir, { recursive: true, force: true });
-  });
+  }, TIMELINE_CAP_TEST_TIMEOUT);
 
   it("keeps paging while below the cap", async () => {
     const { dir, runner } = await openWithFile(MAX_TIMELINE_ITEMS + 400);

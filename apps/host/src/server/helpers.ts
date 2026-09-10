@@ -63,7 +63,15 @@ export class HostSessionListService {
     await this.ensureLoaded(load);
     const now = (this.options.now ?? Date.now)();
     if (now - this.loadedAt > (this.options.staleAfterMs ?? 10_000) && !this.refresh) {
-      this.refresh = this.reload(load).finally(() => { this.refresh = undefined; });
+      // 必须接 .catch：这是 fire-and-forget 的后台刷新，reload() 一旦 reject
+      // （index 目录被删、.tmp 被并发 rename 抢走）就是 unhandledRejection，
+      // 在 host 进程会命中 cli.ts 的 fatal() → 直接退整个守护进程。
+      // 刷新失败只能降级为「用旧快照继续服务」，不能升级成进程级故障。
+      this.refresh = this.reload(load)
+        .catch((error: unknown) => {
+          console.warn("[maestro-mobile] session index refresh failed (serving stale summary):", error instanceof Error ? error.message : error);
+        })
+        .finally(() => { this.refresh = undefined; });
     }
     const all = this.summaries ?? [];
     if (options.sessionIds || options.latestForCwds) {
@@ -117,10 +125,17 @@ export class HostSessionListService {
     const list = await toSessionSummaryList(await load());
     this.summaries = [...list.sessions].sort((a, b) => b.updatedAt.localeCompare(a.updatedAt) || b.id.localeCompare(a.id));
     this.loadedAt = (this.options.now ?? Date.now)();
-    await mkdir(join(this.options.indexPath, ".."), { recursive: true });
-    const temp = `${this.options.indexPath}.tmp`;
-    await writeFile(temp, JSON.stringify({ sessions: this.summaries, loadedAt: this.loadedAt }), "utf8");
-    await rename(temp, this.options.indexPath);
+    // 持久化与内存刷新解耦：索引文件写失败（磁盘满/目录被删/并发 rename 抢 .tmp）
+    // 只能降级为告警，不能让已在内存里的数据路径（含冷启动 ensureLoaded）向调用方抛错，
+    // 更不能变成 unhandledRejection → cli fatal() 退整个 host 进程。
+    try {
+      await mkdir(join(this.options.indexPath, ".."), { recursive: true });
+      const temp = `${this.options.indexPath}.${process.pid}.tmp`;
+      await writeFile(temp, JSON.stringify({ sessions: this.summaries, loadedAt: this.loadedAt }), "utf8");
+      await rename(temp, this.options.indexPath);
+    } catch (error) {
+      console.warn("[maestro-mobile] session index persist failed (serving from memory):", error instanceof Error ? error.message : error);
+    }
   }
 }
 

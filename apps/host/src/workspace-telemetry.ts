@@ -15,7 +15,7 @@
  *
  * 这正是 Monitor/Teammate Tab 需要的"窗口状态"合同。
  */
-import { readFile, readdir } from "node:fs/promises";
+import { readFile, readdir, stat } from "node:fs/promises";
 import { join } from "node:path";
 import { homedir } from "node:os";
 import type { WorkspaceOwnerState, WorkspaceTelemetryState, JsonValue } from "@maestro-mobile/shared";
@@ -24,23 +24,32 @@ import type { WorkspaceOwnerState, WorkspaceTelemetryState, JsonValue } from "@m
 export type WorkspaceOwner = WorkspaceOwnerState;
 export type WorkspaceTelemetry = WorkspaceTelemetryState;
 
-const WORKSPACES_ROOT = join(homedir(), ".pi", "teammate", "workspaces");
+const DEFAULT_WORKSPACES_ROOT = join(homedir(), ".pi", "teammate", "workspaces");
 const HEARTBEAT_STALE_MS = 90_000; // 90s 无心跳视为不活跃
+/** owner 文件是兄弟进程（Pi 会话）写出的，会随 agents[]/settled[] 增长；先 stat 再读避免无界分配 */
+const MAX_OWNER_FILE_BYTES = 1 * 1024 * 1024; // 1MB
 
 export class WorkspaceTelemetryReader {
-  constructor(private readonly staleMs = HEARTBEAT_STALE_MS) {}
+  private readonly root: string;
+
+  constructor(
+    private readonly staleMs = HEARTBEAT_STALE_MS,
+    options: { rootPath?: string } = {},
+  ) {
+    this.root = options.rootPath ?? DEFAULT_WORKSPACES_ROOT;
+  }
 
   async read(): Promise<WorkspaceTelemetry> {
     const owners: WorkspaceOwner[] = [];
     let wsDirs: string[] = [];
     try {
-      wsDirs = await readdir(WORKSPACES_ROOT);
+      wsDirs = await readdir(this.root);
     } catch {
       return { owners: [], observedAt: new Date().toISOString(), aliveCount: 0 };
     }
 
     for (const wsId of wsDirs) {
-      const ownersDir = join(WORKSPACES_ROOT, wsId, "runtime", "owners");
+      const ownersDir = join(this.root, wsId, "runtime", "owners");
       let files: string[];
       try {
         files = await readdir(ownersDir);
@@ -50,7 +59,15 @@ export class WorkspaceTelemetryReader {
       for (const f of files) {
         if (!f.endsWith(".json") || f.includes(".tmp")) continue;
         try {
-          const raw = await readFile(join(ownersDir, f), "utf8");
+          const ownerPath = join(ownersDir, f);
+          // 规则：先 stat 校验大小再 readFile（同 spec 四件套的本地文件面）
+          const info = await stat(ownerPath);
+          if (!info.isFile() || info.size === 0) continue;
+          if (info.size > MAX_OWNER_FILE_BYTES) {
+            console.warn(`[maestro-mobile] telemetry: 跳过异常大的 owner 文件 ${f} (${info.size}B > ${MAX_OWNER_FILE_BYTES}B)`);
+            continue;
+          }
+          const raw = await readFile(ownerPath, "utf8");
           const d = JSON.parse(raw) as Record<string, unknown>;
           if (d.kind !== "owner") continue;
           // 畸形 publishedAt 跳过：NaN 会让 alive/排序失效（correctness）

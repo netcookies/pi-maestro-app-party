@@ -52,8 +52,8 @@ interface ClientSocket {
   lastDropLogAt: number;
   /** 背压宽限：首次越阈时间戳，持续越阈达宽限期才 close，避免突发抖动误杀 */
   slowSince: number;
-  /** 心跳存活标记：ping 前清零，收到 pong 置回；下周期仍 false 则 terminate */
-  alive: boolean;
+  /** 连续未应答心跳数：达上限才 terminate（单次漏答不得误杀活连接） */
+  heartbeatMisses: number;
 }
 
 /**
@@ -80,6 +80,8 @@ export class MobileHostServer {
   private static readonly HARD_LIMIT_BYTES = 32 * 1024 * 1024;
   private static readonly SLOW_GRACE_MS = 5_000;
   private static readonly DROP_LOG_INTERVAL_MS = 60_000;
+  /** 连续未应答次数上限：2 = 容忍一次漏答（默认 30s 周期即约 60s 无响应才判定死连） */
+  private static readonly HEARTBEAT_MAX_MISSES = 2;
   private unsubscribeController: (() => void) | undefined;
   /** listen() 等待中的错误回调；非空表示正在绑定端口 */
   private listenError: ((error: Error) => void) | undefined;
@@ -121,7 +123,7 @@ export class MobileHostServer {
         ws.close(1013, "too many connections");
         return;
       }
-      const client: ClientSocket = { id: crypto.randomUUID(), ws, inflight: 0, closing: false, droppedFrames: 0, lastDropLogAt: 0, slowSince: 0, alive: true };
+      const client: ClientSocket = { id: crypto.randomUUID(), ws, inflight: 0, closing: false, droppedFrames: 0, lastDropLogAt: 0, slowSince: 0, heartbeatMisses: 0 };
       this.clients.add(client);
       // 故障隔离到连接粒度（本 run 主根因）：此前无 error listener，超限/非法帧的 error 事件直接变
       // uncaughtException → cli fatal() → 整个 host 退出（单手机一帧崩掉所有客户端）。现在只断该连接，
@@ -136,7 +138,7 @@ export class MobileHostServer {
       // 均自动应答 pong，无需改协议。半开连接、死 socket 在下个周期被 terminate，
       // 也封住 close() 等失联连接 graceful close 的≈30s 悬挂。
       ws.on("pong", () => {
-        client.alive = true;
+        client.heartbeatMisses = 0;
       });
       ws.on("message", (data) => {
         if (client.inflight >= MobileHostServer.MAX_CONCURRENT_COMMANDS) {
@@ -205,14 +207,17 @@ export class MobileHostServer {
    * 替代此前没用的 ws.setTimeout（WebSocket 对象无此方法）；也让 close():「graceful 等待」不再被失联连接拖≈30s。
    */
   private startHeartbeat(intervalMs: number): void {
+    if (this.heartbeatTimer) return; // 幂等：重复 listen 不得叠加 interval（否则多路 ping/terminate）
     this.heartbeatTimer = setInterval(() => {
       for (const client of [...this.clients]) {
-        if (!client.alive) {
-          console.warn(`[maestro-mobile] ws heartbeat lost client=${client.id} remote=${this.remoteOf(client.ws)} → terminate`);
+        // 必须容忍一次漏答：本机 event loop 卡顶（实测 load>150）会让 pong 排队跨过半个周期，
+        // 单次未应答即 terminate 会误杀健康连接（表现为手机无端断线，需重连+补拉）。
+        if (client.heartbeatMisses >= MobileHostServer.HEARTBEAT_MAX_MISSES) {
+          console.warn(`[maestro-mobile] ws heartbeat lost client=${client.id} remote=${this.remoteOf(client.ws)} misses=${client.heartbeatMisses} → terminate`);
           this.closeClient(client, "heartbeat_lost");
           continue;
         }
-        client.alive = false;
+        client.heartbeatMisses++;
         try {
           client.ws.ping();
         } catch {
@@ -280,6 +285,9 @@ export class MobileHostServer {
   }
 
   private rawSend(client: ClientSocket, payload: string): boolean {
+    // 关闭可能就在本次 sendFrame 判定内发生（硬顶/宽限到期）：此时不得再写，
+    // 否则「已判定必须送达」的那一帧反而静默丢失（ws 对 CLOSING 只累加计数不报错）。
+    if (client.closing) return false;
     try {
       client.ws.send(payload);
       return true;
@@ -317,13 +325,15 @@ export class MobileHostServer {
 
   listen(port: number, hostname = "0.0.0.0"): Promise<void> {
     this.boundHost = hostname;
-    this.startHeartbeat(this.options.heartbeatIntervalMs ?? 30_000);
     return new Promise((resolve, reject) => {
       // EADDRINUSE / EACCES / 非法绑定地址都以 server 的 error 事件产生。此前无监听者：
       // 该 Promise 永不 settle，错误以 uncaughtException 裸崩（而此时 cli 的 handler 尚未注册）。
       this.listenError = reject;
       this.server.listen(port, hostname, () => {
         this.listenError = undefined;
+        // 心跳必须在绑定成功后启动：放在 listen() 之前时，EADDRINUSE 会留下一个无人 cleanup 的 interval，
+        // 且同实例重试 listen() 会覆盖 heartbeatTimer，使 close() 只能清最后一个。
+        this.startHeartbeat(this.options.heartbeatIntervalMs ?? 30_000);
         resolve();
       });
     });
@@ -338,7 +348,10 @@ export class MobileHostServer {
   }
 
   async close(): Promise<void> {
-    if (this.heartbeatTimer) clearInterval(this.heartbeatTimer);
+    if (this.heartbeatTimer) {
+      clearInterval(this.heartbeatTimer);
+      this.heartbeatTimer = undefined; // 必须置空：否则幂等守卫会阻止下次 listen() 重启心跳
+    }
     this.unsubscribeController?.();
     for (const client of this.clients) {
       client.ws.close();
