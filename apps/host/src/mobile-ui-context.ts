@@ -127,13 +127,23 @@ export class MobileExtensionUiBridge {
     clearTimeout(pending.timeout);
     this.pendingDialogs.delete(requestId);
     pending.resolve(response);
+    this.emitCleared(requestId);
+    return true;
+  }
+
+  /**
+   * 弹窗失效必须通知移动端（S_CONFIRM RV-001）。
+   * 之前只有 respond() 发 cleared，而 host 自己超时与 abort/dispose cancelAll() 时不发
+   * ⇒ 移动端无法区分「host 还在等这个答案」与「host 已放弃」，断连重发会 reopen
+   * 一个已无人接收的 ask，用户重试只会得到 request_not_found。
+   */
+  private emitCleared(requestId: string): void {
     this.emit({
       type: "extension_ui_cleared",
       sessionId: this.sessionId,
       requestId,
       seq: this.now(),
     });
-    return true;
   }
 
   /** 关闭所有挂起的弹窗（会话中止/关闭时调用），返回已取消的数量 */
@@ -142,6 +152,7 @@ export class MobileExtensionUiBridge {
     for (const [requestId, pending] of this.pendingDialogs) {
       clearTimeout(pending.timeout);
       pending.resolve({ id: requestId, cancelled: true });
+      this.emitCleared(requestId);
       count++;
     }
     this.pendingDialogs.clear();
@@ -162,6 +173,8 @@ export class MobileExtensionUiBridge {
       const timeout = setTimeout(() => {
         this.pendingDialogs.delete(id);
         resolve(parse({ id, cancelled: true }));
+        // host 已放弃此 ask ⇒ 必须通知移动端出队，否则移动端可 reopen 一个无人接收的弹窗
+        this.emitCleared(id);
       }, timeoutMs);
       this.pendingDialogs.set(id, {
         resolve: (response) => resolve(parse(response)),

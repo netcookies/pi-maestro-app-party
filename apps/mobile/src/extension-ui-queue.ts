@@ -143,6 +143,16 @@ export class ExtensionUiQueue {
     return { id: requestId, cancelled: true };
   }
 
+  /**
+   * 按 host 通知直接出队（S_CONFIRM RV-001 根因修复）。
+   * 与 pruneFinished 不同：这里删的是 host 已明确放弃的条目（超时/abort/cancel），
+   * 不问状态。之前 extension_ui_cleared 只过滤投影数组、条目留在 Map 里
+   *（实测 q.get("r1") 仍为 true），使 reopen 的「条目不存在 ⇒ 不恢复」判据永不生效。
+   */
+  drop(requestId: string): boolean {
+    return this.dialogs.delete(requestId);
+  }
+
   /** 清空某 session 的所有弹窗（会话关闭/切换时） */
   clearSession(sessionId: string): number {
     let count = 0;

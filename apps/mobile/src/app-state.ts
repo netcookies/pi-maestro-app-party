@@ -204,9 +204,10 @@ export function reduceEvent(state: AppState, event: AppAction, deps: AppStateDep
 
     case "extension_ui_cleared": {
       if (!queue) return state;
-      // 从队列中移除已处理的弹窗
-      const remaining = queue.pendingDialogs.filter((d) => d.request.id !== event.requestId);
-      return { ...state, dialogs: remaining };
+      // 必须真正出队（而非只过滤投影数组）：host 已应答/超时/取消的 ask 如果仍留在队列里，
+      // 后续一次失败的 resend 就能把它 reopen 回来（S_CONFIRM RV-001）。
+      queue.drop(event.requestId);
+      return { ...state, dialogs: queue.pendingDialogs };
     }
 
     case "command_error":

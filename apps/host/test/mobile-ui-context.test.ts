@@ -97,6 +97,40 @@ describe("MobileExtensionUiBridge", () => {
     expect(bridge.pendingCount).toBe(0);
   });
 
+  it("S_CONFIRM RV-001: host 超时也发 extension_ui_cleared（否则移动端会 reopen 无人接收的 ask）", async () => {
+    vi.useFakeTimers();
+    const ctx = bridge.createContext();
+    const promise = ctx.select("Pick", ["A"], { timeout: 1000 });
+    await Promise.resolve();
+    expect(events.map((e) => e.type)).toEqual(["extension_ui_request"]);
+    vi.advanceTimersByTime(1001);
+    expect(await promise).toBeUndefined();
+    // 修复前：超时只 delete + resolve(cancelled)，不发 cleared ⇒ 移动端弹窗永不消失
+    expect(events.map((e) => e.type)).toEqual(["extension_ui_request", "extension_ui_cleared"]);
+    const cleared = events[1] as Extract<HostEvent, { type: "extension_ui_cleared" }>;
+    expect(cleared.requestId).toBe((events[0] as Extract<HostEvent, { type: "extension_ui_request" }>).request.id);
+    vi.useRealTimers();
+  });
+
+  it("S_CONFIRM RV-001: cancelAll 为每个挂起弹窗发 cleared，且 requestId 与请求一一对应", async () => {
+    const ctx = bridge.createContext();
+    const p1 = ctx.select("Q1", ["A"]);
+    const p2 = ctx.input("Q2");
+    await Promise.resolve();
+    const requestIds = events
+      .filter((e) => e.type === "extension_ui_request")
+      .map((e) => (e as Extract<HostEvent, { type: "extension_ui_request" }>).request.id);
+    expect(requestIds).toHaveLength(2);
+    events.length = 0; // 只看 cancelAll 期间产生的事件
+    expect(bridge.cancelAll()).toBe(2);
+    const clearedIds = events
+      .filter((e) => e.type === "extension_ui_cleared")
+      .map((e) => (e as Extract<HostEvent, { type: "extension_ui_cleared" }>).requestId);
+    // 精确对应：不是「有两条 cleared」而已，id 必须就是那两个请求
+    expect(clearedIds.sort()).toEqual(requestIds.sort());
+    await Promise.all([p1, p2]);
+  });
+
   it("notify is fire-and-forget", async () => {
     const ctx = bridge.createContext();
     ctx.notify("Hello", "info");

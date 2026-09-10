@@ -294,7 +294,11 @@ export class HostClient {
         this.authFailed = true;
         if (this.reconnectTimer) { clearTimeout(this.reconnectTimer); this.reconnectTimer = null; }
         this.setState("disconnected");
-        this.options.onEvent?.({ type: "error", message: "token 校验失败 —— 在 PC 终端执行 /maestro-mobile qr 重新扫码配对" } as never);
+        // 走本地错误通道（S_CONFIRM RV-002）：之前用 `as never` 向 onEvent 投一个缺 seq 的
+        // `error` 帧，而本文件 :323 自己就要求 `typeof seq === "number"` 才派发 host 事件；
+        // 强转绕开了自家契约。token 校验失败是客户端本地判定，不属于 host 事件流。
+        // 文案仍含 "token"：HostConnectCard.tsx:50 靠 lastError?.includes("token") 做红字强调。
+        this.options.onConnectionError?.("token 校验失败 —— 在 PC 终端执行 /maestro-mobile qr 重新扫码配对");
       }
       // 200/其它状态 = 服务在且 token 未启用或路径异常，不做 auth 判定，退避重连继续
     } catch {

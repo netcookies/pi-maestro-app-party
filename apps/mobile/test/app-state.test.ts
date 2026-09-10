@@ -208,6 +208,22 @@ describe("__dialog_send_failed 与 __local_error（review F-001/F-002）", () =>
     expect(state.lastError).toContain("已超时或已清理");
   });
 
+  it("S_CONFIRM RV-001：host 已放弃（cleared）的 ask 不得被 reopen 复活", () => {
+    // 根因链：host 超时/abort 现在也发 extension_ui_cleared（mobile-ui-context.ts），
+    // 而 cleared 必须真正出队；否则条目仍以终态留在 Map 里，一次失败的 resend 就能把它拉回来。
+    const queue = new ExtensionUiQueue();
+    queue.enqueue(req);
+    let state = reduceEvent(createInitialState(), { type: "extension_ui_request", request: req, seq: 1 } as HostEvent, { dialogQueue: queue });
+    createAppActions(queue, () => undefined).answerDialog("r9", "A");
+    // host 侧确认收到（respond）⇒ 发 cleared
+    state = reduceEvent(state, { type: "extension_ui_cleared", sessionId: "s1", requestId: "r9", seq: 2 } as HostEvent, { dialogQueue: queue });
+    expect(queue.get("r9"), "cleared 必须真正出队，不能只过滤投影数组").toBeUndefined();
+    // 此时才发生发送失败（例如 WS 乱序/延迟 reject）⇒ 不得复活
+    state = reduceEvent(state, { type: "__dialog_send_failed", request: req, message: "lost" } as never, { dialogQueue: queue });
+    expect(state.dialogs, "host 已放弃的 ask 不得重新弹窗").toHaveLength(0);
+    expect(state.lastError).toContain("已超时或已清理");
+  });
+
   it("S_CONFIRM：窗口内恢复保留原 receivedAt，并按原时限正常过期（不永不过期）", () => {
     let now = 1000;
     const queue = new ExtensionUiQueue({ defaultTimeoutMs: 10_000, now: () => now });

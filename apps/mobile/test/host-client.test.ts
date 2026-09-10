@@ -166,11 +166,13 @@ describe("HostClient", () => {
     // fetch mock：health 返回 401（host 在，token 错）
     const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response(null, { status: 401 }));
     const ws = createFakeWs();
+    const localErrors: string[] = [];
     const c = new HostClient({
       url: "ws://192.168.1.5:4739/ws",
       token: "wrong",
       wsFactory: () => ws,
       onEvent: (e) => { events.push(e); },
+      onConnectionError: (m) => { localErrors.push(m); },
     });
     c.connect();
     // 第一次被断：attempt=0 不标记（可能 host 未启动）
@@ -180,7 +182,11 @@ describe("HostClient", () => {
     ws._close();
     // 等待 verifyAuthFailure 完成后确认 authFailed
     await vi.waitFor(() => expect(c.connectionState).toBe("disconnected"));
-    expect(events.some((e) => e.type === "error")).toBe(true);
+    // RV-002：auth 失败走本地错误通道，不再向 host 事件流投一个缺 seq 的 error 帧
+    expect(localErrors.some((m) => m.includes("token"))).toBe(true);
+    expect(events.some((e) => e.type === "error"), "onEvent 不得再收到无 seq 的合成 error 帧").toBe(false);
+    // 既有 UI 契约：消息含 "token"，HostConnectCard.tsx:50 据此做红字强调
+    expect(localErrors[0]).toContain("token");
     // 不再重连：等待 30s 等效验证（真实定时器已被 authFailed 停止，state 不变即可）
     await new Promise((r) => setTimeout(r, 50));
     expect(c.connectionState).toBe("disconnected");
