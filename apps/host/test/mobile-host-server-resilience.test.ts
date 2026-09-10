@@ -345,6 +345,46 @@ describe("search_history 参数钳制", () => {
   }, 10_000);
 });
 
+describe("command_result 关联 id（in_reply_to）", () => {
+  // 客户端 host-client.ts:263 用 in_reply_to 匹配 pendingCommands；空值会让命令挂满 30s 超时。
+  // 修复前实测：sendError 的 16 处调用把 command id 传进了 message 位，in_reply_to 恒为 ""。
+  const errorCases = [
+    { name: "session_not_found", cmd: { id: "ID-SEARCH", type: "search_history", sessionId: "missing", keyword: "x" } },
+    { name: "unsupported_command", cmd: { id: "ID-UNS", type: "unsupported_xyz" } },
+    { name: "invalid_command(缺 type)", cmd: { id: "ID-INVALID", cwd: "/tmp" } },
+    { name: "command_failed(处理中抛错)", cmd: { id: "ID-FAIL", type: "open_session", cwd: "/nope" } },
+  ];
+  for (const c of errorCases) {
+    it(`${c.name} 的错误响应必须回显 in_reply_to=${c.cmd.id}`, async () => {
+      ctx = await createServer();
+      const conn = connect(ctx.port);
+      await conn.opened;
+      await conn.nextType("host_status");
+      const reply = conn.nextType("command_result");
+      conn.ws.send(JSON.stringify(c.cmd));
+      const msg = await reply;
+      expect(msg.in_reply_to, c.name).toBe(c.cmd.id);
+      expect(msg.ok).toBe(false);
+      // message 位不得被塞成 command id（修复前的形态）
+      const err = msg.error as { message?: string };
+      expect(err?.message, "message 位不应是 command id").not.toBe(c.cmd.id);
+      conn.ws.close();
+    }, 10_000);
+  }
+
+  it("非法 JSON 无法取 id：回裸 error 事件且不崩", async () => {
+    ctx = await createServer();
+    const conn = connect(ctx.port);
+    await conn.opened;
+    await conn.nextType("host_status");
+    const errEvent = conn.nextType("error");
+    conn.ws.send("not-json{{{");
+    const msg = await errEvent;
+    expect((msg as { code?: string }).code).toBe("invalid_json");
+    conn.ws.close();
+  }, 10_000);
+});
+
 describe("错误响应脱敏", () => {
   it("RV-002：只抹已知敏感值，不误删 API 路径与 URL 等诊断信息", async () => {
     const home = require("node:os").homedir() as string;

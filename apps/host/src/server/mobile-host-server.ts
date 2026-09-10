@@ -140,7 +140,14 @@ export class MobileHostServer {
       });
       ws.on("message", (data) => {
         if (client.inflight >= MobileHostServer.MAX_CONCURRENT_COMMANDS) {
-          this.sendError(client, "too_many_commands", "");
+          // 限流拒绝也要回 in_reply_to：否则客户端那条命令挂 30s 超时。
+          // 此处解析一次只为取 id；解析失败回空（真正的 invalid_json 判定在 handleClientMessage 里）
+          let replyTo = "";
+          try {
+            const parsed = JSON.parse(data.toString()) as { id?: unknown };
+            if (typeof parsed?.id === "string") replyTo = parsed.id;
+          } catch { /* 非 JSON：无 id 可回 */ }
+          this.sendError(client, "too_many_commands", undefined, replyTo);
           return;
         }
         client.inflight++;
@@ -575,7 +582,16 @@ export class MobileHostServer {
     try {
       command = validateClientCommand(command);
     } catch {
-      this.sendFrame(client, { type: "error", code: "invalid_command", message: "Invalid ClientCommand: missing type" }, "required", "error");
+      // JSON 已解析成功→可取 id：必须回 command_result 而非裸 error 事件，
+      // 否则客户端 pendingCommands 匹配不到，该命令挂满 30s 超时
+      const rawId = (command as unknown as { id?: unknown })?.id;
+      const replyTo = typeof rawId === "string" ? rawId : "";
+      this.sendFrame(client, {
+        type: "command_result",
+        in_reply_to: replyTo,
+        ok: false,
+        error: { code: "invalid_command", message: "Invalid ClientCommand: missing type" },
+      }, "required", "command_result");
       return;
     }
 
@@ -588,14 +604,14 @@ export class MobileHostServer {
         }
         case "load_more_history": {
           const runner = this.controller.getSession(command.sessionId);
-          if (!runner) { this.sendError(client, "session_not_found", (command as { id?: string }).id ?? ""); break; }
+          if (!runner) { this.sendError(client, "session_not_found", undefined, (command as { id?: string }).id ?? ""); break; }
           const result = await runner.loadMoreHistory(command.count);
           this.sendAck(client, command, result);
           break;
         }
         case "search_history": {
           const runner = this.controller.getSession(command.sessionId);
-          if (!runner) { this.sendError(client, "session_not_found", (command as { id?: string }).id ?? ""); break; }
+          if (!runner) { this.sendError(client, "session_not_found", undefined, (command as { id?: string }).id ?? ""); break; }
           // 服务端硬上限：客户端可传任意值（全扫 165MB 会话 + 无界结果集），不信任入参
           const maxResults = clampCommandInt(command.maxResults, 50, MAX_SEARCH_RESULTS);
           const previewLength = clampCommandInt(command.previewLength, 120, MAX_SEARCH_PREVIEW_LENGTH);
@@ -605,14 +621,14 @@ export class MobileHostServer {
         }
         case "list_models": {
           const runner = this.controller.getSession(command.sessionId);
-          if (!runner) { this.sendError(client, "session_not_found", (command as { id?: string }).id ?? ""); break; }
+          if (!runner) { this.sendError(client, "session_not_found", undefined, (command as { id?: string }).id ?? ""); break; }
           const models = typeof runner.listModels === "function" ? runner.listModels() : [];
           this.sendAck(client, command, models);
           break;
         }
         case "list_skills": {
           const runner = this.controller.getSession(command.sessionId);
-          if (!runner) { this.sendError(client, "session_not_found", (command as { id?: string }).id ?? ""); break; }
+          if (!runner) { this.sendError(client, "session_not_found", undefined, (command as { id?: string }).id ?? ""); break; }
           // 优先走 SDK resourceLoader（与 TUI 一致），回退到文件扫描
           const loaded = typeof runner.listLoadedSkills === "function" ? runner.listLoadedSkills() : [];
           const skills = loaded.length > 0 ? loaded : await listSkills(runner.state.cwd);
@@ -635,7 +651,7 @@ export class MobileHostServer {
         }
         case "set_model": {
           const runner = this.controller.getSession(command.sessionId);
-          if (!runner) { this.sendError(client, "session_not_found", (command as { id?: string }).id ?? ""); break; }
+          if (!runner) { this.sendError(client, "session_not_found", undefined, (command as { id?: string }).id ?? ""); break; }
           if (typeof runner.setModel !== "function") { this.sendError(client, "unsupported_command", undefined, (command as { id?: string }).id ?? ""); break; }
           const result = await runner.setModel(command.modelId);
           this.sendAck(client, command, result);
@@ -643,7 +659,7 @@ export class MobileHostServer {
         }
         case "set_thinking": {
           const runner = this.controller.getSession(command.sessionId);
-          if (!runner) { this.sendError(client, "session_not_found", (command as { id?: string }).id ?? ""); break; }
+          if (!runner) { this.sendError(client, "session_not_found", undefined, (command as { id?: string }).id ?? ""); break; }
           if (typeof runner.setThinking !== "function") { this.sendError(client, "unsupported_command", undefined, (command as { id?: string }).id ?? ""); break; }
           const result = runner.setThinking(command.level);
           this.sendAck(client, command, result);
@@ -651,7 +667,7 @@ export class MobileHostServer {
         }
         case "compact": {
           const runner = this.controller.getSession(command.sessionId);
-          if (!runner) { this.sendError(client, "session_not_found", (command as { id?: string }).id ?? ""); break; }
+          if (!runner) { this.sendError(client, "session_not_found", undefined, (command as { id?: string }).id ?? ""); break; }
           if (typeof runner.compact !== "function") { this.sendError(client, "unsupported_command", undefined, (command as { id?: string }).id ?? ""); break; }
           const result = await runner.compact(command.customInstructions);
           this.sendAck(client, command, result);
@@ -659,7 +675,7 @@ export class MobileHostServer {
         }
         case "rename_session": {
           const runner = this.controller.getSession(command.sessionId);
-          if (!runner) { this.sendError(client, "session_not_found", (command as { id?: string }).id ?? ""); break; }
+          if (!runner) { this.sendError(client, "session_not_found", undefined, (command as { id?: string }).id ?? ""); break; }
           if (typeof runner.renameSession !== "function") { this.sendError(client, "unsupported_command", undefined, (command as { id?: string }).id ?? ""); break; }
           const result = runner.renameSession(command.name);
           this.sendAck(client, command, result);
@@ -689,7 +705,7 @@ export class MobileHostServer {
         }
         case "prompt": {
           const runner = this.controller.getSession(command.sessionId);
-          if (!runner) { this.sendError(client, "session_not_found", (command as { id?: string }).id ?? ""); break; }
+          if (!runner) { this.sendError(client, "session_not_found", undefined, (command as { id?: string }).id ?? ""); break; }
           // P1-3：透传图片（此前被静默丢弃），非法元素显式报错而非静默丢失
           const images = command.images?.map((img) => toSdkImageContent(img)).filter((x) => x !== undefined);
           if (command.images && command.images.length > 0 && images?.length !== command.images.length) {
@@ -702,7 +718,7 @@ export class MobileHostServer {
         }
         case "steer": {
           const runner = this.controller.getSession(command.sessionId);
-          if (!runner) { this.sendError(client, "session_not_found", (command as { id?: string }).id ?? ""); break; }
+          if (!runner) { this.sendError(client, "session_not_found", undefined, (command as { id?: string }).id ?? ""); break; }
           await runner.steer(command.message);
           this.sendAck(client, command, {});
           break;
@@ -728,14 +744,14 @@ export class MobileHostServer {
         }
         case "follow_up": {
           const runner = this.controller.getSession(command.sessionId);
-          if (!runner) { this.sendError(client, "session_not_found", (command as { id?: string }).id ?? ""); break; }
+          if (!runner) { this.sendError(client, "session_not_found", undefined, (command as { id?: string }).id ?? ""); break; }
           await runner.followUp(command.message);
           this.sendAck(client, command, {});
           break;
         }
         case "abort": {
           const runner = this.controller.getSession(command.sessionId);
-          if (!runner) { this.sendError(client, "session_not_found", (command as { id?: string }).id ?? ""); break; }
+          if (!runner) { this.sendError(client, "session_not_found", undefined, (command as { id?: string }).id ?? ""); break; }
           await runner.abort();
           this.sendAck(client, command, {});
           break;
@@ -749,7 +765,7 @@ export class MobileHostServer {
           if (ok) {
             this.sendAck(client, command, {});
           } else {
-            this.sendError(client, "request_not_found", (command as { id?: string }).id ?? "");
+            this.sendError(client, "request_not_found", undefined, (command as { id?: string }).id ?? "");
           }
           break;
         }
@@ -766,7 +782,7 @@ export class MobileHostServer {
         }
         case "get_snapshot": {
           const runner = this.controller.getSession(command.sessionId);
-          if (!runner) { this.sendError(client, "session_not_found", (command as { id?: string }).id ?? ""); break; }
+          if (!runner) { this.sendError(client, "session_not_found", undefined, (command as { id?: string }).id ?? ""); break; }
           const snapshot = runner.snapshot() satisfies SessionSnapshot;
           this.sendFrame(client, {
             type: "command_result",
@@ -778,18 +794,19 @@ export class MobileHostServer {
         }
         case "get_session_usage": {
           const runner = this.controller.getSession(command.sessionId);
-          if (!runner) { this.sendError(client, "session_not_found", (command as { id?: string }).id ?? ""); break; }
+          if (!runner) { this.sendError(client, "session_not_found", undefined, (command as { id?: string }).id ?? ""); break; }
           const usage = typeof runner.getUsage === "function" ? await runner.getUsage() : { entries: 0, input: 0, output: 0, cacheRead: 0, cacheWrite: 0, reasoning: 0, totalTokens: 0, cost: 0 };
           const context = typeof runner.getContextUsage === "function" ? runner.getContextUsage() ?? null : null;
           this.sendAck(client, command, { sessionId: command.sessionId, ...usage, context });
           break;
         }
         default:
-          this.sendError(client, "unsupported_command", (command as { id?: string }).id ?? "");
+          this.sendError(client, "unsupported_command", undefined, (command as { id?: string }).id ?? "");
       }
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
-      this.sendError(client, "command_failed", message);
+      // 必须带 in_reply_to：客户端靠它匹配 pendingCommands，空值会让命令挂满 30s 超时
+      this.sendError(client, "command_failed", message, (command as { id?: string }).id ?? "");
     }
   }
 
