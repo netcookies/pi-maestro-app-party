@@ -27,6 +27,13 @@ export interface HostClientOptions {
   wsFactory?: (url: string, token?: string) => WebSocketLike;
   onEvent?: (event: HostEvent) => void;
   onStateChange?: (state: ConnectionState) => void;
+  /**
+   * 连接层错误（命令因断连而未被确认）回调。rejection 仍会冒泡给调用方，
+   * 本回调只负责把错误送进 store 的 lastError 通道：app/session.tsx:151 注释声称
+   * 「错误由 store.lastError 提示」，但 lastError 此前只由 host 推的事件写入，
+   * 客户端本地 reject 实际进不了 reducer → UI 静默。
+   */
+  onConnectionError?: (message: string) => void;
 }
 
 /** 可测试的 WebSocket 抽象（React Native 的 WebSocket 与浏览器一致） */
@@ -41,6 +48,25 @@ export interface WebSocketLike {
 }
 
 export const WS_OPEN = 1;
+
+/**
+ * 连接层错误：命令未被确认是否已由 Host 执行（区别于 Host 明确回给的业务失败）。
+ * 调用方可据此区分「失败」与「需重连后核对状态」。
+ * 不会把仍在 Host 正常执行的 prompt 误判为业务失败：服务端 runner.prompt() 在 preflight
+ * 受理时即 resolve 并回 ack（session-runner.ts:110-120 + mobile-host-server.ts:732），
+ * 因此断连时仍挂在 pending 的命令处于「未确认」而非「已失败」态。
+ */
+export class CommandConnectionLostError extends Error {
+  readonly code = "connection_lost";
+  /** 断连时该命令是否已交给 socket（仅供诊断，不作为成功/失败依据） */
+  readonly maybeExecuted: boolean;
+
+  constructor(commandType: string, maybeExecuted: boolean) {
+    super(`Connection lost before response (${commandType})`);
+    this.name = "CommandConnectionLostError";
+    this.maybeExecuted = maybeExecuted;
+  }
+}
 
 export class HostClient {
   private ws: WebSocketLike | null = null;
@@ -61,6 +87,8 @@ export class HostClient {
   private pendingCommands = new Map<string, {
     resolve(result: unknown): void;
     reject(error: Error): void;
+    commandType: string;
+    maybeExecuted: boolean;
   }>();
   private commandSeq = 0;
 
@@ -94,23 +122,50 @@ export class HostClient {
     this.ws?.close();
     this.ws = null;
     this.setState("disconnected");
-    // 拒绝所有挂起命令
-    for (const { reject } of this.pendingCommands.values()) {
-      reject(new Error("HostClient closed"));
-    }
+    // 拒绝所有挂起命令（文案与历史一致）
+    this.rejectAllPending("closed");
+  }
+
+  /**
+   * 以连接层错误 settle 全部在途命令。保留每条命令自身的 30s timeout 作为兜底，
+   * 本方法只在能确定「响应永不会到达」时提前失败（因此不删超时，只把它降级为兜底）。
+   */
+  private rejectAllPending(reason: "connection_lost" | "closed" | "not_connected"): void {
+    if (this.pendingCommands.size === 0) return;
+    const pending = [...this.pendingCommands.values()];
     this.pendingCommands.clear();
+    const errors = pending.map((cmd) =>
+      reason === "connection_lost"
+        ? new CommandConnectionLostError(cmd.commandType, cmd.maybeExecuted)
+        : new Error(reason === "closed" ? "HostClient closed" : "Not connected"),
+    );
+    for (let i = 0; i < pending.length; i++) {
+      pending[i].reject(errors[i]);
+    }
+    // 只报首条 + 汇总数，避免断线瞬间刷屏覆盖 lastError
+    if (reason === "connection_lost") {
+      this.options.onConnectionError?.(
+        pending.length > 1
+          ? `${errors[0].message}（另有 ${pending.length - 1} 条命令状态未知）`
+          : errors[0].message,
+      );
+    }
   }
 
   /** 发送命令并等待响应 */
   sendCommand(command: ClientCommand & { id?: string }, timeoutMs = 30_000): Promise<unknown> {
     const id = command.id ?? `cmd-${++this.commandSeq}`;
     const payload = { ...command, id };
+    // 发送前判定是否已交给 socket：断连时区分「可能已执行」与「肯定未执行」
+    const maybeExecuted = this.ws?.readyState === WS_OPEN;
     return new Promise((resolve, reject) => {
       const timer = setTimeout(() => {
         this.pendingCommands.delete(id);
         reject(new Error(`Command timeout: ${payload.type}`));
       }, timeoutMs);
       this.pendingCommands.set(id, {
+        commandType: payload.type,
+        maybeExecuted,
         resolve: (result) => {
           clearTimeout(timer);
           resolve(result);
@@ -186,6 +241,10 @@ export class HostClient {
 
     ws.onclose = () => {
       if (this.closed || generation !== this.socketGeneration) return;
+      // 意外断连：立即以可区分错误 settle 在途命令。此前只重连不清 pending，
+      // 它们会各自挂满 30s timer 才报 timeout（UI 表现为无响应），且 timeout 文案无法区分
+      // 「命令失败」与「连接丢失、执行状态未知」。手动 close() 已由上方 this.closed 守卫排除。
+      this.rejectAllPending("connection_lost");
       // 快速失败（从未 onopen 且 <2s）：标记疑似鉴权问题，由 verifyAuthFailure 用 HTTP 探测确认后才停连
       if (this.state !== "connected" && Date.now() - this.connectStartedAt < 2_000 && this.reconnectAttempt >= 1) {
         this.suspectAuthFailure = true;
@@ -276,11 +335,8 @@ export class HostClient {
     if (this.ws && this.ws.readyState === WS_OPEN) {
       this.ws.send(data);
     } else {
-      // 未连接：立即拒绝命令（重连后客户端应重试）
-      for (const { reject } of this.pendingCommands.values()) {
-        reject(new Error("Not connected"));
-      }
-      this.pendingCommands.clear();
+      // 未连接：立即拒绝命令（重连后客户端应重试）；含本次刚入队的命令，与历史行为一致
+      this.rejectAllPending("not_connected");
     }
   }
 

@@ -129,6 +129,11 @@ export function HostStoreProvider({ children }: { children: React.ReactNode }) {
       reconnectBaseMs: 1000,
       reconnectMaxMs: 15000,
       onEvent: dispatchBuffered,
+      // ISS-002：断连导致的命令失败走 error 事件进 reducer（与 host 推的 error 同一通道，
+      // app-state.ts:164 已处理），补上「错误由 store.lastError 提示」这一之前断掉的链路。
+      onConnectionError: (message) => {
+        dispatch({ type: "error", code: "connection_lost", message, seq: 0 } as HostEvent);
+      },
       onStateChange: (s) => {
         setConnectionState(s);
         // P2-2：断线重连成功后，为重连前活动的会话补拉 snapshot（代次号防陈旧响应覆盖新状态）

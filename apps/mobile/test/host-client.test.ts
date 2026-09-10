@@ -1,5 +1,5 @@
 import { describe, expect, it, beforeEach, afterEach, vi } from "vitest";
-import { HostClient, type WebSocketLike } from "../src/host-client.js";
+import { CommandConnectionLostError, HostClient, type WebSocketLike } from "../src/host-client.js";
 import type { ClientCommand, HostEvent } from "@maestro-mobile/shared";
 
 const WS_OPEN = 1;
@@ -222,5 +222,105 @@ describe("HostClient", () => {
     expect(events.some((e) => e.type === "error" && String((e as { message?: string }).message ?? "").includes("token"))).toBe(false);
     vi.useRealTimers();
     c.close();
+  });
+});
+
+/**
+ * ISS-20260910-002：意外断连必须立即 settle 在途命令，且错误语义可与「业务失败」区分。
+ * 反向验证：回滚 onclose 的 rejectAllPending 后，前两条以 30s timeout 文案失败。
+ */
+describe("HostClient 意外断连时 settle 在途命令（ISS-002）", () => {
+  let client: HostClient;
+  let fakeWs: ReturnType<typeof createFakeWs>;
+
+  beforeEach(() => {
+    fakeWs = createFakeWs();
+    client = new HostClient({
+      url: "ws://localhost:0",
+      wsFactory: () => fakeWs,
+      onEvent: () => {},
+    });
+  });
+  afterEach(() => { client.close(); });
+
+  it("onclose 立即以 connection_lost 拒绝在途命令，不等 30s 超时", async () => {
+    client.connect();
+    fakeWs._open();
+    const promise = client.sendCommand({ type: "abort", sessionId: "s1" });
+    let settled: Error | undefined;
+    void promise.catch((e: Error) => { settled = e; });
+
+    fakeWs._close();            // 意外断连（未调 close()）
+    await Promise.resolve();    // 让 rejection 回调落地
+    expect(settled, "断连后必须立即失败，而非挂满 30s timer").toBeInstanceOf(CommandConnectionLostError);
+    expect((settled as unknown as { code?: string }).code).toBe("connection_lost");
+    // 文案必须可区分：不得是 "Command timeout"
+    expect(settled!.message).not.toContain("timeout");
+  });
+
+  it("maybeExecuted 反映发送时 socket 状态", async () => {
+    client.connect();
+    fakeWs._open();
+    const sent = client.sendCommand({ type: "prompt", sessionId: "s1", message: "hi" });
+    const errs: unknown[] = [];
+    void sent.catch((e: unknown) => errs.push(e));
+    fakeWs._close();
+    await Promise.resolve();
+    expect(errs[0]).toBeInstanceOf(CommandConnectionLostError);
+    expect((errs[0] as unknown as CommandConnectionLostError).maybeExecuted).toBe(true);
+  });
+
+  it("全部在途命令都被拒绝（不是只拒第一条）", async () => {
+    client.connect();
+    fakeWs._open();
+    const a = client.sendCommand({ type: "abort", sessionId: "s1" });
+    const b = client.sendCommand({ type: "list_models", sessionId: "s1" });
+    const c = client.sendCommand({ type: "get_monitor_state" });
+    const errs: unknown[] = [];
+    void a.catch((e: unknown) => errs.push(e));
+    void b.catch((e: unknown) => errs.push(e));
+    void c.catch((e: unknown) => errs.push(e));
+    fakeWs._close();
+    await Promise.resolve();
+    expect(errs).toHaveLength(3);
+    expect(errs.every((e) => e instanceof CommandConnectionLostError)).toBe(true);
+    // 每条错误带自己的命令类型，便于 UI/日志区分是哪条命令状态未知
+    expect(errs.map((e) => (e as CommandConnectionLostError).message).sort()).toEqual([
+      "Connection lost before response (abort)",
+      "Connection lost before response (get_monitor_state)",
+      "Connection lost before response (list_models)",
+    ]);
+  });
+
+  it("断连错误经 onConnectionError 送达 store 的 lastError 通道（ISS-002「UI 能区分」链路）", async () => {
+    const errs: string[] = [];
+    const c = new HostClient({
+      url: "ws://localhost:0",
+      wsFactory: () => fakeWs,
+      onEvent: () => {},
+      onConnectionError: (m) => errs.push(m),
+    });
+    c.connect();
+    fakeWs._open();
+    void c.sendCommand({ type: "prompt", sessionId: "s1", message: "hi" }).catch(() => {});
+    void c.sendCommand({ type: "abort", sessionId: "s1" }).catch(() => {});
+    fakeWs._close();
+    await Promise.resolve();
+    // 首条带命令类型，其余汇总为「状态未知」条数，不刷屏覆盖 lastError
+    expect(errs).toHaveLength(1);
+    expect(errs[0]).toContain("Connection lost before response (prompt)");
+    expect(errs[0]).toContain("另有 1 条");
+    c.close();
+  });
+
+  it("手动 close() 仍用 HostClient closed 文案（回归保护）", async () => {
+    client.connect();
+    fakeWs._open();
+    const promise = client.sendCommand({ type: "abort", sessionId: "s1" });
+    let msg = "";
+    void promise.catch((e: Error) => { msg = e.message; });
+    client.close();
+    await Promise.resolve();
+    expect(msg).toBe("HostClient closed");
   });
 });
