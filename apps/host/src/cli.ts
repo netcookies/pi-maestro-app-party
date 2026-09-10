@@ -74,6 +74,24 @@ function parseArgs(argv: string[]): CliArgs {
 }
 
 /** 仅当 PID 文件指向本进程时删除，避免误删其他实例的 PID */
+/** 日志用：抹掉 argv 中 --token 的值（明文密钥不能落盘到 ~/.pi/maestro-mobile.log） */
+function redactArgv(argv: string[]): string {
+  const SENSITIVE = new Set(["token"]);
+  const out: string[] = [];
+  for (let i = 0; i < argv.length; i++) {
+    const arg = argv[i];
+    if (arg.startsWith("--")) {
+      const key = arg.slice(2);
+      const hasValue = argv[i + 1] !== undefined && !argv[i + 1].startsWith("--");
+      out.push(arg);
+      if (hasValue) out.push(SENSITIVE.has(key) ? "[redacted]" : argv[++i]);
+    } else {
+      out.push(arg);
+    }
+  }
+  return out.join(" ");
+}
+
 async function unlinkIfOwned(path: string, ownPid: number): Promise<void> {
   try {
     const saved = Number((await readFile(path, "utf8")).trim());
@@ -105,8 +123,10 @@ async function main(): Promise<void> {
   }
   const fatal = (label: string, error: unknown): void => {
     console.error(`[maestro-mobile] ${label}, shutting down:`, error);
-    // 附带现场信息：extension 以 stdio:"ignore" 拉起时无终端输出，日志是唯一线索
-    console.error(`[maestro-mobile]   pid=${process.pid} node=${process.version} cwd=${process.cwd()} argv=${process.argv.slice(1).join(" ")}`);
+    // 附带现场信息：extension 以 stdio:"ignore" 拉起时无终端输出，日志是唯一线索。
+    // argv 里的 --token 值必须脱敏：此输出会被 extension 落盘到 ~/.pi/maestro-mobile.log，
+    // 不能把明文密钥写进日志文件。
+    console.error(`[maestro-mobile]   pid=${process.pid} node=${process.version} cwd=${process.cwd()} argv=${redactArgv(process.argv.slice(1))}`);
     void shutdown(label, 1);
   };
   process.on("SIGINT", () => void shutdown("SIGINT", 0));
