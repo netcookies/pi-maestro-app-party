@@ -3,14 +3,14 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Maestro Mobile - 方案 B（便当盒工坊）深化设计原型</title>
+  <title>Maestro Mobile - 方案 B 完整生产级功能交互原型</title>
   <!-- React & Babel CDN -->
   <script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
   <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
   <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
   <!-- Tailwind CSS -->
   <script src="https://cdn.tailwindcss.com"></script>
-  <!-- 字体 -->
+  <!-- Google Fonts -->
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
@@ -25,13 +25,13 @@
             mono: ['JetBrains Mono', 'monospace'],
           },
           colors: {
-            appDark: '#090A0D',
-            cardBg: '#13161C',
-            cardInner: '#1A1E26',
-            cardBorder: '#222733',
-            accentPurple: '#8A5CF5',
-            accentBlue: '#3282F6',
-            accentGreen: '#238636',
+            appDark: '#08090C',
+            cardBg: '#12151B',
+            cardInner: '#181C24',
+            cardBorder: '#202530',
+            accentPurple: '#8B5CF6',
+            accentBlue: '#3B82F6',
+            accentGreen: '#10B981',
           }
         }
       }
@@ -39,34 +39,34 @@
   </script>
   <style>
     body {
-      background-color: #040507;
+      background-color: #020305;
       color: #E6EDF3;
       user-select: none;
       -webkit-font-smoothing: antialiased;
     }
     .iphone-frame {
       width: 414px;
-      height: 864px;
+      height: 874px;
       border-radius: 54px;
-      box-shadow: 0 0 0 10px #1C2028, 0 0 0 12px #0E1015, 0 30px 80px rgba(0,0,0,0.92);
+      box-shadow: 0 0 0 11px #1B1E26, 0 0 0 13px #0C0E13, 0 35px 85px rgba(0,0,0,0.95);
       position: relative;
       overflow: hidden;
     }
     .no-scrollbar::-webkit-scrollbar { display: none; }
     .no-scrollbar { -ms-overflow-style: none; scrollbar-width: none; }
     .glass-bar {
-      background: rgba(19, 22, 28, 0.85);
+      background: rgba(18, 21, 27, 0.86);
       backdrop-filter: blur(20px);
       -webkit-backdrop-filter: blur(20px);
     }
     .glass-dock {
-      background: rgba(11, 13, 17, 0.92);
+      background: rgba(10, 12, 16, 0.94);
       backdrop-filter: blur(24px);
       -webkit-backdrop-filter: blur(24px);
     }
   </style>
 </head>
-<body class="flex flex-col items-center justify-center min-h-screen py-6">
+<body class="flex flex-col items-center justify-center min-h-screen py-4">
 
   <div id="root"></div>
 
@@ -103,25 +103,13 @@
           <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/>
         </svg>
       ),
-      Cpu: ({ size = 14, className = "" }) => (
-        <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={className}>
-          <rect x="4" y="4" width="16" height="16" rx="2"/>
-          <rect x="9" y="9" width="6" height="6"/>
-          <path d="M9 1v3M15 1v3M9 20v3M15 20v3M20 9h3M20 14h3M1 9h3M1 14h3"/>
-        </svg>
-      ),
-      Zap: ({ size = 14, className = "" }) => (
-        <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={className}>
-          <polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/>
-        </svg>
-      ),
-      Search: ({ size = 16, className = "" }) => (
+      Search: ({ size = 15, className = "" }) => (
         <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={className}>
           <circle cx="11" cy="11" r="8"/>
           <line x1="21" y1="21" x2="16.65" y2="16.65"/>
         </svg>
       ),
-      Minimize: ({ size = 15, className = "" }) => (
+      Minimize: ({ size = 14, className = "" }) => (
         <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={className}>
           <polyline points="4 14 10 14 10 20"/>
           <polyline points="20 10 14 10 14 4"/>
@@ -162,6 +150,18 @@
           <polygon points="22 2 15 22 11 13 2 9 22 2"/>
         </svg>
       ),
+      AlertTriangle: ({ size = 15, className = "" }) => (
+        <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={className}>
+          <path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/>
+          <line x1="12" y1="9" x2="12" y2="13"/>
+          <line x1="12" y1="17" x2="12.01" y2="17"/>
+        </svg>
+      ),
+      Check: ({ size = 15, className = "" }) => (
+        <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={className}>
+          <polyline points="20 6 9 17 4 12"/>
+        </svg>
+      ),
       Close: ({ size = 16, className = "" }) => (
         <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={className}>
           <line x1="18" y1="6" x2="6" y2="18"/>
@@ -170,7 +170,7 @@
       )
     };
 
-    // --- 双语字典与专业术语体系 ---
+    // --- 双语字典 ---
     const i18n = {
       zh: {
         tabWorkbench: "工作台",
@@ -179,7 +179,7 @@
         tabSettings: "设置",
         filterActive: "活跃",
         filterAll: "全部",
-        searchPlaceholder: "搜索项目、会话或路径...",
+        searchPlaceholder: "搜索标题 / ID / 模型 / 路径...",
         statusStreaming: "流式生成中",
         statusActive: "在线就绪",
         statusIdle: "空闲等待",
@@ -187,26 +187,43 @@
         tokensLabel: "Token 消耗",
         cacheLabel: "缓存命中",
         msgCount: "条对话",
+        running: "运行中",
         hubTitle: "桌面通信与配对中枢",
-        hubDesc: "通过 WebSocket 安全隧道与 Mac 桌面进程双向毫秒级同步",
+        hubDesc: "通过安全 WebSocket 隧道与 Mac 桌面进程保持双向同步",
         hubNode: "当前节点",
-        hubHeartbeat: "心跳保活",
+        hubHeartbeat: "心跳机制",
         hubBackpressure: "出站背压",
         btnRefresh: "测速重连",
         btnScan: "扫码配对",
         btnCode: "输入配对码",
-        backBtn: "收起会话",
+        backBtn: "收起并返回",
         swipeBackHint: "← 屏幕左侧边缘右滑返回",
         langToggle: "English",
-        testPrompt: "收到你的最新 iPhone 消息：",
-        testTag: "ios 消息测试",
-        testSub: "请看此时手机端屏幕：",
-        test1: "是否只渲染了一次（不再出现两条一模一样的蓝色用户气泡）？",
-        test2: "当前这条回复的流式输出是否依然流畅同屏打字？",
-        titleDemo: "根因与修复结论",
-        loadMore: "已加载 3/3 个会话",
-        groupTitle1: "当前活跃工作区",
-        groupTitle2: "其他工作空间"
+        nowRunningTitle: "现在运行",
+        heroTitle: "已打开会话总用量",
+        metric1: "活跃窗口",
+        metric2: "今日 Run 完成",
+        metric3: "Teammates 工作中",
+        metric4: "等待你处理 (Ask)",
+        askTitle: "待决交互确认 (Ask)",
+        askDesc: "来自 extension-ui 的审核请求：",
+        askConfirm: "批准执行",
+        askReject: "拒绝",
+        attentionTitle: "监控警告 (Attention)",
+        steerPlaceholder: "输入指令干预当前窗口 (Steer)...",
+        steerBtn: "介入执行",
+        settingsAppearance: "外观主题",
+        settingsParams: "数据拉取参数",
+        settingsSliders: [
+          { label: "每页消息数", value: "30", unit: "条" },
+          { label: "自动加载阈值", value: "200", unit: "px" },
+          { label: "活跃轮询间隔", value: "250", unit: "ms" },
+          { label: "消息预览长度", value: "120", unit: "字符" }
+        ],
+        settingsSwitches: [
+          { label: "高优先级关注通知", desc: "当任务需要审核时振动提醒" },
+          { label: "仅 Wi-Fi 下拉取历史", desc: "节省蜂窝移动数据" }
+        ]
       },
       en: {
         tabWorkbench: "Workbench",
@@ -215,44 +232,60 @@
         tabSettings: "Settings",
         filterActive: "Active",
         filterAll: "All",
-        searchPlaceholder: "Search projects, sessions or paths...",
+        searchPlaceholder: "Search title / ID / model / path...",
         statusStreaming: "Streaming",
         statusActive: "Ready",
         statusIdle: "Idle",
-        contextLabel: "Context Window",
+        contextLabel: "Context",
         tokensLabel: "Tokens",
         cacheLabel: "Cache Hit",
-        msgCount: "messages",
+        msgCount: "msgs",
+        running: "Running",
         hubTitle: "Host Connection & Pairing Hub",
-        hubDesc: "Bidirectional sub-millisecond sync via authenticated WebSocket tunnel",
-        hubNode: "Connected Node",
+        hubDesc: "Bidirectional real-time sync via authenticated WebSocket tunnel",
+        hubNode: "Host Node",
         hubHeartbeat: "Heartbeat",
         hubBackpressure: "Backpressure",
         btnRefresh: "Ping Host",
         btnScan: "Scan QR",
         btnCode: "Enter Code",
         backBtn: "Minimize",
-        swipeBackHint: "← Swipe right from edge to back",
+        swipeBackHint: "← Swipe from edge to return",
         langToggle: "中文",
-        testPrompt: "Received your latest iPhone message: ",
-        testTag: "ios test msg",
-        testSub: "Please check your screen now:",
-        test1: "Rendered only once (duplicate bubbles eliminated)?",
-        test2: "Is the live stream typing smooth?",
-        titleDemo: "Root Cause & Fix Summary",
-        loadMore: "Loaded 3 of 3 sessions",
-        groupTitle1: "Active Workspace",
-        groupTitle2: "Other Workspaces"
+        nowRunningTitle: "Now Running",
+        heroTitle: "Active Session Token Usage",
+        metric1: "Active Windows",
+        metric2: "Runs Completed",
+        metric3: "Working Teammates",
+        metric4: "Waiting Actions (Ask)",
+        askTitle: "Pending Approval (Ask)",
+        askDesc: "Extension UI request requiring review:",
+        askConfirm: "Approve",
+        askReject: "Reject",
+        attentionTitle: "System Attention",
+        steerPlaceholder: "Steer selected window...",
+        steerBtn: "Steer",
+        settingsAppearance: "Appearance Theme",
+        settingsParams: "Data Fetching Parameters",
+        settingsSliders: [
+          { label: "Page Size", value: "30", unit: "items" },
+          { label: "Preload Threshold", value: "200", unit: "px" },
+          { label: "Poll Interval", value: "250", unit: "ms" },
+          { label: "Preview Length", value: "120", unit: "chars" }
+        ],
+        settingsSwitches: [
+          { label: "High Priority Notifications", desc: "Haptic feedback on ask alerts" },
+          { label: "Wi-Fi Only for History", desc: "Save cellular data" }
+        ]
       }
     };
 
-    // --- 真实测试数据（映射生产 HostSessionSummary 与 LiveSessionInfo） ---
+    // --- 真实会话数据 (覆盖 8 大统一要素) ---
     const mockSessions = [
       {
         id: "01a0866a-7a23-7581",
         title: "pi-maestro-app-party",
         cwd: "~/Projects/pi-maestro-app-party",
-        group: "group1",
         model: "gemini-3.8-flash",
         status: "streaming",
         messageCount: 42,
@@ -262,13 +295,13 @@
         cacheRate: 78,
         totalTokens: "885k",
         cost: "$0.68",
-        updatedAt: "刚刚"
+        updatedAt: "刚刚",
+        objective: "双端实时同步优化与 Bento UI 重构"
       },
       {
         id: "01a0800b-ac02-7271",
         title: "WorkSpace4AI",
         cwd: "~/Projects/WorkSpace4AI",
-        group: "group2",
         model: "gpt-5.6-sol",
         status: "active",
         messageCount: 128,
@@ -278,13 +311,13 @@
         cacheRate: 92,
         totalTokens: "2.4M",
         cost: "$1.85",
-        updatedAt: "3分钟前"
+        updatedAt: "3分钟前",
+        objective: "智能体流水线调度监控"
       },
       {
         id: "01a009b3-56b3-7156",
         title: "isulewTools-app",
         cwd: "~/AndroidStudioProjects/isulewTools",
-        group: "group2",
         model: "claude-sonnet-4-6",
         status: "idle",
         messageCount: 19,
@@ -294,12 +327,13 @@
         cacheRate: 64,
         totalTokens: "340k",
         cost: "$0.42",
-        updatedAt: "15分钟前"
+        updatedAt: "15分钟前",
+        objective: "Android 工具箱更新"
       }
     ];
 
     function App() {
-      // 当前主导航 Tab
+      // 当前选中的 Tab: 'workbench' | 'sessions' | 'monitor' | 'settings'
       const [tab, setTab] = useState("sessions");
       // 双语
       const [lang, setLang] = useState("zh");
@@ -307,13 +341,29 @@
       const [filter, setFilter] = useState("active");
       // 是否正在会话详情页
       const [inDetail, setInDetail] = useState(false);
+      const [activeSession, setActiveSession] = useState(mockSessions[0]);
       // Floating 搜索栏展开状态
       const [searchExpanded, setSearchExpanded] = useState(false);
       const [searchQuery, setSearchQuery] = useState("");
-      // 配对弹层状态
-      const [pairModal, setPairModal] = useState(null); // 'scan' | 'code' | 'candidates' | null
+      // 配对弹层: 'scan' | 'code' | 'candidates' | null
+      const [pairModal, setPairModal] = useState(null);
+      // Ask 交互弹窗是否展示
+      const [showAskDialog, setShowAskDialog] = useState(true);
+      // Monitor 选中的窗口目标
+      const [selectedMonitorKey, setSelectedMonitorKey] = useState("01a0866a-7a23-7581");
+      const [steerInput, setSteerInput] = useState("");
+      // 真实聊天的动态消息流
+      const [chatMessages, setChatMessages] = useState([
+        { id: "m1", sender: "user", text: "ios 消息测试" },
+        { 
+          id: "m2", 
+          sender: "assistant", 
+          text: "收到你的最新 iPhone 消息：**`ios 消息测试`**！\n\n请看此时手机端屏幕：\n1. 是否只渲染了一次（不再出现两条一模一样的蓝色用户气泡）？\n2. 当前这条回复的流式输出是否依然流畅同屏打字？\n\n### 根因与修复结论\n已在方案 B 中完整落地 Bento Grid 与全部生产能力。" 
+        }
+      ]);
+      const [chatDraft, setChatDraft] = useState("");
 
-      // 滑动切换与边缘返回手势
+      // 手势
       const [swipeDx, setSwipeDx] = useState(0);
       const touchStartX = useRef(0);
       const touchStartY = useRef(0);
@@ -331,9 +381,7 @@
         if (!isTouching.current) return;
         const dx = e.touches[0].clientX - touchStartX.current;
         const dy = Math.abs(e.touches[0].clientY - touchStartY.current);
-        if (dy < 40) {
-          setSwipeDx(dx);
-        }
+        if (dy < 40) setSwipeDx(dx);
       };
 
       const handleTouchEnd = () => {
@@ -343,21 +391,39 @@
         const idx = tabs.indexOf(tab);
 
         if (inDetail) {
-          // 边缘右滑返回（从屏幕左侧向右滑）
-          if (swipeDx > 70) {
-            setInDetail(false);
-          }
+          // 边缘向右滑动返回
+          if (swipeDx > 70) setInDetail(false);
           setSwipeDx(0);
           return;
         }
 
-        // 一级页面左右轻扫切换 Dock 栏
+        // 一级导航左右滑动切换 Dock
         if (swipeDx < -60 && idx < tabs.length - 1) {
           setTab(tabs[idx + 1]);
         } else if (swipeDx > 60 && idx > 0) {
           setTab(tabs[idx - 1]);
         }
         setSwipeDx(0);
+      };
+
+      // 发送新消息
+      const handleSendChat = () => {
+        if (!chatDraft.trim()) return;
+        const userMsg = { id: `u-${Date.now()}`, sender: "user", text: chatDraft.trim() };
+        setChatMessages((prev) => [...prev, userMsg]);
+        setChatDraft("");
+        // 模拟秒级流式回复
+        setTimeout(() => {
+          setChatMessages((prev) => [
+            ...prev,
+            { id: `a-${Date.now()}`, sender: "assistant", text: `收到指令：\`${userMsg.text}\`，桌面 TUI 正在实时协同响应。` }
+          ]);
+        }, 600);
+      };
+
+      const openSessionDetail = (s) => {
+        setActiveSession(s);
+        setInDetail(true);
       };
 
       // 过滤后的会话
@@ -373,12 +439,12 @@
       return (
         <div class="flex flex-col items-center w-full">
           {/* 顶控面板：状态提示与双语切换 */}
-          <div class="w-full max-w-4xl mb-5 flex flex-col md:flex-row items-center justify-between gap-3 px-4">
+          <div class="w-full max-w-4xl mb-4 flex flex-col md:flex-row items-center justify-between gap-3 px-4">
             <div class="flex items-center gap-2">
               <span class="px-3 py-1 rounded-xl bg-purple-950/80 text-purple-300 border border-purple-800 text-xs font-bold font-mono">
-                MIUIX / HyperOS Bento Grid
+                MIUIX Bento Grid · Production Complete
               </span>
-              <span class="text-xs text-zinc-400">方案 B 深度全功能深化设计原型</span>
+              <span class="text-xs text-zinc-400">方案 B 深度全功能交互原型（含工作台、监控、设置、会话）</span>
             </div>
 
             <div class="flex items-center gap-3">
@@ -389,15 +455,9 @@
                 <span>🌐 {t.langToggle}</span>
               </button>
               <div class="text-xs text-emerald-400 bg-emerald-950/60 border border-emerald-800/80 px-3 py-1.5 rounded-xl font-mono">
-                ● 100% 生产功能对齐
+                ● 100% 业务逻辑可交互
               </div>
             </div>
-          </div>
-
-          {/* 交互说明横幅 */}
-          <div class="text-xs text-zinc-400 mb-4 text-center max-w-xl px-2 leading-relaxed">
-            ✨ 全面剔除彩色 Emoji，采用<strong>纯色线性矢量图标</strong>；会话卡片采用 <strong>2×2 Bento Grid 仪表盘</strong>；
-            连接状态完整迁移进<strong>“设置 - 通信中枢”</strong>；支持<strong>边缘右滑返回</strong>与<strong>底部 Dock 左右滑动切换</strong>。
           </div>
 
           {/* --- iPhone 16 Pro 机框容器 --- */}
@@ -422,28 +482,30 @@
               </div>
             </div>
 
-            {/* --- 手机屏幕内容区 --- */}
+            {/* --- 手机屏幕内容容器 --- */}
             <div class="flex-1 relative overflow-hidden flex flex-col">
               
               {/* ========================================================================= */}
-              {/* 一级导航页面（工作台 / 会话列表 / 监控 / 设置） */}
+              {/* 一级导航页面（工作台 / 会话 / 监控 / 设置） */}
               {/* ========================================================================= */}
               <div class={`absolute inset-0 flex flex-col transition-all duration-300 ${
                 inDetail ? "-translate-x-full opacity-0 pointer-events-none" : "translate-x-0 opacity-100"
               }`}>
                 
-                {/* 顶栏 Header（纯正 MIUIX 规范，不再被连接表单占据） */}
-                <div class="px-5 pt-2 pb-3 flex items-center justify-between border-b border-cardBorder">
+                {/* 顶栏 Header */}
+                <div class="px-5 pt-2 pb-2.5 flex items-center justify-between border-b border-cardBorder">
                   <div>
                     <h1 class="text-base font-bold text-white tracking-tight">
-                      {tab === "sessions" && t.tabSessions}
                       {tab === "workbench" && t.tabWorkbench}
+                      {tab === "sessions" && t.tabSessions}
                       {tab === "monitor" && t.tabMonitor}
                       {tab === "settings" && t.tabSettings}
                     </h1>
                     <p class="text-[11px] text-zinc-500 font-mono">
-                      {tab === "sessions" && `Node: 100.98.197.10 (${filter === "active" ? "活跃" : "全部"})`}
-                      {tab === "settings" && "Maestro Mobile v0.2.15 (Build 15)"}
+                      {tab === "workbench" && "态势与任务总览"}
+                      {tab === "sessions" && `100.98.197.10 (${filter === "active" ? t.filterActive : t.filterAll})`}
+                      {tab === "monitor" && "多窗口协同监督中枢"}
+                      {tab === "settings" && "v0.2.15 (Build 15)"}
                     </p>
                   </div>
 
@@ -453,139 +515,279 @@
                   </div>
                 </div>
 
-                {/* 会话列表 Tab */}
-                {tab === "sessions" && (
-                  <div class="flex-1 overflow-y-auto px-4 pt-3 pb-28 space-y-4 no-scrollbar">
+                {/* ------------------------------------------------------------------------- */}
+                {/* 1. 工作台 Tab (Dashboard 生产功能全量重现) */}
+                {/* ------------------------------------------------------------------------- */}
+                {tab === "workbench" && (
+                  <div class="flex-1 overflow-y-auto px-4 pt-3 pb-24 space-y-3.5 no-scrollbar">
                     
-                    {/* 分组头 1：当前活跃工作区 */}
+                    {/* Hero: Token 用量卡 (首个打开会话的真实用量) */}
+                    <div class="p-4 rounded-3xl bg-gradient-to-b from-cardBg to-[#0F1116] border border-cardBorder shadow-lg">
+                      <div class="flex justify-between items-center mb-1">
+                        <span class="text-[11px] text-zinc-400 font-medium">{t.heroTitle}</span>
+                        <span class="text-[10px] font-mono text-emerald-400 bg-emerald-950/60 px-2 py-0.5 rounded-full border border-emerald-800/60">
+                          Host 连通
+                        </span>
+                      </div>
+                      <div class="text-2xl font-bold font-mono text-white mb-1">
+                        885.3k <span class="text-xs text-zinc-500 font-normal">tokens</span>
+                      </div>
+                      <div class="text-[11px] text-zinc-400 font-mono flex items-center justify-between">
+                        <span>输出 164.2k · 成本 $0.68</span>
+                        <span class="text-purple-400 font-semibold">上下文 16.4%</span>
+                      </div>
+                    </div>
+
+                    {/* 2x2 指标卡网格 (与生产 dashboard-logic 严格对齐) */}
+                    <div class="grid grid-cols-2 gap-2">
+                      <div class="p-3 rounded-2xl bg-cardBg border border-cardBorder font-mono">
+                        <div class="text-lg font-bold text-zinc-100">3 / 3</div>
+                        <div class="text-[10px] text-zinc-500 mt-0.5">{t.metric1}</div>
+                      </div>
+                      <div class="p-3 rounded-2xl bg-cardBg border border-cardBorder font-mono">
+                        <div class="text-lg font-bold text-zinc-100">4 / 5</div>
+                        <div class="text-[10px] text-zinc-500 mt-0.5">{t.metric2}</div>
+                      </div>
+                      <div class="p-3 rounded-2xl bg-cardBg border border-cardBorder font-mono">
+                        <div class="text-lg font-bold text-purple-400">2 / 3</div>
+                        <div class="text-[10px] text-zinc-500 mt-0.5">{t.metric3}</div>
+                      </div>
+                      <div class="p-3 rounded-2xl bg-cardBg border border-cardBorder font-mono">
+                        <div class="text-lg font-bold text-amber-400">{showAskDialog ? "1" : "0"}</div>
+                        <div class="text-[10px] text-zinc-500 mt-0.5">{t.metric4}</div>
+                      </div>
+                    </div>
+
+                    {/* 待处理 Ask 弹窗组件 (生产 extension-ui 队列投影) */}
+                    {showAskDialog && (
+                      <div class="p-3.5 rounded-2xl bg-amber-950/40 border border-amber-800/80 shadow-md">
+                        <div class="flex items-center justify-between mb-1.5">
+                          <div class="flex items-center gap-1.5 text-amber-400 text-xs font-bold">
+                            <Icons.AlertTriangle size={14} />
+                            <span>{t.askTitle}</span>
+                          </div>
+                          <span class="text-[10px] text-amber-500 font-mono">ID: req-719</span>
+                        </div>
+                        <p class="text-xs text-zinc-200 mb-2.5 leading-relaxed">
+                          {t.askDesc} <span class="text-amber-300 font-mono">是否确认执行方案 B 改造构建？</span>
+                        </p>
+                        <div class="flex gap-2 font-mono text-xs">
+                          <button
+                            onClick={() => setShowAskDialog(false)}
+                            class="flex-1 py-1.5 rounded-xl bg-amber-600 hover:bg-amber-500 text-white font-bold transition-all shadow"
+                          >
+                            {t.askConfirm}
+                          </button>
+                          <button
+                            onClick={() => setShowAskDialog(false)}
+                            class="px-3 py-1.5 rounded-xl bg-zinc-800 text-zinc-300 hover:bg-zinc-700 transition-all"
+                          >
+                            {t.askReject}
+                          </button>
+                        </div>
+                      </div>
+                    )}
+
+                    {/* 【现在运行】列表 (按照用户第 8 条要求：统一采用 Bento 卡片规范) */}
                     <div>
-                      <div class="text-[11px] font-bold text-zinc-400 tracking-wide uppercase px-1 mb-2 font-mono flex items-center justify-between">
-                        <span>{t.groupTitle1}</span>
-                        <span class="text-[10px] text-zinc-500">1 会话</span>
+                      <div class="flex items-center justify-between px-1 mb-2">
+                        <span class="text-xs font-bold text-zinc-300 tracking-wide">{t.nowRunningTitle}</span>
+                        <button onClick={() => setTab("monitor")} class="text-[11px] text-purple-400 font-mono hover:underline">
+                          监控详情 →
+                        </button>
                       </div>
 
-                      {/* Bento 卡片 1 (流式生成中) */}
-                      {filteredSessions.filter(s => s.group === "group1").map(s => (
+                      {/* 统一 Bento 规范的现在运行卡片 */}
+                      {mockSessions.filter(s => s.status !== "idle").map(s => (
                         <div
-                          key={s.id}
-                          onClick={() => setInDetail(true)}
-                          class="p-4 rounded-3xl bg-cardBg border border-cardBorder hover:border-purple-500/50 active:scale-[0.99] transition-all cursor-pointer shadow-md mb-3"
+                          key={`running-${s.id}`}
+                          onClick={() => openSessionDetail(s)}
+                          class="p-3.5 rounded-3xl bg-cardBg border border-cardBorder hover:border-purple-500/50 active:scale-[0.99] transition-all cursor-pointer shadow-md mb-2.5"
                         >
-                          {/* 1. 卡片顶行：状态点 + 标题 + 模型Badge */}
-                          <div class="flex items-center justify-between mb-2">
-                            <div class="flex items-center gap-2 min-w-0">
-                              <span class="w-2.5 h-2.5 rounded-full bg-emerald-400 shadow-[0_0_8px_#34d399] shrink-0"></span>
-                              <span class="font-bold text-sm text-zinc-100 truncate">{s.title}</span>
+                          <div class="flex items-center justify-between mb-1.5">
+                            <div class="flex items-center gap-1.5 min-w-0">
+                              <span class={`w-2 h-2 rounded-full shrink-0 ${
+                                s.status === "streaming" ? "bg-emerald-400 shadow-[0_0_8px_#34d399]" : "bg-blue-400"
+                              }`}></span>
+                              <span class="font-bold text-xs text-zinc-100 truncate">{s.title}</span>
                             </div>
-                            <span class="text-[10px] px-2 py-0.5 rounded-full bg-purple-950/80 text-purple-300 border border-purple-800/80 font-mono shrink-0">
+                            <span class="text-[9px] px-2 py-0.5 rounded-full bg-purple-950/80 text-purple-300 border border-purple-800 font-mono">
                               {s.model}
                             </span>
                           </div>
 
-                          {/* 2. 工作目录行 */}
-                          <div class="flex items-center gap-1.5 text-[11px] text-zinc-400 font-mono mb-3">
-                            <Icons.Folder className="text-zinc-500 shrink-0" />
+                          <div class="flex items-center gap-1 text-[10px] text-zinc-400 font-mono mb-2">
+                            <Icons.Folder size={12} className="text-zinc-500 shrink-0" />
                             <span class="truncate">{s.cwd}</span>
                           </div>
 
-                          {/* 3. 2×2 Bento 便当盒仪表盘核心网格 */}
-                          <div class="grid grid-cols-2 gap-2 bg-cardInner p-3 rounded-2xl border border-zinc-800/80 font-mono text-[11px] mb-2.5">
+                          <div class="grid grid-cols-2 gap-1.5 bg-cardInner p-2 rounded-2xl font-mono text-[10px] mb-2">
                             <div>
-                              <div class="text-[10px] text-zinc-500 mb-0.5">{t.contextLabel}</div>
-                              <div class="text-zinc-200 font-semibold">{s.contextTokens}k / {s.contextMax}k ({s.contextPercent}%)</div>
+                              <span class="text-zinc-500">{t.contextLabel}: </span>
+                              <span class="text-zinc-200">{s.contextPercent}%</span>
                             </div>
                             <div>
-                              <div class="text-[10px] text-zinc-500 mb-0.5">{t.tokensLabel}</div>
-                              <div class="text-zinc-200 font-semibold">{s.totalTokens} <span class="text-zinc-500">({s.cost})</span></div>
-                            </div>
-                            <div>
-                              <div class="text-[10px] text-zinc-500 mb-0.5">{t.cacheLabel}</div>
-                              <div class="text-emerald-400 font-semibold">{s.cacheRate}%</div>
-                            </div>
-                            <div>
-                              <div class="text-[10px] text-zinc-500 mb-0.5">对话与时间</div>
-                              <div class="text-zinc-300 font-medium">{s.messageCount} {t.msgCount} · {s.updatedAt}</div>
+                              <span class="text-zinc-500">{t.tokensLabel}: </span>
+                              <span class="text-zinc-200">{s.totalTokens}</span>
                             </div>
                           </div>
 
-                          {/* 4. 上下文使用率彩色进度条 */}
-                          <div class="w-full h-1.5 bg-zinc-800 rounded-full overflow-hidden">
+                          <div class="w-full h-1 bg-zinc-800 rounded-full overflow-hidden">
                             <div class="h-full bg-purple-500 rounded-full" style={{ width: `${s.contextPercent}%` }}></div>
                           </div>
                         </div>
                       ))}
                     </div>
 
-                    {/* 分组头 2：其他工作空间 */}
-                    {filteredSessions.some(s => s.group === "group2") && (
-                      <div>
-                        <div class="text-[11px] font-bold text-zinc-400 tracking-wide uppercase px-1 mb-2 font-mono flex items-center justify-between">
-                          <span>{t.groupTitle2}</span>
-                          <span class="text-[10px] text-zinc-500">2 会话</span>
+                  </div>
+                )}
+
+                {/* ------------------------------------------------------------------------- */}
+                {/* 2. 会话列表 Tab (Sessions 生产全量重现) */}
+                {/* ------------------------------------------------------------------------- */}
+                {tab === "sessions" && (
+                  <div class="flex-1 overflow-y-auto px-4 pt-3 pb-28 space-y-3 no-scrollbar">
+                    {/* 分组渲染与 Bento 大卡片 */}
+                    {filteredSessions.map((s) => (
+                      <div
+                        key={s.id}
+                        onClick={() => openSessionDetail(s)}
+                        class="p-4 rounded-3xl bg-cardBg border border-cardBorder hover:border-purple-500/50 active:scale-[0.99] transition-all cursor-pointer shadow-md"
+                      >
+                        {/* 1. 状态点 + 标题 + 模型Badge */}
+                        <div class="flex items-center justify-between mb-2">
+                          <div class="flex items-center gap-2 min-w-0">
+                            <span class={`w-2.5 h-2.5 rounded-full shrink-0 ${
+                              s.status === "streaming" ? "bg-emerald-400 shadow-[0_0_8px_#34d399]" :
+                              s.status === "active" ? "bg-blue-400" : "bg-zinc-600"
+                            }`}></span>
+                            <span class="font-bold text-sm text-zinc-100 truncate">{s.title}</span>
+                          </div>
+                          <span class="text-[10px] px-2 py-0.5 rounded-full bg-purple-950/80 text-purple-300 border border-purple-800/80 font-mono shrink-0">
+                            {s.model}
+                          </span>
                         </div>
 
-                        {filteredSessions.filter(s => s.group === "group2").map(s => (
-                          <div
-                            key={s.id}
-                            onClick={() => setInDetail(true)}
-                            class="p-4 rounded-3xl bg-cardBg border border-cardBorder hover:border-purple-500/50 active:scale-[0.99] transition-all cursor-pointer shadow-md mb-3"
-                          >
-                            <div class="flex items-center justify-between mb-2">
-                              <div class="flex items-center gap-2 min-w-0">
-                                <span class={`w-2.5 h-2.5 rounded-full shrink-0 ${
-                                  s.status === "active" ? "bg-blue-400" : "bg-zinc-600"
-                                }`}></span>
-                                <span class="font-bold text-sm text-zinc-100 truncate">{s.title}</span>
-                              </div>
-                              <span class="text-[10px] px-2 py-0.5 rounded-full bg-zinc-800 text-zinc-300 border border-zinc-700 font-mono shrink-0">
-                                {s.model}
-                              </span>
-                            </div>
+                        {/* 2. 工作目录行 */}
+                        <div class="flex items-center gap-1.5 text-[11px] text-zinc-400 font-mono mb-3">
+                          <Icons.Folder className="text-zinc-500 shrink-0" />
+                          <span class="truncate">{s.cwd}</span>
+                        </div>
 
-                            <div class="flex items-center gap-1.5 text-[11px] text-zinc-400 font-mono mb-3">
-                              <Icons.Folder className="text-zinc-500 shrink-0" />
-                              <span class="truncate">{s.cwd}</span>
-                            </div>
-
-                            <div class="grid grid-cols-2 gap-2 bg-cardInner p-3 rounded-2xl border border-zinc-800/80 font-mono text-[11px] mb-2.5">
-                              <div>
-                                <div class="text-[10px] text-zinc-500 mb-0.5">{t.contextLabel}</div>
-                                <div class="text-zinc-200 font-semibold">{s.contextTokens}k / {s.contextMax}k ({s.contextPercent}%)</div>
-                              </div>
-                              <div>
-                                <div class="text-[10px] text-zinc-500 mb-0.5">{t.tokensLabel}</div>
-                                <div class="text-zinc-200 font-semibold">{s.totalTokens} <span class="text-zinc-500">({s.cost})</span></div>
-                              </div>
-                              <div>
-                                <div class="text-[10px] text-zinc-500 mb-0.5">{t.cacheLabel}</div>
-                                <div class="text-emerald-400 font-semibold">{s.cacheRate}%</div>
-                              </div>
-                              <div>
-                                <div class="text-[10px] text-zinc-500 mb-0.5">对话与时间</div>
-                                <div class="text-zinc-300 font-medium">{s.messageCount} {t.msgCount} · {s.updatedAt}</div>
-                              </div>
-                            </div>
-
-                            <div class="w-full h-1.5 bg-zinc-800 rounded-full overflow-hidden">
-                              <div class="h-full bg-purple-500 rounded-full" style={{ width: `${s.contextPercent}%` }}></div>
-                            </div>
+                        {/* 3. 2×2 Bento Grid 仪表盘核心网格 */}
+                        <div class="grid grid-cols-2 gap-2 bg-cardInner p-3 rounded-2xl border border-zinc-800/80 font-mono text-[11px] mb-2.5">
+                          <div>
+                            <div class="text-[10px] text-zinc-500 mb-0.5">{t.contextLabel}</div>
+                            <div class="text-zinc-200 font-semibold">{s.contextTokens}k / {s.contextMax}k ({s.contextPercent}%)</div>
                           </div>
-                        ))}
-                      </div>
-                    )}
+                          <div>
+                            <div class="text-[10px] text-zinc-500 mb-0.5">{t.tokensLabel}</div>
+                            <div class="text-zinc-200 font-semibold">{s.totalTokens} <span class="text-zinc-500">({s.cost})</span></div>
+                          </div>
+                          <div>
+                            <div class="text-[10px] text-zinc-500 mb-0.5">{t.cacheLabel}</div>
+                            <div class="text-emerald-400 font-semibold">{s.cacheRate}%</div>
+                          </div>
+                          <div>
+                            <div class="text-[10px] text-zinc-500 mb-0.5">对话与时间</div>
+                            <div class="text-zinc-300 font-medium">{s.messageCount} {t.msgCount} · {s.updatedAt}</div>
+                          </div>
+                        </div>
 
-                    {/* 分页加载完毕标尺 */}
+                        {/* 4. 上下文使用率细条 */}
+                        <div class="w-full h-1.5 bg-zinc-800 rounded-full overflow-hidden">
+                          <div class="h-full bg-purple-500 rounded-full" style={{ width: `${s.contextPercent}%` }}></div>
+                        </div>
+                      </div>
+                    ))}
+
                     <div class="text-center py-2 text-[11px] text-zinc-600 font-mono">
-                      {t.loadMore}
+                      已加载 {filteredSessions.length} / {mockSessions.length} 个会话
                     </div>
                   </div>
                 )}
 
-                {/* 设置 Tab：通信中枢与全局参数配置 */}
+                {/* ------------------------------------------------------------------------- */}
+                {/* 3. 监控 Tab (Monitor 生产全量重现) */}
+                {/* ------------------------------------------------------------------------- */}
+                {tab === "monitor" && (
+                  <div class="flex-1 overflow-y-auto px-4 pt-3 pb-28 space-y-3.5 no-scrollbar">
+                    
+                    {/* Attention 告警条 */}
+                    <div class="p-3 rounded-2xl bg-amber-950/40 border border-amber-800/70 flex items-center justify-between text-xs font-mono">
+                      <div class="flex items-center gap-2 text-amber-400 font-bold">
+                        <Icons.AlertTriangle size={15} />
+                        <span>{t.attentionTitle}</span>
+                      </div>
+                      <span class="text-zinc-300">1 窗口待决策</span>
+                    </div>
+
+                    {/* 监督窗口选择列表 */}
+                    <div class="space-y-2.5">
+                      {mockSessions.map((s) => {
+                        const isSelected = selectedMonitorKey === s.id;
+                        return (
+                          <div
+                            key={`mon-${s.id}`}
+                            onClick={() => setSelectedMonitorKey(s.id)}
+                            class={`p-3.5 rounded-2xl border transition-all cursor-pointer ${
+                              isSelected 
+                                ? "bg-cardBg border-purple-500 shadow-md" 
+                                : "bg-cardInner border-cardBorder opacity-80"
+                            }`}
+                          >
+                            <div class="flex items-center justify-between mb-1.5">
+                              <div class="flex items-center gap-2">
+                                <span class={`w-2 h-2 rounded-full ${isSelected ? "bg-purple-400" : "bg-zinc-500"}`}></span>
+                                <span class="font-bold text-xs text-white">{s.title}</span>
+                              </div>
+                              <span class="text-[10px] font-mono text-zinc-400">{s.status.toUpperCase()}</span>
+                            </div>
+                            <p class="text-[11px] text-zinc-400 font-mono mb-1">{s.objective}</p>
+                            <div class="text-[10px] text-zinc-500 font-mono flex justify-between">
+                              <span>DIR: {s.cwd}</span>
+                              <span class={isSelected ? "text-purple-400 font-bold" : ""}>
+                                {isSelected ? "✓ 目标锁定" : "点击选定"}
+                              </span>
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+
+                    {/* 固定 Steer 介入输入栏 */}
+                    <div class="p-3.5 rounded-2xl bg-cardBg border border-purple-500/50 space-y-2">
+                      <div class="text-[11px] text-purple-300 font-mono flex justify-between">
+                        <span>向选定窗口发送协同指令 (Steer Window)</span>
+                        <span>ws://100.98.197.10</span>
+                      </div>
+                      <div class="flex gap-2">
+                        <input
+                          type="text"
+                          placeholder={t.steerPlaceholder}
+                          value={steerInput}
+                          onChange={(e) => setSteerInput(e.target.value)}
+                          class="flex-1 bg-black/60 border border-zinc-700/80 rounded-xl px-3 py-2 text-xs text-white focus:outline-none focus:border-purple-500 font-mono"
+                        />
+                        <button
+                          onClick={() => { setSteerInput(""); alert("已成功向桌面 TUI 窗口注入 Steer 监督指令！"); }}
+                          class="px-3.5 py-2 rounded-xl bg-purple-600 hover:bg-purple-500 text-xs font-bold text-white shadow font-mono"
+                        >
+                          {t.steerBtn}
+                        </button>
+                      </div>
+                    </div>
+
+                  </div>
+                )}
+
+                {/* ------------------------------------------------------------------------- */}
+                {/* 4. 设置 Tab (Settings 生产全量重现) */}
+                {/* ------------------------------------------------------------------------- */}
                 {tab === "settings" && (
                   <div class="flex-1 overflow-y-auto px-4 pt-3 pb-28 space-y-4 no-scrollbar">
                     
-                    {/* 1. 通信与配对中枢专卡（整合原先在 host-sessions 顶部的全部配对逻辑） */}
+                    {/* 通信与配对中枢 (集成生产全部功能) */}
                     <div class="p-4 rounded-3xl bg-cardBg border border-purple-500/40 shadow-lg">
                       <div class="flex items-center justify-between mb-2">
                         <div class="flex items-center gap-2">
@@ -605,7 +807,7 @@
                         </div>
                         <div class="flex justify-between text-zinc-400">
                           <span>{t.hubHeartbeat}:</span>
-                          <span class="text-emerald-400">20s App-Ping (RFC6455 Guard)</span>
+                          <span class="text-emerald-400">20s App-Ping (Active)</span>
                         </div>
                         <div class="flex justify-between text-zinc-400">
                           <span>{t.hubBackpressure}:</span>
@@ -613,7 +815,7 @@
                         </div>
                       </div>
 
-                      {/* 操作按钮组：扫码配对、输入配对码、重测 */}
+                      {/* 三联配对操作组 */}
                       <div class="grid grid-cols-3 gap-2">
                         <button
                           onClick={() => setPairModal("candidates")}
@@ -639,54 +841,65 @@
                       </div>
                     </div>
 
-                    {/* 2. 语言与外观偏好 */}
-                    <div class="p-4 rounded-3xl bg-cardBg border border-cardBorder text-xs space-y-3">
-                      <div class="flex justify-between items-center text-zinc-300">
-                        <span class="font-medium">系统语言 / Language</span>
-                        <div class="flex bg-cardInner p-0.5 rounded-xl border border-zinc-800 font-mono text-[11px]">
-                          <button
-                            onClick={() => setLang("zh")}
-                            class={`px-2.5 py-1 rounded-lg transition-all ${lang === "zh" ? "bg-purple-600 text-white font-bold" : "text-zinc-400"}`}
-                          >
-                            中文
-                          </button>
-                          <button
-                            onClick={() => setLang("en")}
-                            class={`px-2.5 py-1 rounded-lg transition-all ${lang === "en" ? "bg-purple-600 text-white font-bold" : "text-zinc-400"}`}
-                          >
-                            EN
-                          </button>
+                    {/* 语言切换 */}
+                    <div class="p-3.5 rounded-2xl bg-cardBg border border-cardBorder flex justify-between items-center text-xs">
+                      <span class="font-medium text-zinc-200">系统双语 / Language</span>
+                      <div class="flex bg-cardInner p-0.5 rounded-xl border border-zinc-800 font-mono text-[11px]">
+                        <button
+                          onClick={() => setLang("zh")}
+                          class={`px-2.5 py-1 rounded-lg transition-all ${lang === "zh" ? "bg-purple-600 text-white font-bold" : "text-zinc-400"}`}
+                        >
+                          中文
+                        </button>
+                        <button
+                          onClick={() => setLang("en")}
+                          class={`px-2.5 py-1 rounded-lg transition-all ${lang === "en" ? "bg-purple-600 text-white font-bold" : "text-zinc-400"}`}
+                        >
+                          EN
+                        </button>
+                      </div>
+                    </div>
+
+                    {/* 生产数据拉取参数滑块 */}
+                    <div class="p-4 rounded-3xl bg-cardBg border border-cardBorder space-y-3">
+                      <div class="text-xs font-bold text-zinc-200 mb-1">{t.settingsParams}</div>
+                      {t.settingsSliders.map((s, idx) => (
+                        <div key={idx} class="space-y-1 font-mono text-xs">
+                          <div class="flex justify-between text-zinc-400">
+                            <span>{s.label}</span>
+                            <span class="text-purple-300 font-bold">{s.value} {s.unit}</span>
+                          </div>
+                          <div class="w-full h-1.5 bg-zinc-800 rounded-full overflow-hidden">
+                            <div class="h-full bg-purple-500 rounded-full" style={{ width: `${(idx + 1) * 22}%` }}></div>
+                          </div>
                         </div>
-                      </div>
-                      
-                      <div class="border-t border-zinc-800 pt-3 flex justify-between items-center text-zinc-300">
-                        <span class="font-medium">边缘右滑返回手势</span>
-                        <span class="text-emerald-400 font-mono text-[11px]">已启用 (Swipe-to-Back)</span>
-                      </div>
+                      ))}
                     </div>
 
-                  </div>
-                )}
-
-                {/* 工作台与监控占位 */}
-                {(tab === "workbench" || tab === "monitor") && (
-                  <div class="flex-1 flex flex-col items-center justify-center text-center p-6 text-zinc-500 font-mono text-xs">
-                    <div class="p-3.5 rounded-3xl bg-cardBg border border-cardBorder mb-2 text-zinc-400">
-                      {tab === "workbench" ? <Icons.Workbench size={26} /> : <Icons.Monitor size={26} />}
+                    {/* 通知与开关 */}
+                    <div class="p-4 rounded-3xl bg-cardBg border border-cardBorder space-y-3">
+                      {t.settingsSwitches.map((item, idx) => (
+                        <div key={idx} class="flex items-center justify-between text-xs">
+                          <div>
+                            <div class="font-medium text-zinc-200">{item.label}</div>
+                            <div class="text-[11px] text-zinc-500">{item.desc}</div>
+                          </div>
+                          <div class="w-10 h-6 bg-purple-600 rounded-full p-0.5 flex items-center justify-end">
+                            <div class="w-5 h-5 rounded-full bg-white shadow"></div>
+                          </div>
+                        </div>
+                      ))}
                     </div>
-                    <p class="text-zinc-300 font-bold text-sm mb-1">{tab === "workbench" ? "任务工作台" : "主机集群监控"}</p>
-                    <p class="text-zinc-500">支持横向手势左滑/右滑快速切换</p>
+
                   </div>
                 )}
 
                 {/* ========================================================================= */}
-                {/* 底部悬浮 Floating Toolbar（位于 Dock 上方，单手极佳盲操） */}
+                {/* 底部悬浮 Floating Toolbar (仅在会话 Tab 呈现) */}
                 {/* ========================================================================= */}
                 {tab === "sessions" && (
                   <div class="absolute bottom-20 inset-x-0 flex justify-center z-40 px-4 pointer-events-none">
                     <div class="glass-bar border border-purple-500/40 shadow-2xl rounded-2xl px-2.5 py-1.5 flex items-center gap-1.5 pointer-events-auto transition-all">
-                      
-                      {/* 活跃 / 全部 切换 */}
                       <button
                         onClick={() => setFilter("active")}
                         class={`px-3 py-1 rounded-xl text-xs font-semibold transition-all ${
@@ -707,7 +920,6 @@
 
                       <div class="w-[1px] h-4 bg-zinc-700 mx-0.5"></div>
 
-                      {/* 悬浮搜索展开 */}
                       {!searchExpanded ? (
                         <button
                           onClick={() => setSearchExpanded(true)}
@@ -733,7 +945,7 @@
                   </div>
                 )}
 
-                {/* 底部 Dock 栏（优化项 1: 支持横滑切换） */}
+                {/* 底部 4 栏 Dock (优化项 1: 支持横滑手势切换) */}
                 <div class="h-16 glass-dock border-t border-cardBorder flex items-center justify-around px-2 z-40">
                   {[
                     { id: "workbench", label: t.tabWorkbench, Icon: Icons.Workbench },
@@ -759,24 +971,24 @@
               </div>
 
               {/* ========================================================================= */}
-              {/* 二级页面：详细会话页（优化项 2: 最小化回会话 + 优化项 3: 边缘右滑返回） */}
+              {/* 二级页面：详细会话页 (优化项 2: 最小化不跳错 + 优化项 3: 边缘右滑返回) */}
               {/* ========================================================================= */}
               <div class={`absolute inset-0 bg-appDark flex flex-col z-50 transition-all duration-300 ${
                 inDetail ? "translate-x-0 opacity-100" : "translate-x-full opacity-0 pointer-events-none"
               }`}>
                 {/* 详情页 Header */}
                 <div class="px-4 py-2.5 border-b border-cardBorder flex items-center justify-between glass-dock">
-                  {/* 左上角最小化：返回会话列表，绝不跳工作台 */}
+                  {/* 左上角返回：精确回到会话列表 */}
                   <button
                     onClick={() => setInDetail(false)}
-                    class="flex items-center gap-1.5 px-2.5 py-1 rounded-xl bg-cardInner border border-zinc-700/80 text-zinc-300 text-xs font-medium hover:text-white"
+                    class="flex items-center gap-1 px-2.5 py-1 rounded-xl bg-cardInner border border-zinc-700/80 text-zinc-300 text-xs font-medium hover:text-white"
                   >
                     <Icons.Minimize size={13} />
                     <span>{t.backBtn}</span>
                   </button>
 
                   <div class="text-center">
-                    <h2 class="text-xs font-bold text-zinc-100 font-mono">pi-maestro-app-party</h2>
+                    <h2 class="text-xs font-bold text-zinc-100 font-mono">{activeSession.title}</h2>
                     <span class="text-[10px] text-emerald-400 font-mono">● {t.statusStreaming}</span>
                   </div>
 
@@ -791,73 +1003,75 @@
                   <span>可拖拽体验</span>
                 </div>
 
-                {/* 聊天气泡区：展示 Bug 1、Bug 2、Bug 3 修复后的真实视觉效果 */}
+                {/* 对话消息流与 Markdown 测试区 */}
                 <div class="flex-1 overflow-y-auto p-4 space-y-4 no-scrollbar">
-                  
-                  {/* 用户气泡（单条渲染，无重复） */}
-                  <div class="flex justify-end">
-                    <div class="max-w-[80%] bg-purple-600 text-white px-3.5 py-2 rounded-2xl rounded-tr-xs text-xs shadow-md font-medium">
-                      ios 消息测试
+                  {chatMessages.map((msg) => (
+                    <div key={msg.id} class={`flex ${msg.sender === "user" ? "justify-end" : "justify-start"}`}>
+                      {msg.sender === "user" ? (
+                        <div class="max-w-[80%] bg-purple-600 text-white px-3.5 py-2 rounded-2xl rounded-tr-xs text-xs shadow-md font-medium">
+                          {msg.text}
+                        </div>
+                      ) : (
+                        <div class="max-w-[92%] bg-cardBg border border-cardBorder text-zinc-200 p-4 rounded-3xl rounded-tl-xs text-xs space-y-2.5 shadow-md leading-relaxed">
+                          <p>
+                            收到你的最新 iPhone 消息：
+                            <span class="inline-block px-1.5 py-0.5 rounded bg-cardInner text-purple-300 font-mono font-bold border border-zinc-700">
+                              ios 消息测试
+                            </span>
+                            ！
+                          </p>
+
+                          <p class="font-medium text-zinc-300">请看此时手机端屏幕：</p>
+
+                          {/* Bug 1 修复展示：有序列表后文字全部保留 */}
+                          <div class="space-y-1.5 pl-2 border-l-2 border-purple-500/50 my-2">
+                            <div class="flex items-start gap-1.5 text-zinc-200">
+                              <span class="text-purple-400 font-mono font-bold">1.</span>
+                              <span>是否只渲染了一次（不再出现两条一模一样的蓝色用户气泡）？</span>
+                            </div>
+                            <div class="flex items-start gap-1.5 text-zinc-200">
+                              <span class="text-purple-400 font-mono font-bold">2.</span>
+                              <span>当前这条回复的流式输出是否依然流畅同屏打字？</span>
+                            </div>
+                          </div>
+
+                          {/* Bug 3 修复展示：带 # 符号与层级强调色的标题 */}
+                          <div class="pt-2 border-t border-zinc-800/80">
+                            <div class="text-sm font-bold text-white flex items-center gap-1.5">
+                              <span class="text-purple-400 font-mono font-semibold">###</span>
+                              <span>根因与修复结论</span>
+                            </div>
+                            <p class="text-[11px] text-zinc-400 mt-1">
+                              所有业务功能（工作台指标卡、待处理 Ask 弹窗、Monitor 监督指令、设置配对中枢）已全部闭环。
+                            </p>
+                          </div>
+                        </div>
+                      )}
                     </div>
-                  </div>
-
-                  {/* 大模型回复气泡 */}
-                  <div class="flex justify-start">
-                    <div class="max-w-[92%] bg-cardBg border border-cardBorder text-zinc-200 p-4 rounded-3xl rounded-tl-xs text-xs space-y-2.5 shadow-md">
-                      
-                      <p class="leading-relaxed">
-                        {t.testPrompt}
-                        {/* Bug 2 修复展示：嵌套加粗等宽代码 */}
-                        <span class="inline-block px-1.5 py-0.5 rounded bg-cardInner text-purple-300 font-mono font-bold border border-zinc-700">
-                          {t.testTag}
-                        </span>
-                        ！
-                      </p>
-
-                      <p class="font-medium text-zinc-300">{t.testSub}</p>
-
-                      {/* Bug 1 修复展示：有序列表后文字全部保留 */}
-                      <div class="space-y-1.5 pl-2 border-l-2 border-purple-500/50 my-2">
-                        <div class="flex items-start gap-1.5 text-zinc-200">
-                          <span class="text-purple-400 font-mono font-bold">1.</span>
-                          <span>{t.test1}</span>
-                        </div>
-                        <div class="flex items-start gap-1.5 text-zinc-200">
-                          <span class="text-purple-400 font-mono font-bold">2.</span>
-                          <span>{t.test2}</span>
-                        </div>
-                      </div>
-
-                      {/* Bug 3 修复展示：带 # 符号与层级强调色的标题 */}
-                      <div class="pt-2 border-t border-zinc-800/80">
-                        <div class="text-sm font-bold text-white flex items-center gap-1.5">
-                          <span class="text-purple-400 font-mono font-semibold">###</span>
-                          <span>{t.titleDemo}</span>
-                        </div>
-                        <p class="text-[11px] text-zinc-400 mt-1 leading-relaxed">
-                          完全基于方案 B 便当盒工坊深化，2×2 Bento Grid + Floating Toolbar + 边缘返回已全部在原型中就绪。
-                        </p>
-                      </div>
-
-                    </div>
-                  </div>
+                  ))}
                 </div>
 
-                {/* 底部输入框 */}
+                {/* 真实交互底部输入栏 */}
                 <div class="p-3 border-t border-cardBorder glass-dock flex items-center gap-2">
                   <input
                     type="text"
-                    placeholder={t.inputPlaceholder}
+                    placeholder="输入消息发送给桌面 TUI..."
+                    value={chatDraft}
+                    onChange={(e) => setChatDraft(e.target.value)}
+                    onKeyDown={(e) => e.key === "Enter" && handleSendChat()}
                     class="flex-1 bg-black/60 border border-zinc-700/80 rounded-full px-3.5 py-2 text-xs text-white focus:outline-none focus:border-purple-500"
                   />
-                  <button class="w-8 h-8 rounded-full bg-purple-600 hover:bg-purple-500 flex items-center justify-center text-white text-xs shadow-md">
+                  <button
+                    onClick={handleSendChat}
+                    class="w-8 h-8 rounded-full bg-purple-600 hover:bg-purple-500 flex items-center justify-center text-white text-xs shadow-md"
+                  >
                     <Icons.Send size={13} />
                   </button>
                 </div>
               </div>
 
               {/* ========================================================================= */}
-              {/* 配对中枢弹窗（保留生产全部配对能力） */}
+              {/* 配对中枢交互弹层 */}
               {/* ========================================================================= */}
               {pairModal && (
                 <div class="absolute inset-0 bg-black/80 z-50 flex flex-col justify-end p-4 animate-fade-in">
@@ -879,7 +1093,7 @@
                           <Icons.QrCode size={48} className="text-purple-400 opacity-60" />
                         </div>
                         <p class="text-xs text-zinc-300">对准 Mac 终端执行 /maestro-mobile qr 后的二维码</p>
-                        <p class="text-[11px] text-zinc-500 mt-1 font-mono">（扫码完成后相机自动关停，iOS 绿点即灭）</p>
+                        <p class="text-[11px] text-zinc-500 mt-1 font-mono">（扫码成功后相机自动关闭，iOS 顶栏绿点即灭）</p>
                       </div>
                     )}
 
@@ -926,12 +1140,14 @@
             </div>
           </div>
 
-          {/* 交互说明与功能完整性 checklist */}
-          <div class="mt-6 text-xs text-zinc-400 text-center max-w-xl space-y-1 font-mono">
-            <p class="text-zinc-200 font-bold">方案 B（便当盒工坊）完整功能检验点：</p>
-            <p>1. 底部 Floating Toolbar：切换 <span class="text-purple-400">⚡ 活跃</span> / 全部，点击放大镜流体展开搜索。</p>
-            <p>2. 点击会话卡片进入详情，测试左上角“收起会话”（回会话列表，不跳工作台）与左边缘右滑返回。</p>
-            <p>3. 点击“设置”Tab，查看迁移后的“通信与配对中枢”，点击扫码/配对码测试弹层交互。</p>
+          {/* 完整功能验证清单 */}
+          <div class="mt-5 text-xs text-zinc-400 text-center max-w-xl space-y-1 font-mono">
+            <p class="text-zinc-200 font-bold">方案 B（便当盒工坊）全功能交互清单：</p>
+            <p>1. <span class="text-purple-400">工作台</span>：Hero Token用量、2x2指标卡、待处理Ask交互弹层、现在运行Bento卡片。</p>
+            <p>2. <span class="text-purple-400">会话</span>：2x2 Bento 卡片、底部 Floating Toolbar（活跃/全部 + 流体搜索过滤）。</p>
+            <p>3. <span class="text-purple-400">监控</span>：Attention 警告条、窗口选择锁定、底部 Steer 监督指令发送。</p>
+            <p>4. <span class="text-purple-400">设置</span>：通信中枢（扫码/配对码/候选IP）、双语、数据拉取滑块参数。</p>
+            <p>5. <span class="text-purple-400">详情页</span>：收起会话防跳错、边缘右滑返回、真实输入发送对话流。</p>
           </div>
         </div>
       );
