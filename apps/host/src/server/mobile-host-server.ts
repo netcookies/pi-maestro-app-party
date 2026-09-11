@@ -782,7 +782,12 @@ export class MobileHostServer {
             this.sendError(client, "invalid_image", "images 元素必须是 base64 data 与 mime 字段齐全的图片", (command as { id?: string }).id ?? "");
             break;
           }
-          await runner.prompt(command.message, undefined, images);
+          // 双端协同：若会话当前正处于流式生成中（如 TUI/后台正在运行），走 steer 介入；空闲状态正常 prompt
+          if (runner.state.runState === "streaming") {
+            await runner.steer(command.message);
+          } else {
+            await runner.prompt(command.message, undefined, images);
+          }
           this.sendAck(client, command, {});
           break;
         }

@@ -13,6 +13,7 @@ import { replayTailFromJsonl, replayPageFromJsonl, searchInJsonl } from "./jsonl
 import { readSessionUsage } from "./usage-reader.js";
 import { MobileExtensionUiBridge } from "./mobile-ui-context.js";
 import { imageBlocksFromContent, materializeImages } from "./image-cache.js";
+import { JsonlTailWatcher } from "./jsonl-tail-watcher.js";
 
 const HISTORY_PAGE_SIZE = 80;
 /**
@@ -38,6 +39,7 @@ export class SdkSessionRunner implements SessionRunner {
   private readonly eventLog = new EventLog();
   private readonly timeline: TimelineItem[] = [];
   private readonly uiBridge: MobileExtensionUiBridge;
+  private tailWatcher: JsonlTailWatcher | null = null;
   private unsubscribe: (() => void) | undefined;
   private session: MobileAgentSession;
   private _state: SessionState;
@@ -265,6 +267,10 @@ export class SdkSessionRunner implements SessionRunner {
 
   async dispose(): Promise<void> {
     this.unsubscribe?.();
+    if (this.tailWatcher) {
+      await this.tailWatcher.dispose();
+      this.tailWatcher = null;
+    }
     this.uiBridge.cancelAll();
     await this.runtime.dispose();
   }
@@ -306,6 +312,18 @@ export class SdkSessionRunner implements SessionRunner {
       },
     });
     this.unsubscribe = this.session.subscribe((event: unknown) => this.handleSessionEvent(event));
+
+    // 方案 A 双端实时同步：监听外部进程（如桌面 TUI）追加写进会话 JSONL 的新内容，
+    // 实时通过 WebSocket 广播给已连接的移动端，实现桌面敲字/输出手机同屏实时显示。
+    if (this.session.sessionFile) {
+      this.tailWatcher = new JsonlTailWatcher(this.session.sessionFile, (items) => {
+        for (const item of items) {
+          this.pushTimelineItem(item);
+          this.emit(this.eventLog.record({ type: "timeline_item", sessionId: this.id, item }));
+        }
+      });
+      await this.tailWatcher.start();
+    }
   }
 
   /** 是否还有更早的历史可加载 */

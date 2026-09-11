@@ -7,6 +7,8 @@ import { WorkspaceTelemetryReader } from "./workspace-telemetry.js";
 import { projectMonitorState, telemetryStableKey, monitorStateEvent } from "./monitor-projection.js";
 import { VersionDetector, type ComponentVersions } from "./version-detector.js";
 import { EventLog } from "./event-log.js";
+import { normalize } from "node:path";
+import type { WorkspaceOwner } from "./workspace-telemetry.js";
 
 /**
  * HostController — 集中管理所有会话 + Maestro 状态 + 事件分发
@@ -63,6 +65,17 @@ export class HostController {
   /** 读取 workspace telemetry（owner 状态，Monitor/Teammate 合同） */
   async readTelemetry() {
     return this.telemetryReader.read();
+  }
+
+  /** 查询匹配该 cwd 的当前活跃桌面 TUI 窗口（heartbeat 新鲜且 cwd 一致） */
+  async findActiveOwnerForCwd(cwd: string): Promise<WorkspaceOwner | undefined> {
+    try {
+      const t = await this.telemetryReader.read();
+      const normCwd = normalize(cwd);
+      return t.owners.find((o) => o.alive && normalize(o.normalizedCwd) === normCwd);
+    } catch {
+      return undefined;
+    }
   }
 
   /** 轮询 telemetry，状态变化时推送 monitor_state 事件（single-flight + 稳定键变更检测） */

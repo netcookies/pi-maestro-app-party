@@ -1,5 +1,5 @@
 import { describe, expect, it, beforeEach, afterEach } from "vitest";
-import { mkdir, writeFile, rm } from "node:fs/promises";
+import { mkdir, writeFile, rm, mkdtemp, appendFile } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { randomUUID } from "node:crypto";
@@ -321,5 +321,51 @@ describe("live 条目受 MAX_TIMELINE_ITEMS 约束（写入路径不得无界）
     expect(it.snapshot().timeline.length).toBe(MAX_TIMELINE_ITEMS);
     expect(it.timeline[it.timeline.length - 1].text).toBe(`u-${MAX_TIMELINE_ITEMS + 999}`);
     await runner.dispose();
+  });
+});
+
+describe("SdkSessionRunner 集成 JsonlTailWatcher 与双向生命周期 (AC2, AC3)", () => {
+  let dir: string;
+  let path: string;
+  let events: HostEvent[];
+
+  beforeEach(async () => {
+    dir = await mkdtemp(join(tmpdir(), `runner-tail-${randomUUID()}`));
+    path = join(dir, "session.jsonl");
+    await writeFile(path, "");
+    events = [];
+  });
+
+  afterEach(async () => {
+    await rm(dir, { recursive: true, force: true });
+  });
+
+  it("外部追加写入时，通过 Watcher 捕获并广播 timeline_item", async () => {
+    const runtime = makeRuntime(path);
+    const runner = await SdkSessionRunner.open(
+      { createRuntime: async () => runtime.runtime, listSessions: async () => [] },
+      { cwd: "/tmp", mode: "continue", sessionFile: path },
+      (e: HostEvent) => events.push(e),
+    );
+
+    // 模拟外部桌面 TUI 进程写入一条 assistant 回复
+    const newLine = JSON.stringify({
+      type: "message",
+      id: "tui-msg-1",
+      message: { role: "assistant", content: "来自桌面TUI的回复" },
+    }) + "\n";
+    await appendFile(path, newLine, "utf8");
+
+    // 检查 watcher 是否捕获并 emit 广播
+    const internal = runner as unknown as { tailWatcher: { checkNewContent: () => Promise<void> } | null };
+    expect(internal.tailWatcher).not.toBeNull();
+    await internal.tailWatcher!.checkNewContent();
+
+    const timelineEvents = events.filter((e) => e.type === "timeline_item") as Extract<HostEvent, { type: "timeline_item" }>[];
+    expect(timelineEvents.some((e) => e.item.text === "来自桌面TUI的回复")).toBe(true);
+
+    // 验证生命周期：runner.dispose() 必须释放 watcher
+    await runner.dispose();
+    expect(internal.tailWatcher).toBeNull();
   });
 });
