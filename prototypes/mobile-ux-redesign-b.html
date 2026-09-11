@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Maestro Mobile - 方案 B 完整生产级功能交互原型</title>
+  <title>Maestro Mobile - 方案 B 完整生产级功能交互原型 (精确对齐版)</title>
   <!-- React & Babel CDN -->
   <script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
   <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
@@ -25,12 +25,10 @@
             mono: ['JetBrains Mono', 'monospace'],
           },
           colors: {
-            // 深色系 (MIUIX Dark)
             appDark: '#08090C',
             cardBgDark: '#12151B',
             cardInnerDark: '#181C24',
             cardBorderDark: '#202530',
-            // 浅色系 (MIUIX Light)
             appLight: '#F4F5F7',
             cardBgLight: '#FFFFFF',
             cardInnerLight: '#F8F9FA',
@@ -115,12 +113,21 @@
           <line x1="21" y1="21" x2="16.65" y2="16.65"/>
         </svg>
       ),
-      Minimize: ({ size = 14, className = "" }) => (
+      ArrowLeft: ({ size = 18, className = "" }) => (
+        <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round" className={className}>
+          <line x1="19" y1="12" x2="5" y2="12"/>
+          <polyline points="12 19 5 12 12 5"/>
+        </svg>
+      ),
+      ArrowDown: ({ size = 16, className = "" }) => (
+        <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round" className={className}>
+          <line x1="12" y1="5" x2="12" y2="19"/>
+          <polyline points="19 12 12 19 5 12"/>
+        </svg>
+      ),
+      Clip: ({ size = 16, className = "" }) => (
         <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={className}>
-          <polyline points="4 14 10 14 10 20"/>
-          <polyline points="20 10 14 10 14 4"/>
-          <line x1="14" y1="10" x2="21" y2="3"/>
-          <line x1="3" y1="21" x2="10" y2="14"/>
+          <path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"/>
         </svg>
       ),
       Radio: ({ size = 16, className = "" }) => (
@@ -168,12 +175,6 @@
           <circle cx="12" cy="12" r="5"/>
           <line x1="12" y1="1" x2="12" y2="3"/>
           <line x1="12" y1="21" x2="12" y2="23"/>
-          <line x1="4.22" y1="4.22" x2="5.64" y2="5.64"/>
-          <line x1="18.36" y1="18.36" x2="19.78" y2="19.78"/>
-          <line x1="1" y1="12" x2="3" y2="12"/>
-          <line x1="21" y1="12" x2="23" y2="12"/>
-          <line x1="4.22" y1="19.78" x2="5.64" y2="18.36"/>
-          <line x1="18.36" y1="5.64" x2="19.78" y2="4.22"/>
         </svg>
       ),
       Moon: ({ size = 14, className = "" }) => (
@@ -187,10 +188,30 @@
           <line x1="12" y1="18" x2="12.01" y2="18"/>
         </svg>
       ),
-      Close: ({ size = 16, className = "" }) => (
+      Brain: ({ size = 13, className = "" }) => (
         <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={className}>
-          <line x1="18" y1="6" x2="6" y2="18"/>
-          <line x1="6" y1="6" x2="18" y2="18"/>
+          <path d="M9.5 2A2.5 2.5 0 0 1 12 4.5v15a2.5 2.5 0 0 1-4.96.44 2.5 2.5 0 0 1-2.96-3.08 3 3 0 0 1-.34-5.58 2.5 2.5 0 0 1 1.32-4.24 2.5 2.5 0 0 1 4.44-2.04z"/>
+          <path d="M14.5 2A2.5 2.5 0 0 0 12 4.5v15a2.5 2.5 0 0 0 4.96.44 2.5 2.5 0 0 0 2.96-3.08 3 3 0 0 0 .34-5.58 2.5 2.5 0 0 0-1.32-4.24 2.5 2.5 0 0 0-4.44-2.04z"/>
+        </svg>
+      ),
+      Bolt: ({ size = 13, className = "" }) => (
+        <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={className}>
+          <polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/>
+        </svg>
+      ),
+      Layers: ({ size = 13, className = "" }) => (
+        <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={className}>
+          <polygon points="12 2 2 7 12 12 22 7 12 2"/>
+          <polyline points="2 17 12 22 22 17"/>
+          <polyline points="2 12 12 17 22 12"/>
+        </svg>
+      ),
+      Minimize2: ({ size = 13, className = "" }) => (
+        <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={className}>
+          <polyline points="4 14 10 14 10 20"/>
+          <polyline points="20 10 14 10 14 4"/>
+          <line x1="14" y1="10" x2="21" y2="3"/>
+          <line x1="3" y1="21" x2="10" y2="14"/>
         </svg>
       )
     };
@@ -204,7 +225,7 @@
         tabSettings: "设置",
         filterActive: "活跃中",
         filterAll: "全部会话",
-        searchPlaceholder: "输入项目、ID、模型或路径...",
+        searchPlaceholder: "输入关键词搜索标题、ID、路径...",
         statusStreaming: "流式生成中",
         statusActive: "活跃在线",
         statusIdle: "空闲等待",
@@ -214,9 +235,8 @@
         msgCount: "条对话",
         onlineBadge: "在线",
         offlineBadge: "离线",
-        hostTitle: "桌面主机端 (Host)",
         hostConnected: "已连接主机 (Connected)",
-        hubTitle: "桌面主机通信与配对中枢",
+        hubTitle: "通信与配对中枢",
         hubDesc: "经由 WebSocket (ws://) 安全隧道与桌面主机进程双向同步",
         hubNode: "主机节点 (Host Node)",
         hubHeartbeat: "应用层心跳 (App-Ping)",
@@ -225,8 +245,6 @@
         btnRefresh: "测速重测",
         btnScan: "扫码配对",
         btnCode: "输入配对码",
-        backBtn: "收起并返回",
-        swipeBackHint: "← 屏幕左侧边缘右滑返回",
         langToggle: "English",
         nowRunningTitle: "现在运行中的会话",
         heroTitle: "当前活跃会话 Token 总用量",
@@ -236,19 +254,17 @@
         metric4: "待决交互确认 (Ask)",
         askTitle: "待决交互确认 (Ask)",
         askDesc: "来自桌面插件界面的交互确认请求：",
-        askConfirm: "批准执行 (Approve)",
-        askReject: "拒绝 (Reject)",
+        askConfirm: "批准执行",
+        askReject: "拒绝",
         attentionTitle: "系统关注警告 (Attention)",
-        steerPlaceholder: "输入协同干预指令 (Steer)...",
-        steerBtn: "协同介入",
-        // 设置页 5 模块按顺序
-        secAppearance: "1. 外观模式",
+        // 设置页标题无 1. 2. 3.
+        secAppearance: "外观模式",
         appearanceAuto: "跟随系统",
         appearanceLight: "浅色白昼",
         appearanceDark: "深色黑夜",
-        secLanguage: "2. 系统语言 / Language",
-        secHub: "3. 通信与配对中枢",
-        secParams: "4. 数据拉取性能参数",
+        secLanguage: "系统语言 / Language",
+        secHub: "通信与配对中枢",
+        secParams: "数据拉取性能参数",
         settingsSliders: [
           { label: "每页加载消息数", value: "30", unit: "条" },
           { label: "向下滚动预加载阈值", value: "200", unit: "px" },
@@ -259,7 +275,7 @@
           { label: "高优先级交互确认提醒", desc: "当收到 Ask 审核提问时触发触觉震动" },
           { label: "仅 Wi-Fi 下拉取超长历史", desc: "节约移动蜂窝流量" }
         ],
-        secVersion: "5. 版本与诊断信息",
+        secVersion: "版本与诊断信息",
         versionApp: "Maestro Mobile 客户端",
         versionHost: "桌面主机服务 (Host)",
         versionPi: "Pi 智能体会话引擎",
@@ -285,9 +301,8 @@
         msgCount: "messages",
         onlineBadge: "ONLINE",
         offlineBadge: "OFFLINE",
-        hostTitle: "Desktop Host",
         hostConnected: "Connected",
-        hubTitle: "Desktop Host Connection Hub",
+        hubTitle: "Host Connection & Pairing Hub",
         hubDesc: "Bidirectional real-time sync via authenticated WebSocket tunnel",
         hubNode: "Host Node",
         hubHeartbeat: "App-Ping Heartbeat",
@@ -296,8 +311,6 @@
         btnRefresh: "Ping Host",
         btnScan: "Scan QR",
         btnCode: "Enter Code",
-        backBtn: "Minimize",
-        swipeBackHint: "← Swipe from edge to return",
         langToggle: "中文",
         nowRunningTitle: "Now Running Sessions",
         heroTitle: "Active Session Token Usage",
@@ -310,15 +323,13 @@
         askConfirm: "Approve",
         askReject: "Reject",
         attentionTitle: "System Attention",
-        steerPlaceholder: "Steer selected window...",
-        steerBtn: "Steer Window",
-        secAppearance: "1. Appearance Mode",
+        secAppearance: "Appearance Mode",
         appearanceAuto: "Auto",
         appearanceLight: "Light",
         appearanceDark: "Dark",
-        secLanguage: "2. System Language",
-        secHub: "3. Connection & Pairing Hub",
-        secParams: "4. Data Fetching Parameters",
+        secLanguage: "System Language",
+        secHub: "Connection & Pairing Hub",
+        secParams: "Data Fetching Parameters",
         settingsSliders: [
           { label: "Page Message Limit", value: "30", unit: "items" },
           { label: "Preload Threshold", value: "200", unit: "px" },
@@ -329,7 +340,7 @@
           { label: "High Priority Ask Alerts", desc: "Haptic feedback on interactive ask events" },
           { label: "Wi-Fi Only for Long History", desc: "Conserve mobile cellular bandwidth" }
         ],
-        secVersion: "5. Version & Diagnostics",
+        secVersion: "Version & Diagnostics",
         versionApp: "Maestro Mobile Client",
         versionHost: "Desktop Host Server",
         versionPi: "Pi Agent Session Engine",
@@ -340,10 +351,11 @@
       }
     };
 
-    // --- 真实会话数据 ---
+    // --- 真实测试会话数据 ---
     const mockSessions = [
       {
         id: "01a0866a-7a23-7581",
+        hashId: "db274f4c",
         title: "pi-maestro-app-party",
         cwd: "~/Projects/pi-maestro-app-party",
         model: "gemini-3.8-flash",
@@ -360,6 +372,7 @@
       },
       {
         id: "01a0800b-ac02-7271",
+        hashId: "4a247833",
         title: "WorkSpace4AI",
         cwd: "~/Projects/WorkSpace4AI",
         model: "gpt-5.6-sol",
@@ -376,6 +389,7 @@
       },
       {
         id: "01a009b3-56b3-7156",
+        hashId: "c182f9fb",
         title: "isulewTools-app",
         cwd: "~/AndroidStudioProjects/isulewTools",
         model: "claude-sonnet-4-6",
@@ -393,34 +407,35 @@
     ];
 
     function App() {
-      // 当前选中的 Tab: 'workbench' | 'sessions' | 'monitor' | 'settings'
       const [tab, setTab] = useState("sessions");
-      // 双语模式
       const [lang, setLang] = useState("zh");
-      // 外观三段模式: 'auto' | 'dark' | 'light'
       const [appearance, setAppearance] = useState("dark");
-      // 实际生效的亮暗状态 (auto 则根据系统或默认为深色)
       const isDark = appearance === "auto" ? true : appearance === "dark";
 
-      // 会话过滤：默认 "active"（活跃），支持 "all"（全部）
       const [filter, setFilter] = useState("active");
-      // 是否正在会话详情页
       const [inDetail, setInDetail] = useState(false);
       const [activeSession, setActiveSession] = useState(mockSessions[0]);
       
-      // 搜索栏展开状态 (底部弹出整行全宽搜索)
+      // 底部原位全宽搜索
       const [searchBarOpen, setSearchBarOpen] = useState(false);
       const [searchQuery, setSearchQuery] = useState("");
       
-      // 配对弹层: 'scan' | 'code' | 'candidates' | null
+      // 配对弹层
       const [pairModal, setPairModal] = useState(null);
-      // Ask 交互弹窗是否展示
-      const [showAskDialog, setShowAskDialog] = useState(true);
-      // Monitor 选中的窗口目标
-      const [selectedMonitorKey, setSelectedMonitorKey] = useState("01a0866a-7a23-7581");
+
+      // 问题 2：工作台多条 Ask 队列交互
+      const [askList, setAskList] = useState([
+        { id: "req-101", title: "代码改动构建确认", prompt: "是否执行 apps/mobile/build.sh 构建并发布？", time: "10秒前" },
+        { id: "req-102", title: "Git 分支合并授权", prompt: "是否将 feat/bento-ui 分支合并至 main 主线？", time: "2分钟前" },
+        { id: "req-103", title: "清理旧版本安装包", prompt: "是否清理 ~/Downloads 下过期的 unsigned 0.1.0 包？", time: "5分钟前" }
+      ]);
+      const [currentAskIndex, setCurrentAskIndex] = useState(0);
+
+      // 问题 1：监控窗口选中的目标（未选中时为空，不弹输入框；选中时弹生产一致的“发送到 #window.hashid”）
+      const [selectedMonitorSession, setSelectedMonitorSession] = useState(null);
       const [steerInput, setSteerInput] = useState("");
 
-      // 实时聊天流
+      // 聊天会话
       const [chatMessages, setChatMessages] = useState([
         { id: "m1", sender: "user", text: "ios 消息测试" },
         { 
@@ -430,6 +445,8 @@
         }
       ]);
       const [chatDraft, setChatDraft] = useState("");
+      // 问题 4：向下滚动回到底部的 FAB 按钮展示状态
+      const [showScrollBottomFab, setShowScrollBottomFab] = useState(true);
 
       // 手势
       const [swipeDx, setSwipeDx] = useState(0);
@@ -459,13 +476,11 @@
         const idx = tabs.indexOf(tab);
 
         if (inDetail) {
-          // 边缘右滑返回
           if (swipeDx > 70) setInDetail(false);
           setSwipeDx(0);
           return;
         }
 
-        // 一级导航左右滑动切换 Dock
         if (swipeDx < -60 && idx < tabs.length - 1) {
           setTab(tabs[idx + 1]);
         } else if (swipeDx > 60 && idx > 0) {
@@ -482,7 +497,7 @@
         setTimeout(() => {
           setChatMessages((prev) => [
             ...prev,
-            { id: `a-${Date.now()}`, sender: "assistant", text: `收到指令：\`${userMsg.text}\`，桌面 TUI 正在实时协同响应。` }
+            { id: `a-${Date.now()}`, sender: "assistant", text: `收到指令：\`${userMsg.text}\`，桌面 TUI 正在实时响应。` }
           ]);
         }, 500);
       };
@@ -492,7 +507,15 @@
         setInDetail(true);
       };
 
-      // 过滤后的会话
+      // 响应 Ask 队列处理
+      const handleResolveAsk = (approved) => {
+        const next = askList.filter((_, i) => i !== currentAskIndex);
+        setAskList(next);
+        if (currentAskIndex >= next.length && next.length > 0) {
+          setCurrentAskIndex(next.length - 1);
+        }
+      };
+
       const filteredSessions = mockSessions.filter((s) => {
         if (filter === "active" && s.status === "idle") return false;
         if (searchQuery.trim()) {
@@ -509,19 +532,20 @@
       const borderClass = isDark ? "border-cardBorderDark" : "border-cardBorderLight";
       const dockClass = isDark ? "glass-dock border-cardBorderDark" : "bg-white/95 border-zinc-200 shadow-lg";
 
+      const currentAsk = askList[currentAskIndex];
+
       return (
         <div class="flex flex-col items-center w-full">
-          {/* 顶控面板：状态提示与三段式外观控制 */}
+          {/* 顶控面板 */}
           <div class="w-full max-w-4xl mb-4 flex flex-col md:flex-row items-center justify-between gap-3 px-4">
             <div class="flex items-center gap-2">
               <span class="px-3 py-1 rounded-xl bg-purple-950/80 text-purple-300 border border-purple-800 text-xs font-bold font-mono">
-                MIUIX Bento Grid · Production Final
+                Bento Grid · Precision V2
               </span>
-              <span class="text-xs text-zinc-400">设置顺序重构 · 底部原位全宽搜索 · 外观三段式</span>
+              <span class="text-xs text-zinc-400">已严格落实 7 项具体细节指令</span>
             </div>
 
             <div class="flex items-center gap-2.5">
-              {/* 外观三段切换控制 */}
               <div class="flex items-center bg-zinc-900 border border-zinc-800 rounded-xl p-0.5 font-mono text-xs">
                 <button
                   onClick={() => setAppearance("auto")}
@@ -552,7 +576,6 @@
                 </button>
               </div>
 
-              {/* 语言切换 */}
               <button
                 onClick={() => setLang(lang === "zh" ? "en" : "zh")}
                 class="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-zinc-900 border border-zinc-800 text-xs text-zinc-300 hover:border-zinc-600 transition-all font-mono"
@@ -569,7 +592,7 @@
             onTouchMove={handleTouchMove}
             onTouchEnd={handleTouchEnd}
           >
-            {/* iOS 顶栏状态栏（灵动岛无任何常亮绿点） */}
+            {/* iOS 顶栏状态栏 */}
             <div class={`h-12 pt-3 px-7 flex items-center justify-between z-50 ${isDark ? "text-zinc-300" : "text-zinc-800"}`}>
               <span class="text-xs font-semibold font-mono">09:41</span>
               <div class="w-28 h-7 bg-black rounded-full flex items-center justify-between px-2.5">
@@ -611,7 +634,6 @@
                     </p>
                   </div>
 
-                  {/* 状态徽标全面双语化 */}
                   <div class={`flex items-center gap-1.5 px-2.5 py-1 rounded-full border text-[11px] font-mono ${
                     isDark ? "bg-emerald-950/70 border-emerald-800 text-emerald-400" : "bg-emerald-50 border-emerald-300 text-emerald-700 font-bold"
                   }`}>
@@ -621,7 +643,7 @@
                 </div>
 
                 {/* ------------------------------------------------------------------------- */}
-                {/* 1. 工作台 Tab (Dashboard 生产功能全量重现) */}
+                {/* 1. 工作台 Tab (含问题 2 多条 Ask 交互卡片轮播) */}
                 {/* ------------------------------------------------------------------------- */}
                 {tab === "workbench" && (
                   <div class="flex-1 overflow-y-auto px-4 pt-3 pb-24 space-y-3.5 no-scrollbar">
@@ -660,34 +682,60 @@
                         <div class="text-[10px] opacity-60 mt-0.5">{t.metric3}</div>
                       </div>
                       <div class={`p-3 rounded-2xl border font-mono ${cardClass}`}>
-                        <div class="text-lg font-bold text-amber-500">{showAskDialog ? "1" : "0"}</div>
+                        <div class="text-lg font-bold text-amber-500">{askList.length}</div>
                         <div class="text-[10px] opacity-60 mt-0.5">{t.metric4}</div>
                       </div>
                     </div>
 
-                    {/* 待处理 Ask 弹窗组件 */}
-                    {showAskDialog && (
-                      <div class={`p-3.5 rounded-2xl border shadow-md ${isDark ? "bg-amber-950/40 border-amber-800/80" : "bg-amber-50 border-amber-300"}`}>
-                        <div class="flex items-center justify-between mb-1.5">
+                    {/* 问题 2 方案落地：多条 Ask 队列卡片与轮播交互 */}
+                    {askList.length > 0 && currentAsk && (
+                      <div class={`p-4 rounded-3xl border shadow-md relative overflow-hidden ${isDark ? "bg-amber-950/40 border-amber-800/80" : "bg-amber-50 border-amber-300"}`}>
+                        {/* 顶栏：多条队列角标指示器与翻页 */}
+                        <div class="flex items-center justify-between mb-2">
                           <div class="flex items-center gap-1.5 text-amber-500 text-xs font-bold">
-                            <Icons.AlertTriangle size={14} />
+                            <Icons.AlertTriangle size={15} />
                             <span>{t.askTitle}</span>
                           </div>
-                          <span class="text-[10px] opacity-60 font-mono">ID: req-719</span>
+                          
+                          {/* 多条指示切换器 */}
+                          <div class="flex items-center gap-2 font-mono text-[11px]">
+                            <span class="px-2 py-0.5 rounded-full bg-amber-500/20 text-amber-400 font-bold">
+                              待处理 {currentAskIndex + 1} / {askList.length}
+                            </span>
+                            {askList.length > 1 && (
+                              <div class="flex gap-1">
+                                <button
+                                  onClick={() => setCurrentAskIndex((prev) => (prev > 0 ? prev - 1 : askList.length - 1))}
+                                  class="w-5 h-5 rounded bg-black/40 flex items-center justify-center text-zinc-300 hover:text-white"
+                                >
+                                  ‹
+                                </button>
+                                <button
+                                  onClick={() => setCurrentAskIndex((prev) => (prev < askList.length - 1 ? prev + 1 : 0))}
+                                  class="w-5 h-5 rounded bg-black/40 flex items-center justify-center text-zinc-300 hover:text-white"
+                                >
+                                  ›
+                                </button>
+                              </div>
+                            )}
+                          </div>
                         </div>
-                        <p class="text-xs mb-2.5 leading-relaxed">
-                          {t.askDesc} <span class="font-bold text-amber-600 font-mono">是否确认执行方案 B 改造构建？</span>
+
+                        <div class="text-xs font-bold text-zinc-200 mb-1">{currentAsk.title}</div>
+                        <p class="text-xs mb-3 leading-relaxed opacity-90 font-mono">
+                          {currentAsk.prompt}
                         </p>
+
                         <div class="flex gap-2 font-mono text-xs">
                           <button
-                            onClick={() => setShowAskDialog(false)}
-                            class="flex-1 py-1.5 rounded-xl bg-amber-600 hover:bg-amber-500 text-white font-bold transition-all shadow"
+                            onClick={() => handleResolveAsk(true)}
+                            class="flex-1 py-2 rounded-xl bg-amber-600 hover:bg-amber-500 text-white font-bold transition-all shadow"
                           >
                             {t.askConfirm}
                           </button>
                           <button
-                            onClick={() => setShowAskDialog(false)}
-                            class={`px-3 py-1.5 rounded-xl border transition-all ${isDark ? "bg-zinc-800 border-zinc-700 text-zinc-300" : "bg-white border-zinc-300 text-zinc-700"}`}
+                            onClick={() => handleResolveAsk(false)}
+                            class={`px-4 py-2 rounded-xl border transition-all ${isDark ? "bg-zinc-800 border-zinc-700 text-zinc-300" : "bg-white border-zinc-300 text-zinc-700"}`}
                           >
                             {t.askReject}
                           </button>
@@ -749,7 +797,7 @@
                 )}
 
                 {/* ------------------------------------------------------------------------- */}
-                {/* 2. 会话列表 Tab (Sessions 生产全量重现) */}
+                {/* 2. 会话列表 Tab */}
                 {/* ------------------------------------------------------------------------- */}
                 {tab === "sessions" && (
                   <div class="flex-1 overflow-y-auto px-4 pt-3 pb-28 space-y-3 no-scrollbar relative">
@@ -759,7 +807,6 @@
                         onClick={() => openSessionDetail(s)}
                         class={`p-4 rounded-3xl border hover:border-purple-500 active:scale-[0.99] transition-all cursor-pointer shadow-md ${cardClass}`}
                       >
-                        {/* 1. 状态点 + 标题 + 模型Badge */}
                         <div class="flex items-center justify-between mb-2">
                           <div class="flex items-center gap-2 min-w-0">
                             <span class={`w-2.5 h-2.5 rounded-full shrink-0 ${
@@ -773,13 +820,11 @@
                           </span>
                         </div>
 
-                        {/* 2. 工作目录行 */}
                         <div class="flex items-center gap-1.5 text-[11px] opacity-60 font-mono mb-3">
                           <Icons.Folder className="shrink-0" />
                           <span class="truncate">{s.cwd}</span>
                         </div>
 
-                        {/* 3. 2×2 Bento Grid 仪表盘核心网格 */}
                         <div class={`grid grid-cols-2 gap-2 p-3 rounded-2xl border font-mono text-[11px] mb-2.5 ${cardInnerClass}`}>
                           <div>
                             <div class="text-[10px] opacity-50 mb-0.5">{t.contextLabel}</div>
@@ -799,7 +844,6 @@
                           </div>
                         </div>
 
-                        {/* 4. 上下文使用率细条 */}
                         <div class="w-full h-1.5 bg-zinc-700/30 rounded-full overflow-hidden">
                           <div class="h-full bg-purple-500 rounded-full" style={{ width: `${s.contextPercent}%` }}></div>
                         </div>
@@ -813,10 +857,10 @@
                 )}
 
                 {/* ------------------------------------------------------------------------- */}
-                {/* 3. 监控 Tab (Monitor 生产全量重现) */}
+                {/* 3. 监控 Tab (含问题 1：仅选中时在 dock 上方弹出精简输入框) */}
                 {/* ------------------------------------------------------------------------- */}
                 {tab === "monitor" && (
-                  <div class="flex-1 overflow-y-auto px-4 pt-3 pb-28 space-y-3.5 no-scrollbar">
+                  <div class="flex-1 overflow-y-auto px-4 pt-3 pb-28 space-y-3.5 no-scrollbar relative">
                     
                     {/* Attention 告警条 */}
                     <div class={`p-3 rounded-2xl border flex items-center justify-between text-xs font-mono ${
@@ -832,11 +876,11 @@
                     {/* 监督窗口选择列表 */}
                     <div class="space-y-2.5">
                       {mockSessions.map((s) => {
-                        const isSelected = selectedMonitorKey === s.id;
+                        const isSelected = selectedMonitorSession?.id === s.id;
                         return (
                           <div
                             key={`mon-${s.id}`}
-                            onClick={() => setSelectedMonitorKey(s.id)}
+                            onClick={() => setSelectedMonitorSession(isSelected ? null : s)}
                             class={`p-3.5 rounded-2xl border transition-all cursor-pointer ${
                               isSelected 
                                 ? "border-purple-500 shadow-md " + cardClass
@@ -848,13 +892,13 @@
                                 <span class={`w-2 h-2 rounded-full ${isSelected ? "bg-purple-500" : "bg-zinc-500"}`}></span>
                                 <span class="font-bold text-xs">{s.title}</span>
                               </div>
-                              <span class="text-[10px] font-mono opacity-60">{s.status.toUpperCase()}</span>
+                              <span class="text-[10px] font-mono opacity-60">#{s.hashId}</span>
                             </div>
                             <p class="text-[11px] opacity-75 font-mono mb-1">{s.objective}</p>
                             <div class="text-[10px] opacity-50 font-mono flex justify-between">
                               <span>DIR: {s.cwd}</span>
                               <span class={isSelected ? "text-purple-500 font-bold" : ""}>
-                                {isSelected ? "✓ 目标锁定" : "点击选定"}
+                                {isSelected ? "✓ 目标已选中" : "点击选中目标"}
                               </span>
                             </div>
                           </div>
@@ -862,42 +906,47 @@
                       })}
                     </div>
 
-                    {/* 固定 Steer 介入输入栏 */}
-                    <div class={`p-3.5 rounded-2xl border border-purple-500/50 space-y-2 ${cardClass}`}>
-                      <div class="text-[11px] text-purple-400 font-mono flex justify-between">
-                        <span>向选定窗口发送协同指令 (Steer Window)</span>
-                        <span>ws://100.98.197.10</span>
-                      </div>
-                      <div class="flex gap-2">
-                        <input
-                          type="text"
-                          placeholder={t.steerPlaceholder}
-                          value={steerInput}
-                          onChange={(e) => setSteerInput(e.target.value)}
-                          class={`flex-1 border rounded-xl px-3 py-2 text-xs focus:outline-none focus:border-purple-500 font-mono ${
-                            isDark ? "bg-black/60 border-zinc-700/80 text-white" : "bg-white border-zinc-300 text-zinc-900"
-                          }`}
-                        />
-                        <button
-                          onClick={() => { setSteerInput(""); alert("已成功向桌面 TUI 窗口注入 Steer 监督指令！"); }}
-                          class="px-3.5 py-2 rounded-xl bg-purple-600 hover:bg-purple-500 text-xs font-bold text-white shadow font-mono"
-                        >
-                          {t.steerBtn}
-                        </button>
-                      </div>
-                    </div>
+                  </div>
+                )}
 
+                {/* 问题 1 落地：仅在选中窗口时，在 dock 上方弹出精简输入栏 “发送到 #window.hashid” */}
+                {tab === "monitor" && selectedMonitorSession && (
+                  <div class="absolute bottom-20 inset-x-4 z-40 animate-fade-in pointer-events-auto">
+                    <div class={`p-2.5 rounded-2xl border shadow-2xl flex items-center gap-2 ${
+                      isDark ? "glass-bar border-purple-500/60" : "bg-white border-purple-400 shadow-xl"
+                    }`}>
+                      <input
+                        type="text"
+                        placeholder={`发送到 #${selectedMonitorSession.hashId}…`}
+                        value={steerInput}
+                        onChange={(e) => setSteerInput(e.target.value)}
+                        class={`flex-1 text-xs focus:outline-none bg-transparent font-mono ${isDark ? "text-white" : "text-zinc-900"}`}
+                        autoFocus
+                      />
+                      <button
+                        onClick={() => { setSteerInput(""); setSelectedMonitorSession(null); alert(`已成功向 #${selectedMonitorSession.hashId} 注入协同消息！`); }}
+                        class="text-xs font-bold text-white bg-purple-600 px-3.5 py-1.5 rounded-xl shadow font-mono"
+                      >
+                        发送
+                      </button>
+                      <button
+                        onClick={() => setSelectedMonitorSession(null)}
+                        class="text-xs opacity-50 px-1"
+                        title="取消选中"
+                      >
+                        ✕
+                      </button>
+                    </div>
                   </div>
                 )}
 
                 {/* ------------------------------------------------------------------------- */}
-                {/* 4. 设置 Tab (Settings 严格按指定顺序排序) */}
-                {/* 顺序：外观 -> 语言 -> 配对情况 -> 参数 -> 版本 */}
+                {/* 4. 设置 Tab (问题 3: 无数字序号，纯粹原生质感) */}
                 {/* ------------------------------------------------------------------------- */}
                 {tab === "settings" && (
                   <div class="flex-1 overflow-y-auto px-4 pt-3 pb-28 space-y-4 no-scrollbar">
                     
-                    {/* 模块 1：外观模式 (带跟随系统自动、深色、浅色) */}
+                    {/* 模块 1：外观模式 */}
                     <div class={`p-4 rounded-3xl border ${cardClass}`}>
                       <div class="text-xs font-bold mb-2.5">{t.secAppearance}</div>
                       <div class={`grid grid-cols-3 p-1 rounded-xl border font-mono text-xs ${cardInnerClass}`}>
@@ -931,7 +980,7 @@
                       </div>
                     </div>
 
-                    {/* 模块 2：系统语言 / Language */}
+                    {/* 模块 2：系统语言 */}
                     <div class={`p-4 rounded-3xl border ${cardClass}`}>
                       <div class="text-xs font-bold mb-2.5">{t.secLanguage}</div>
                       <div class={`grid grid-cols-2 p-1 rounded-xl border font-mono text-xs ${cardInnerClass}`}>
@@ -954,7 +1003,7 @@
                       </div>
                     </div>
 
-                    {/* 模块 3：配对情况 (通信与配对中枢) */}
+                    {/* 模块 3：配对情况 */}
                     <div class={`p-4 rounded-3xl border border-purple-500/40 shadow-lg ${cardClass}`}>
                       <div class="flex items-center justify-between mb-2">
                         <div class="flex items-center gap-2">
@@ -984,7 +1033,6 @@
                         </div>
                       </div>
 
-                      {/* 三联配对操作组 */}
                       <div class="grid grid-cols-3 gap-2">
                         <button
                           onClick={() => setPairModal("candidates")}
@@ -1044,7 +1092,7 @@
                       </div>
                     </div>
 
-                    {/* 模块 5：版本与诊断信息 (放置在最下方) */}
+                    {/* 模块 5：版本与诊断信息 (置底) */}
                     <div class={`p-4 rounded-3xl border space-y-2.5 ${cardClass}`}>
                       <div class="text-xs font-bold tracking-tight mb-1">{t.secVersion}</div>
                       <div class="space-y-2 text-xs font-mono divide-y divide-zinc-700/20">
@@ -1083,7 +1131,6 @@
                 {/* ========================================================================= */}
                 {tab === "sessions" && !searchBarOpen && (
                   <div class="absolute bottom-20 inset-x-0 flex items-center justify-between px-5 z-40 pointer-events-none">
-                    {/* 左/中：活跃/全部 悬浮药丸 */}
                     <div class={`shadow-2xl rounded-2xl px-2 py-1.5 flex items-center gap-1.5 pointer-events-auto border transition-all ${
                       isDark ? "glass-bar border-purple-500/40" : "bg-white/95 border-purple-300 shadow-xl"
                     }`}>
@@ -1106,7 +1153,6 @@
                       </button>
                     </div>
 
-                    {/* 右侧：单独的搜索 FAB（单手拇指极易点击） */}
                     <button
                       onClick={() => setSearchBarOpen(true)}
                       class="pointer-events-auto w-11 h-11 rounded-2xl bg-purple-600 hover:bg-purple-500 text-white flex items-center justify-center shadow-2xl transition-all active:scale-95"
@@ -1117,7 +1163,7 @@
                   </div>
                 )}
 
-                {/* 底部原位弹出的整行全宽搜索栏 (优化项：在底部原位弹出，不跳顶) */}
+                {/* 底部原位全宽搜索栏 */}
                 {tab === "sessions" && searchBarOpen && (
                   <div class="absolute bottom-20 inset-x-4 z-40 pointer-events-auto animate-fade-in">
                     <div class={`p-2 rounded-2xl border shadow-2xl flex items-center gap-2 ${
@@ -1147,7 +1193,7 @@
                   </div>
                 )}
 
-                {/* 底部 4 栏 Dock 栏（优化项 1: 支持横滑手势切换） */}
+                {/* 底部 4 栏 Dock 栏 */}
                 <div class={`h-16 border-t flex items-center justify-around px-2 z-40 ${dockClass}`}>
                   {[
                     { id: "workbench", label: t.tabWorkbench, Icon: Icons.Workbench },
@@ -1173,42 +1219,44 @@
               </div>
 
               {/* ========================================================================= */}
-              {/* 二级页面：详细会话页 (优化项 2: 最小化不跳错 + 优化项 3: 边缘右滑返回) */}
+              {/* 二级页面：详细会话页 (含问题 4, 5, 6, 7 的全部精准设计) */}
               {/* ========================================================================= */}
               <div class={`absolute inset-0 flex flex-col z-50 transition-all duration-300 ${bgClass} ${
                 inDetail ? "translate-x-0 opacity-100" : "translate-x-full opacity-0 pointer-events-none"
               }`}>
-                {/* 详情页 Header */}
+                
+                {/* 详情页 Header：问题 5 (返回箭头 ←) + 问题 6 (右上角显示模型名，移除设置图标) */}
                 <div class={`px-4 py-2.5 border-b flex items-center justify-between ${dockClass}`}>
-                  {/* 左上角返回：精确回到会话列表 */}
+                  {/* 问题 5：直接用一个纯净利落的返回箭头 ← */}
                   <button
                     onClick={() => setInDetail(false)}
-                    class={`flex items-center gap-1 px-2.5 py-1 rounded-xl border text-xs font-medium ${
-                      isDark ? "bg-zinc-800 border-zinc-700 text-zinc-300 hover:text-white" : "bg-zinc-100 border-zinc-300 text-zinc-700"
-                    }`}
+                    class="p-1 rounded-xl opacity-80 hover:opacity-100 transition-all active:scale-95"
+                    title="返回会话列表"
                   >
-                    <Icons.Minimize size={13} />
-                    <span>{t.backBtn}</span>
+                    <Icons.ArrowLeft size={20} />
                   </button>
 
-                  <div class="text-center">
-                    <h2 class="text-xs font-bold font-mono">{activeSession.title}</h2>
+                  <div class="text-center min-w-0 px-2">
+                    <h2 class="text-xs font-bold font-mono truncate max-w-[180px]">{activeSession.title}</h2>
                     <span class="text-[10px] text-emerald-500 font-mono">● {t.statusStreaming}</span>
                   </div>
 
-                  <div class="w-12 flex justify-end opacity-50">
-                    <Icons.Settings size={15} />
+                  {/* 问题 6 落地：右上角替换为模型名称标签 Badge (如 gemini-3.8-flash) */}
+                  <div class="shrink-0">
+                    <span class="text-[10px] font-mono px-2 py-0.5 rounded-full bg-purple-900/30 text-purple-400 border border-purple-800/80">
+                      {activeSession.model}
+                    </span>
                   </div>
                 </div>
 
                 {/* 边缘右滑返回引导 */}
                 <div class="bg-purple-950/40 border-b border-purple-900/30 px-4 py-1 text-[10px] text-purple-400 flex items-center justify-between font-mono">
                   <span>{t.swipeBackHint}</span>
-                  <span>可拖拽体验</span>
+                  <span>可拖拽返回</span>
                 </div>
 
                 {/* 对话消息流 */}
-                <div class="flex-1 overflow-y-auto p-4 space-y-4 no-scrollbar">
+                <div class="flex-1 overflow-y-auto p-4 space-y-4 no-scrollbar relative">
                   {chatMessages.map((msg) => (
                     <div key={msg.id} class={`flex ${msg.sender === "user" ? "justify-end" : "justify-start"}`}>
                       {msg.sender === "user" ? (
@@ -1227,7 +1275,6 @@
 
                           <p class="font-medium opacity-80">请看此时手机端屏幕：</p>
 
-                          {/* Bug 1 修复展示：有序列表后文字全部保留 */}
                           <div class="space-y-1.5 pl-2 border-l-2 border-purple-500/50 my-2">
                             <div class="flex items-start gap-1.5">
                               <span class="text-purple-500 font-mono font-bold">1.</span>
@@ -1239,14 +1286,13 @@
                             </div>
                           </div>
 
-                          {/* Bug 3 修复展示：带 # 符号与层级强调色的标题 */}
                           <div class={`pt-2 border-t ${borderClass}`}>
                             <div class="text-sm font-bold flex items-center gap-1.5">
                               <span class="text-purple-500 font-mono font-semibold">###</span>
                               <span>根因与修复结论</span>
                             </div>
                             <p class="text-[11px] opacity-70 mt-1">
-                              已支持底部原位全宽搜索栏、设置顺序精准重排与三段式外观模式。
+                              已支持 Model/Think/Plan 悬浮条、回到底部 FAB 与经典输入栏布局。
                             </p>
                           </div>
                         </div>
@@ -1255,23 +1301,79 @@
                   ))}
                 </div>
 
-                {/* 底部输入框 */}
+                {/* 问题 4：向下滚动一键到底的 FAB 按钮 (悬浮在输入框上方) */}
+                {showScrollBottomFab && (
+                  <button
+                    onClick={() => alert("已一键平滑平移滚动到会话最新消息底部！")}
+                    class="absolute bottom-28 right-4 z-40 w-9 h-9 rounded-full bg-purple-600 hover:bg-purple-500 text-white flex items-center justify-center shadow-xl active:scale-95 transition-all"
+                    title="回到底部"
+                  >
+                    <Icons.ArrowDown size={16} />
+                  </button>
+                )}
+
+                {/* 问题 4：将 Model / Think / Plan / Compact 弄成输入框上方的 Floating Toolbar */}
+                <div class="px-4 py-1.5 flex items-center justify-between border-t border-cardBorder text-xs font-mono">
+                  <div class="flex items-center gap-2">
+                    <button class={`px-2 py-0.5 rounded-lg border flex items-center gap-1 ${cardInnerClass} hover:border-purple-500`}>
+                      <Icons.Brain size={12} className="text-purple-400" />
+                      <span>Model</span>
+                    </button>
+                    <button class={`px-2 py-0.5 rounded-lg border flex items-center gap-1 ${cardInnerClass} hover:border-purple-500`}>
+                      <Icons.Bolt size={12} className="text-amber-400" />
+                      <span>Think</span>
+                    </button>
+                    <button class={`px-2 py-0.5 rounded-lg border flex items-center gap-1 ${cardInnerClass} hover:border-purple-500`}>
+                      <Icons.Layers size={12} className="text-blue-400" />
+                      <span>Plan</span>
+                    </button>
+                    <button class={`px-2 py-0.5 rounded-lg border flex items-center gap-1 ${cardInnerClass} hover:border-purple-500`}>
+                      <Icons.Minimize2 size={12} className="text-emerald-400" />
+                      <span>Compact</span>
+                    </button>
+                  </div>
+                  <span class="text-[10px] opacity-50 truncate max-w-[100px]">{activeSession.model}</span>
+                </div>
+
+                {/* 问题 7：输入框完全保持现在的布局：[ / | 回形针 | 输入框 | 小飞机 ] */}
                 <div class={`p-3 border-t flex items-center gap-2 ${dockClass}`}>
+                  {/* / 快捷命令按钮 */}
+                  <button
+                    onClick={() => alert("呼出可用 Skill 快捷命令联想列表（如 /commit, /release, /worktree）")}
+                    class={`w-8 h-8 rounded-xl border flex items-center justify-center font-mono font-bold text-sm text-purple-400 ${cardInnerClass} hover:border-purple-500`}
+                    title="触发技能 /skill"
+                  >
+                    /
+                  </button>
+
+                  {/* 回形针附件按钮 */}
+                  <button
+                    onClick={() => alert("打开相册或相机附加图片 (Base64)")}
+                    class={`w-8 h-8 rounded-xl border flex items-center justify-center text-zinc-400 hover:text-white ${cardInnerClass} hover:border-purple-500`}
+                    title="添加图片附件"
+                  >
+                    <Icons.Clip size={16} />
+                  </button>
+
+                  {/* 输入框 */}
                   <input
                     type="text"
-                    placeholder="输入消息发送给桌面 TUI..."
+                    placeholder="Message..."
                     value={chatDraft}
                     onChange={(e) => setChatDraft(e.target.value)}
                     onKeyDown={(e) => e.key === "Enter" && handleSendChat()}
-                    class={`flex-1 border rounded-full px-3.5 py-2 text-xs focus:outline-none focus:border-purple-500 ${
+                    class={`flex-1 border rounded-xl px-3.5 py-2 text-xs focus:outline-none focus:border-purple-500 ${
                       isDark ? "bg-black/60 border-zinc-700 text-white" : "bg-white border-zinc-300 text-zinc-900"
                     }`}
                   />
+
+                  {/* 小飞机发送按钮 */}
                   <button
                     onClick={handleSendChat}
-                    class="w-8 h-8 rounded-full bg-purple-600 hover:bg-purple-500 flex items-center justify-center text-white text-xs shadow-md"
+                    class="w-8 h-8 rounded-xl bg-purple-600 hover:bg-purple-500 flex items-center justify-center text-white shadow-md active:scale-95 transition-all"
+                    title="发送消息"
                   >
-                    <Icons.Send size={13} />
+                    <Icons.Send size={14} />
                   </button>
                 </div>
               </div>
@@ -1289,7 +1391,7 @@
                         {pairModal === "candidates" && "选择候选 IP 节点"}
                       </h4>
                       <button onClick={() => setPairModal(null)} class="opacity-60 hover:opacity-100">
-                        <Icons.Close size={18} />
+                        ✕
                       </button>
                     </div>
 
@@ -1346,11 +1448,14 @@
             </div>
           </div>
 
-          {/* 交互说明 */}
+          {/* 7 项需求落地验证核对 */}
           <div class="mt-4 text-xs text-zinc-400 text-center max-w-xl space-y-1 font-mono">
-            <p class="text-zinc-200 font-bold">本次微调成果核对：</p>
-            <p>1. <span class="text-purple-400">底部原位全宽搜索</span>：点击右下角紫色搜索 FAB，整行输入框在<strong>大拇指触手可及的底部原位弹出</strong>，不再跳顶。</p>
-            <p>2. <span class="text-purple-400">设置页面严格按序排列</span>：① 外观（含跟随系统/深色/浅色三段）→ ② 语言 → ③ 配对情况 → ④ 参数 → ⑤ 版本与诊断（置底）。</p>
+            <p class="text-zinc-200 font-bold">7 项修改已全部精准呈现：</p>
+            <p>1. <span class="text-purple-400">监控输入栏</span>：未选中不占地；点击窗口卡片即在 dock 上方弹出「发送到 #hashid」。</p>
+            <p>2. <span class="text-purple-400">工作台多条 Ask</span>：角标显示「待处理 1/3」，支持左右切换与独立批准/拒绝。</p>
+            <p>3. <span class="text-purple-400">设置项纯净化</span>：彻底移除 1. 2. 3. 序号，外观、语言、配对、参数、版本（置底）。</p>
+            <p>4. <span class="text-purple-400">会话工具栏与 FAB</span>：Model/Think/Plan/Compact 浮动条、一键到底 ↓ FAB、右上角模型名替换图标。</p>
+            <p>5. <span class="text-purple-400">返回与输入框</span>：左上角纯净返回箭头 ←；底部标准四件套 [ / | 📎 | 输入框 | 🚀 ]。</p>
           </div>
         </div>
       );
