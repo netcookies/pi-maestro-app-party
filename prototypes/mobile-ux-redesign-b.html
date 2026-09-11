@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Maestro Mobile - 方案 B 完整生产级功能交互原型 (精修语义版)</title>
+  <title>Maestro Mobile - 方案 B 完整生产级功能交互原型 (V5 精准交互版)</title>
   <!-- React & Babel CDN -->
   <script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
   <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
@@ -59,7 +59,7 @@
     .no-scrollbar::-webkit-scrollbar { display: none; }
     .no-scrollbar { -ms-overflow-style: none; scrollbar-width: none; }
     .glass-bar {
-      background: rgba(18, 21, 27, 0.88);
+      background: rgba(18, 21, 27, 0.9);
       backdrop-filter: blur(20px);
       -webkit-backdrop-filter: blur(20px);
     }
@@ -77,7 +77,7 @@
   <script type="text/babel">
     const { useState, useEffect, useRef } = React;
 
-    // --- 纯单色线性矢量 SVG 图标库（经过严格语义化重新设计） ---
+    // --- 纯单色线性矢量 SVG 图标库 ---
     const Icons = {
       Workbench: ({ size = 18, className = "" }) => (
         <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={className}>
@@ -188,17 +188,15 @@
           <line x1="12" y1="18" x2="12.01" y2="18"/>
         </svg>
       ),
-      // --- 核心语义化三大图标（专为思考/计划/压缩打造） ---
-      // 1. 思考 (Think) — 大脑神经网络与思考灵感
-      ThinkBrain: ({ size = 16, className = "" }) => (
+      // 核心语义化三大图标
+      ThinkBrain: ({ size = 14, className = "" }) => (
         <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={className}>
           <path d="M12 5a3 3 0 1 0-5.997.125 4 4 0 0 0-2.526 5.77 4 4 0 0 0 .556 6.588A4 4 0 1 0 12 18Z"/>
           <path d="M12 5a3 3 0 1 1 5.997.125 4 4 0 0 1 2.526 5.77 4 4 0 0 1-.556 6.588A4 4 0 1 1 12 18Z"/>
           <path d="M12 5v14"/>
         </svg>
       ),
-      // 2. 计划 (Plan) — 任务清单剪贴板 (带对勾与列表)
-      PlanClipboard: ({ size = 16, className = "" }) => (
+      PlanClipboard: ({ size = 14, className = "" }) => (
         <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={className}>
           <path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"/>
           <rect x="8" y="2" width="8" height="4" rx="1" ry="1"/>
@@ -206,22 +204,21 @@
           <path d="M9 10h6"/>
         </svg>
       ),
-      // 3. 压缩 (Compact) — 上下向内对冲挤压收缩 (上下文压缩最直观隐喻)
-      CompactSqueeze: ({ size = 16, className = "" }) => (
+      CompactSqueeze: ({ size = 14, className = "" }) => (
         <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={className}>
           <path d="M4 12h16"/>
           <path d="M12 3v6m-3-3l3 3 3-3"/>
           <path d="M12 21v-6m-3 3l3-3 3 3"/>
         </svg>
       ),
-      ChevronDown: ({ size = 12, className = "" }) => (
+      ChevronDown: ({ size = 11, className = "" }) => (
         <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" className={className}>
           <polyline points="6 9 12 15 18 9"/>
         </svg>
       )
     };
 
-    // --- 双语字典 ---
+    // --- 双语字典体系 ---
     const i18n = {
       zh: {
         tabWorkbench: "工作台",
@@ -240,7 +237,7 @@
         msgCount: "条对话",
         onlineBadge: "在线",
         offlineBadge: "离线",
-        hostConnected: "已连接主机", // 修复点 1：纯粹已连接主机，无重复
+        hostConnected: "已连接主机",
         hubTitle: "通信与配对中枢",
         hubDesc: "经由 WebSocket (ws://) 安全隧道与桌面主机进程双向同步",
         hubNode: "主机节点",
@@ -250,7 +247,7 @@
         btnRefresh: "测速重测",
         btnScan: "扫码配对",
         btnCode: "输入配对码",
-        backBtn: "收起并返回",
+        backBtn: "返回",
         swipeBackHint: "← 屏幕左侧边缘右滑返回",
         langToggle: "English",
         nowRunningTitle: "现在运行中的会话",
@@ -412,14 +409,29 @@
       }
     ];
 
-    const AVAILABLE_MODELS = [
-      "gemini-3.8-flash",
-      "gpt-5.6-sol",
-      "claude-sonnet-4-6",
-      "claude-opus-4-7",
-      "glm-5.3-flash",
-      "deepseek-v4-pro"
+    // 模型全量清单
+    const FULL_MODEL_CATALOG = [
+      { id: "gemini-3.8-flash", provider: "Google DeepMind", context: "1.0M tokens", reasoning: true, vision: true, badge: "主力推荐" },
+      { id: "gemini-3.7-flash", provider: "Google DeepMind", context: "1.0M tokens", reasoning: true, vision: true, badge: "快速" },
+      { id: "gpt-5.6-sol", provider: "OpenAI", context: "128k tokens", reasoning: true, vision: false, badge: "高深度思考" },
+      { id: "gpt-5.6", provider: "OpenAI", context: "128k tokens", reasoning: false, vision: true, badge: "多模态" },
+      { id: "claude-sonnet-4-6", provider: "Anthropic", context: "200k tokens", reasoning: true, vision: true, badge: "编程主力" },
+      { id: "claude-opus-4-7", provider: "Anthropic", context: "200k tokens", reasoning: true, vision: true, badge: "超大复杂任务" },
+      { id: "glm-5.3-flash", provider: "Zhipu AI", context: "128k tokens", reasoning: true, vision: true, badge: "轻量检索" },
+      { id: "deepseek-v4-pro", provider: "DeepSeek", context: "64k tokens", reasoning: true, vision: false, badge: "代码推导" }
     ];
+
+    // TUI 真实对齐的 5 种 Plan 模式
+    const TUI_PLAN_MODES = [
+      { id: "YOLO", label: "YOLO (极速全自动)", desc: "无需任何中途确认，全自动直接实施所有计划改动" },
+      { id: "APPROVAL DEFAULT", label: "APPROVAL DEFAULT (默认逐项审批)", desc: "关键写文件与终端命令执行前停顿等待人工审核" },
+      { id: "APPROVAL acceptEdits", label: "APPROVAL acceptEdits (仅审批编辑)", desc: "自动放行只读与命令，代码文件修改时要求审批确认" },
+      { id: "APPROVAL donAsk", label: "APPROVAL donAsk (静默兜底模式)", desc: "遇到不确定分支采用默认策略继续，不阻塞提问" },
+      { id: "PLAN", label: "PLAN (只读规划模式)", desc: "严格只读分析与制定实施计划，禁止修改任何代码" }
+    ];
+
+    // 思考深度选项
+    const THINK_LEVELS = ["off", "minimal", "low", "medium", "high", "xhigh", "max"];
 
     function App() {
       const [tab, setTab] = useState("sessions");
@@ -431,6 +443,18 @@
       const [inDetail, setInDetail] = useState(false);
       const [activeSession, setActiveSession] = useState(mockSessions[0]);
       
+      // 优化项 2 落地：模型选择独立全屏子页面状态
+      const [inModelSelect, setInModelSelect] = useState(false);
+      const [selectedModelDraft, setSelectedModelDraft] = useState(mockSessions[0].model);
+      const [modelSearchQuery, setModelSearchQuery] = useState("");
+
+      // 优化项 1 落地：FloatingToolBar 回显状态
+      const [thinkLevel, setThinkLevel] = useState("xhigh");
+      const [planMode, setPlanMode] = useState("YOLO");
+      
+      // FloatingToolBar 交互浮层
+      const [actionSheetType, setActionSheetType] = useState(null); // 'think' | 'plan' | 'compact_confirm' | null
+
       // 底部原位全宽搜索
       const [searchBarOpen, setSearchBarOpen] = useState(false);
       const [searchQuery, setSearchQuery] = useState("");
@@ -450,9 +474,6 @@
       const [selectedMonitorSession, setSelectedMonitorSession] = useState(null);
       const [steerInput, setSteerInput] = useState("");
 
-      // 会话模型选择弹层（点击右上角模型触发）
-      const [showModelPicker, setShowModelPicker] = useState(false);
-
       // 聊天会话
       const [chatMessages, setChatMessages] = useState([
         { id: "m1", sender: "user", text: "ios 消息测试" },
@@ -463,8 +484,6 @@
         }
       ]);
       const [chatDraft, setChatDraft] = useState("");
-      
-      // 向下的箭头浮动在 FAB 位置，按需显示
       const [showScrollBottomFab, setShowScrollBottomFab] = useState(true);
 
       // 手势
@@ -494,6 +513,12 @@
         const tabs = ["workbench", "sessions", "monitor", "settings"];
         const idx = tabs.indexOf(tab);
 
+        if (inModelSelect) {
+          if (swipeDx > 70) setInModelSelect(false);
+          setSwipeDx(0);
+          return;
+        }
+
         if (inDetail) {
           if (swipeDx > 70) setInDetail(false);
           setSwipeDx(0);
@@ -516,13 +541,14 @@
         setTimeout(() => {
           setChatMessages((prev) => [
             ...prev,
-            { id: `a-${Date.now()}`, sender: "assistant", text: `收到指令：\`${userMsg.text}\`，桌面 TUI 正在实时响应。` }
+            { id: `a-${Date.now()}`, sender: "assistant", text: `收到指令：\`${userMsg.text}\`，桌面 TUI 正在以 ${thinkLevel} 深度思考并执行。` }
           ]);
         }, 500);
       };
 
       const openSessionDetail = (s) => {
         setActiveSession(s);
+        setSelectedModelDraft(s.model);
         setInDetail(true);
       };
 
@@ -543,6 +569,12 @@
         return true;
       });
 
+      const filteredModels = FULL_MODEL_CATALOG.filter((m) => {
+        if (!modelSearchQuery.trim()) return true;
+        const q = modelSearchQuery.toLowerCase();
+        return m.id.toLowerCase().includes(q) || m.provider.toLowerCase().includes(q);
+      });
+
       // 动态主题类
       const bgClass = isDark ? "bg-appDark text-zinc-100" : "bg-appLight text-zinc-900";
       const cardClass = isDark ? "bg-cardBgDark border-cardBorderDark text-zinc-200" : "bg-cardBgLight border-cardBorderLight text-zinc-800 shadow-sm";
@@ -558,9 +590,9 @@
           <div class="w-full max-w-4xl mb-4 flex flex-col md:flex-row items-center justify-between gap-3 px-4">
             <div class="flex items-center gap-2">
               <span class="px-3 py-1 rounded-xl bg-purple-950/80 text-purple-300 border border-purple-800 text-xs font-bold font-mono">
-                Bento Grid · Precision V4
+                Bento Grid · Precision V5
               </span>
-              <span class="text-xs text-zinc-400">语义化三图标 (Think/Plan/Compact) · 右上角点击选模型</span>
+              <span class="text-xs text-zinc-400">独立模型选择子页面 · FloatingToolbar 状态回显 · 压缩二次确认</span>
             </div>
 
             <div class="flex items-center gap-2.5">
@@ -629,7 +661,7 @@
             <div class="flex-1 relative overflow-hidden flex flex-col">
               
               {/* ========================================================================= */}
-              {/* 一级导航页面（工作台 / 会话 / 监控 / 设置） */}
+              {/* 1. 一级导航页面（工作台 / 会话 / 监控 / 设置） */}
               {/* ========================================================================= */}
               <div class={`absolute inset-0 flex flex-col transition-all duration-300 ${
                 inDetail ? "-translate-x-full opacity-0 pointer-events-none" : "translate-x-0 opacity-100"
@@ -660,10 +692,9 @@
                   </div>
                 </div>
 
-                {/* 1. 工作台 Tab */}
+                {/* 工作台 Tab */}
                 {tab === "workbench" && (
                   <div class="flex-1 overflow-y-auto px-4 pt-3 pb-24 space-y-3.5 no-scrollbar">
-                    
                     {/* Hero: Token 用量卡 */}
                     <div class={`p-4 rounded-3xl border shadow-lg ${cardClass}`}>
                       <div class="flex justify-between items-center mb-1">
@@ -810,7 +841,7 @@
                   </div>
                 )}
 
-                {/* 2. 会话列表 Tab */}
+                {/* 会话列表 Tab */}
                 {tab === "sessions" && (
                   <div class="flex-1 overflow-y-auto px-4 pt-3 pb-28 space-y-3 no-scrollbar relative">
                     {filteredSessions.map((s) => (
@@ -868,11 +899,9 @@
                   </div>
                 )}
 
-                {/* 3. 监控 Tab */}
+                {/* 监控 Tab */}
                 {tab === "monitor" && (
                   <div class="flex-1 overflow-y-auto px-4 pt-3 pb-28 space-y-3.5 no-scrollbar relative">
-                    
-                    {/* Attention 告警条 */}
                     <div class={`p-3 rounded-2xl border flex items-center justify-between text-xs font-mono ${
                       isDark ? "bg-amber-950/40 border-amber-800/70" : "bg-amber-50 border-amber-300"
                     }`}>
@@ -883,7 +912,6 @@
                       <span class="opacity-80">1 窗口待决策</span>
                     </div>
 
-                    {/* 监督窗口选择列表 */}
                     <div class="space-y-2.5">
                       {mockSessions.map((s) => {
                         const isSelected = selectedMonitorSession?.id === s.id;
@@ -915,7 +943,6 @@
                         );
                       })}
                     </div>
-
                   </div>
                 )}
 
@@ -950,10 +977,9 @@
                   </div>
                 )}
 
-                {/* 4. 设置 Tab */}
+                {/* 设置 Tab */}
                 {tab === "settings" && (
                   <div class="flex-1 overflow-y-auto px-4 pt-3 pb-28 space-y-4 no-scrollbar">
-                    
                     {/* 模块 1：外观模式 */}
                     <div class={`p-4 rounded-3xl border ${cardClass}`}>
                       <div class="text-xs font-bold mb-2.5">{t.secAppearance}</div>
@@ -1011,7 +1037,7 @@
                       </div>
                     </div>
 
-                    {/* 模块 3：配对情况 (已连接主机，纯粹无重复) */}
+                    {/* 模块 3：配对情况 */}
                     <div class={`p-4 rounded-3xl border border-purple-500/40 shadow-lg ${cardClass}`}>
                       <div class="flex items-center justify-between mb-2">
                         <div class="flex items-center gap-2">
@@ -1130,11 +1156,10 @@
                         </div>
                       </div>
                     </div>
-
                   </div>
                 )}
 
-                {/* 底部悬浮：活跃/全部 胶囊 (绿色微光小圆点，无⚡️) */}
+                {/* 底部悬浮：活跃/全部 胶囊 (绿色微光圆点) */}
                 {tab === "sessions" && !searchBarOpen && (
                   <div class="absolute bottom-20 inset-x-0 flex items-center justify-between px-5 z-40 pointer-events-none">
                     <div class={`shadow-2xl rounded-2xl px-2 py-1.5 flex items-center gap-1.5 pointer-events-auto border transition-all ${
@@ -1142,7 +1167,7 @@
                     }`}>
                       <button
                         onClick={() => setFilter("active")}
-                        class={`px-3 py-1 rounded-xl text-xs font-semibold flex items-center gap-1.5 transition-all ${
+                        class={`px-3 py-1.5 rounded-xl text-xs font-semibold flex items-center gap-1.5 transition-all ${
                           filter === "active" ? "bg-purple-600 text-white shadow" : "opacity-60 hover:opacity-100"
                         }`}
                       >
@@ -1152,7 +1177,7 @@
 
                       <button
                         onClick={() => setFilter("all")}
-                        class={`px-3 py-1 rounded-xl text-xs font-semibold transition-all ${
+                        class={`px-3.5 py-1.5 rounded-xl text-xs font-semibold transition-all ${
                           filter === "all" ? (isDark ? "bg-zinc-800 text-zinc-100 shadow" : "bg-zinc-200 text-zinc-900 shadow") : "opacity-60 hover:opacity-100"
                         }`}
                       >
@@ -1226,13 +1251,13 @@
               </div>
 
               {/* ========================================================================= */}
-              {/* 二级页面：详细会话页 (精修：右上角点击选模型 + 浮动药丸三图标 Think/Plan/Compact) */}
+              {/* 2. 二级页面：详细会话页 (右上角模型点击导航至独立子页面 + 药丸三图标回显) */}
               {/* ========================================================================= */}
               <div class={`absolute inset-0 flex flex-col z-50 transition-all duration-300 ${bgClass} ${
-                inDetail ? "translate-x-0 opacity-100" : "translate-x-full opacity-0 pointer-events-none"
+                inDetail && !inModelSelect ? "translate-x-0 opacity-100" : (inModelSelect ? "-translate-x-full opacity-0 pointer-events-none" : "translate-x-full opacity-0 pointer-events-none")
               }`}>
                 
-                {/* 详情页 Header：左侧返回箭头 ← + 右侧可点击的模型 Badge ▾ */}
+                {/* 详情页 Header */}
                 <div class={`px-4 py-2.5 border-b flex items-center justify-between ${dockClass}`}>
                   <button
                     onClick={() => setInDetail(false)}
@@ -1247,11 +1272,14 @@
                     <span class="text-[10px] text-emerald-500 font-mono">● {t.statusStreaming}</span>
                   </div>
 
-                  {/* 右上角：可点击的模型切换 Badge (带微型下拉箭头) */}
+                  {/* 优化项 2 落地：右上角模型 Badge 点击平滑进入全屏“模型选择”独立子页面 */}
                   <button
-                    onClick={() => setShowModelPicker(true)}
-                    class="flex items-center gap-1 font-mono text-[10px] px-2.5 py-1 rounded-full bg-purple-900/30 hover:bg-purple-900/50 text-purple-400 border border-purple-800/80 active:scale-95 transition-all"
-                    title="点击切换当前会话模型"
+                    onClick={() => {
+                      setSelectedModelDraft(activeSession.model);
+                      setInModelSelect(true);
+                    }}
+                    class="flex items-center gap-1 font-mono text-[10px] px-2.5 py-1 rounded-full bg-purple-900/30 hover:bg-purple-900/50 text-purple-400 border border-purple-800/80 active:scale-95 transition-all shadow-xs"
+                    title="点击进入模型选择子页面"
                   >
                     <span class="truncate max-w-[95px]">{activeSession.model}</span>
                     <Icons.ChevronDown size={11} className="opacity-70" />
@@ -1308,7 +1336,7 @@
                               <span>根因与修复结论</span>
                             </div>
                             <p class="text-[11px] opacity-70 mt-1">
-                              已支持 Think (大脑)/Plan (清单)/Compact (对冲挤压) 纯单色语义三大按钮。
+                              已支持独立模型切换子页面、[Think|Plan|Compact] 状态回显与上下文压缩二次确认。
                             </p>
                           </div>
                         </div>
@@ -1318,42 +1346,44 @@
                 </div>
 
                 {/* ------------------------------------------------------------------------- */}
-                {/* 会话浮动栏：纯单色浮动单图标药丸 (只有 Think, Plan, Compact 三大语义化图标) */}
-                {/* 形态与位置完全同外面的 [活跃|全部] */}
+                {/* 优化项 1 落地：FloatingToolBar 悬浮药丸带实时状态回显 */}
+                {/* 形态：[Icons.ThinkBrain] xhigh | [Icons.PlanClipboard] YOLO | [Icons.CompactSqueeze] */}
                 {/* ------------------------------------------------------------------------- */}
                 <div class="absolute bottom-20 inset-x-0 flex items-center justify-between px-5 z-40 pointer-events-none">
                   
-                  {/* 悬浮药丸：只保留思考、计划、压缩 3 个语义化单图标 */}
-                  <div class={`shadow-2xl rounded-2xl px-2 py-1 flex items-center gap-1 pointer-events-auto border transition-all ${
+                  {/* 悬浮药丸：纯单色语义图标 + 实时回显值 */}
+                  <div class={`shadow-2xl rounded-2xl px-2.5 py-1.5 flex items-center gap-2 pointer-events-auto border font-mono text-xs transition-all ${
                     isDark ? "glass-bar border-purple-500/40" : "bg-white/95 border-purple-300 shadow-xl"
                   }`}>
-                    {/* 1. 思考 (Think) — 大脑神经网络思维 */}
+                    {/* 1. 思考 (Think) + 回显当前等级 */}
                     <button
-                      onClick={() => alert("思考等级切换 (Think Level): [off, low, medium, high, max]")}
-                      class="p-2 rounded-xl text-zinc-400 hover:text-white hover:bg-white/10 transition-all"
-                      title="思考深度 (Think)"
+                      onClick={() => setActionSheetType("think")}
+                      class="flex items-center gap-1 text-zinc-300 hover:text-white px-1.5 py-1 rounded-xl hover:bg-white/10 transition-all"
+                      title="点击切换思考深度"
                     >
-                      <Icons.ThinkBrain size={16} />
+                      <Icons.ThinkBrain size={15} className="text-purple-400" />
+                      <span class="font-bold text-[11px]">{thinkLevel}</span>
                     </button>
 
                     <div class="w-[1px] h-3.5 bg-zinc-700/60"></div>
 
-                    {/* 2. 计划 (Plan) — 任务勾选清单剪贴板 */}
+                    {/* 2. 计划 (Plan) + 回显当前 TUI 计划模式 */}
                     <button
-                      onClick={() => alert("切换 Plan 计划执行模式 / Act 行动模式")}
-                      class="p-2 rounded-xl text-zinc-400 hover:text-white hover:bg-white/10 transition-all"
-                      title="任务计划 (Plan)"
+                      onClick={() => setActionSheetType("plan")}
+                      class="flex items-center gap-1 text-zinc-300 hover:text-white px-1.5 py-1 rounded-xl hover:bg-white/10 transition-all"
+                      title="点击切换计划模式"
                     >
-                      <Icons.PlanClipboard size={16} />
+                      <Icons.PlanClipboard size={15} className="text-purple-400" />
+                      <span class="font-bold text-[11px] truncate max-w-[65px]">{planMode}</span>
                     </button>
 
                     <div class="w-[1px] h-3.5 bg-zinc-700/60"></div>
 
-                    {/* 3. 压缩 (Compact) — 上下向内挤压收缩 */}
+                    {/* 3. 压缩 (Compact) + 二次确认 */}
                     <button
-                      onClick={() => alert("触发会话上下文深度压缩 (Compact)")}
-                      class="p-2 rounded-xl text-zinc-400 hover:text-white hover:bg-white/10 transition-all"
-                      title="压缩上下文 (Compact)"
+                      onClick={() => setActionSheetType("compact_confirm")}
+                      class="p-1.5 rounded-xl text-zinc-400 hover:text-purple-300 hover:bg-white/10 transition-all"
+                      title="点击压缩上下文（带二次确认）"
                     >
                       <Icons.CompactSqueeze size={16} />
                     </button>
@@ -1414,37 +1444,187 @@
                   </button>
                 </div>
 
-                {/* 模型选择弹层 (点击右上角模型 Badge 触发) */}
-                {showModelPicker && (
+                {/* ----------------------------------------------------------------------- */}
+                {/* 优化项 1 落地：思考等级与计划模式选择 ActionSheet + 压缩二次确认弹窗 */}
+                {/* ----------------------------------------------------------------------- */}
+                {actionSheetType && (
                   <div class="absolute inset-0 bg-black/80 z-50 flex flex-col justify-end p-4 animate-fade-in">
-                    <div class={`border rounded-3xl p-5 space-y-2 shadow-2xl ${cardClass}`}>
-                      <div class="flex justify-between items-center pb-2 border-b border-zinc-800">
-                        <span class="text-xs font-bold">选择当前会话模型</span>
-                        <button onClick={() => setShowModelPicker(false)} class="text-xs opacity-60">✕</button>
-                      </div>
-                      <div class="space-y-1 pt-1 font-mono text-xs max-h-52 overflow-y-auto no-scrollbar">
-                        {AVAILABLE_MODELS.map((m) => {
-                          const isCur = activeSession.model === m;
-                          return (
+                    <div class={`border rounded-3xl p-5 space-y-3 shadow-2xl ${cardClass}`}>
+                      
+                      {/* Think 思考等级选择 */}
+                      {actionSheetType === "think" && (
+                        <div>
+                          <div class="flex justify-between items-center pb-2 border-b border-zinc-800 mb-2 font-mono">
+                            <span class="text-xs font-bold text-purple-400">选择思考深度等级 (Think Level)</span>
+                            <button onClick={() => setActionSheetType(null)} class="text-xs opacity-60">✕</button>
+                          </div>
+                          <div class="space-y-1 font-mono text-xs">
+                            {THINK_LEVELS.map((lvl) => (
+                              <button
+                                key={lvl}
+                                onClick={() => { setThinkLevel(lvl); setActionSheetType(null); }}
+                                class={`w-full p-2.5 rounded-xl border text-left flex justify-between items-center transition-all ${
+                                  thinkLevel === lvl ? "bg-purple-600/20 border-purple-500 text-purple-300 font-bold" : `${cardInnerClass} hover:border-zinc-600`
+                                }`}
+                              >
+                                <span>{lvl}</span>
+                                {thinkLevel === lvl && <span class="text-purple-400">✓ 激活</span>}
+                              </button>
+                            ))}
+                          </div>
+                        </div>
+                      )}
+
+                      {/* Plan 真实 TUI 5 模式选择 */}
+                      {actionSheetType === "plan" && (
+                        <div>
+                          <div class="flex justify-between items-center pb-2 border-b border-zinc-800 mb-2 font-mono">
+                            <span class="text-xs font-bold text-purple-400">选择计划与执行模式 (Plan Mode)</span>
+                            <button onClick={() => setActionSheetType(null)} class="text-xs opacity-60">✕</button>
+                          </div>
+                          <div class="space-y-1.5 font-mono text-xs max-h-60 overflow-y-auto no-scrollbar">
+                            {TUI_PLAN_MODES.map((pm) => (
+                              <button
+                                key={pm.id}
+                                onClick={() => { setPlanMode(pm.id); setActionSheetType(null); }}
+                                class={`w-full p-2.5 rounded-xl border text-left transition-all ${
+                                  planMode === pm.id ? "bg-purple-600/20 border-purple-500 text-purple-300" : `${cardInnerClass} hover:border-zinc-600`
+                                }`}
+                              >
+                                <div class="flex justify-between items-center font-bold mb-0.5">
+                                  <span>{pm.label}</span>
+                                  {planMode === pm.id && <span class="text-purple-400">✓ 当前</span>}
+                                </div>
+                                <div class="text-[10px] opacity-60 leading-tight">{pm.desc}</div>
+                              </button>
+                            ))}
+                          </div>
+                        </div>
+                      )}
+
+                      {/* Compact 二次确认弹窗 */}
+                      {actionSheetType === "compact_confirm" && (
+                        <div class="space-y-3 py-1">
+                          <div class="flex items-center gap-2 text-purple-400 font-bold text-sm">
+                            <Icons.CompactSqueeze size={18} />
+                            <span>压缩上下文确认 (Compact Session)</span>
+                          </div>
+                          <p class="text-xs opacity-80 leading-relaxed font-mono">
+                            此操作将对当前会话的历史上下文生成阶段性总结，并修剪超出视窗的对话记录，以降低 Token 消耗并提升响应速度。是否立即执行？
+                          </p>
+                          <div class="flex gap-2 font-mono text-xs pt-1">
                             <button
-                              key={m}
                               onClick={() => {
-                                setActiveSession((prev) => ({ ...prev, model: m }));
-                                setShowModelPicker(false);
+                                setActionSheetType(null);
+                                alert("已触发 Compact 指令！桌面 Host 正在整理压缩当前会话上下文。");
                               }}
-                              class={`w-full p-2.5 rounded-xl border text-left flex justify-between items-center transition-all ${
-                                isCur ? "bg-purple-600/20 border-purple-500 text-purple-300 font-bold" : `${cardInnerClass} hover:border-zinc-600`
-                              }`}
+                              class="flex-1 py-2.5 rounded-xl bg-purple-600 hover:bg-purple-500 text-white font-bold transition-all shadow"
                             >
-                              <span>{m}</span>
-                              {isCur && <span class="text-xs text-purple-400">✓ 当前</span>}
+                              确认压缩
                             </button>
-                          );
-                        })}
-                      </div>
+                            <button
+                              onClick={() => setActionSheetType(null)}
+                              class={`px-4 py-2.5 rounded-xl border transition-all ${isDark ? "bg-zinc-800 border-zinc-700 text-zinc-300" : "bg-white border-zinc-300 text-zinc-700"}`}
+                            >
+                              取消
+                            </button>
+                          </div>
+                        </div>
+                      )}
+
                     </div>
                   </div>
                 )}
+              </div>
+
+              {/* ========================================================================= */}
+              {/* 3. 独立全屏子页面：模型选择 (优化项 2 落地：带返回、确认与取消) */}
+              {/* ========================================================================= */}
+              <div class={`absolute inset-0 flex flex-col z-50 transition-all duration-300 ${bgClass} ${
+                inModelSelect ? "translate-x-0 opacity-100" : "translate-x-full opacity-0 pointer-events-none"
+              }`}>
+                {/* 顶栏：左上角返回 + 标题 + 右上角确认按钮（彻底消除重复的取消按钮） */}
+                <div class={`px-4 py-2.5 border-b flex items-center justify-between ${dockClass}`}>
+                  <button
+                    onClick={() => setInModelSelect(false)}
+                    class="p-1 rounded-xl opacity-80 hover:opacity-100 transition-all active:scale-95"
+                    title="放弃并返回会话"
+                  >
+                    <Icons.ArrowLeft size={20} />
+                  </button>
+
+                  <h2 class="text-xs font-bold font-mono">选择会话模型</h2>
+
+                  <button
+                    onClick={() => {
+                      setActiveSession((prev) => ({ ...prev, model: selectedModelDraft }));
+                      setInModelSelect(false);
+                    }}
+                    class="px-3 py-1 rounded-full bg-purple-600 hover:bg-purple-500 text-white text-[11px] font-mono font-bold shadow-xs transition-all active:scale-95"
+                  >
+                    应用
+                  </button>
+                </div>
+
+                {/* 搜索框 */}
+                <div class={`p-3 border-b ${borderClass}`}>
+                  <div class={`flex items-center gap-2 px-3 py-2 rounded-xl border ${cardInnerClass}`}>
+                    <Icons.Search size={14} className="opacity-50" />
+                    <input
+                      type="text"
+                      placeholder="搜索模型名称或厂商 (Gemini, Claude, GPT...)"
+                      value={modelSearchQuery}
+                      onChange={(e) => setModelSearchQuery(e.target.value)}
+                      class={`flex-1 text-xs focus:outline-none bg-transparent font-mono ${isDark ? "text-white" : "text-zinc-900"}`}
+                    />
+                    {modelSearchQuery && (
+                      <button onClick={() => setModelSearchQuery("")} class="text-xs opacity-50 px-1">✕</button>
+                    )}
+                  </div>
+                </div>
+
+                {/* 模型列表 */}
+                <div class="flex-1 overflow-y-auto p-4 space-y-2.5 no-scrollbar">
+                  {filteredModels.map((m) => {
+                    const isSelected = selectedModelDraft === m.id;
+                    return (
+                      <div
+                        key={m.id}
+                        onClick={() => setSelectedModelDraft(m.id)}
+                        class={`p-3.5 rounded-2xl border transition-all cursor-pointer ${
+                          isSelected 
+                            ? "bg-purple-950/40 border-purple-500 shadow-md" 
+                            : cardClass
+                        }`}
+                      >
+                        <div class="flex items-center justify-between mb-1">
+                          <span class="font-bold text-xs font-mono text-zinc-100">{m.id}</span>
+                          <span class="text-[9px] px-2 py-0.5 rounded-full bg-purple-900/30 text-purple-400 border border-purple-800 font-mono">
+                            {m.badge}
+                          </span>
+                        </div>
+
+                        <div class="flex items-center justify-between text-[11px] font-mono opacity-70 mb-2">
+                          <span>{m.provider}</span>
+                          <span>{m.context}</span>
+                        </div>
+
+                        <div class="flex items-center justify-between border-t border-zinc-800/60 pt-2 text-[10px] font-mono">
+                          <div class="flex gap-2">
+                            {m.reasoning && <span class="text-purple-400 font-semibold">● 深度推导</span>}
+                            {m.vision && <span class="text-blue-400 font-semibold">● 视觉感知</span>}
+                          </div>
+                          <div class={isSelected ? "text-purple-400 font-bold" : "opacity-40"}>
+                            {isSelected ? "● 选中拟生效" : "点击选中"}
+                          </div>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+
+                {/* 底部保留适度留白以防触碰 Home Indicator，无需多余的重复操作栏 */}
+                <div class="h-6"></div>
               </div>
 
               {/* ========================================================================= */}
@@ -1517,11 +1697,11 @@
             </div>
           </div>
 
-          {/* 交互核对说明 */}
+          {/* 交互说明与验证指引 */}
           <div class="mt-4 text-xs text-zinc-400 text-center max-w-xl space-y-1 font-mono">
-            <p class="text-zinc-200 font-bold">语义精修核对点：</p>
-            <p>1. <span class="text-purple-400">右上角模型切换</span>：点击右上角模型 Badge (带 ▾ 箭头)，直接弹出模型选择 Sheet 切换。</p>
-            <p>2. <span class="text-purple-400">三大语义化图标</span>：思考 (<span class="text-zinc-200 font-bold">大脑神经网络</span>) · 计划 (<span class="text-zinc-200 font-bold">任务清单剪贴板</span>) · 压缩 (<span class="text-zinc-200 font-bold">上下向内挤压收缩</span>)。</p>
+            <p class="text-zinc-200 font-bold">V5 精准交互落地核对：</p>
+            <p>1. <span class="text-purple-400">FloatingToolBar 药丸回显</span>：显示 <span class="text-zinc-200">[脑] xhigh | [清单] YOLO | [挤压]</span>，点击分别呼出思考等级、真实TUI五模式与二次确认。</p>
+            <p>2. <span class="text-purple-400">独立全屏模型选择页</span>：点击右上角模型徽标，平滑进入带搜索、返回、取消与确认键的独立子页面。</p>
           </div>
         </div>
       );
