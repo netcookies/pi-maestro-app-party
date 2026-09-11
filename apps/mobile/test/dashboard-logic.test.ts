@@ -4,6 +4,7 @@ import {
   isSameLocalDay,
   isWindowSteerable,
   deriveDashboardMetrics,
+  getWindowContextPressure,
 } from "../src/dashboard-logic.js";
 import type { MonitorWindowSummary, MaestroState, MaestroScheduleSummary } from "@maestro-mobile/shared";
 
@@ -38,6 +39,41 @@ function makeSchedule(overrides: Partial<MaestroScheduleSummary> = {}): MaestroS
 describe("windowKey", () => {
   it("composes workspace and owner id", () => {
     expect(windowKey(makeWindow())).toBe("ws1-o1");
+  });
+});
+
+describe("getWindowContextPressure", () => {
+  it("extracts context pressure number correctly", () => {
+    const w = makeWindow({
+      facets: [
+        {
+          kind: "teammate-agents",
+          target: { identity: { workspaceId: "ws", ownerId: "o", ownerNonce: "", endpointId: "e" } },
+          revision: "1",
+          data: { contextPressure: 60 },
+        },
+      ],
+    });
+    expect(getWindowContextPressure(w)).toBe(60);
+  });
+
+  it("extracts context pressure object with percent", () => {
+    const w = makeWindow({
+      facets: [
+        {
+          kind: "teammate-agents",
+          target: { identity: { workspaceId: "ws", ownerId: "o", ownerNonce: "", endpointId: "e" } },
+          revision: "1",
+          data: { contextPressure: { percent: 42 } },
+        },
+      ],
+    });
+    expect(getWindowContextPressure(w)).toBe(42);
+  });
+
+  it("returns null when contextPressure is missing or null", () => {
+    const w = makeWindow();
+    expect(getWindowContextPressure(w)).toBeNull();
   });
 });
 

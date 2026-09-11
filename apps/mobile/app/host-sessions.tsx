@@ -410,34 +410,33 @@ export default function HostSessionsScreen() {
           <Text style={styles.pathText} numberOfLines={1}>{s.cwd || s.path}</Text>
         </View>
 
-        {/* 2x2 Bento 便当盒仪表盘核心网格 (严格对齐原型数据规范) */}
+        {/* 2x2 Bento 便当盒仪表盘核心网格 */}
         <View style={styles.bentoGrid}>
-          {/* 格 1：上下文视窗 (格式严格对齐原型: 412k / 1000k (41.2%)) */}
+          {/* 格 1：上下文视窗 (模型视窗容量真实展示) */}
           <View style={styles.bentoCell}>
             <Text style={styles.bentoCellLabel}>{t.contextLabel}</Text>
             <Text style={styles.bentoCellValue}>
               {(() => {
-                const maxWindow = s.model?.includes("gemini") ? 1000 : 200;
-                const used = Math.min(maxWindow, Math.max(1, Math.round(s.messageCount * 0.12)));
-                const pct = ((used / maxWindow) * 100).toFixed(1);
-                return `${used}k / ${maxWindow}k (${pct}%)`;
+                if (!s.model) return "--";
+                const maxWindow = s.model.includes("gemini") ? "1000k" : s.model.includes("deepseek") ? "128k" : "200k";
+                return `${maxWindow} ${t.modelWindow}`;
               })()}
             </Text>
           </View>
 
-          {/* 格 2：Token 消耗 (总消耗与成本估算) */}
+          {/* 格 2：Token 消耗 (无真实 telemetry 时真实显示 --) */}
           <View style={styles.bentoCell}>
             <Text style={styles.bentoCellLabel}>{t.tokensLabel}</Text>
             <Text style={styles.bentoCellValue}>
-              {s.messageCount > 0 ? `${(s.messageCount * 0.45).toFixed(1)}k ($${(s.messageCount * 0.00035).toFixed(2)})` : "--"}
+              {"--"}
             </Text>
           </View>
 
-          {/* 格 3：缓存命中 (双语化) */}
+          {/* 格 3：状态 (双语化) */}
           <View style={styles.bentoCell}>
             <Text style={styles.bentoCellLabel}>{t.cacheLabel}</Text>
-            <Text style={[styles.bentoCellValue, { color: theme.success }]}>
-              {item.live ? "92%" : t.readyLabel}
+            <Text style={[styles.bentoCellValue, { color: item.live ? theme.success : theme.muted }]}>
+              {item.live ? t.statusActive : t.readyLabel}
             </Text>
           </View>
 
@@ -452,7 +451,7 @@ export default function HostSessionsScreen() {
 
         {/* 上下文健康细条 */}
         <View style={styles.contextTrack}>
-          <View style={[styles.contextFill, { width: item.live ? "65%" : "25%", backgroundColor: theme.accent }]} />
+          <View style={[styles.contextFill, { width: item.live ? "100%" : "0%", backgroundColor: theme.accent }]} />
         </View>
       </TouchableOpacity>
     );
@@ -529,13 +528,14 @@ export default function HostSessionsScreen() {
           data={flatRows}
           keyExtractor={(r) => r.key}
           renderItem={renderItem}
+          extraData={t}
           contentContainerStyle={[styles.list, { paddingBottom: 100 }]}
           keyboardShouldPersistTaps="handled"
           refreshing={refreshing}
           onRefresh={() => void loadFirstPage(debouncedQuery, true)}
           onEndReached={() => void loadMore()}
           onEndReachedThreshold={0.35}
-          ListEmptyComponent={<View style={styles.center}><Text style={styles.centerText}>没有匹配的会话</Text></View>}
+          ListEmptyComponent={<View style={styles.center}><Text style={styles.centerText}>{t.tabSessions === "会话" ? "没有匹配的会话" : "No matching sessions"}</Text></View>}
           ListFooterComponent={sessions.length > 0 ? listFooter : null}
         />
       )}

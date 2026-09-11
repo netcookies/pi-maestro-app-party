@@ -19,6 +19,7 @@ import { useI18n } from "../src/i18n";
 import {
   deriveDashboardMetrics,
   windowKey,
+  getWindowContextPressure,
   type PendingAskItem,
 } from "../src/dashboard-logic";
 import type { MonitorWindowSummary, SessionUsageSummary } from "@maestro-mobile/shared";
@@ -140,18 +141,26 @@ export default function DashboardScreen() {
         if (sessionId) router.push({ pathname: "/session", params: { id: sessionId } });
       } catch {}
     };
+    const pressure = getWindowContextPressure(item);
+    const completedTodos = item.todos.filter((x) => x.status === "completed").length;
+    const trackPercent = item.todos.length > 0
+      ? Math.round((completedTodos / item.todos.length) * 100)
+      : pressure !== null
+      ? pressure
+      : 0;
+
     return (
       <TouchableOpacity
         style={styles.bentoCard}
         onPress={() => void openWindow()}
         disabled={!item.cwd}
         accessibilityRole="button"
-        accessibilityLabel={`打开窗口 ${item.name ?? "未命名"} 的会话`}
+        accessibilityLabel={`打开窗口 ${item.name ?? t.unnamedWindow} 的会话`}
       >
         <View style={styles.cardHeader}>
           <View style={styles.cardHeaderLeft}>
             <View style={[styles.dot, { backgroundColor: statusColor }]} />
-            <Text style={styles.cardTitle} numberOfLines={1}>{item.name ?? "未命名窗口"}</Text>
+            <Text style={styles.cardTitle} numberOfLines={1}>{item.name ?? t.unnamedWindow}</Text>
           </View>
           <View style={styles.modelBadge}>
             <Text style={styles.modelBadgeText}>#{item.identity.endpointId.slice(0, 8)}</Text>
@@ -160,7 +169,7 @@ export default function DashboardScreen() {
 
         <View style={styles.pathRow}>
           <LineIcon name="folder" size={13} color={theme.muted} />
-          <Text style={styles.pathText} numberOfLines={1}>{item.cwd ?? "未知路径"}</Text>
+          <Text style={styles.pathText} numberOfLines={1}>{item.cwd ?? t.unknownPath}</Text>
         </View>
 
         {/* 单行 Info 左右分散对齐：左边上下文视窗，右边 Token 消耗 */}
@@ -168,13 +177,13 @@ export default function DashboardScreen() {
           <View style={styles.singleInfoItem}>
             <Text style={styles.singleInfoLabel}>{t.contextLabel}:</Text>
             <Text style={[styles.singleInfoValue, { color: theme.accent }]}>
-              {item.todos.length > 0 ? `${(15 + item.todos.length * 4.5).toFixed(1)}%` : "16.4%"}
+              {pressure !== null ? `${pressure}%` : "--"}
             </Text>
           </View>
           <View style={styles.singleInfoItem}>
             <Text style={styles.singleInfoLabel}>{t.tokensLabel}:</Text>
             <Text style={styles.singleInfoValue}>
-              {item.todos.length > 0 ? `${item.todos.length * 45 + 120}k tokens` : "245k tokens"}
+              {"--"}
             </Text>
           </View>
         </View>
@@ -184,7 +193,7 @@ export default function DashboardScreen() {
             style={[
               styles.contextFill,
               {
-                width: `${Math.round((item.todos.filter((x) => x.status === "completed").length / Math.max(1, item.todos.length)) * 100)}%`,
+                width: `${trackPercent}%`,
                 backgroundColor: theme.accent,
               },
             ]}
@@ -192,16 +201,16 @@ export default function DashboardScreen() {
         </View>
       </TouchableOpacity>
     );
-  }, [theme, styles, openSessionContinue, router]);
+  }, [theme, styles, openSessionContinue, router, t]);
 
   const renderAttentionGroup = useCallback(({ item }: { item: { key: string; windowName: string; items: { code: string; severity: string; message: string }[] } }) => (
     <View style={styles.alert}>
-      <Text style={styles.alertTitle}>{item.windowName} · {item.items.length} 条告警</Text>
+      <Text style={styles.alertTitle}>{item.windowName} · {item.items.length} {t.alertCount}</Text>
       {item.items.slice(0, 3).map((a, i) => (
         <Text key={i} style={styles.alertMsg} numberOfLines={1}>· {a.message}</Text>
       ))}
     </View>
-  ), [styles]);
+  ), [styles, t]);
 
   return (
     <View style={[styles.container, { backgroundColor: theme.bg }]}>
@@ -387,6 +396,7 @@ export default function DashboardScreen() {
             data={windows}
             keyExtractor={keyExtractor}
             renderItem={renderWindowRow}
+            extraData={t}
             scrollEnabled={false}
             contentContainerStyle={styles.listGap}
           />
@@ -406,6 +416,7 @@ export default function DashboardScreen() {
             data={metrics.attentionGroups}
             keyExtractor={(g) => g.key}
             renderItem={renderAttentionGroup}
+            extraData={t}
             scrollEnabled={false}
             contentContainerStyle={styles.listGap}
           />

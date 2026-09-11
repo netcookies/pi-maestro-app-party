@@ -102,6 +102,31 @@ function agentsOfWindow(w: MonitorWindowSummary): Array<{ status?: unknown }> {
   return [];
 }
 
+/** 提取窗口上下文压力百分比（0-100；无数据返回 null） */
+export function getWindowContextPressure(w: MonitorWindowSummary): number | null {
+  for (const f of w.facets ?? []) {
+    if (f && typeof f === "object" && !Array.isArray(f)) {
+      const facet = f as unknown as Record<string, unknown>;
+      if (facet.kind === "teammate-agents") {
+        const data = facet.data as { contextPressure?: unknown } | undefined;
+        if (data && data.contextPressure !== undefined && data.contextPressure !== null) {
+          const cp = data.contextPressure;
+          if (typeof cp === "number" && Number.isFinite(cp)) {
+            return Math.max(0, Math.min(100, Math.round(cp)));
+          }
+          if (typeof cp === "object" && cp !== null && "percent" in cp) {
+            const p = (cp as { percent?: unknown }).percent;
+            if (typeof p === "number" && Number.isFinite(p)) {
+              return Math.max(0, Math.min(100, Math.round(p)));
+            }
+          }
+        }
+      }
+    }
+  }
+  return null;
+}
+
 /** 态势总览指标推导（纯函数；now 可注入便于测试） */
 export function deriveDashboardMetrics(input: DashboardInput, now: Date = new Date()): DashboardMetrics {
   const windows = input.monitor?.windows ?? [];

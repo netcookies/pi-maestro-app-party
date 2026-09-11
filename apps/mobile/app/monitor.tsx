@@ -15,7 +15,7 @@ import { useHost } from "../src/store";
 import { useTheme, MIUIX_RADIUS, MIUIX_TYPE, MIUIX_SPACE, hexToRgba } from "../src/theme";
 import { LineIcon } from "../src/components/LineIcon";
 import { useI18n } from "../src/i18n";
-import { windowKey, isWindowSteerable } from "../src/dashboard-logic";
+import { windowKey, isWindowSteerable, getWindowContextPressure } from "../src/dashboard-logic";
 import type { MonitorWindowSummary, MonitorAttentionSummary } from "@maestro-mobile/shared";
 
 export default function MonitorScreen() {
@@ -91,7 +91,12 @@ export default function MonitorScreen() {
     const shownTodos = todosExpanded ? item.todos : item.todos.slice(0, LIMIT);
     const statusClr = statusColor(item.status, theme);
     const completedTodos = item.todos.filter((x) => x.status === "completed").length;
-    const todoPercent = item.todos.length > 0 ? Math.round((completedTodos / item.todos.length) * 100) : 0;
+    const pressure = getWindowContextPressure(item);
+    const trackPercent = item.todos.length > 0
+      ? Math.round((completedTodos / item.todos.length) * 100)
+      : pressure !== null
+      ? pressure
+      : 0;
 
     return (
       <TouchableOpacity
@@ -107,7 +112,7 @@ export default function MonitorScreen() {
         <View style={styles.cardHeader}>
           <View style={styles.cardHeaderLeft}>
             <View style={[styles.dot, { backgroundColor: statusClr }]} />
-            <Text style={styles.cardTitle} numberOfLines={1}>{item.name ?? "未命名窗口"}</Text>
+            <Text style={styles.cardTitle} numberOfLines={1}>{item.name ?? t.unnamedWindow}</Text>
           </View>
           <View
             style={[
@@ -127,7 +132,7 @@ export default function MonitorScreen() {
         {/* 路径行 */}
         <View style={styles.pathRow}>
           <LineIcon name="folder" size={13} color={theme.muted} />
-          <Text style={styles.pathText} numberOfLines={1}>{item.cwd ?? `#window.${item.name ?? "unknown"}`}</Text>
+          <Text style={styles.pathText} numberOfLines={1}>{item.cwd ?? t.unknownPath}</Text>
         </View>
 
         {/* 单行 Info 左右分散对齐：左边上下文视窗，右边 Token 消耗 */}
@@ -135,13 +140,13 @@ export default function MonitorScreen() {
           <View style={styles.singleInfoItem}>
             <Text style={styles.singleInfoLabel}>{t.contextLabel}:</Text>
             <Text style={[styles.singleInfoValue, { color: theme.accent }]}>
-              {item.todos.length > 0 ? `${(15 + item.todos.length * 4.5).toFixed(1)}%` : "16.4%"}
+              {pressure !== null ? `${pressure}%` : "--"}
             </Text>
           </View>
           <View style={styles.singleInfoItem}>
             <Text style={styles.singleInfoLabel}>{t.tokensLabel}:</Text>
             <Text style={styles.singleInfoValue}>
-              {item.todos.length > 0 ? `${item.todos.length * 45 + 120}k tokens` : "245k tokens"}
+              {"--"}
             </Text>
           </View>
         </View>
@@ -152,7 +157,7 @@ export default function MonitorScreen() {
             style={[
               styles.contextFill,
               {
-                width: `${todoPercent}%`,
+                width: `${trackPercent}%`,
                 backgroundColor: theme.accent,
               },
             ]}
@@ -162,7 +167,7 @@ export default function MonitorScreen() {
         {/* 告警展开条（若有） */}
         {item.attention.length > 0 && (
           <View style={styles.attentionSection}>
-            <Text style={styles.sectionTitle}>Attention · {item.attention.length} 条告警</Text>
+            <Text style={styles.sectionTitle}>Attention · {item.attention.length} {t.alertCount}</Text>
             {shownAttention.map((a, i) => (
               <View key={i} style={styles.attentionItem}>
                 <Text style={[styles.attentionCode, { color: sevColor(a.severity, theme) }]}>{a.code}</Text>
@@ -176,7 +181,9 @@ export default function MonitorScreen() {
                 onPress={() => toggleExpanded(`${key}-attention`)}
               >
                 <Text style={styles.showAllText}>
-                  {attentionExpanded ? "收起" : `查看全部 ${item.attention.length} 条`}
+                  {attentionExpanded
+                    ? (t.tabMonitor === "监控" ? "收起" : "Collapse")
+                    : (t.tabMonitor === "监控" ? `查看全部 ${item.attention.length} 条` : `View all ${item.attention.length}`)}
                 </Text>
               </TouchableOpacity>
             )}
@@ -184,7 +191,7 @@ export default function MonitorScreen() {
         )}
       </TouchableOpacity>
     );
-  }, [resolvedTarget, expanded, theme, styles]);
+  }, [resolvedTarget, expanded, theme, styles, t]);
 
   return (
     <View style={[styles.container, { backgroundColor: theme.bg }]}>
@@ -219,20 +226,21 @@ export default function MonitorScreen() {
         <View style={[styles.attentionBar, { backgroundColor: theme.secondaryContainer ?? theme.cardBg }]}>
           <View style={[styles.sevDot, { backgroundColor: theme.error }]} />
           <Text style={[styles.attentionText, { color: theme.error }]} numberOfLines={2}>
-            <Text style={styles.attentionBold}>需要关注</Text> · {totalAttention} 条告警，涉及 {attentionWindows.length} 个窗口
+            <Text style={styles.attentionBold}>{t.attentionTitle}</Text> · {totalAttention} {t.alertCount}
           </Text>
         </View>
       )}
       {windows.length === 0 ? (
         <View style={styles.empty}>
-          <Text style={styles.emptyText}>暂无窗口数据</Text>
-          <Text style={styles.emptyDesc}>等待 Host 推送 monitor 状态</Text>
+          <Text style={styles.emptyText}>{t.noWindows}</Text>
+          <Text style={styles.emptyDesc}>{t.noWindowsDesc}</Text>
         </View>
       ) : (
         <FlatList
           data={windows}
           keyExtractor={windowKey}
           renderItem={renderWindow}
+          extraData={t}
           contentContainerStyle={[styles.list, resolvedTarget ? { paddingBottom: 100 } : null]}
           keyboardShouldPersistTaps="handled"
         />
@@ -245,12 +253,12 @@ export default function MonitorScreen() {
               style={[styles.floatingInput, { color: theme.text }]}
               value={draft}
               onChangeText={setDraft}
-              placeholder={`发送到 #${endpointId.slice(0, 8)}…`}
+              placeholder={`${t.sendTo} #${endpointId.slice(0, 8)}…`}
               placeholderTextColor={theme.dim}
               editable={!sending}
               multiline={false}
               autoFocus
-              accessibilityLabel="监督消息输入"
+              accessibilityLabel={t.sendSupervisionMsg}
             />
             <TouchableOpacity
               style={[
@@ -267,7 +275,7 @@ export default function MonitorScreen() {
               onPress={() => void handleSend()}
               disabled={!canSend}
               accessibilityRole="button"
-              accessibilityLabel="发送监督消息"
+              accessibilityLabel={t.sendSupervisionMsg}
             >
               <LineIcon name="send" size={15} color="#fff" strokeWidth={2.2} />
             </TouchableOpacity>

@@ -127,6 +127,12 @@ export interface I18nDictionary {
   wifiOnlyLabel: string;
   wifiOnlyDesc: string;
   confirmConnect: string;
+  sendTo: string;
+  sendSupervisionMsg: string;
+  unnamedWindow: string;
+  unknownPath: string;
+  noWindowsDesc: string;
+  modelWindow: string;
 }
 
 export const DICTIONARIES: Record<Language, I18nDictionary> = {
@@ -253,6 +259,12 @@ export const DICTIONARIES: Record<Language, I18nDictionary> = {
     wifiOnlyLabel: "仅 Wi-Fi 下拉取超长历史",
     wifiOnlyDesc: "节约移动蜂窝数据流量",
     confirmConnect: "确认连接",
+    sendTo: "发送到",
+    sendSupervisionMsg: "发送监督消息",
+    unnamedWindow: "未命名窗口",
+    unknownPath: "未知路径",
+    noWindowsDesc: "等待 Host 推送 monitor 状态",
+    modelWindow: "视窗上限",
   },
   en: {
     tabWorkbench: "Workbench",
@@ -377,6 +389,12 @@ export const DICTIONARIES: Record<Language, I18nDictionary> = {
     wifiOnlyLabel: "Large History on Wi-Fi Only",
     wifiOnlyDesc: "Save mobile cellular data",
     confirmConnect: "Connect",
+    sendTo: "Send to",
+    sendSupervisionMsg: "Send supervisor message",
+    unnamedWindow: "Unnamed Window",
+    unknownPath: "Unknown path",
+    noWindowsDesc: "Waiting for host monitor telemetry",
+    modelWindow: "Max Window",
   },
 };
 
