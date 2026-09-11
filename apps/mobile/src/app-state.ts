@@ -170,10 +170,19 @@ export function reduceEvent(state: AppState, event: AppAction, deps: AppStateDep
       const items = timelines.get(event.sessionId) ?? [];
       // P1-1 契约：相同 id 替换（host 对同一消息更新时复用稳定 id），否则追加
       const idx = items.findIndex((t) => t.id === event.item.id);
-      const next = idx >= 0
-        ? items.map((t, i) => (i === idx ? event.item : t))
-        : [...items, event.item];
-      timelines.set(event.sessionId, next);
+      if (idx >= 0) {
+        const next = items.map((t, i) => (i === idx ? event.item : t));
+        timelines.set(event.sessionId, next);
+        return { ...state, timelines };
+      }
+      // 防重：若最后一条条目角色与文本完全一致（例如乐观回显与 watcher 读盘），复用并替换为最新条目
+      const last = items[items.length - 1];
+      if (last && last.kind === event.item.kind && last.text === event.item.text && event.item.kind === "user") {
+        const next = [...items.slice(0, -1), event.item];
+        timelines.set(event.sessionId, next);
+        return { ...state, timelines };
+      }
+      timelines.set(event.sessionId, [...items, event.item]);
       return { ...state, timelines };
     }
 

@@ -76,6 +76,17 @@ describe("P1-1 契约: timeline_item 按 id 去重替换", () => {
     expect(state.timelines.get("s1")).toHaveLength(2);
   });
 
+  it("连续到达相同内容和角色的 user 消息时，复用并替换为最新条目（防乐观回显与 watcher 双重推送）", () => {
+    let state = createInitialState();
+    const user1: TimelineItem = { id: "user-1", kind: "user", text: "测试消息", createdAt: "1" };
+    const user2: TimelineItem = { id: "tail-custom-2", kind: "user", text: "测试消息", createdAt: "2" };
+    state = reduceEvent(state, { type: "timeline_item", sessionId: "s1", item: user1, seq: 1 } as HostEvent);
+    state = reduceEvent(state, { type: "timeline_item", sessionId: "s1", item: user2, seq: 2 } as HostEvent);
+    const timeline = state.timelines.get("s1")!;
+    expect(timeline).toHaveLength(1);
+    expect(timeline[0].id).toBe("tail-custom-2");
+  });
+
   it("timeline_delta 对未知 id 忽略（终态由 timeline_item 补齐）", () => {
     const state = reduceEvent(createInitialState(), {
       type: "timeline_delta", sessionId: "s1", itemId: "ghost", delta: "x", seq: 1,
