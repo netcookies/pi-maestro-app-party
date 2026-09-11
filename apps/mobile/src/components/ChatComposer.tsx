@@ -231,7 +231,17 @@ export function ChatComposer({ actions, currentModel, sending, skills = [], plac
         </View>
         {/* 发送按钮 */}
         <TouchableOpacity
-          style={[styles.sendButton, { backgroundColor: canSend ? theme.buttonPrimary : theme.border }]}
+          style={[
+            styles.sendButton,
+            {
+              backgroundColor: theme.accent,
+              opacity: canSend && !sending ? 1 : 0.45,
+              shadowColor: theme.accent,
+              shadowOpacity: canSend && !sending ? 0.35 : 0,
+              shadowRadius: 6,
+              elevation: canSend && !sending ? 4 : 0,
+            },
+          ]}
           hitSlop={{ top: 4, bottom: 4, left: 4, right: 4 }}
           accessibilityRole="button"
           accessibilityLabel="发送消息"
@@ -239,7 +249,7 @@ export function ChatComposer({ actions, currentModel, sending, skills = [], plac
           onPress={() => void handleSend()}
           disabled={!canSend || sending}
         >
-          <LineIcon name="send" size={16} color="#fff" strokeWidth={2} />
+          <LineIcon name="send" size={16} color="#fff" strokeWidth={2.2} />
         </TouchableOpacity>
       </View>
 
@@ -298,7 +308,17 @@ export function ChatComposer({ actions, currentModel, sending, skills = [], plac
             </TouchableOpacity>
             <View style={styles.fsSpacer} />
             <TouchableOpacity
-              style={[styles.sendButton, { backgroundColor: canSend ? theme.buttonPrimary : theme.border }]}
+              style={[
+                styles.sendButton,
+                {
+                  backgroundColor: theme.accent,
+                  opacity: canSend && !sending ? 1 : 0.45,
+                  shadowColor: theme.accent,
+                  shadowOpacity: canSend && !sending ? 0.35 : 0,
+                  shadowRadius: 6,
+                  elevation: canSend && !sending ? 4 : 0,
+                },
+              ]}
               hitSlop={{ top: 4, bottom: 4, left: 4, right: 4 }}
               accessibilityRole="button"
               accessibilityLabel="发送消息"
@@ -306,7 +326,7 @@ export function ChatComposer({ actions, currentModel, sending, skills = [], plac
               onPress={() => { setFullscreenEdit(false); void handleSend(); }}
               disabled={!canSend || sending}
             >
-              <LineIcon name="send" size={16} color="#fff" strokeWidth={2} />
+              <LineIcon name="send" size={16} color="#fff" strokeWidth={2.2} />
             </TouchableOpacity>
           </View>
 

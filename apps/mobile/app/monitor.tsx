@@ -253,13 +253,23 @@ export default function MonitorScreen() {
               accessibilityLabel="监督消息输入"
             />
             <TouchableOpacity
-              style={[styles.floatingSendBtn, { backgroundColor: canSend ? theme.accent : theme.border }]}
+              style={[
+                styles.floatingSendBtn,
+                {
+                  backgroundColor: theme.accent,
+                  opacity: canSend ? 1 : 0.45,
+                  shadowColor: theme.accent,
+                  shadowOpacity: canSend ? 0.35 : 0,
+                  shadowRadius: 6,
+                  elevation: canSend ? 4 : 0,
+                },
+              ]}
               onPress={() => void handleSend()}
               disabled={!canSend}
               accessibilityRole="button"
               accessibilityLabel="发送监督消息"
             >
-              <Text style={styles.floatingSendText}>↑</Text>
+              <LineIcon name="send" size={15} color="#fff" strokeWidth={2.2} />
             </TouchableOpacity>
             <TouchableOpacity
               onPress={() => setTarget(null)}
@@ -424,11 +434,6 @@ function makeStyles(theme: ReturnType<typeof useTheme>["theme"]) {
     borderRadius: 16,
     alignItems: "center",
     justifyContent: "center",
-  },
-  floatingSendText: {
-    color: "#fff",
-    fontSize: 16,
-    fontWeight: "700",
   },
   closeTargetBtn: {
     padding: 6,
