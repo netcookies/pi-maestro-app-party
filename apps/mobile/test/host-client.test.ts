@@ -357,4 +357,32 @@ describe("calculateBackoffDelay（ISS-006）", () => {
     expect(delay).toBeGreaterThanOrEqual(500);
     expect(delay).toBeLessThanOrEqual(1000);
   });
+
+  it("连接成功后启动定时 ping 保活命令，断开时清理定时器", () => {
+    vi.useFakeTimers();
+    try {
+      const sent: string[] = [];
+      const ws = createFakeWs();
+      const c = new HostClient({
+        url: "ws://localhost:0",
+        wsFactory: () => ws,
+      });
+      c.connect();
+      ws._open();
+      expect(c.isConnected).toBe(true);
+
+      // 前进 20 秒
+      vi.advanceTimersByTime(20_000);
+      const pingCmd = ws._sent.find((s) => s.includes('"type":"ping"'));
+      expect(pingCmd).toBeDefined();
+
+      // 关闭连接，定时器应被清理
+      c.close();
+      const sentLen = ws._sent.length;
+      vi.advanceTimersByTime(40_000);
+      expect(ws._sent.length).toBe(sentLen);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });

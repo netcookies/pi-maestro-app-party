@@ -101,6 +101,7 @@ export class HostClient {
     commandType: string;
   }>();
   private commandSeq = 0;
+  private heartbeatPingTimer: ReturnType<typeof setInterval> | null = null;
 
   constructor(private readonly options: HostClientOptions) {
     this.reconnectBaseMs = options.reconnectBaseMs ?? 1000;
@@ -130,6 +131,7 @@ export class HostClient {
       clearTimeout(this.reconnectTimer);
       this.reconnectTimer = null;
     }
+    this.stopPing();
     this.ws?.close();
     this.ws = null;
     this.setState("disconnected");
@@ -232,6 +234,7 @@ export class HostClient {
 
     ws.onopen = () => {
       if (generation !== this.socketGeneration || this.closed) return;
+      this.startPing();
       // 连接需稳定保持 30s 才清零退避，防握手后反复断开退化为每秒重试
       this.connectedAt = Date.now();
       this.setState("connected");
@@ -248,6 +251,7 @@ export class HostClient {
     };
 
     ws.onclose = () => {
+      this.stopPing();
       if (this.closed || generation !== this.socketGeneration) return;
       // 意外断连：立即以可区分错误 settle 在途命令。此前只重连不清 pending，
       // 它们会各自挂满 30s timer 才报 timeout（UI 表现为无响应），且 timeout 文案无法区分
@@ -263,6 +267,23 @@ export class HostClient {
     ws.onerror = () => {
       // onclose 会跟随，这里不重复处理
     };
+  }
+
+  private stopPing(): void {
+    if (this.heartbeatPingTimer) {
+      clearInterval(this.heartbeatPingTimer);
+      this.heartbeatPingTimer = null;
+    }
+  }
+
+  private startPing(): void {
+    this.stopPing();
+    this.heartbeatPingTimer = setInterval(() => {
+      if (this.state === "connected" && !this.closed) {
+        this.sendCommand({ type: "ping" }).catch(() => {});
+      }
+    }, 20_000);
+    this.heartbeatPingTimer.unref?.();
   }
 
   private scheduleReconnect(): void {

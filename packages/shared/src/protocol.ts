@@ -366,7 +366,8 @@ export type ClientCommand =
   | { type: "get_snapshot"; sessionId: string }
   | { type: "get_session_usage"; sessionId: string }
   | { type: "get_maestro_state" }
-  | { type: "get_monitor_state" };
+  | { type: "get_monitor_state" }
+  | { type: "ping" };
 
 /** steer_window 结果（tookOver=true 表示窗口原先未打开，Host 已接管为受控会话） */
 export interface SteerWindowResult {

@@ -252,6 +252,8 @@ export default function SessionScreen() {
             {segments.map((seg, i) =>
               seg.type === "image" ? (
                 <InlineImage key={`img-${i}`} path={seg.path} />
+              ) : isAssistant ? (
+                <MarkdownText key={`txt-${i}`} text={seg.text} />
               ) : (
                 <Text
                   key={`txt-${i}`}

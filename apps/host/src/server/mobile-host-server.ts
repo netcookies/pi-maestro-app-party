@@ -670,6 +670,10 @@ export class MobileHostServer {
 
     try {
       switch (command.type) {
+        case "ping": {
+          this.sendAck(client, command, { pong: true });
+          break;
+        }
         case "list_live_sessions": {
           const list = await this.controller.listLiveSessions();
           this.sendAck(client, command, list);
