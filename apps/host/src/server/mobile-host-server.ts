@@ -604,49 +604,31 @@ export class MobileHostServer {
   }
 
   /**
-   * 白名单条目匹配（实测：new URL("http://[::1]:4739").hostname === "[::1]"，带括号）：
-   *  - 完整 URL 条目：hostname 相等；若条目显式写了非默认端口则端口也必须相等。
-   *  - 裸 hostname / hostname:port 条目：new URL() 会抛错（实测 `new URL("a.example.com")`
-   *    = Invalid URL），旧实现因此让这类配置静默永不生效；现在按字符串解析后同样参与匹配。
-   *  - IPv6 条目带/不带括号两种写法都归一后比较，与 Origin 的带括号 hostname 对齐。
+   * 白名单条目匹配：借助标准 new URL() 归一化解析 scheme/host/port。
+   * 裸 hostname 或未带 scheme 的写法统一垫入 "http://" 代理解析，避免易碎的手工切片。
    */
   private matchesAllowedOrigin(configured: string, hostname: string, originPort: string): boolean {
     const entry = configured.trim().toLowerCase();
     if (!entry) return false;
-    let entryHost: string;
-    let entryPort: string | undefined; // undefined = 条目未精确指定端口
-    if (entry.includes("://")) {
-      try {
-        const u = new URL(entry);
-        entryHost = u.hostname;
-        entryPort = u.port === "" ? undefined : u.port; // 默认端口归一为「未指定」（实测 :443/:80 会被 URL 丢掉）
-      } catch {
-        return false;
-      }
-    } else {
-      // 裸写法的三种形态，必须分开处理（否则都是静默失效的配置陷阱）：
-      //   a) `[fd00::42]:4739` 带括号+端口 → 括号内为 host，] 之后为 port
-      //   b) `app.example.com:3000` 单冒号 → host:port
-      //   c) `fd00::42` 多冒号且无括号 → 未加括号的 IPv6 字面量（整体作 host）；
-      //      若不单独判分会被 indexOf(':') 切成 entryHost="fd00"（实测永不匹配）
-      const bracketEnd = entry.lastIndexOf("]");
-      if (entry.startsWith("[") && bracketEnd > 0) {
-        entryHost = entry.slice(0, bracketEnd + 1);
-        const rest = entry.slice(bracketEnd + 1);
-        entryPort = rest.startsWith(":") ? (rest.slice(1) || undefined) : undefined;
-      } else if ((entry.match(/:/g) || []).length === 1) {
-        const cut = entry.indexOf(":");
-        entryHost = entry.slice(0, cut);
-        entryPort = entry.slice(cut + 1) || undefined;
+    let urlStr = entry;
+    if (!urlStr.includes("://")) {
+      const colons = (urlStr.match(/:/g) || []).length;
+      if (colons > 1 && !urlStr.startsWith("[")) {
+        urlStr = `http://[${urlStr}]`;
       } else {
-        entryHost = entry;
+        urlStr = `http://${urlStr}`;
       }
     }
-    const normalizedEntry = bareHost(entryHost);
-    const normalizedOrigin = bareHost(hostname);
-    if (normalizedEntry !== normalizedOrigin) return false;
-    if (entryPort !== undefined && entryPort !== originPort) return false;
-    return true;
+    try {
+      const u = new URL(urlStr);
+      const entryHost = bareHost(u.hostname);
+      const entryPort = u.port || undefined; // 默认端口规范化为空串即 undefined
+      if (entryHost !== bareHost(hostname)) return false;
+      if (entryPort !== undefined && entryPort !== originPort) return false;
+      return true;
+    } catch {
+      return false;
+    }
   }
 
   // ── WS 命令 ───────────────────────────────────────────────────────────────

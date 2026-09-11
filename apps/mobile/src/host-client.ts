@@ -52,21 +52,29 @@ export interface WebSocketLike {
 export const WS_OPEN = 1;
 
 /**
+ * 计算带 Jitter 的指数退避时长（纯函数）。
+ * [0.5, 1) × 退避值：Jitter 只向下微调，保证恒不超 maxMs，且单调不减。
+ */
+export function calculateBackoffDelay(
+  baseMs: number,
+  maxMs: number,
+  attempt: number,
+  random: () => number = Math.random,
+): number {
+  const backoff = Math.min(baseMs * 2 ** attempt, maxMs);
+  return backoff * (0.5 + random() * 0.5);
+}
+
+/**
  * 连接层错误：命令未被确认是否已由 Host 执行（区别于 Host 明确回给的业务失败）。
  * 调用方可据此区分「失败」与「需重连后核对状态」。
- * 不会把仍在 Host 正常执行的 prompt 误判为业务失败：服务端 runner.prompt() 在 preflight
- * 受理时即 resolve 并回 ack（session-runner.ts:110-120 + mobile-host-server.ts:732），
- * 因此断连时仍挂在 pending 的命令处于「未确认」而非「已失败」态。
  */
 export class CommandConnectionLostError extends Error {
   readonly code = "connection_lost";
-  /** 断连时该命令是否已交给 socket（仅供诊断，不作为成功/失败依据） */
-  readonly maybeExecuted: boolean;
 
-  constructor(commandType: string, maybeExecuted: boolean) {
+  constructor(commandType: string) {
     super(`Connection lost before response (${commandType})`);
     this.name = "CommandConnectionLostError";
-    this.maybeExecuted = maybeExecuted;
   }
 }
 
@@ -91,7 +99,6 @@ export class HostClient {
     resolve(result: unknown): void;
     reject(error: Error): void;
     commandType: string;
-    maybeExecuted: boolean;
   }>();
   private commandSeq = 0;
 
@@ -140,7 +147,7 @@ export class HostClient {
     this.pendingCommands.clear();
     const errors = pending.map((cmd) =>
       reason === "connection_lost"
-        ? new CommandConnectionLostError(cmd.commandType, cmd.maybeExecuted)
+        ? new CommandConnectionLostError(cmd.commandType)
         : new Error(reason === "closed" ? "HostClient closed" : "Not connected"),
     );
     for (let i = 0; i < pending.length; i++) {
@@ -160,8 +167,6 @@ export class HostClient {
   sendCommand(command: ClientCommand & { id?: string }, timeoutMs = 30_000): Promise<unknown> {
     const id = command.id ?? `cmd-${++this.commandSeq}`;
     const payload = { ...command, id };
-    // 发送前判定是否已交给 socket：断连时区分「可能已执行」与「肯定未执行」
-    const maybeExecuted = this.ws?.readyState === WS_OPEN;
     return new Promise((resolve, reject) => {
       const timer = setTimeout(() => {
         this.pendingCommands.delete(id);
@@ -169,7 +174,6 @@ export class HostClient {
       }, timeoutMs);
       this.pendingCommands.set(id, {
         commandType: payload.type,
-        maybeExecuted,
         resolve: (result) => {
           clearTimeout(timer);
           resolve(result);
@@ -271,12 +275,7 @@ export class HostClient {
       void this.verifyAuthFailure();
     }
     this.setState("reconnecting");
-    // 指数退避 + jitter：host 重启/网络闪断时，已配对的 ≤MAX_CONNECTIONS 台设备
-    // 若用相同 delay 会同刻重连，形成周期性同步冲击（把刚起来的 host 又打满）。
-    // 取 [0.5, 1) × 退避值：jitter 只向下，因此 delay 恒不超 reconnectMaxMs，
-    // 退避单调递增与 reconnectAttempt/authFailed 语义均不变。
-    const backoff = Math.min(this.reconnectBaseMs * 2 ** this.reconnectAttempt, this.reconnectMaxMs);
-    const delay = backoff * (0.5 + this.random() * 0.5);
+    const delay = calculateBackoffDelay(this.reconnectBaseMs, this.reconnectMaxMs, this.reconnectAttempt, this.random);
     this.reconnectAttempt++;
     this.reconnectTimer = setTimeout(() => {
       this.reconnectTimer = null;

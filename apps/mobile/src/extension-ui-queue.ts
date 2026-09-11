@@ -57,19 +57,17 @@ export class ExtensionUiQueue {
   }
 
   /**
-   * 回收终态条目（answered/cancelled/expired），优先最早的插入。
-   * 若全为未过期 pending 则不强制丢（它们仍然用户可见），
-   * 下一次过期后会被 sweep 标终态并可被修剪。
+   * 回收终态条目（answered/cancelled/expired），按插入顺序单趟淘汰至容量内。
+   * 若全为未过期 pending 则不强制丢（保证可见弹窗完整）。
    */
   private pruneFinished(): void {
     this.sweepExpired();
-    while (this.dialogs.size > MAX_QUEUED_DIALOGS) {
-      let victim: string | undefined;
-      for (const [id, entry] of this.dialogs) {
-        if (entry.status !== "pending") { victim = id; break; }
+    if (this.dialogs.size <= MAX_QUEUED_DIALOGS) return;
+    for (const [id, entry] of this.dialogs) {
+      if (entry.status !== "pending") {
+        this.dialogs.delete(id);
+        if (this.dialogs.size <= MAX_QUEUED_DIALOGS) break;
       }
-      if (!victim) break;
-      this.dialogs.delete(victim);
     }
   }
 
