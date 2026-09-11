@@ -76,10 +76,10 @@ export default function DashboardScreen() {
   }, [firstSessionId, fetchSessionUsage, isConnected]);
 
   const pairingPrompt = connectionState === "connecting"
-    ? "正在连接 Host…"
+    ? t.connectingHost
     : connectionState === "reconnecting"
-      ? "正在重新连接 Host…"
-      : "请前往会话页面扫码配对";
+      ? t.reconnectingHost
+      : t.goToPair;
   const canOpenPairing = connectionState === "disconnected";
 
   // 待处理 ask 弹窗投影（extension-ui 队列 pending 项，来自 AppState.dialogs）
@@ -248,7 +248,7 @@ export default function DashboardScreen() {
           disabled={!canOpenPairing}
           activeOpacity={canOpenPairing ? 0.75 : 1}
           accessibilityRole={canOpenPairing ? "button" : undefined}
-          accessibilityLabel={canOpenPairing ? "请前往会话页面扫码配对" : undefined}
+          accessibilityLabel={canOpenPairing ? t.goToPair : undefined}
           accessibilityState={{ disabled: !canOpenPairing }}
         >
           <View style={styles.heroTop}>
@@ -292,7 +292,7 @@ export default function DashboardScreen() {
                 <Text style={{ fontSize: 12, color: theme.dim, fontFamily: "monospace" }}>tokens</Text>
               </View>
               <Text style={[styles.heroCaption, { color: theme.muted }]}>
-                {isConnected ? (t.tabWorkbench === "工作台" ? "在会话页打开一个会话后显示实时用量" : "Open a session to display live usage") : pairingPrompt}
+                {isConnected ? t.openSessionHint : pairingPrompt}
               </Text>
             </>
           )}

@@ -14,6 +14,7 @@ import { useTheme, MIUIX_RADIUS, MIUIX_TYPE, MIUIX_SPACE } from "../theme";
 import { useHost } from "../store";
 import { LineIcon } from "./LineIcon";
 import { MiuixSwitch } from "./MiuixSwitch";
+import { useI18n } from "../i18n";
 import { loadPairedHosts, savePairedHosts, rememberRemovedHost, forgetRemovedHost, type PairedHost } from "../paired-hosts";
 
 export function HostConnectCard({ hostUrl, token, onHostUrlChange, onTokenChange }: {
@@ -23,6 +24,7 @@ export function HostConnectCard({ hostUrl, token, onHostUrlChange, onTokenChange
   onTokenChange: (v: string) => void;
 }) {
   const { theme } = useTheme();
+  const { t } = useI18n();
   const router = useRouter();
   const { isConnected, connectionState, connect, disconnect, lastError } = useHost();
   const [open, setOpen] = useState(false);
@@ -234,7 +236,7 @@ export function HostConnectCard({ hostUrl, token, onHostUrlChange, onTokenChange
               onPress={() => doConnect(hostUrl, token)}
               disabled={busy}
               accessibilityRole="button"
-              accessibilityLabel="重新连接"
+              accessibilityLabel={t.reconnect}
               accessibilityState={{ disabled: busy, busy }}
             >
               {busy ? (
@@ -242,7 +244,7 @@ export function HostConnectCard({ hostUrl, token, onHostUrlChange, onTokenChange
               ) : (
                 <>
                   <LineIcon name="collapse" size={16} color="#fff" strokeWidth={2} />
-                  <Text style={styles.btnText}>  连接</Text>
+                  <Text style={styles.btnText}>  {t.confirmConnect}</Text>
                 </>
               )}
             </TouchableOpacity>

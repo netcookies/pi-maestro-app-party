@@ -120,6 +120,10 @@ export interface I18nDictionary {
   btnNext: string;
   btnRescan: string;
   connectingHost: string;
+  reconnectingHost: string;
+  reconnect: string;
+  goToPair: string;
+  openSessionHint: string;
   savingHost: string;
   saveParams: string;
   notifAttentionLabel: string;
@@ -252,6 +256,10 @@ export const DICTIONARIES: Record<Language, I18nDictionary> = {
     btnNext: "下一步",
     btnRescan: "重新扫描",
     connectingHost: "正在连接主机…",
+    reconnectingHost: "正在重新连接主机…",
+    reconnect: "重新连接",
+    goToPair: "请前往会话页面扫码配对",
+    openSessionHint: "在会话页打开一个会话后显示实时用量",
     savingHost: "正在保存配对…",
     saveParams: "保存参数",
     notifAttentionLabel: "高优先级关注通知",
@@ -382,6 +390,10 @@ export const DICTIONARIES: Record<Language, I18nDictionary> = {
     btnNext: "Next",
     btnRescan: "Rescan",
     connectingHost: "Connecting to host...",
+    reconnectingHost: "Reconnecting to host...",
+    reconnect: "Reconnect",
+    goToPair: "Please pair on Sessions tab",
+    openSessionHint: "Open a session to display live usage",
     savingHost: "Saving pairing...",
     saveParams: "Save Settings",
     notifAttentionLabel: "Attention Haptic Feedback",
