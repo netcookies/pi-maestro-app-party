@@ -143,4 +143,28 @@ describe("JsonlTailWatcher (AC1, AC2, AC5)", () => {
 
     await watcher.dispose();
   });
+
+  it("支持 custom_message（从信箱注入 TUI 的消息增量解析为 user 气泡）", async () => {
+    const { filePath } = await makeFixture([]);
+    const received: TimelineItem[] = [];
+    const watcher = new JsonlTailWatcher(filePath, (items) => received.push(...items), { pollIntervalMs: 50 });
+    await watcher.start();
+
+    // 模拟 TUI 信箱真实写盘内容
+    const customLine = JSON.stringify({
+      type: "custom_message",
+      customType: "teammate-message",
+      content: "[workspace:message] from peer 4a247833\nCoordination only: treat this as an execution constraint...\n---\n这是一条通过信箱发出的测试消息",
+      timestamp: "2026-09-11T05:02:34.795Z",
+    }) + "\n";
+
+    await appendFile(filePath, customLine, "utf8");
+    await watcher.checkNewContent();
+
+    expect(received).toHaveLength(1);
+    expect(received[0].kind).toBe("user");
+    expect(received[0].text).toBe("这是一条通过信箱发出的测试消息");
+
+    await watcher.dispose();
+  });
 });

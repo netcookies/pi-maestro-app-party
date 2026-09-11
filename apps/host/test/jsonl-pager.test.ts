@@ -277,4 +277,25 @@ describe("jsonl-pager oversized-line carry bound", () => {
       await rm(dir2, { recursive: true, force: true });
     }
   });
+
+  it("支持 custom_message 格式的跨窗口注入消息回放", async () => {
+    const dir2 = join(tmpdir(), `jsonl-custom-${randomUUID()}`);
+    await mkdir(dir2, { recursive: true });
+    const p = join(dir2, "s.jsonl");
+    try {
+      const customLine = JSON.stringify({
+        type: "custom_message",
+        customType: "teammate-message",
+        content: "[workspace:message] from peer abc\n---\n这是一条历史信箱消息",
+        timestamp: 1756800000000,
+      });
+      await writeFile(p, customLine + "\n");
+      const tail = await replayTailFromJsonl(p, 10);
+      expect(tail.items).toHaveLength(1);
+      expect(tail.items[0].kind).toBe("user");
+      expect(tail.items[0].text).toBe("这是一条历史信箱消息");
+    } finally {
+      await rm(dir2, { recursive: true, force: true });
+    }
+  });
 });

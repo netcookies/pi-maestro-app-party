@@ -87,7 +87,8 @@ async function scanWindow(filePath: string, opts: WindowOptions): Promise<PageRe
       }
       if (!line.trimStart().startsWith("{")) return;
       // 只有 message 类型计入总数（session/model_change 等忽略）
-      if (!line.includes('"type":"message"')) return;
+      // 只有 message 与 custom_message 类型计入总数（session/model_change 等忽略）
+      if (!line.includes('"type":"message"') && !line.includes('"type":"custom_message"')) return;
       totalEntries++;
       // ring 按 message 数保留最后 want 条（含 null 占位）
       if (ring.length >= want) {
@@ -162,6 +163,22 @@ function parseMessageLineItems(
   } catch {
     return [];
   }
+  // 支持跨窗口注入的 custom_message（如从手机信箱注入到 TUI 的消息）
+  if (entry.type === "custom_message") {
+    const rawContent = typeof entry.content === "string" ? entry.content : "";
+    const cut = rawContent.indexOf("\n---\n");
+    const userText = cut >= 0 ? rawContent.slice(cut + 5).trim() : rawContent.trim();
+    if (!userText) return [];
+    const timestamp = typeof entry.timestamp === "number" ? entry.timestamp : (typeof entry.timestamp === "string" ? Date.parse(entry.timestamp) : 0);
+    const createdAt = timestamp > 0 ? new Date(timestamp).toISOString() : "";
+    return [{
+      id: `replay-custom-${index}`,
+      kind: "user",
+      text: userText,
+      createdAt,
+    }];
+  }
+
   if (entry.type !== "message") return [];
   const msg = (entry.message ?? {}) as Record<string, unknown>;
   const role = String(msg.role ?? "");
@@ -249,7 +266,7 @@ export async function searchInJsonl(
         skippedOversize++;
         return;
       }
-      if (!line.includes('"type":"message"')) return;
+      if (!line.includes('"type":"message"') && !line.includes('"type":"custom_message"')) return;
       totalEntries++;
       if (matches.length >= maxResults) return;
       try {

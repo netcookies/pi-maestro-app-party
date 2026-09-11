@@ -18,6 +18,7 @@ export interface SessionRunner {
   loadMoreHistory(count?: number): Promise<{ items: TimelineItem[]; hasMore: boolean; totalEntries: number }>;
   searchHistory(keyword: string, maxResults?: number, previewLength?: number): Promise<{ matches: { index: number; text: string; kind: string }[]; totalEntries: number }>;
   prompt(message: string, streamingBehavior?: "steer" | "followUp", images?: unknown[]): Promise<void>;
+  recordUserMessage?(message: string, images?: unknown[]): void;
   steer(message: string): Promise<void>;
   followUp(message: string): Promise<void>;
   abort(): Promise<void>;

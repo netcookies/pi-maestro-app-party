@@ -66,7 +66,7 @@ export async function buildMessageIndex(filePath: string): Promise<JsonlIndex> {
       let nl: number;
       while ((nl = buf.indexOf("\n")) !== -1) {
         const line = buf.slice(0, nl);
-        if (line.trim() && line.length <= MAX_LINE_BYTES && line.includes('"type":"message"')) {
+        if (line.trim() && line.length <= MAX_LINE_BYTES && (line.includes('"type":"message"') || line.includes('"type":"custom_message"'))) {
           messageOffsets.push(bufStart);
         }
         buf = buf.slice(nl + 1);
@@ -74,7 +74,7 @@ export async function buildMessageIndex(filePath: string): Promise<JsonlIndex> {
       }
     }
     // 末尾无换行的残行
-    if (buf.trim() && buf.length <= MAX_LINE_BYTES && buf.includes('"type":"message"')) {
+    if (buf.trim() && buf.length <= MAX_LINE_BYTES && (buf.includes('"type":"message"') || buf.includes('"type":"custom_message"'))) {
       messageOffsets.push(bufStart);
     }
 

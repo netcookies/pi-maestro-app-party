@@ -650,7 +650,7 @@ export class SdkSessionRunner implements SessionRunner {
     }
   }
 
-  private recordUserMessage(message: string, images?: unknown[]): void {
+  recordUserMessage(message: string, images?: unknown[]): void {
     const imagePaths = materializeImages(images);
     const item: TimelineItem = {
       id: `user-${this.eventLog.nextSequence}`,

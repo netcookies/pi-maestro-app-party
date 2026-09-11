@@ -197,6 +197,23 @@ export class JsonlTailWatcher {
       return [];
     }
 
+    // 支持跨窗口注入的 custom_message（如从手机信箱注入到 TUI 的消息实时同步给客户端）
+    if (entry.type === "custom_message") {
+      const rawContent = typeof entry.content === "string" ? entry.content : "";
+      const cut = rawContent.indexOf("\n---\n");
+      const userText = cut >= 0 ? rawContent.slice(cut + 5).trim() : rawContent.trim();
+      if (!userText) return [];
+      const timestamp = typeof entry.timestamp === "number"
+        ? new Date(entry.timestamp).toISOString()
+        : (typeof entry.timestamp === "string" ? new Date(entry.timestamp).toISOString() : new Date(this.now()).toISOString());
+      return [{
+        id: `tail-custom-${++this.seq}`,
+        kind: "user",
+        text: userText,
+        createdAt: timestamp,
+      }];
+    }
+
     if (entry.type !== "message") return [];
     const msg = (entry.message ?? {}) as Record<string, unknown>;
     const role = String(msg.role ?? "");

@@ -794,6 +794,10 @@ export class MobileHostServer {
           let injectedToTui = false;
           if (activeTuiOwner && (!images || images.length === 0)) {
             injectedToTui = await injectMessageToActiveTui(activeTuiOwner, command.message);
+            if (injectedToTui) {
+              // 手机端乐观回显：立即向发送端广播 user 消息气泡，无需等待 TUI 写盘轮询
+              runner.recordUserMessage?.(command.message, images);
+            }
           }
 
           if (!injectedToTui) {
