@@ -226,23 +226,27 @@ let statusCtx: ExtensionContext | null = null;
 
 /** 刷新 footer status：● maestro-mobile :4739 · N 窗口（未运行时清除） */
 async function refreshStatus(): Promise<void> {
-  if (!statusCtx) return;
-  const port = hostPort();
-  const alive = await probeHealth(port);
-  if (!alive) {
-    statusCtx.ui.setStatus(STATUS_KEY, undefined);
-    return;
-  }
-  let windows = 0;
   try {
-    const r = await fetch(`http://127.0.0.1:${port}/api/workspace-telemetry`);
-    if (r.ok) {
-      const d = (await r.json()) as { aliveCount?: number };
-      windows = d.aliveCount ?? 0;
+    if (!statusCtx?.ui) return;
+    const port = hostPort();
+    const alive = await probeHealth(port);
+    if (!alive) {
+      statusCtx?.ui?.setStatus(STATUS_KEY, undefined);
+      return;
     }
-  } catch { /* 探测失败按 0 显示 */ }
-  // setStatus 嵌入 footer 状态栏（与 EVOL/relay 同一行），不再占独立行
-  statusCtx.ui.setStatus(STATUS_KEY, `● maestro-mobile :${port} · ${windows} 窗口`);
+    let windows = 0;
+    try {
+      const r = await fetch(`http://127.0.0.1:${port}/api/workspace-telemetry`);
+      if (r.ok) {
+        const d = (await r.json()) as { aliveCount?: number };
+        windows = d.aliveCount ?? 0;
+      }
+    } catch { /* 探测失败按 0 显示 */ }
+    // setStatus 嵌入 footer 状态栏（与 EVOL/relay 同一行），不再占独立行
+    statusCtx?.ui?.setStatus(STATUS_KEY, `● maestro-mobile :${port} · ${windows} 窗口`);
+  } catch {
+    // 扩展 status 刷新是后台辅助任务，无论因 ctx 销毁、无 UI 或网络异常，绝不得拉崩宿主进程
+  }
 }
 
 export default function maestroHostExtension(pi: ExtensionAPI): void {

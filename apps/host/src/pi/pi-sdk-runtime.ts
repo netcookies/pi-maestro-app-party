@@ -26,13 +26,14 @@ export class PiSdkRuntimeFactory implements RuntimeFactory {
     const createRuntime: CreateAgentSessionRuntimeFactory = async ({ cwd, sessionManager: sm, sessionStartEvent }) => {
       const services = await createAgentSessionServices({
         cwd,
-        // 过滤 pi-maestro-teammate：host 进程与真实 Pi 会话共享工作区时
-        // 会触发 workspace owner claim 冲突（同一 cwd 只能有一个 live owner）。
-        // host 只做只读会话浏览/驱动，不需要 teammate 的 peer 运行时。
+        // 过滤不需要的扩展：
+        // 1. pi-maestro-teammate：会触发 workspace owner claim 冲突。
+        // 2. pi-maestro-mobile 自身：host 进程本身就是服务宿主，通过 SDK 打开会话时
+        //    绝不能在无 UI 的子会话内再次加载运行自己的扩展遥控器（会导致 statusCtx.ui 空指针崩溃）。
         resourceLoaderOptions: {
           extensionsOverride: (base) => ({
             ...base,
-            extensions: base.extensions.filter((e) => !isTeammateExtension(e.path)),
+            extensions: base.extensions.filter((e) => !isIgnoredExtension(e.path)),
           }),
         },
       });
@@ -71,7 +72,7 @@ function createSessionManager(request: OpenSessionRequest): SessionManager {
   return SessionManager.create(request.cwd);
 }
 
-/** 判断扩展路径是否属于 pi-maestro-teammate（其 workspace peer 会与真实 Pi 冲突） */
-function isTeammateExtension(path: string): boolean {
-  return path.includes("pi-maestro-teammate");
+/** 判断扩展路径是否属于需要被 Host 内部会话忽略的扩展 */
+function isIgnoredExtension(path: string): boolean {
+  return path.includes("pi-maestro-teammate") || path.includes("pi-maestro-mobile");
 }
