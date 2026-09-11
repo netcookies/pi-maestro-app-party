@@ -3,6 +3,7 @@ import React from "react";
 import { Linking, StyleSheet, Text, TouchableOpacity, View } from "react-native";
 import { CameraView, useCameraPermissions } from "expo-camera";
 import { MIUIX_RADIUS, MIUIX_SPACE, MIUIX_TYPE, useTheme } from "../theme";
+import { useI18n } from "../i18n";
 
 export function QRPairScanner({ active = true, disabled = false, onScanned, onError }: {
   active?: boolean;
@@ -11,21 +12,22 @@ export function QRPairScanner({ active = true, disabled = false, onScanned, onEr
   onError?: (message: string) => void;
 }) {
   const { theme } = useTheme();
+  const { t } = useI18n();
   const styles = makeStyles();
   const [permission, requestPermission] = useCameraPermissions();
 
   if (!permission?.granted) {
     return (
       <View style={styles.centerBox}>
-        <Text style={[styles.hint, { color: theme.text }]}>需要相机权限来扫描配对码</Text>
-        <Text style={[styles.hintSub, { color: theme.onBackgroundVariant ?? theme.muted }]}>二维码在 PC 终端执行 /maestro-mobile qr 后显示</Text>
+        <Text style={[styles.hint, { color: theme.text }]}>{t.cameraPermRequired}</Text>
+        <Text style={[styles.hintSub, { color: theme.onBackgroundVariant ?? theme.muted }]}>{t.cameraPermHint}</Text>
         <TouchableOpacity
           style={[styles.permissionButton, { backgroundColor: theme.buttonPrimary }]}
           onPress={() => permission?.canAskAgain === false ? void Linking.openSettings() : void requestPermission()}
           accessibilityRole="button"
-          accessibilityLabel={permission?.canAskAgain === false ? "打开系统设置授权相机" : "授权相机"}
+          accessibilityLabel={permission?.canAskAgain === false ? t.goToSettings : t.grantCamera}
         >
-          <Text style={styles.permissionButtonText}>{permission?.canAskAgain === false ? "去系统设置开启" : "授权相机"}</Text>
+          <Text style={styles.permissionButtonText}>{permission?.canAskAgain === false ? t.goToSettings : t.grantCamera}</Text>
         </TouchableOpacity>
       </View>
     );
@@ -42,7 +44,7 @@ export function QRPairScanner({ active = true, disabled = false, onScanned, onEr
       />
       <View pointerEvents="none" style={styles.reticleOuter}>
         <View style={[styles.reticle, { borderColor: theme.accent }]} />
-        <Text style={styles.cameraHint}>对准 PC 终端上的二维码</Text>
+        <Text style={styles.cameraHint}>{t.alignQrHint}</Text>
       </View>
     </View>
   );

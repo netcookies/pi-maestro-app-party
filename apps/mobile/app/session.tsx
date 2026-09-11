@@ -5,9 +5,10 @@ import {
 } from "react-native";
 import { useLocalSearchParams, useRouter } from "expo-router";
 import { useHost } from "../src/store";
-import { useTheme, MIUIX_RADIUS, MIUIX_TYPE, MIUIX_SPACE } from "../src/theme";
+import { useTheme, MIUIX_RADIUS, MIUIX_TYPE, MIUIX_SPACE, hexToRgba } from "../src/theme";
 import { getConfig, loadConfig } from "../src/config";
 import { LineIcon } from "../src/components/LineIcon";
+import { useI18n } from "../src/i18n";
 import { SafeAreaView, useSafeAreaInsets } from "react-native-safe-area-context";
 import type { TimelineItem } from "@maestro-mobile/shared";
 import { ExtensionUiDialog } from "../src/components/ExtensionUiDialog";
@@ -27,22 +28,62 @@ if (Platform.OS === "android" && UIManager.setLayoutAnimationEnabledExperimental
 const LOAD_MORE_ID = "__load_more__";
 type ListRow = TimelineItem | { id: typeof LOAD_MORE_ID; __virtual: true };
 
+// 全局模型列表内存缓存，跨会话秒级复用
+let cachedModelsList: { id: string; provider: string; name: string; reasoning: boolean; vision: boolean }[] = [];
+
 export default function SessionScreen() {
   const { id } = useLocalSearchParams<{ id: string }>();
   const router = useRouter();
   const { state, sendPrompt, sendAbort, answerDialog, cancelDialog, loadMoreHistory, searchHistory, listModels, setModel, setThinking, listSkills, compactSession, renameSession, isConnected, connectionState } = useHost();
   const { theme } = useTheme();
+  const { t } = useI18n();
   const cfg = getConfig();
   const session = state.sessions.get(id ?? "");
   const insets = useSafeAreaInsets();
 
-  // 确保配置加载（冷启动直接进本页时）
+  // 优化项 2 落地：全屏独立模型选择子页面状态与缓存加载
+  const [inModelSelect, setInModelSelect] = useState(false);
+  const [availableModels, setAvailableModels] = useState<{ id: string; provider: string; name: string; reasoning: boolean; vision: boolean }[]>(cachedModelsList);
+  const [modelsLoading, setModelsLoading] = useState(false);
+  const [refreshingModels, setRefreshingModels] = useState(false);
+  const [selectedModelDraft, setSelectedModelDraft] = useState<string>("");
+  const [modelSearchQuery, setModelSearchQuery] = useState("");
+
+  // 获取模型列表（带全局缓存更新与 SWR 预取）
+  const fetchModels = useCallback(async (isRefresh = false) => {
+    if (!id) return;
+    if (cachedModelsList.length === 0 && !isRefresh) {
+      setModelsLoading(true);
+    }
+    if (isRefresh) setRefreshingModels(true);
+    try {
+      const ms = await listModels(id);
+      if (Array.isArray(ms) && ms.length > 0) {
+        cachedModelsList = ms;
+        setAvailableModels(ms);
+      }
+    } catch {
+      // 失败静默，保留已有缓存
+    } finally {
+      setModelsLoading(false);
+      setRefreshingModels(false);
+    }
+  }, [id, listModels]);
+
+  // 优化项 1 落地：FloatingToolBar 状态回显与操作
+  const [thinkLevel, setThinkLevel] = useState("xhigh");
+  const [planMode, setPlanMode] = useState("YOLO");
+  const [actionSheetType, setActionSheetType] = useState<"think" | "plan" | "compact_confirm" | null>(null);
+
+  // 确保配置加载与后台预取模型（冷启动直接进本页时）
   useEffect(() => {
     void loadConfig();
     if (id) {
       void listSkills(id).then(setAvailableSkills).catch(() => {});
+      // 后台静默预取模型，若已缓存则刷新，若未缓存则就绪备用
+      void fetchModels();
     }
-  }, []);
+  }, [id, fetchModels]);
   const [input, setInput] = useState("");
   const [sending, setSending] = useState(false);
   const [loadingMore, setLoadingMore] = useState(false);
@@ -109,9 +150,11 @@ export default function SessionScreen() {
   const pendingDialog = state.dialogs[0];
   const fabBottom = insets.bottom + composerHeight + 16;
 
-  // reduce-motion 时跳过布局动画（RV-001）
+  // reduce-motion 时跳过布局动画，加 try/catch 避免 Fabric 新架构初次布局时崩溃
   const animateLayout = useCallback(() => {
-    if (!reduceMotion) LayoutAnimation.easeInEaseOut();
+    try {
+      if (!reduceMotion) LayoutAnimation.easeInEaseOut();
+    } catch {}
   }, [reduceMotion]);
 
   useEffect(() => {
@@ -277,49 +320,41 @@ export default function SessionScreen() {
   };
 
   return (
-    <SafeAreaView style={styles.container} edges={["top"]}>
+    <View style={[styles.container, { backgroundColor: theme.headerBg }]}>
+    <SafeAreaView style={[styles.container, { backgroundColor: theme.headerBg }]} edges={["top", "bottom"]}>
     <KeyboardAvoidingView
-      style={styles.container}
+      style={[styles.container, { backgroundColor: theme.headerBg }]}
       behavior={Platform.OS === "ios" ? "padding" : undefined}
     >
       <View style={styles.header}>
-        <TouchableOpacity onPress={() => router.back()} style={styles.backBtn} accessibilityRole="button" accessibilityLabel="返回">
-          <LineIcon name="collapse" size={20} color={theme.accent} strokeWidth={2.2} />
+        <TouchableOpacity
+          onPress={() => router.replace("/host-sessions")}
+          style={styles.backBtn}
+          accessibilityRole="button"
+          accessibilityLabel="返回会话列表"
+        >
+          <LineIcon name="arrowLeft" size={20} color={theme.text} strokeWidth={2.4} />
         </TouchableOpacity>
         <Text style={styles.headerTitle} numberOfLines={1}>{session?.title ?? "会话"}</Text>
-        {/* 右槽位与返回钮等宽（minWidth 一致），保证标题真正居中 */}
-        <View style={styles.headerRight}>
-          {connectionState === "reconnecting" && (
-            <Text style={[styles.headerStatus, { color: theme.warning }]}>重连中…</Text>
-          )}
-          {connectionState === "disconnected" && (
-            <Text style={[styles.headerStatus, { color: theme.error }]}>未连接</Text>
-          )}
-          {connectionState === "connecting" && (
-            <Text style={[styles.headerStatus, { color: theme.muted }]}>连接中…</Text>
-          )}
-          <Text style={styles.headerStatus}>
-            {session?.runState === "streaming" ? (
-              <>
-                <Animated.Text style={{ opacity: pulseOpacity }}>●</Animated.Text>
-                {" 正在生成 · 可随时停止"}
-              </>
-            ) : session?.runState === "compacting" ? (
-              "● 正在整理上下文"
-            ) : (
-              "·"
-            )}
+        
+        {/* 右侧：当前模型 Badge，点击进入独立全屏“模型选择”子页面 */}
+        <TouchableOpacity
+          onPress={() => {
+            const curName = typeof session?.model === "string" ? session.model : (session?.model as { name?: string; id?: string })?.name ?? (session?.model as { name?: string; id?: string })?.id ?? "";
+            setSelectedModelDraft(currentModelId ?? curName);
+            setInModelSelect(true);
+            // 立即打开（若有缓存秒开），同时后台或前台刷新
+            void fetchModels();
+          }}
+          style={styles.modelHeaderBtn}
+          accessibilityRole="button"
+          accessibilityLabel="选择模型"
+        >
+          <Text style={styles.modelHeaderBtnText} numberOfLines={1}>
+            {currentModelId ?? (typeof session?.model === "string" ? session.model : (session?.model as { name?: string; id?: string })?.name ?? (session?.model as { name?: string; id?: string })?.id ?? "Model")}
           </Text>
-          <TouchableOpacity
-            onPress={() => {
-              animateLayout();
-              setSearchOpen((v) => !v);
-            }}
-            style={styles.searchToggle}
-          >
-            <Text style={[styles.backText, { color: theme.accent }]}>搜索</Text>
-          </TouchableOpacity>
-        </View>
+          <LineIcon name="chevronDown" size={11} color={theme.accent} />
+        </TouchableOpacity>
       </View>
 
       {/* 搜索条 */}
@@ -384,7 +419,7 @@ export default function SessionScreen() {
             <Text style={[styles.emptySub, { color: theme.dim }]}>发送第一条指令开始对话</Text>
           </View>
         }
-        style={styles.list}
+        style={[styles.list, { backgroundColor: theme.bg }]}
         contentContainerStyle={styles.listContent}
         onContentSizeChange={(w, h) => {
           lastContentHeight.current = h;
@@ -425,29 +460,81 @@ export default function SessionScreen() {
         scrollEventThrottle={100}
       />
 
-      {showFab && (
-        <TouchableOpacity
-          style={[styles.fab, { backgroundColor: theme.accent, bottom: fabBottom }]}
-          accessibilityLabel="回到底部"
-          onPress={() => {
-            animateLayout();
-            stickToBottom.current = true;
-            showFabRef.current = false;
-            setShowFab(false);
-            listRef.current?.scrollToEnd({ animated: true });
-          }}
-        >
-          <Text style={styles.fabText}>↓</Text>
-        </TouchableOpacity>
-      )}
-
       {session?.runState === "streaming" && (
         <TouchableOpacity style={styles.abortButton} onPress={() => id && sendAbort(id)}>
           <Text style={styles.abortText}>■ 停止</Text>
         </TouchableOpacity>
       )}
 
-      <View onLayout={(e) => setComposerHeight(e.nativeEvent.layout.height)}>
+      {/* 底部悬浮 Floating Bar：左侧是纯单色状态药丸，右侧是向下一键到底 FAB，水平基线完全一致 */}
+      <View
+        style={[
+          styles.floatingBarContainer,
+          { bottom: composerHeight + 12 },
+        ]}
+        pointerEvents="box-none"
+      >
+        <View style={[styles.floatingToolPill, { backgroundColor: theme.cardBg, borderColor: theme.border }]}>
+          {/* 1. 思考等级 */}
+          <TouchableOpacity
+            style={styles.floatingToolBtn}
+            onPress={() => setActionSheetType("think")}
+            accessibilityRole="button"
+            accessibilityLabel="思考等级"
+          >
+            <LineIcon name="thinkBrain" size={15} color={theme.accent} />
+            <Text style={[styles.floatingToolText, { color: theme.text }]}>{thinkLevel}</Text>
+          </TouchableOpacity>
+
+          <View style={[styles.pillDivider, { backgroundColor: theme.border }]} />
+
+          {/* 2. 计划模式 */}
+          <TouchableOpacity
+            style={styles.floatingToolBtn}
+            onPress={() => setActionSheetType("plan")}
+            accessibilityRole="button"
+            accessibilityLabel="计划模式"
+          >
+            <LineIcon name="planClipboard" size={15} color={theme.accent} />
+            <Text style={[styles.floatingToolText, { color: theme.text }]} numberOfLines={1}>{planMode}</Text>
+          </TouchableOpacity>
+
+          <View style={[styles.pillDivider, { backgroundColor: theme.border }]} />
+
+          {/* 3. 上下文压缩 */}
+          <TouchableOpacity
+            style={styles.floatingToolBtnOnlyIcon}
+            onPress={() => setActionSheetType("compact_confirm")}
+            accessibilityRole="button"
+            accessibilityLabel="压缩上下文"
+          >
+            <LineIcon name="compactSqueeze" size={15} color={theme.muted} />
+          </TouchableOpacity>
+        </View>
+
+        {showFab ? (
+          <TouchableOpacity
+            style={[styles.fab, { backgroundColor: theme.accent }]}
+            accessibilityLabel="回到底部"
+            onPress={() => {
+              animateLayout();
+              stickToBottom.current = true;
+              showFabRef.current = false;
+              setShowFab(false);
+              listRef.current?.scrollToEnd({ animated: true });
+            }}
+          >
+            <LineIcon name="arrowDown" size={18} color="#fff" strokeWidth={2.4} />
+          </TouchableOpacity>
+        ) : (
+          <View style={{ width: 42, height: 42 }} />
+        )}
+      </View>
+
+      <View
+        onLayout={(e) => setComposerHeight(e.nativeEvent.layout.height)}
+        style={{ backgroundColor: theme.headerBg, paddingBottom: Math.max(insets.bottom > 0 ? 4 : 8, 4) }}
+      >
       <ChatComposer
         actions={{
           send: async (text, imgs) => {
@@ -490,8 +577,264 @@ export default function SessionScreen() {
           onCancel={() => cancelDialog(pendingDialog.request.id)}
         />
       )}
+
+      {/* ActionSheet: 思考等级、计划模式、Compact 二次确认 */}
+      {actionSheetType && (
+        <View style={styles.actionSheetOverlay}>
+          <TouchableOpacity style={StyleSheet.absoluteFill} onPress={() => setActionSheetType(null)} />
+          <View style={[styles.actionSheetContent, { backgroundColor: theme.cardBg, borderColor: theme.border }]}>
+            {actionSheetType === "think" && (
+              <View>
+                <View style={styles.sheetHeader}>
+                  <Text style={[styles.sheetTitle, { color: theme.text }]}>{t.thinkLevelTitle}</Text>
+                  <TouchableOpacity onPress={() => setActionSheetType(null)}>
+                    <LineIcon name="x" size={16} color={theme.muted} />
+                  </TouchableOpacity>
+                </View>
+                <View style={{ gap: 6 }}>
+                  {["off", "minimal", "low", "medium", "high", "xhigh", "max"].map((lvl) => (
+                    <TouchableOpacity
+                      key={lvl}
+                      style={[
+                        styles.sheetOption,
+                        { borderColor: thinkLevel === lvl ? theme.accent : theme.border, backgroundColor: theme.inputBg },
+                      ]}
+                      onPress={async () => {
+                        setThinkLevel(lvl);
+                        if (id) await setThinking(id, lvl);
+                        setActionSheetType(null);
+                      }}
+                    >
+                      <Text style={[styles.sheetOptionText, { color: theme.text }]}>{lvl}</Text>
+                      {thinkLevel === lvl && <LineIcon name="check" size={16} color={theme.accent} strokeWidth={2.4} />}
+                    </TouchableOpacity>
+                  ))}
+                </View>
+              </View>
+            )}
+
+            {actionSheetType === "plan" && (
+              <View>
+                <View style={styles.sheetHeader}>
+                  <Text style={[styles.sheetTitle, { color: theme.text }]}>{t.planModeTitle}</Text>
+                  <TouchableOpacity onPress={() => setActionSheetType(null)}>
+                    <LineIcon name="x" size={16} color={theme.muted} />
+                  </TouchableOpacity>
+                </View>
+                <View style={{ gap: 6 }}>
+                  {[
+                    { id: "YOLO", label: "YOLO (极速全自动)" },
+                    { id: "APPROVAL DEFAULT", label: "APPROVAL DEFAULT (默认审批)" },
+                    { id: "APPROVAL acceptEdits", label: "APPROVAL acceptEdits (审批编辑)" },
+                    { id: "APPROVAL donAsk", label: "APPROVAL donAsk (静默兜底)" },
+                    { id: "PLAN", label: "PLAN (只读规划模式)" },
+                  ].map((item) => (
+                    <TouchableOpacity
+                      key={item.id}
+                      style={[
+                        styles.sheetOption,
+                        { borderColor: planMode === item.id ? theme.accent : theme.border, backgroundColor: theme.inputBg },
+                      ]}
+                      onPress={() => {
+                        setPlanMode(item.id);
+                        setActionSheetType(null);
+                      }}
+                    >
+                      <Text style={[styles.sheetOptionText, { color: theme.text }]}>{item.label}</Text>
+                      {planMode === item.id && <LineIcon name="check" size={16} color={theme.accent} strokeWidth={2.4} />}
+                    </TouchableOpacity>
+                  ))}
+                </View>
+              </View>
+            )}
+
+            {actionSheetType === "compact_confirm" && (
+              <View style={{ gap: 12 }}>
+                <View style={styles.sheetHeader}>
+                  <Text style={[styles.sheetTitle, { color: theme.text }]}>{t.compactTitle}</Text>
+                  <TouchableOpacity onPress={() => setActionSheetType(null)}>
+                    <LineIcon name="x" size={16} color={theme.muted} />
+                  </TouchableOpacity>
+                </View>
+                <Text style={[styles.sheetDesc, { color: theme.muted }]}>
+                  {t.compactDesc}
+                </Text>
+                <View style={{ flexDirection: "row", gap: 10, marginTop: 4 }}>
+                  <TouchableOpacity
+                    style={[styles.confirmBtn, { backgroundColor: theme.buttonPrimary }]}
+                    onPress={async () => {
+                      setActionSheetType(null);
+                      if (id) await compactSession(id);
+                    }}
+                  >
+                    <Text style={styles.confirmBtnText}>{t.compactConfirm}</Text>
+                  </TouchableOpacity>
+                  <TouchableOpacity
+                    style={[styles.cancelBtn, { borderColor: theme.border, backgroundColor: theme.inputBg }]}
+                    onPress={() => setActionSheetType(null)}
+                  >
+                    <Text style={[styles.cancelBtnText, { color: theme.muted }]}>{t.cancel}</Text>
+                  </TouchableOpacity>
+                </View>
+              </View>
+            )}
+          </View>
+        </View>
+      )}
     </KeyboardAvoidingView>
     </SafeAreaView>
+
+    {/* 独立全屏模型选择子页面 (置于最顶层，直接使用 insets.top 贴顶，完全脱离外层 KeyboardAvoidingView 干扰) */}
+    {inModelSelect && (
+      <View
+        style={[
+          StyleSheet.absoluteFill,
+          {
+            backgroundColor: theme.headerBg,
+            zIndex: 100,
+            paddingTop: insets.top,
+            paddingBottom: Math.max(insets.bottom, 12),
+          },
+        ]}
+      >
+        <View style={[styles.header, { borderBottomColor: theme.border }]}>
+          <TouchableOpacity
+            onPress={() => setInModelSelect(false)}
+            style={styles.backBtn}
+            accessibilityRole="button"
+            accessibilityLabel="返回"
+          >
+            <LineIcon name="arrowLeft" size={20} color={theme.text} strokeWidth={2.4} />
+          </TouchableOpacity>
+          <Text style={styles.headerTitle}>
+            {t.tabSessions === "会话" ? "选择会话模型" : "Select Session Model"}
+          </Text>
+          <TouchableOpacity
+            onPress={async () => {
+              if (id && selectedModelDraft) {
+                await setModel(id, selectedModelDraft);
+                setCurrentModelId(selectedModelDraft);
+              }
+              setInModelSelect(false);
+            }}
+            style={[styles.modelApplyBtn, { backgroundColor: theme.buttonPrimary }]}
+          >
+            <Text style={styles.modelApplyBtnText}>
+              {t.tabSessions === "会话" ? "应用" : "Apply"}
+            </Text>
+          </TouchableOpacity>
+        </View>
+
+        <View style={{ flex: 1, backgroundColor: theme.bg }}>
+        <View style={[styles.modelSearchRow, { backgroundColor: theme.cardBg, borderColor: theme.border }]}>
+          <LineIcon name="search" size={15} color={theme.muted} style={{ marginLeft: 8 }} />
+          <TextInput
+            style={[styles.modelSearchInput, { color: theme.text }]}
+            placeholder={t.tabSessions === "会话" ? "搜索模型名称或厂商 (Gemini, Claude, GPT...)" : "Search model name or provider..."}
+            placeholderTextColor={theme.dim}
+            value={modelSearchQuery}
+            onChangeText={setModelSearchQuery}
+          />
+          {modelSearchQuery.length > 0 && (
+            <TouchableOpacity onPress={() => setModelSearchQuery("")} style={{ padding: 6 }}>
+              <LineIcon name="x" size={14} color={theme.muted} />
+            </TouchableOpacity>
+          )}
+        </View>
+
+        {modelsLoading && availableModels.length === 0 ? (
+          <View style={{ flex: 1, alignItems: "center", justifyContent: "center", gap: 10 }}>
+            <ActivityIndicator size="large" color={theme.accent} />
+            <Text style={{ color: theme.muted, fontSize: 13 }}>正在检索可用模型列表...</Text>
+          </View>
+        ) : (
+          <FlatList
+            data={(availableModels || []).filter((m) => {
+              if (!modelSearchQuery.trim()) return true;
+              const q = modelSearchQuery.toLowerCase();
+              const idStr = String(m?.id ?? "").toLowerCase();
+              const provStr = String(m?.provider ?? "").toLowerCase();
+              const nameStr = String(m?.name ?? "").toLowerCase();
+              return idStr.includes(q) || provStr.includes(q) || nameStr.includes(q);
+            })}
+            keyExtractor={(m) => m?.id ?? Math.random().toString()}
+            contentContainerStyle={{ padding: 16, gap: 10 }}
+            keyboardShouldPersistTaps="handled"
+            refreshing={refreshingModels}
+            onRefresh={() => void fetchModels(true)}
+            ListEmptyComponent={
+              <View style={{ alignItems: "center", paddingVertical: 48, gap: 8 }}>
+                <Text style={{ color: theme.muted, fontSize: 13 }}>未找到匹配的模型</Text>
+                <TouchableOpacity
+                  onPress={() => void fetchModels(true)}
+                  style={{ paddingHorizontal: 12, paddingVertical: 6, borderRadius: 12, borderWidth: 1, borderColor: theme.border }}
+                >
+                  <Text style={{ color: theme.accent, fontSize: 12 }}>重新加载</Text>
+                </TouchableOpacity>
+              </View>
+            }
+            renderItem={({ item: m }) => {
+              const isSelected = selectedModelDraft === m.id;
+              return (
+                <TouchableOpacity
+                  style={[
+                    styles.modelCard,
+                    { borderColor: isSelected ? theme.accent : theme.border, backgroundColor: theme.cardBg },
+                  ]}
+                  onPress={() => setSelectedModelDraft(m.id)}
+                >
+                  <View style={styles.modelCardHeader}>
+                    <Text style={[styles.modelCardTitle, { color: theme.text }]}>{m.name || m.id}</Text>
+                    {isSelected && <LineIcon name="check" size={16} color={theme.accent} strokeWidth={2.4} />}
+                  </View>
+                  <Text style={[styles.modelCardProvider, { color: theme.muted }]}>{m.provider} · #{m.id}</Text>
+                  <View style={styles.modelCardTags}>
+                    {m.reasoning && (
+                      <View
+                        style={{
+                          flexDirection: "row",
+                          alignItems: "center",
+                          backgroundColor: hexToRgba(theme.accent, 0.14),
+                          borderWidth: 1,
+                          borderColor: hexToRgba(theme.accent, 0.35),
+                          paddingHorizontal: 8,
+                          paddingVertical: 3,
+                          borderRadius: 8,
+                        }}
+                      >
+                        <Text style={{ fontSize: 10, fontFamily: "monospace", color: theme.accent, fontWeight: "600" }}>
+                          ● {t.reasoningLabel}
+                        </Text>
+                      </View>
+                    )}
+                    {m.vision && (
+                      <View
+                        style={{
+                          flexDirection: "row",
+                          alignItems: "center",
+                          backgroundColor: "rgba(59, 130, 246, 0.14)",
+                          borderWidth: 1,
+                          borderColor: "rgba(59, 130, 246, 0.35)",
+                          paddingHorizontal: 8,
+                          paddingVertical: 3,
+                          borderRadius: 8,
+                        }}
+                      >
+                        <Text style={{ fontSize: 10, fontFamily: "monospace", color: "#60A5FA", fontWeight: "600" }}>
+                          ● {t.visionLabel}
+                        </Text>
+                      </View>
+                    )}
+                  </View>
+                </TouchableOpacity>
+              );
+            }}
+          />
+        )}
+        </View>
+      </View>
+    )}
+    </View>
   );
 }
 
@@ -508,7 +851,14 @@ function makeStyles(theme: ReturnType<typeof useTheme>["theme"]) {
       borderBottomWidth: 1,
       borderBottomColor: theme.border,
     },
-    headerTitle: { fontSize: MIUIX_TYPE.title3, fontWeight: "600", color: theme.text, flex: 1, textAlign: "center" },
+    headerTitle: {
+      fontSize: 15,
+      fontWeight: "600",
+      color: theme.text,
+      flex: 1,
+      textAlign: "center",
+      marginHorizontal: 8,
+    },
     headerStatus: { fontSize: MIUIX_TYPE.footnote2, color: theme.muted, minWidth: 56, textAlign: "right" },
     headerRight: { flexDirection: "row", alignItems: "center", gap: 6, minWidth: 72, justifyContent: "flex-end" },
     emptyWrap: { alignItems: "center", paddingVertical: 64, gap: 6 },
@@ -554,15 +904,18 @@ function makeStyles(theme: ReturnType<typeof useTheme>["theme"]) {
       padding: MIUIX_SPACE.md,
       marginBottom: 10,
       maxWidth: "90%",
+      overflow: "hidden",
     },
-    bubbleUser: { backgroundColor: theme.userBubble, alignSelf: "flex-end" },
-    bubbleAgent: { backgroundColor: theme.agentBubble, alignSelf: "flex-start", borderWidth: 1, borderColor: theme.border, borderRadius: MIUIX_RADIUS.lg },
+    bubbleUser: { backgroundColor: theme.userBubble, alignSelf: "flex-end", flexShrink: 1, overflow: "hidden" },
+    bubbleAgent: { backgroundColor: theme.agentBubble, alignSelf: "flex-start", borderWidth: 1, borderColor: theme.border, borderRadius: MIUIX_RADIUS.lg, flexShrink: 1, overflow: "hidden" },
     bubbleTool: {
-      backgroundColor: theme.toolBubble,
-      alignSelf: "stretch",
-      borderWidth: 1,
-      borderColor: theme.border,
-      borderRadius: MIUIX_RADIUS.md,
+      backgroundColor: "transparent",
+      alignSelf: "flex-start",
+      maxWidth: "90%",
+      width: "90%",
+      borderWidth: 0,
+      padding: 0,
+      marginBottom: 8,
     },
     toolImages: { marginTop: 8 },
     loadMoreWrap: { alignItems: "center", paddingVertical: 10 },
@@ -622,19 +975,134 @@ function makeStyles(theme: ReturnType<typeof useTheme>["theme"]) {
     },
     abortText: { color: "#fff", fontSize: MIUIX_TYPE.footnote1, fontWeight: "600" },
     fab: {
-      position: "absolute",
-      right: MIUIX_SPACE.lg + 2,
-      width: 46,
-      height: 46,
-      borderRadius: 23,
+      width: 42,
+      height: 42,
+      borderRadius: 21,
       alignItems: "center",
       justifyContent: "center",
       shadowColor: "#000",
-      shadowOpacity: 0.3,
-      shadowRadius: 6,
-      shadowOffset: { width: 0, height: 2 },
-      elevation: 5,
+      shadowOpacity: 0.25,
+      shadowRadius: 8,
+      shadowOffset: { width: 0, height: 4 },
+      elevation: 6,
     },
     fabText: { color: "#fff", fontSize: 22, fontWeight: "700", lineHeight: 26 },
+    modelHeaderBtn: {
+      flexDirection: "row",
+      alignItems: "center",
+      gap: 4,
+      paddingHorizontal: 10,
+      paddingVertical: 4,
+      borderRadius: 14,
+      borderWidth: 1,
+      borderColor: hexToRgba(theme.accent, 0.35),
+      backgroundColor: hexToRgba(theme.accent, 0.14),
+      maxWidth: 140,
+    },
+    modelHeaderBtnText: { fontSize: 11, fontFamily: "monospace", color: theme.accent, fontWeight: "600" },
+    floatingBarContainer: {
+      position: "absolute",
+      left: 16,
+      right: 16,
+      flexDirection: "row",
+      justifyContent: "space-between",
+      alignItems: "center",
+      zIndex: 50,
+    },
+    floatingToolPillWrap: {
+      position: "absolute",
+      left: 16,
+      zIndex: 40,
+    },
+    floatingToolPill: {
+      flexDirection: "row",
+      alignItems: "center",
+      borderRadius: 20,
+      borderWidth: 1,
+      paddingHorizontal: 6,
+      paddingVertical: 3,
+      shadowColor: "#000",
+      shadowOffset: { width: 0, height: 3 },
+      shadowOpacity: 0.2,
+      shadowRadius: 6,
+      elevation: 5,
+      gap: 2,
+    },
+    floatingToolBtn: {
+      flexDirection: "row",
+      alignItems: "center",
+      gap: 4,
+      paddingHorizontal: 8,
+      paddingVertical: 4,
+      borderRadius: 14,
+    },
+    floatingToolBtnOnlyIcon: {
+      paddingHorizontal: 6,
+      paddingVertical: 4,
+      borderRadius: 14,
+    },
+    floatingToolText: { fontSize: 11, fontFamily: "monospace", fontWeight: "700" },
+    pillDivider: { width: 1, height: 12, opacity: 0.5 },
+    modelApplyBtn: { paddingHorizontal: 12, paddingVertical: 5, borderRadius: 14 },
+    modelApplyBtnText: { color: "#fff", fontSize: 11, fontWeight: "700" },
+    modelSearchRow: {
+      flexDirection: "row",
+      alignItems: "center",
+      marginHorizontal: 16,
+      marginVertical: 10,
+      borderRadius: MIUIX_RADIUS.md,
+      borderWidth: 1,
+      paddingHorizontal: 8,
+      paddingVertical: 4,
+      gap: 6,
+    },
+    modelSearchInput: { flex: 1, fontSize: 12, paddingVertical: 4 },
+    modelCard: {
+      padding: 12,
+      borderRadius: MIUIX_RADIUS.md,
+      borderWidth: 1,
+      gap: 4,
+    },
+    modelCardHeader: { flexDirection: "row", justifyContent: "space-between", alignItems: "center" },
+    modelCardTitle: { fontSize: 13, fontWeight: "700" },
+    modelCardProvider: { fontSize: 11, fontFamily: "monospace" },
+    modelCardTags: { flexDirection: "row", gap: 6, marginTop: 4 },
+    modelTag: { paddingHorizontal: 6, paddingVertical: 2, borderRadius: 6 },
+    modelTagText: { fontSize: 9, fontWeight: "600" },
+    actionSheetOverlay: {
+      position: "absolute",
+      inset: 0,
+      backgroundColor: "rgba(0,0,0,0.6)",
+      justifyContent: "flex-end",
+      zIndex: 200,
+    },
+    actionSheetContent: {
+      borderTopLeftRadius: 24,
+      borderTopRightRadius: 24,
+      borderWidth: 1,
+      padding: 20,
+      maxHeight: 480,
+    },
+    sheetHeader: {
+      flexDirection: "row",
+      justifyContent: "space-between",
+      alignItems: "center",
+      marginBottom: 14,
+    },
+    sheetTitle: { fontSize: 13, fontWeight: "700" },
+    sheetOption: {
+      flexDirection: "row",
+      justifyContent: "space-between",
+      alignItems: "center",
+      padding: 12,
+      borderRadius: MIUIX_RADIUS.md,
+      borderWidth: 1,
+    },
+    sheetOptionText: { fontSize: 13, fontWeight: "600", fontFamily: "monospace" },
+    sheetDesc: { fontSize: 12, lineHeight: 18 },
+    confirmBtn: { flex: 1, paddingVertical: 10, borderRadius: MIUIX_RADIUS.md, alignItems: "center" },
+    confirmBtnText: { color: "#fff", fontSize: 12, fontWeight: "700" },
+    cancelBtn: { paddingHorizontal: 20, paddingVertical: 10, borderRadius: MIUIX_RADIUS.md, borderWidth: 1, alignItems: "center" },
+    cancelBtnText: { fontSize: 12, fontWeight: "600" },
   });
 }

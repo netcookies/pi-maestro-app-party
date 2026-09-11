@@ -185,39 +185,7 @@ export function ChatComposer({ actions, currentModel, sending, skills = [], plac
         </ScrollView>
       )}
 
-      {/* skill 弹窗（带搜索条） */}
-      {/* 工具行（图标 + 英文文字） */}
-      <View style={styles.toolbar}>
-        <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.toolbarScroll}>
-          <View style={styles.toolbarBtns}>
-            <TouchableOpacity onPress={openModels} style={styles.toolBtn} accessibilityRole="button" accessibilityLabel="选择模型">
-              <LineIcon name="brain" size={18} color={theme.muted} />
-              <Text style={[styles.toolLabel, { color: theme.muted }]}>Model</Text>
-            </TouchableOpacity>
-            <TouchableOpacity onPress={() => setShowThinking(true)} style={styles.toolBtn} accessibilityRole="button" accessibilityLabel="思考等级">
-              <LineIcon name="bolt" size={18} color={theme.muted} />
-              <Text style={[styles.toolLabel, { color: theme.muted }]}>Think</Text>
-            </TouchableOpacity>
-            <TouchableOpacity onPress={() => setShowPlanPicker(true)} style={styles.toolBtn} accessibilityRole="button" accessibilityLabel="Plan模式">
-              <LineIcon name="plan" size={18} color={theme.muted} />
-              <Text style={[styles.toolLabel, { color: theme.muted }]}>Plan</Text>
-            </TouchableOpacity>
-            <TouchableOpacity
-              onPress={async () => { await actions.compact?.(); }}
-              style={styles.toolBtn}
-              accessibilityRole="button"
-              accessibilityLabel="压缩会话"
-            >
-              <LineIcon name="compress" size={18} color={theme.muted} />
-              <Text style={[styles.toolLabel, { color: theme.muted }]}>Compact</Text>
-            </TouchableOpacity>
-          </View>
-        </ScrollView>
-        <Text style={[styles.modelLabel, { color: theme.dim }]} numberOfLines={1}>
-          {currentModel ?? "no model"}
-        </Text>
-      </View>
-
+      {/* 标准四件套输入行: [ / | 📎 | 输入框 | 🚀 ] */}
       <View style={styles.inputRow}>
         {/* / 按钮：弹 skill 弹窗 */}
         <TouchableOpacity

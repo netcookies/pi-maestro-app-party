@@ -10,6 +10,7 @@ import { extractPairing, type PairingInfo } from "../src/pairing";
 import { persistPairedHost } from "../src/paired-hosts";
 import { useHost } from "../src/store";
 import { MIUIX_RADIUS, MIUIX_SPACE, MIUIX_TYPE, useTheme } from "../src/theme";
+import { useI18n } from "../src/i18n";
 
 type ScanState = "scanning" | "exchanging" | "selecting" | "saving" | "error";
 
@@ -29,6 +30,7 @@ function requestSignal(parent: AbortSignal): AbortSignal {
 
 export default function PairScanScreen() {
   const { theme } = useTheme();
+  const { t } = useI18n();
   const { connect } = useHost();
   const navigation = useNavigation();
   const isFocused = useIsFocused();
@@ -169,7 +171,8 @@ export default function PairScanScreen() {
     }
     cancelledRef.current = true;
     abortControllerRef.current.abort();
-    router.back();
+    // 显式精准返回设置页，绝不跳回工作台
+    router.replace("/settings");
   };
 
   function reset() {
@@ -194,10 +197,10 @@ export default function PairScanScreen() {
   return (
     <SafeAreaView style={[styles.container, { backgroundColor: theme.bg }]} edges={["top", "bottom"]}>
       <View style={[styles.header, { borderBottomColor: theme.border }]}>
-        <TouchableOpacity onPress={cancelAndBack} disabled={state === "saving"} accessibilityRole="button" accessibilityLabel="返回会话页" accessibilityState={{ disabled: state === "saving" }} style={[styles.iconButton, state === "saving" && styles.disabled]}>
-          <LineIcon name="collapse" size={22} color={theme.text} />
+        <TouchableOpacity onPress={cancelAndBack} disabled={state === "saving"} accessibilityRole="button" accessibilityLabel="返回设置页" accessibilityState={{ disabled: state === "saving" }} style={[styles.iconButton, state === "saving" && styles.disabled]}>
+          <LineIcon name="arrowLeft" size={20} color={theme.text} strokeWidth={2.4} />
         </TouchableOpacity>
-        <Text style={[styles.title, { color: theme.text }]}>扫描配对二维码</Text>
+        <Text style={[styles.title, { color: theme.text }]}>{t.scanQrTitle}</Text>
         <View style={styles.iconButton} />
       </View>
 
@@ -210,8 +213,8 @@ export default function PairScanScreen() {
         />
       ) : state === "selecting" && pairing ? (
         <View style={styles.content}>
-          <Text style={[styles.heading, { color: theme.text }]}>选择要连接的地址</Text>
-          <Text style={[styles.hint, { color: theme.onBackgroundVariant ?? theme.muted }]}>请选择一个地址，然后点下一步。</Text>
+          <Text style={[styles.heading, { color: theme.text }]}>{t.selectIpTitle}</Text>
+          <Text style={[styles.hint, { color: theme.onBackgroundVariant ?? theme.muted }]}>{t.selectIpHint}</Text>
           <ScrollView contentContainerStyle={styles.list}>
             {pairing.candidateIps.map((ip) => {
               const selected = selectedIp === ip;
@@ -238,25 +241,27 @@ export default function PairScanScreen() {
             disabled={!selectedIp}
             onPress={continueWithSelection}
             accessibilityRole="button"
-            accessibilityLabel="下一步"
+            accessibilityLabel={t.btnNext}
             accessibilityState={{ disabled: !selectedIp }}
           >
-            <Text style={styles.primaryButtonText}>下一步</Text>
+            <Text style={styles.primaryButtonText}>{t.btnNext}</Text>
           </TouchableOpacity>
         </View>
       ) : state === "error" ? (
         <View style={styles.center}>
-          <Text style={[styles.heading, { color: theme.error }]}>配对失败</Text>
+          <Text style={[styles.heading, { color: theme.error }]}>{t.tabSettings === "设置" ? "配对失败" : "Pairing Failed"}</Text>
           <Text style={[styles.message, { color: theme.onBackgroundVariant ?? theme.muted }]}>{error}</Text>
-          <TouchableOpacity style={[styles.primaryButton, { backgroundColor: theme.buttonPrimary }]} onPress={reset} accessibilityRole="button" accessibilityLabel="重新扫码">
-            <Text style={styles.primaryButtonText}>重新扫码</Text>
+          <TouchableOpacity style={[styles.primaryButton, { backgroundColor: theme.buttonPrimary }]} onPress={reset} accessibilityRole="button" accessibilityLabel={t.btnRescan}>
+            <Text style={styles.primaryButtonText}>{t.btnRescan}</Text>
           </TouchableOpacity>
         </View>
       ) : (
         <View style={styles.center}>
           <ActivityIndicator size="large" color={theme.accent} />
-          <Text style={[styles.heading, { color: theme.text }]}>{stateLabel(state)}</Text>
-          <Text style={[styles.message, { color: theme.onBackgroundVariant ?? theme.muted }]}>{state === "saving" ? "正在保存，请勿退出" : "请保持此页面打开"}</Text>
+          <Text style={[styles.heading, { color: theme.text }]}>
+            {state === "exchanging" ? (t.tabSettings === "设置" ? "正在换取配对凭证…" : "Exchanging credentials...") : (t.tabSettings === "设置" ? "正在保存并连接…" : "Saving and connecting...")}
+          </Text>
+          <Text style={[styles.message, { color: theme.onBackgroundVariant ?? theme.muted }]}>{state === "saving" ? (t.tabSettings === "设置" ? "正在保存，请勿退出" : "Saving, please do not close") : (t.tabSettings === "设置" ? "请保持此页面打开" : "Keep this screen open")}</Text>
         </View>
       )}
     </SafeAreaView>

@@ -13,6 +13,7 @@ import {
   LayoutAnimation, Platform, UIManager, AccessibilityInfo,
 } from "react-native";
 import { useTheme } from "../../src/theme";
+import { useI18n } from "../../src/i18n";
 
 // Android 开启 LayoutAnimation 实验支持（模块顶层一次性）
 if (Platform.OS === "android") {
@@ -31,6 +32,7 @@ const PREVIEW_LEN = 80;
 
 export function CollapsibleTool({ toolName, text, isError, summary }: Props) {
   const { theme } = useTheme();
+  const { t } = useI18n();
   const [expanded, setExpanded] = useState(false);
   const [fullscreen, setFullscreen] = useState(false);
   const [reduceMotion, setReduceMotion] = useState(false);
@@ -59,7 +61,7 @@ export function CollapsibleTool({ toolName, text, isError, summary }: Props) {
       <TouchableOpacity
         style={[
           styles.card,
-          { backgroundColor: theme.toolBubble, borderColor: isError ? theme.error : theme.border },
+          { backgroundColor: theme.cardBg, borderColor: isError ? theme.error : theme.border },
         ]}
         onPress={toggleExpanded}
         activeOpacity={0.7}
@@ -75,7 +77,7 @@ export function CollapsibleTool({ toolName, text, isError, summary }: Props) {
             {toolName}
           </Text>
           {/* 摘要行：输出行数（无耗时数据，不显示状态点） */}
-          <Text style={[styles.meta, { color: theme.muted }]}>{lineCount} 行输出</Text>
+          <Text style={[styles.meta, { color: theme.muted }]}>{lineCount} {t.linesOutput}</Text>
           <Text style={[styles.arrow, { color: theme.muted }]}>{expanded ? "▾" : "▸"}</Text>
         </View>
         {!expanded && (
@@ -86,7 +88,18 @@ export function CollapsibleTool({ toolName, text, isError, summary }: Props) {
         {expanded && (
           <View style={styles.body}>
             {/* H19: 展开态限高，不再无限撑高聊天列表 */}
-            <ScrollView style={styles.bodyScroll} nestedScrollEnabled>
+            <ScrollView
+              style={[
+                styles.bodyScroll,
+                {
+                  backgroundColor: theme.cardInner ?? theme.inputBg,
+                  borderRadius: 8,
+                  padding: 8,
+                  marginTop: 6,
+                },
+              ]}
+              nestedScrollEnabled
+            >
               <Text style={[styles.bodyText, { color: theme.toolOutput }]} selectable>
                 {text}
               </Text>
@@ -98,7 +111,7 @@ export function CollapsibleTool({ toolName, text, isError, summary }: Props) {
                 accessibilityRole="button"
                 accessibilityLabel="全屏查看工具输出"
               >
-                <Text style={[styles.fullscreenText, { color: theme.accent }]}>全屏</Text>
+                <Text style={[styles.fullscreenText, { color: theme.accent }]}>{t.fullscreen}</Text>
               </TouchableOpacity>
             )}
           </View>
@@ -113,7 +126,7 @@ export function CollapsibleTool({ toolName, text, isError, summary }: Props) {
               {isError ? "错误" : "工具"} {toolName}
             </Text>
             <TouchableOpacity onPress={() => setFullscreen(false)} style={styles.fsClose}>
-              <Text style={[styles.fsCloseText, { color: theme.accent }]}>✕ 关闭</Text>
+              <Text style={[styles.fsCloseText, { color: theme.accent }]}>✕ {t.close}</Text>
             </TouchableOpacity>
           </View>
           <ScrollView style={styles.fsScroll} contentContainerStyle={styles.fsContent}>

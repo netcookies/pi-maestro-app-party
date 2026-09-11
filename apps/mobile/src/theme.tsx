@@ -5,6 +5,7 @@
  * 这里提炼为 App 可用的语义色板，围绕"消息/工具/markdown/界面"四组语义。
  */
 import React, { createContext, useContext, useState, useCallback, useMemo, useEffect } from "react";
+import { useColorScheme } from "react-native";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 
 export interface AppTheme {
@@ -49,6 +50,8 @@ export interface AppTheme {
   /** 导航 */
   headerBg: string;
   headerText: string;
+  /** 卡片内部嵌套块背景 */
+  cardInner?: string;
   /** Miuix 语义扩展槽（全部可选，旧主题可不提供） */
   surfaceVariant?: string;
   onSurfaceVariantSummary?: string;
@@ -63,46 +66,54 @@ export interface AppTheme {
   windowDimming?: string;
 }
 
+export const ACCENT_PALETTES = [
+  { id: "violet", name: "工坊紫", color: "#8B5CF6" },
+  { id: "cobalt", name: "深海蓝", color: "#2563EB" },
+  { id: "emerald", name: "赛博绿", color: "#10B981" },
+  { id: "amber", name: "落日橙", color: "#F59E0B" },
+  { id: "rose", name: "霓虹粉", color: "#F43F5E" },
+] as const;
+
 export const THEMES: Record<string, AppTheme> = {
-  // ── Miuix Light（design-spec §6 Light 列真实值）──
+  // ── Miuix Light（方案 B 便当盒轻量浅色规范）──
   "miuix-light": {
     name: "Miuix Light",
-    bg: "#FFFFFF", cardBg: "#F7F7F7", border: "#D9D9D9",
-    text: "#000000", muted: "#666666", dim: "rgba(0,0,0,0.6)", accent: "#3482FF",
-    userBubble: "#3482FF", userText: "#FFFFFF",
-    agentBubble: "#FFFFFF", toolBubble: "#F7F7F7",
-    toolTitle: "#000000", toolOutput: "rgba(0,0,0,0.8)",
-    success: "#1E8E4E", error: "#E94634", warning: "#B25E09", info: "#3482FF",
-    inputBg: "#F7F7F7", buttonPrimary: "#3482FF", buttonDanger: "#E94634",
-    mdHeading: "#000000", mdLink: "#3482FF", mdCode: "#B34700",
-    mdCodeBlock: "#000000", mdCodeBlockBg: "#F7F7F7", mdQuote: "#666666", mdQuoteBorder: "#E0E0E0", mdHr: "#E0E0E0",
-    headerBg: "#FFFFFF", headerText: "#000000",
-    surfaceVariant: "#F7F7F7", onSurfaceVariantSummary: "rgba(0,0,0,0.6)",
-    tertiaryContainer: "#EAF2FF", onTertiaryContainer: "#3482FF",
-    secondaryContainer: "#F0F0F0", onSecondaryContainer: "#A9A9A9",
-    disabledPrimaryButton: "#C2D9FF", outline: "#D9D9D9", dividerLine: "#E0E0E0",
-    onBackgroundVariant: "#8C93B0", windowDimming: "rgba(0,0,0,0.3)",
+    bg: "#F4F5F7", cardBg: "#FFFFFF", cardInner: "#F8F9FA", border: "#E5E7EB",
+    text: "#0F172A", muted: "#64748B", dim: "#94A3B8", accent: "#8B5CF6",
+    userBubble: "#8B5CF6", userText: "#FFFFFF",
+    agentBubble: "#FFFFFF", toolBubble: "#F8F9FA",
+    toolTitle: "#0F172A", toolOutput: "rgba(15,23,42,0.85)",
+    success: "#10B981", error: "#EF4444", warning: "#F59E0B", info: "#3B82F6",
+    inputBg: "#F1F5F9", buttonPrimary: "#8B5CF6", buttonDanger: "#EF4444",
+    mdHeading: "#0F172A", mdLink: "#8B5CF6", mdCode: "#7C3AED",
+    mdCodeBlock: "#0F172A", mdCodeBlockBg: "#F8F9FA", mdQuote: "#64748B", mdQuoteBorder: "#E2E8F0", mdHr: "#E2E8F0",
+    headerBg: "#FFFFFF", headerText: "#0F172A",
+    surfaceVariant: "#F8F9FA", onSurfaceVariantSummary: "#64748B",
+    tertiaryContainer: "#F3E8FF", onTertiaryContainer: "#7C3AED",
+    secondaryContainer: "#F1F5F9", onSecondaryContainer: "#64748B",
+    disabledPrimaryButton: "#DDD6FE", outline: "#E2E8F0", dividerLine: "#E2E8F0",
+    onBackgroundVariant: "#64748B", windowDimming: "rgba(0,0,0,0.3)",
     sliderBackground: "rgba(0,0,0,0.06)", sliderKeyPoint: "rgba(0,0,0,0.25)",
   },
 
-  // ── Miuix Dark（design-spec §6 Dark 列真实值；卡片取 surfaceContainerHighest #2D2D2D）──
+  // ── Miuix Dark（方案 B 便当盒深邃极黑 OLED 原型真实规范）──
   "miuix-dark": {
     name: "Miuix Dark",
-    bg: "#242424", cardBg: "#2D2D2D", border: "#404040",
-    text: "rgba(255,255,255,0.9)", muted: "#A8A8A8", dim: "#999999", accent: "#277AF7",
-    userBubble: "#277AF7", userText: "#FFFFFF",
-    agentBubble: "#2D2D2D", toolBubble: "#242424",
-    toolTitle: "#F2F2F2", toolOutput: "rgba(255,255,255,0.8)",
-    success: "#4ADE80", error: "#F12522", warning: "#FBBF24", info: "#277AF7",
-    inputBg: "#242424", buttonPrimary: "#277AF7", buttonDanger: "#F12522",
-    mdHeading: "rgba(255,255,255,0.9)", mdLink: "#277AF7", mdCode: "#99C7F1",
-    mdCodeBlock: "#F2F2F2", mdCodeBlockBg: "#242424", mdQuote: "#A8A8A8", mdQuoteBorder: "#393939", mdHr: "#393939",
-    headerBg: "#242424", headerText: "rgba(255,255,255,0.9)",
-    surfaceVariant: "#2D2D2D", onSurfaceVariantSummary: "#999999",
-    tertiaryContainer: "#2B3B54", onTertiaryContainer: "#4788FF",
-    secondaryContainer: "#434343", onSecondaryContainer: "#7C7C7C",
-    disabledPrimaryButton: "#253E64", outline: "#404040", dividerLine: "#393939",
-    onBackgroundVariant: "#787E96", windowDimming: "rgba(0,0,0,0.6)",
+    bg: "#08090C", cardBg: "#12151B", cardInner: "#181C24", border: "#202530",
+    text: "#E6EDF3", muted: "#8B949E", dim: "#6B7280", accent: "#8B5CF6",
+    userBubble: "#8B5CF6", userText: "#FFFFFF",
+    agentBubble: "#12151B", toolBubble: "#181C24",
+    toolTitle: "#F3F4F6", toolOutput: "rgba(243,244,246,0.85)",
+    success: "#10B981", error: "#EF4444", warning: "#F59E0B", info: "#3B82F6",
+    inputBg: "#181C24", buttonPrimary: "#8B5CF6", buttonDanger: "#EF4444",
+    mdHeading: "#F3F4F6", mdLink: "#A78BFA", mdCode: "#C4B5FD",
+    mdCodeBlock: "#F3F4F6", mdCodeBlockBg: "#181C24", mdQuote: "#8B949E", mdQuoteBorder: "#202530", mdHr: "#202530",
+    headerBg: "#12151B", headerText: "#E6EDF3",
+    surfaceVariant: "#181C24", onSurfaceVariantSummary: "#8B949E",
+    tertiaryContainer: "#2E1A47", onTertiaryContainer: "#A78BFA",
+    secondaryContainer: "#181C24", onSecondaryContainer: "#8B949E",
+    disabledPrimaryButton: "#4C1D95", outline: "#202530", dividerLine: "#202530",
+    onBackgroundVariant: "#6B7280", windowDimming: "rgba(0,0,0,0.6)",
     sliderBackground: "rgba(255,255,255,0.15)", sliderKeyPoint: "rgba(255,255,255,0.3)",
   },
 
@@ -173,28 +184,61 @@ export const MIUIX_SPACE = { xs: 4, sm: 8, md: 12, lg: 16, xl: 20, xxl: 24 };
 
 export const DEFAULT_THEME = "miuix-light";
 
-interface ThemeContextValue {
+export interface ThemeContextValue {
   theme: AppTheme;
   themeName: string;
   setTheme: (name: string) => void;
   themeNames: string[];
+  customAccent: string;
+  setCustomAccent: (color: string) => void;
 }
 
 const ThemeContext = createContext<ThemeContextValue | null>(null);
 
 const THEME_STORAGE_KEY = "maestro-mobile.theme";
+const APPEARANCE_CHOICE_KEY = "maestro-mobile.appearance";
+const ACCENT_COLOR_STORAGE_KEY = "maestro-mobile.accent-color";
+
+export type AppearanceChoice = "auto" | "light" | "dark";
 
 export function ThemeProvider({ children }: { children: React.ReactNode }) {
+  const systemScheme = useColorScheme();
+  const [choice, setChoice] = useState<AppearanceChoice>("auto");
   const [themeName, setThemeName] = useState<string>(DEFAULT_THEME);
+  const [customAccent, setCustomAccentState] = useState<string>(ACCENT_PALETTES[0].color);
 
-  // 启动时读持久化主题
+  // 启动时读持久化选择、主题与高光色
   useEffect(() => {
     let cancelled = false;
-    void AsyncStorage.getItem(THEME_STORAGE_KEY).then((saved) => {
-      if (!cancelled && saved && THEMES[saved]) setThemeName(saved);
+    void Promise.all([
+      AsyncStorage.getItem(APPEARANCE_CHOICE_KEY),
+      AsyncStorage.getItem(THEME_STORAGE_KEY),
+      AsyncStorage.getItem(ACCENT_COLOR_STORAGE_KEY),
+    ]).then(([savedChoice, savedTheme, savedAccent]) => {
+      if (cancelled) return;
+      if (savedChoice === "auto" || savedChoice === "light" || savedChoice === "dark") {
+        setChoice(savedChoice);
+      }
+      if (savedTheme && THEMES[savedTheme]) {
+        setThemeName(savedTheme);
+      }
+      if (savedAccent) {
+        setCustomAccentState(savedAccent);
+      }
     }).catch(() => {});
     return () => { cancelled = true; };
   }, []);
+
+  // 响应系统深色/浅色变化或用户选择
+  useEffect(() => {
+    if (choice === "auto") {
+      setThemeName(systemScheme === "dark" ? "miuix-dark" : "miuix-light");
+    } else if (choice === "dark") {
+      setThemeName("miuix-dark");
+    } else {
+      setThemeName("miuix-light");
+    }
+  }, [choice, systemScheme]);
 
   const setTheme = useCallback((name: string) => {
     if (!THEMES[name]) return;
@@ -202,12 +246,31 @@ export function ThemeProvider({ children }: { children: React.ReactNode }) {
     void AsyncStorage.setItem(THEME_STORAGE_KEY, name).catch(() => {});
   }, []);
 
-  const value = useMemo<ThemeContextValue>(() => ({
-    theme: THEMES[themeName] ?? THEMES[DEFAULT_THEME],
-    themeName,
-    setTheme,
-    themeNames: Object.keys(THEMES),
-  }), [themeName, setTheme]);
+  const setCustomAccent = useCallback((color: string) => {
+    setCustomAccentState(color);
+    void AsyncStorage.setItem(ACCENT_COLOR_STORAGE_KEY, color).catch(() => {});
+  }, []);
+
+  const value = useMemo<ThemeContextValue>(() => {
+    const baseTheme = THEMES[themeName] ?? THEMES[DEFAULT_THEME];
+    // 动态融合自定义高光品牌色
+    const mergedTheme: AppTheme = {
+      ...baseTheme,
+      accent: customAccent,
+      buttonPrimary: customAccent,
+      userBubble: customAccent,
+      mdLink: customAccent,
+      mdCode: customAccent,
+    };
+    return {
+      theme: mergedTheme,
+      themeName,
+      setTheme,
+      themeNames: Object.keys(THEMES),
+      customAccent,
+      setCustomAccent,
+    };
+  }, [themeName, setTheme, customAccent, setCustomAccent]);
 
   return <ThemeContext.Provider value={value}>{children}</ThemeContext.Provider>;
 }
@@ -216,4 +279,25 @@ export function useTheme(): ThemeContextValue {
   const value = useContext(ThemeContext);
   if (!value) throw new Error("useTheme must be used within ThemeProvider");
   return value;
+}
+
+/** 将 hex 颜色转为带有指定透明度的 rgba 字符串，用于动态计算高光微光背景与微光边框 */
+export function hexToRgba(hex: string, alpha: number): string {
+  if (!hex || typeof hex !== "string" || !hex.startsWith("#")) {
+    return `rgba(139, 92, 246, ${alpha})`;
+  }
+  const clean = hex.slice(1);
+  if (clean.length === 3) {
+    const r = parseInt(clean[0] + clean[0], 16);
+    const g = parseInt(clean[1] + clean[1], 16);
+    const b = parseInt(clean[2] + clean[2], 16);
+    return `rgba(${r}, ${g}, ${b}, ${alpha})`;
+  }
+  if (clean.length >= 6) {
+    const r = parseInt(clean.slice(0, 2), 16);
+    const g = parseInt(clean.slice(2, 4), 16);
+    const b = parseInt(clean.slice(4, 6), 16);
+    return `rgba(${r}, ${g}, ${b}, ${alpha})`;
+  }
+  return `rgba(139, 92, 246, ${alpha})`;
 }

@@ -14,51 +14,99 @@ import { useTheme } from "../../src/theme";
 import { MarkdownErrorBoundary } from "./MarkdownErrorBoundary";
 import { parseBlocks, parseInline } from "../markdown-parser";
 
+// 辅助函数：判断是否为合法的 Hex 颜色代码
+function isHexColor(str: string): boolean {
+  return /^#([0-9a-fA-F]{3}|[0-9a-fA-F]{6})$/.test(str.trim());
+}
+
+// 辅助函数：根据 Hex 颜色背景计算最佳对比文字颜色（暗色背景显示白字，亮色背景显示黑字）
+function getContrastColor(hexColor: string): string {
+  let clean = hexColor.trim().replace("#", "");
+  if (clean.length === 3) {
+    clean = clean.split("").map((c) => c + c).join("");
+  }
+  const r = parseInt(clean.substring(0, 2), 16) || 0;
+  const g = parseInt(clean.substring(2, 4), 16) || 0;
+  const b = parseInt(clean.substring(4, 6), 16) || 0;
+  // YIQ 亮度公式
+  const yiq = (r * 299 + g * 587 + b * 114) / 1000;
+  return yiq >= 128 ? "#0F172A" : "#FFFFFF";
+}
+
 export function MarkdownText({ text }: { text: string }) {
   const { theme } = useTheme();
   const blocks = useMemo(() => parseBlocks(text ?? ""), [text]);
 
   const renderInline = (raw: string, baseStyle: object) => {
     const parts = parseInline(raw);
-    return parts.map((p, idx) => (
-      <Text
-        key={idx}
-        style={[
-          baseStyle,
-          p.bold && { fontWeight: "700" as const },
-          p.italic && { fontStyle: "italic" as const },
-          p.code && {
-            fontFamily: "monospace",
-            fontSize: 13,
-            color: theme.mdCode,
-            backgroundColor: "rgba(127,127,127,0.18)",
-            paddingHorizontal: 3,
-            borderRadius: 3,
-          },
-          p.link && { color: theme.mdLink, textDecorationLine: "underline" as const },
-        ]}
-      >
-        {p.text}
-      </Text>
-    ));
+    return parts.map((p, idx) => {
+      const isColorCode = p.code && isHexColor(p.text);
+      if (isColorCode) {
+        const colorVal = p.text.trim();
+        const contrastTextColor = getContrastColor(colorVal);
+        return (
+          <Text
+            key={idx}
+            style={[
+              baseStyle,
+              {
+                fontFamily: "monospace",
+                fontSize: 12,
+                fontWeight: "700",
+                backgroundColor: colorVal,
+                color: contrastTextColor,
+                paddingHorizontal: 5,
+                paddingVertical: 1,
+                borderRadius: 4,
+                borderWidth: 1,
+                borderColor: "rgba(128,128,128,0.3)",
+              },
+            ]}
+          >
+            {p.text}
+          </Text>
+        );
+      }
+
+      return (
+        <Text
+          key={idx}
+          style={[
+            baseStyle,
+            p.bold && { fontWeight: "700" as const },
+            p.italic && { fontStyle: "italic" as const },
+            p.code && {
+              fontFamily: "monospace",
+              fontSize: 13,
+              fontWeight: "600",
+              color: theme.accent,
+              paddingHorizontal: 2,
+            },
+            p.link && { color: theme.mdLink, textDecorationLine: "underline" as const },
+          ]}
+        >
+          {p.text}
+        </Text>
+      );
+    });
   };
 
-  const baseText = { color: theme.text, fontSize: 15, lineHeight: 22 };
+  const baseText = { color: theme.text, fontSize: 15, lineHeight: 22, flexShrink: 1 };
 
   return (
     <MarkdownErrorBoundary text={text}>
-      <View style={{ flexShrink: 1, minHeight: 1 }}>
+      <View style={{ flexShrink: 1, minHeight: 1, width: "100%", overflow: "hidden" }}>
         {blocks.map((b, i) => {
           switch (b.kind) {
             case "heading": {
               const level = b.level ?? 1;
               const hashPrefix = "#".repeat(level) + " ";
               const size = level === 1 ? 19 : level === 2 ? 17 : level === 3 ? 16 : 15;
-              const headingColor = level === 1 ? theme.text : level === 2 ? theme.accent : theme.mdHeading;
+              const HEADING_AMBER = "#F59E0B";
               return (
-                <Text key={i} style={[baseText, { fontSize: size, fontWeight: "700", color: headingColor, marginVertical: 6 }]}>
-                  <Text style={{ color: theme.accent, opacity: 0.8, fontWeight: "600" }}>{hashPrefix}</Text>
-                  {renderInline(b.text ?? "", baseText)}
+                <Text key={i} style={[baseText, { fontSize: size, fontWeight: "700", color: HEADING_AMBER, marginVertical: 6 }]}>
+                  <Text style={{ color: HEADING_AMBER, opacity: 0.9, fontWeight: "700" }}>{hashPrefix}</Text>
+                  {renderInline(b.text ?? "", { color: HEADING_AMBER, fontSize: size, fontWeight: "700" })}
                 </Text>
               );
             }

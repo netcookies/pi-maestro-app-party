@@ -142,10 +142,10 @@ export function HostConnectCard({ hostUrl, token, onHostUrlChange, onTokenChange
     <View style={[styles.card, { backgroundColor: theme.tertiaryContainer ?? theme.cardBg }]} accessibilityRole="button" accessibilityLabel={`Host 连接卡，${statusText}`}>
       <TouchableOpacity style={styles.head} onPress={() => setOpen((v) => !v)} accessibilityRole="button" accessibilityLabel={open ? "收起连接控制中心" : "展开连接控制中心"}>
         <View style={[styles.iconWrap, { backgroundColor: theme.surfaceVariant }]}>
-          <LineIcon name="image" size={20} color={theme.onTertiaryContainer ?? theme.accent} />
+          <LineIcon name="radio" size={20} color={theme.onTertiaryContainer ?? theme.accent} />
         </View>
         <View style={styles.meta}>
-          <Text style={[styles.name, { color: theme.text }]}>MacBook · Host</Text>
+          <Text style={[styles.name, { color: theme.text }]}>通信与配对中枢</Text>
           <Text style={[styles.sub, { color: theme.onBackgroundVariant ?? theme.muted }]} numberOfLines={1}>
             {hostUrl || "扫码配对或输入 ws://<PC-IP>:4739/ws"}
           </Text>
@@ -154,7 +154,7 @@ export function HostConnectCard({ hostUrl, token, onHostUrlChange, onTokenChange
           <View style={[styles.led, { backgroundColor: statusColor }]} />
           <Text style={[styles.pillText, { color: theme.text }]}>{statusText}</Text>
         </View>
-        <LineIcon name="expand" size={18} color={theme.onTertiaryContainer ?? theme.muted} />
+        <LineIcon name={open ? "collapse" : "expand"} size={16} color={theme.onTertiaryContainer ?? theme.muted} />
       </TouchableOpacity>
 
       {open && (
