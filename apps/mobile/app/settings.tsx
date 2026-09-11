@@ -8,7 +8,7 @@
  * Pi / pi-maestro-flow / Maestro CLI 版本协议未提供，显示「待 Host 接入」，不编造。
  */
 import React, { useMemo, useState, useEffect } from "react";
-import { View, Text, StyleSheet, ScrollView, TouchableOpacity, TextInput, Modal } from "react-native";
+import { View, Text, StyleSheet, ScrollView, TouchableOpacity, TextInput } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { useRouter } from "expo-router";
 import { useHost } from "../src/store";
@@ -17,10 +17,15 @@ import { DEFAULT_CONFIG, getConfig, updateConfig, loadConfig, type AppConfig } f
 import { MiuixSwitch } from "../src/components/MiuixSwitch";
 import { MiuixSlider } from "../src/components/MiuixSlider";
 import { LineIcon } from "../src/components/LineIcon";
-import { HostConnectCard } from "../src/components/HostConnectCard";
 import { useI18n } from "../src/i18n";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { HOST_CONN_KEY } from "../src/paired-hosts";
+
+export default function SettingsScreen() {
+  const router = useRouter();
+  const { connectionState, isConnected, state, hostUrl: connectedHostUrl, token: connectedToken, connect, disconnect } = useHost();
+  const { theme, themeName, setTheme, customAccent, setCustomAccent } = useTheme();
+  const { lang, langChoice, t, setLanguageChoice } = useI18n();
 
   const configFields = useMemo(() => [
     { key: "historyPageSize" as const, label: t.paramHistoryPageSize, unit: t.unitItems, max: 200 },
@@ -28,12 +33,6 @@ import { HOST_CONN_KEY } from "../src/paired-hosts";
     { key: "livePollIntervalMs" as const, label: t.paramInterval, unit: "ms", max: 10000 },
     { key: "previewLength" as const, label: t.paramPreview, unit: t.unitChars, max: 300 },
   ], [t]);
-
-export default function SettingsScreen() {
-  const router = useRouter();
-  const { connectionState, isConnected, state, hostUrl: connectedHostUrl, token: connectedToken, connect, disconnect } = useHost();
-  const { theme, themeName, setTheme, customAccent, setCustomAccent } = useTheme();
-  const { lang, langChoice, t, setLanguageChoice } = useI18n();
   const styles = useMemo(() => makeStyles(theme), [theme]);
   const [config, setConfig] = useState<AppConfig>(getConfig());
   const [configDraft, setConfigDraft] = useState<Partial<AppConfig>>({});
@@ -443,11 +442,16 @@ export default function SettingsScreen() {
         </View>
       </ScrollView>
 
-      {/* 8位配对码弹窗 */}
+      {/* 8位配对码弹窗：使用纯 React 覆盖层，杜绝 Fabric 下原生 Modal 崩溃 */}
       {showCodeModal && (
-        <Modal visible transparent animationType="fade" onRequestClose={() => setShowCodeModal(false)}>
-          <View style={{ flex: 1, backgroundColor: "rgba(0,0,0,0.5)", justifyContent: "center", alignItems: "center", padding: 20 }}>
-            <View style={{ width: "100%", maxWidth: 320, backgroundColor: theme.cardBg, borderRadius: 20, padding: 20, borderWidth: 1, borderColor: theme.border }}>
+        <View style={[StyleSheet.absoluteFillObject, { zIndex: 999 }]} pointerEvents="auto">
+          <TouchableOpacity
+            style={[StyleSheet.absoluteFillObject, { backgroundColor: "rgba(0,0,0,0.5)" }]}
+            activeOpacity={1}
+            onPress={() => setShowCodeModal(false)}
+          />
+          <View style={{ flex: 1, justifyContent: "center", alignItems: "center", padding: 20 }}>
+            <View style={{ width: "100%", maxWidth: 320, backgroundColor: theme.cardBg, borderRadius: 20, padding: 20, borderWidth: 1, borderColor: theme.border, shadowColor: "#000", shadowOpacity: 0.3, shadowRadius: 10, elevation: 10 }}>
               <Text style={{ fontSize: 14, fontWeight: "700", color: theme.text, marginBottom: 8 }}>{t.enterPairCode}</Text>
               <Text style={{ fontSize: 11, color: theme.muted, marginBottom: 12 }}>{t.pairCodeHint}</Text>
               <TextInput
@@ -474,7 +478,7 @@ export default function SettingsScreen() {
               </View>
             </View>
           </View>
-        </Modal>
+        </View>
       )}
     </View>
   );

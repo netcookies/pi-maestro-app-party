@@ -175,10 +175,60 @@ const fenceStyles = StyleSheet.create({
   },
 });
 
+function isInsideHeading(parents: any): boolean {
+  if (!Array.isArray(parents)) return false;
+  return parents.some((p) => typeof p?.type === "string" && p.type.startsWith("heading"));
+}
+
 export function createChatMarkdownRules(theme: AppTheme, onCopyCode?: (code: string, language: string) => void) {
   const monoFont = Platform.OS === "ios" ? "Menlo" : "monospace";
 
   return {
+    // 0. 基础文本 (text)：如果在标题行内，强制继承标题专属琥珀暖橙色；否则使用普通文字颜色
+    text: (node: any, _children: any, parents: any, styles: any) => {
+      const inHeading = isInsideHeading(parents);
+      return (
+        <Text
+          key={node.key}
+          style={[
+            styles.text,
+            inHeading && { color: HEADING_AMBER, fontWeight: "700" },
+          ]}
+        >
+          {node.content}
+        </Text>
+      );
+    },
+
+    // 0.1 行内组合 (inline)：如果在标题行内，统一暖黄色
+    inline: (node: any, children: any, parents: any, styles: any) => {
+      const inHeading = isInsideHeading(parents);
+      return (
+        <Text
+          key={node.key}
+          style={[
+            styles.inline,
+            inHeading && { color: HEADING_AMBER, fontWeight: "700" },
+          ]}
+        >
+          {children}
+        </Text>
+      );
+    },
+
+    // 0.2 粗体 (strong)：如果在标题行内，继承标题专属琥珀暖橙色；否则使用普通文字颜色
+    strong: (node: any, children: any, parents: any, styles: any) => {
+      const inHeading = isInsideHeading(parents);
+      return (
+        <Text
+          key={node.key}
+          style={[styles.strong, inHeading && { color: HEADING_AMBER }]}
+        >
+          {children}
+        </Text>
+      );
+    },
+
     // 1. 颜色胶囊能力：如果行内代码为 Hex 颜色值，渲染带有真实底色和对比文字的色块
     code_inline: (node: any, _children: any, _parent: any, styles: any) => {
       const content = node.content?.trim();
@@ -208,7 +258,13 @@ export function createChatMarkdownRules(theme: AppTheme, onCopyCode?: (code: str
         );
       }
       return (
-        <Text key={node.key} style={styles.code_inline}>
+        <Text
+          key={node.key}
+          style={[
+            styles.code_inline,
+            { backgroundColor: "transparent", borderWidth: 0, padding: 0 },
+          ]}
+        >
           {node.content}
         </Text>
       );
@@ -249,6 +305,30 @@ export function createChatMarkdownRules(theme: AppTheme, onCopyCode?: (code: str
       <View key={node.key} style={{ marginTop: 6, marginBottom: 3 }}>
         <Text style={styles.heading3}>
           <Text style={{ color: HEADING_AMBER, opacity: 0.85 }}>### </Text>
+          {children}
+        </Text>
+      </View>
+    ),
+    heading4: (node: any, children: any, _parent: any, styles: any) => (
+      <View key={node.key} style={{ marginTop: 5, marginBottom: 2 }}>
+        <Text style={styles.heading4}>
+          <Text style={{ color: HEADING_AMBER, opacity: 0.85 }}>#### </Text>
+          {children}
+        </Text>
+      </View>
+    ),
+    heading5: (node: any, children: any, _parent: any, styles: any) => (
+      <View key={node.key} style={{ marginTop: 4, marginBottom: 2 }}>
+        <Text style={styles.heading5}>
+          <Text style={{ color: HEADING_AMBER, opacity: 0.85 }}>##### </Text>
+          {children}
+        </Text>
+      </View>
+    ),
+    heading6: (node: any, children: any, _parent: any, styles: any) => (
+      <View key={node.key} style={{ marginTop: 4, marginBottom: 2 }}>
+        <Text style={styles.heading6}>
+          <Text style={{ color: HEADING_AMBER, opacity: 0.85 }}>###### </Text>
           {children}
         </Text>
       </View>
