@@ -14,7 +14,7 @@ import type { TimelineItem } from "@maestro-mobile/shared";
 import { ExtensionUiDialog } from "../src/components/ExtensionUiDialog";
 import { InlineImage } from "../src/components/InlineImage";
 import { CollapsibleTool } from "../src/components/CollapsibleTool";
-import { MarkdownText } from "../src/components/MarkdownText";
+import { ChatMarkdown } from "../src/components/chat/ChatMarkdown";
 import { splitImageSegments } from "../src/image-paths";
 import { ChatComposer } from "../src/components/ChatComposer";
 import { pickImagesFromLibrary } from "../src/image-picker";
@@ -278,6 +278,8 @@ export default function SessionScreen() {
       );
     }
 
+    const isLastAssistant = isAssistant && sending && index === timeline.length - 1;
+
     // 非 tool：普通气泡（assistant 走 markdown）
     return (
       <View
@@ -288,7 +290,7 @@ export default function SessionScreen() {
       >
         {isThinking && <Text style={styles.thinkingLabel}>思考</Text>}
         {hasImages ? (
-          <View>
+          <View style={{ width: "100%", minWidth: 0 }}>
             {imagePaths.map((path, i) => (
               <InlineImage key={`item-img-${i}`} path={path} />
             ))}
@@ -296,7 +298,7 @@ export default function SessionScreen() {
               seg.type === "image" ? (
                 <InlineImage key={`img-${i}`} path={seg.path} />
               ) : isAssistant ? (
-                <MarkdownText key={`txt-${i}`} text={seg.text} />
+                <ChatMarkdown key={`txt-${i}`} content={seg.text} streaming={isLastAssistant} />
               ) : (
                 <Text
                   key={`txt-${i}`}
@@ -309,7 +311,7 @@ export default function SessionScreen() {
             )}
           </View>
         ) : isAssistant ? (
-          <MarkdownText text={displayText} />
+          <ChatMarkdown content={displayText} streaming={isLastAssistant} />
         ) : (
           <Text style={[isUser ? styles.textUser : styles.textAgent]} selectable>
             {displayText}
@@ -904,10 +906,11 @@ function makeStyles(theme: ReturnType<typeof useTheme>["theme"]) {
       padding: MIUIX_SPACE.md,
       marginBottom: 10,
       maxWidth: "90%",
+      minWidth: 0,
       overflow: "hidden",
     },
-    bubbleUser: { backgroundColor: theme.userBubble, alignSelf: "flex-end", flexShrink: 1, overflow: "hidden" },
-    bubbleAgent: { backgroundColor: theme.agentBubble, alignSelf: "flex-start", borderWidth: 1, borderColor: theme.border, borderRadius: MIUIX_RADIUS.lg, flexShrink: 1, overflow: "hidden" },
+    bubbleUser: { backgroundColor: theme.userBubble, alignSelf: "flex-end", maxWidth: "85%", minWidth: 0, flexShrink: 1, overflow: "hidden" },
+    bubbleAgent: { backgroundColor: theme.agentBubble, alignSelf: "flex-start", maxWidth: "90%", minWidth: 0, borderWidth: 1, borderColor: theme.border, borderRadius: MIUIX_RADIUS.lg, flexShrink: 1, overflow: "hidden" },
     bubbleTool: {
       backgroundColor: "transparent",
       alignSelf: "flex-start",

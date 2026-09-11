@@ -36,6 +36,7 @@ export type LineIconName =
   | "smartphone"
   | "moon"
   | "sun"
+  | "copy"
   | "workbench"
   | "chat"
   | "monitor"
@@ -176,6 +177,12 @@ const PATHS: Record<LineIconName, React.ReactNode> = {
     <G>
       <Circle cx="12" cy="12" r="5" />
       <Path d="M12 1v2M12 21v2M4.22 4.22l1.42 1.42M18.36 18.36l1.42 1.42M1 12h2M21 12h2M4.22 19.78l1.42-1.42M18.36 5.64l1.42-1.42" />
+    </G>
+  ),
+  copy: (
+    <G>
+      <Rect x="9" y="9" width="13" height="13" rx="2" />
+      <Path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1" />
     </G>
   ),
   workbench: (
