@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Maestro Mobile - 方案 B 完整生产级功能交互原型 (精确对齐 V3)</title>
+  <title>Maestro Mobile - 方案 B 完整生产级功能交互原型 (精修语义版)</title>
   <!-- React & Babel CDN -->
   <script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
   <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
@@ -77,7 +77,7 @@
   <script type="text/babel">
     const { useState, useEffect, useRef } = React;
 
-    // --- 纯单色线性矢量 SVG 图标库（零彩色 Emoji，纯净单色） ---
+    // --- 纯单色线性矢量 SVG 图标库（经过严格语义化重新设计） ---
     const Icons = {
       Workbench: ({ size = 18, className = "" }) => (
         <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={className}>
@@ -175,12 +175,6 @@
           <circle cx="12" cy="12" r="5"/>
           <line x1="12" y1="1" x2="12" y2="3"/>
           <line x1="12" y1="21" x2="12" y2="23"/>
-          <line x1="4.22" y1="4.22" x2="5.64" y2="5.64"/>
-          <line x1="18.36" y1="18.36" x2="19.78" y2="19.78"/>
-          <line x1="1" y1="12" x2="3" y2="12"/>
-          <line x1="21" y1="12" x2="23" y2="12"/>
-          <line x1="4.22" y1="19.78" x2="5.64" y2="18.36"/>
-          <line x1="18.36" y1="5.64" x2="19.78" y2="4.22"/>
         </svg>
       ),
       Moon: ({ size = 14, className = "" }) => (
@@ -194,36 +188,40 @@
           <line x1="12" y1="18" x2="12.01" y2="18"/>
         </svg>
       ),
-      // 纯色线性工具图标 (针对详细会话页 FloatingToolBar)
-      Brain: ({ size = 15, className = "" }) => (
+      // --- 核心语义化三大图标（专为思考/计划/压缩打造） ---
+      // 1. 思考 (Think) — 大脑神经网络与思考灵感
+      ThinkBrain: ({ size = 16, className = "" }) => (
         <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={className}>
-          <path d="M9.5 2A2.5 2.5 0 0 1 12 4.5v15a2.5 2.5 0 0 1-4.96.44 2.5 2.5 0 0 1-2.96-3.08 3 3 0 0 1-.34-5.58 2.5 2.5 0 0 1 1.32-4.24 2.5 2.5 0 0 1 4.44-2.04z"/>
-          <path d="M14.5 2A2.5 2.5 0 0 0 12 4.5v15a2.5 2.5 0 0 0 4.96.44 2.5 2.5 0 0 0 2.96-3.08 3 3 0 0 0 .34-5.58 2.5 2.5 0 0 0-1.32-4.24 2.5 2.5 0 0 0-4.44-2.04z"/>
+          <path d="M12 5a3 3 0 1 0-5.997.125 4 4 0 0 0-2.526 5.77 4 4 0 0 0 .556 6.588A4 4 0 1 0 12 18Z"/>
+          <path d="M12 5a3 3 0 1 1 5.997.125 4 4 0 0 1 2.526 5.77 4 4 0 0 1-.556 6.588A4 4 0 1 1 12 18Z"/>
+          <path d="M12 5v14"/>
         </svg>
       ),
-      Bolt: ({ size = 15, className = "" }) => (
+      // 2. 计划 (Plan) — 任务清单剪贴板 (带对勾与列表)
+      PlanClipboard: ({ size = 16, className = "" }) => (
         <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={className}>
-          <polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/>
+          <path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"/>
+          <rect x="8" y="2" width="8" height="4" rx="1" ry="1"/>
+          <path d="M9 14l2 2 4-4"/>
+          <path d="M9 10h6"/>
         </svg>
       ),
-      Layers: ({ size = 15, className = "" }) => (
+      // 3. 压缩 (Compact) — 上下向内对冲挤压收缩 (上下文压缩最直观隐喻)
+      CompactSqueeze: ({ size = 16, className = "" }) => (
         <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={className}>
-          <polygon points="12 2 2 7 12 12 22 7 12 2"/>
-          <polyline points="2 17 12 22 22 17"/>
-          <polyline points="2 12 12 17 22 12"/>
+          <path d="M4 12h16"/>
+          <path d="M12 3v6m-3-3l3 3 3-3"/>
+          <path d="M12 21v-6m-3 3l3-3 3 3"/>
         </svg>
       ),
-      Minimize2: ({ size = 15, className = "" }) => (
-        <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={className}>
-          <polyline points="4 14 10 14 10 20"/>
-          <polyline points="20 10 14 10 14 4"/>
-          <line x1="14" y1="10" x2="21" y2="3"/>
-          <line x1="3" y1="21" x2="10" y2="14"/>
+      ChevronDown: ({ size = 12, className = "" }) => (
+        <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" className={className}>
+          <polyline points="6 9 12 15 18 9"/>
         </svg>
       )
     };
 
-    // --- 双语字典体系 ---
+    // --- 双语字典 ---
     const i18n = {
       zh: {
         tabWorkbench: "工作台",
@@ -242,7 +240,7 @@
         msgCount: "条对话",
         onlineBadge: "在线",
         offlineBadge: "离线",
-        hostConnected: "已连接主机", // 修复点 1：去掉重复的 (Connected)
+        hostConnected: "已连接主机", // 修复点 1：纯粹已连接主机，无重复
         hubTitle: "通信与配对中枢",
         hubDesc: "经由 WebSocket (ws://) 安全隧道与桌面主机进程双向同步",
         hubNode: "主机节点",
@@ -309,7 +307,7 @@
         msgCount: "messages",
         onlineBadge: "ONLINE",
         offlineBadge: "OFFLINE",
-        hostConnected: "Connected", // 修复点 1：纯粹无重复
+        hostConnected: "Connected",
         hubTitle: "Host Connection & Pairing Hub",
         hubDesc: "Bidirectional real-time sync via authenticated WebSocket tunnel",
         hubNode: "Host Node",
@@ -414,6 +412,15 @@
       }
     ];
 
+    const AVAILABLE_MODELS = [
+      "gemini-3.8-flash",
+      "gpt-5.6-sol",
+      "claude-sonnet-4-6",
+      "claude-opus-4-7",
+      "glm-5.3-flash",
+      "deepseek-v4-pro"
+    ];
+
     function App() {
       const [tab, setTab] = useState("sessions");
       const [lang, setLang] = useState("zh");
@@ -443,6 +450,9 @@
       const [selectedMonitorSession, setSelectedMonitorSession] = useState(null);
       const [steerInput, setSteerInput] = useState("");
 
+      // 会话模型选择弹层（点击右上角模型触发）
+      const [showModelPicker, setShowModelPicker] = useState(false);
+
       // 聊天会话
       const [chatMessages, setChatMessages] = useState([
         { id: "m1", sender: "user", text: "ios 消息测试" },
@@ -454,7 +464,7 @@
       ]);
       const [chatDraft, setChatDraft] = useState("");
       
-      // 修复点 2：详细会话页中向下的箭头浮动在 FAB 位置，按需显示
+      // 向下的箭头浮动在 FAB 位置，按需显示
       const [showScrollBottomFab, setShowScrollBottomFab] = useState(true);
 
       // 手势
@@ -548,9 +558,9 @@
           <div class="w-full max-w-4xl mb-4 flex flex-col md:flex-row items-center justify-between gap-3 px-4">
             <div class="flex items-center gap-2">
               <span class="px-3 py-1 rounded-xl bg-purple-950/80 text-purple-300 border border-purple-800 text-xs font-bold font-mono">
-                Bento Grid · Precision V3
+                Bento Grid · Precision V4
               </span>
-              <span class="text-xs text-zinc-400">去重连接状态 · 绿色圆点活跃 · 纯单色 Floating 工具条与 FAB 联动</span>
+              <span class="text-xs text-zinc-400">语义化三图标 (Think/Plan/Compact) · 右上角点击选模型</span>
             </div>
 
             <div class="flex items-center gap-2.5">
@@ -650,9 +660,7 @@
                   </div>
                 </div>
 
-                {/* ------------------------------------------------------------------------- */}
                 {/* 1. 工作台 Tab */}
-                {/* ------------------------------------------------------------------------- */}
                 {tab === "workbench" && (
                   <div class="flex-1 overflow-y-auto px-4 pt-3 pb-24 space-y-3.5 no-scrollbar">
                     
@@ -802,9 +810,7 @@
                   </div>
                 )}
 
-                {/* ------------------------------------------------------------------------- */}
                 {/* 2. 会话列表 Tab */}
-                {/* ------------------------------------------------------------------------- */}
                 {tab === "sessions" && (
                   <div class="flex-1 overflow-y-auto px-4 pt-3 pb-28 space-y-3 no-scrollbar relative">
                     {filteredSessions.map((s) => (
@@ -862,9 +868,7 @@
                   </div>
                 )}
 
-                {/* ------------------------------------------------------------------------- */}
                 {/* 3. 监控 Tab */}
-                {/* ------------------------------------------------------------------------- */}
                 {tab === "monitor" && (
                   <div class="flex-1 overflow-y-auto px-4 pt-3 pb-28 space-y-3.5 no-scrollbar relative">
                     
@@ -946,9 +950,7 @@
                   </div>
                 )}
 
-                {/* ------------------------------------------------------------------------- */}
                 {/* 4. 设置 Tab */}
-                {/* ------------------------------------------------------------------------- */}
                 {tab === "settings" && (
                   <div class="flex-1 overflow-y-auto px-4 pt-3 pb-28 space-y-4 no-scrollbar">
                     
@@ -1009,14 +1011,13 @@
                       </div>
                     </div>
 
-                    {/* 模块 3：配对情况 (修复点 1: 去掉重复的 Connected) */}
+                    {/* 模块 3：配对情况 (已连接主机，纯粹无重复) */}
                     <div class={`p-4 rounded-3xl border border-purple-500/40 shadow-lg ${cardClass}`}>
                       <div class="flex items-center justify-between mb-2">
                         <div class="flex items-center gap-2">
                           <Icons.Radio className="text-purple-500" />
                           <h3 class="font-bold text-sm">{t.secHub}</h3>
                         </div>
-                        {/* 修复点 1 落地：纯粹已连接主机，无重复 */}
                         <span class={`text-[10px] font-mono px-2 py-0.5 rounded-full border ${
                           isDark ? "bg-emerald-950 text-emerald-400 border-emerald-800" : "bg-emerald-100 text-emerald-800 border-emerald-300 font-bold"
                         }`}>
@@ -1133,18 +1134,15 @@
                   </div>
                 )}
 
-                {/* ========================================================================= */}
-                {/* 底部悬浮：活跃/全部 胶囊 (修复点 3: 活跃中前面使用绿色微光小圆点，去掉⚡️) */}
-                {/* ========================================================================= */}
+                {/* 底部悬浮：活跃/全部 胶囊 (绿色微光小圆点，无⚡️) */}
                 {tab === "sessions" && !searchBarOpen && (
                   <div class="absolute bottom-20 inset-x-0 flex items-center justify-between px-5 z-40 pointer-events-none">
                     <div class={`shadow-2xl rounded-2xl px-2 py-1.5 flex items-center gap-1.5 pointer-events-auto border transition-all ${
                       isDark ? "glass-bar border-purple-500/40" : "bg-white/95 border-purple-300 shadow-xl"
                     }`}>
-                      {/* 修复点 3 落地：纯净绿色圆点替代闪电 emoji */}
                       <button
                         onClick={() => setFilter("active")}
-                        class={`px-3 py-1.5 rounded-xl text-xs font-semibold flex items-center gap-1.5 transition-all ${
+                        class={`px-3 py-1 rounded-xl text-xs font-semibold flex items-center gap-1.5 transition-all ${
                           filter === "active" ? "bg-purple-600 text-white shadow" : "opacity-60 hover:opacity-100"
                         }`}
                       >
@@ -1154,7 +1152,7 @@
 
                       <button
                         onClick={() => setFilter("all")}
-                        class={`px-3.5 py-1.5 rounded-xl text-xs font-semibold transition-all ${
+                        class={`px-3 py-1 rounded-xl text-xs font-semibold transition-all ${
                           filter === "all" ? (isDark ? "bg-zinc-800 text-zinc-100 shadow" : "bg-zinc-200 text-zinc-900 shadow") : "opacity-60 hover:opacity-100"
                         }`}
                       >
@@ -1228,13 +1226,13 @@
               </div>
 
               {/* ========================================================================= */}
-              {/* 二级页面：详细会话页 (修复点 2: FloatingToolBar 纯单色图标药丸 + 位置形态同 [活跃|全部] + FAB 向下箭头按需悬浮) */}
+              {/* 二级页面：详细会话页 (精修：右上角点击选模型 + 浮动药丸三图标 Think/Plan/Compact) */}
               {/* ========================================================================= */}
               <div class={`absolute inset-0 flex flex-col z-50 transition-all duration-300 ${bgClass} ${
                 inDetail ? "translate-x-0 opacity-100" : "translate-x-full opacity-0 pointer-events-none"
               }`}>
                 
-                {/* 详情页 Header */}
+                {/* 详情页 Header：左侧返回箭头 ← + 右侧可点击的模型 Badge ▾ */}
                 <div class={`px-4 py-2.5 border-b flex items-center justify-between ${dockClass}`}>
                   <button
                     onClick={() => setInDetail(false)}
@@ -1245,16 +1243,19 @@
                   </button>
 
                   <div class="text-center min-w-0 px-2">
-                    <h2 class="text-xs font-bold font-mono truncate max-w-[180px]">{activeSession.title}</h2>
+                    <h2 class="text-xs font-bold font-mono truncate max-w-[160px]">{activeSession.title}</h2>
                     <span class="text-[10px] text-emerald-500 font-mono">● {t.statusStreaming}</span>
                   </div>
 
-                  {/* 顶栏右上角纯净模型徽标 */}
-                  <div class="shrink-0">
-                    <span class="text-[10px] font-mono px-2 py-0.5 rounded-full bg-purple-900/30 text-purple-400 border border-purple-800/80">
-                      {activeSession.model}
-                    </span>
-                  </div>
+                  {/* 右上角：可点击的模型切换 Badge (带微型下拉箭头) */}
+                  <button
+                    onClick={() => setShowModelPicker(true)}
+                    class="flex items-center gap-1 font-mono text-[10px] px-2.5 py-1 rounded-full bg-purple-900/30 hover:bg-purple-900/50 text-purple-400 border border-purple-800/80 active:scale-95 transition-all"
+                    title="点击切换当前会话模型"
+                  >
+                    <span class="truncate max-w-[95px]">{activeSession.model}</span>
+                    <Icons.ChevronDown size={11} className="opacity-70" />
+                  </button>
                 </div>
 
                 {/* 边缘右滑返回引导 */}
@@ -1266,7 +1267,6 @@
                 {/* 对话消息流 */}
                 <div 
                   onScroll={(e) => {
-                    // 模拟按需显示 FAB
                     const st = e.currentTarget.scrollTop;
                     const sh = e.currentTarget.scrollHeight - e.currentTarget.clientHeight;
                     setShowScrollBottomFab(sh - st > 30);
@@ -1308,7 +1308,7 @@
                               <span>根因与修复结论</span>
                             </div>
                             <p class="text-[11px] opacity-70 mt-1">
-                              已支持纯单色浮动单图标药丸工具条、FAB 按需显示与去重连接状态。
+                              已支持 Think (大脑)/Plan (清单)/Compact (对冲挤压) 纯单色语义三大按钮。
                             </p>
                           </div>
                         </div>
@@ -1318,58 +1318,48 @@
                 </div>
 
                 {/* ------------------------------------------------------------------------- */}
-                {/* 修复点 2 落地：FloatingToolBar 悬浮在输入栏上方，纯单色图标药丸，形态同外面的 [活跃|全部] */}
+                {/* 会话浮动栏：纯单色浮动单图标药丸 (只有 Think, Plan, Compact 三大语义化图标) */}
+                {/* 形态与位置完全同外面的 [活跃|全部] */}
                 {/* ------------------------------------------------------------------------- */}
                 <div class="absolute bottom-20 inset-x-0 flex items-center justify-between px-5 z-40 pointer-events-none">
                   
-                  {/* 左/中：悬浮纯单色单图标按钮药丸（Model / Think / Plan / Compact） */}
-                  <div class={`shadow-2xl rounded-2xl px-2 py-1.5 flex items-center gap-1.5 pointer-events-auto border transition-all ${
+                  {/* 悬浮药丸：只保留思考、计划、压缩 3 个语义化单图标 */}
+                  <div class={`shadow-2xl rounded-2xl px-2 py-1 flex items-center gap-1 pointer-events-auto border transition-all ${
                     isDark ? "glass-bar border-purple-500/40" : "bg-white/95 border-purple-300 shadow-xl"
                   }`}>
-                    {/* Model 纯单色图标 */}
+                    {/* 1. 思考 (Think) — 大脑神经网络思维 */}
                     <button
-                      onClick={() => alert(`当前模型：${activeSession.model}，点击可快速调出模型切换列表`)}
+                      onClick={() => alert("思考等级切换 (Think Level): [off, low, medium, high, max]")}
                       class="p-2 rounded-xl text-zinc-400 hover:text-white hover:bg-white/10 transition-all"
-                      title="Model (模型切换)"
+                      title="思考深度 (Think)"
                     >
-                      <Icons.Brain size={16} />
+                      <Icons.ThinkBrain size={16} />
                     </button>
 
                     <div class="w-[1px] h-3.5 bg-zinc-700/60"></div>
 
-                    {/* Think 纯单色图标 */}
+                    {/* 2. 计划 (Plan) — 任务勾选清单剪贴板 */}
                     <button
-                      onClick={() => alert("思考深度切换：[off, minimal, low, medium, high, max]")}
+                      onClick={() => alert("切换 Plan 计划执行模式 / Act 行动模式")}
                       class="p-2 rounded-xl text-zinc-400 hover:text-white hover:bg-white/10 transition-all"
-                      title="Think (思考等级)"
+                      title="任务计划 (Plan)"
                     >
-                      <Icons.Bolt size={16} />
+                      <Icons.PlanClipboard size={16} />
                     </button>
 
                     <div class="w-[1px] h-3.5 bg-zinc-700/60"></div>
 
-                    {/* Plan 纯单色图标 */}
+                    {/* 3. 压缩 (Compact) — 上下向内挤压收缩 */}
                     <button
-                      onClick={() => alert("切换 Plan / Act 模式")}
+                      onClick={() => alert("触发会话上下文深度压缩 (Compact)")}
                       class="p-2 rounded-xl text-zinc-400 hover:text-white hover:bg-white/10 transition-all"
-                      title="Plan (计划模式)"
+                      title="压缩上下文 (Compact)"
                     >
-                      <Icons.Layers size={16} />
-                    </button>
-
-                    <div class="w-[1px] h-3.5 bg-zinc-700/60"></div>
-
-                    {/* Compact 纯单色图标 */}
-                    <button
-                      onClick={() => alert("触发会话上下文整理压缩 (Compact)")}
-                      class="p-2 rounded-xl text-zinc-400 hover:text-white hover:bg-white/10 transition-all"
-                      title="Compact (压缩上下文)"
-                    >
-                      <Icons.Minimize2 size={16} />
+                      <Icons.CompactSqueeze size={16} />
                     </button>
                   </div>
 
-                  {/* 修复点 2 落地：向下的箭头浮动在 FAB 的位置，按需显示 */}
+                  {/* 向下的箭头浮动在 FAB 位置，按需显示 */}
                   {showScrollBottomFab ? (
                     <button
                       onClick={() => {
@@ -1423,6 +1413,38 @@
                     <Icons.Send size={14} />
                   </button>
                 </div>
+
+                {/* 模型选择弹层 (点击右上角模型 Badge 触发) */}
+                {showModelPicker && (
+                  <div class="absolute inset-0 bg-black/80 z-50 flex flex-col justify-end p-4 animate-fade-in">
+                    <div class={`border rounded-3xl p-5 space-y-2 shadow-2xl ${cardClass}`}>
+                      <div class="flex justify-between items-center pb-2 border-b border-zinc-800">
+                        <span class="text-xs font-bold">选择当前会话模型</span>
+                        <button onClick={() => setShowModelPicker(false)} class="text-xs opacity-60">✕</button>
+                      </div>
+                      <div class="space-y-1 pt-1 font-mono text-xs max-h-52 overflow-y-auto no-scrollbar">
+                        {AVAILABLE_MODELS.map((m) => {
+                          const isCur = activeSession.model === m;
+                          return (
+                            <button
+                              key={m}
+                              onClick={() => {
+                                setActiveSession((prev) => ({ ...prev, model: m }));
+                                setShowModelPicker(false);
+                              }}
+                              class={`w-full p-2.5 rounded-xl border text-left flex justify-between items-center transition-all ${
+                                isCur ? "bg-purple-600/20 border-purple-500 text-purple-300 font-bold" : `${cardInnerClass} hover:border-zinc-600`
+                              }`}
+                            >
+                              <span>{m}</span>
+                              {isCur && <span class="text-xs text-purple-400">✓ 当前</span>}
+                            </button>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  </div>
+                )}
               </div>
 
               {/* ========================================================================= */}
@@ -1495,12 +1517,11 @@
             </div>
           </div>
 
-          {/* 本轮精修核对说明 */}
+          {/* 交互核对说明 */}
           <div class="mt-4 text-xs text-zinc-400 text-center max-w-xl space-y-1 font-mono">
-            <p class="text-zinc-200 font-bold">本轮 3 点精修已全部完成：</p>
-            <p>1. <span class="text-purple-400">已连接主机</span>：去除了重复的 `(Connected)`，简洁干净。</p>
-            <p>2. <span class="text-purple-400">会话悬浮工具条</span>：纯单色单图标按钮药丸 (Model/Think/Plan/Compact)，形态与位置与外面的 [活跃|全部] 保持高度一致；右侧向下滚动 FAB 按需悬浮。</p>
-            <p>3. <span class="text-purple-400">活跃中绿色微光小圆点</span>：去除了闪电 emoji，改用纯净单色圆点，视觉更沉着。</p>
+            <p class="text-zinc-200 font-bold">语义精修核对点：</p>
+            <p>1. <span class="text-purple-400">右上角模型切换</span>：点击右上角模型 Badge (带 ▾ 箭头)，直接弹出模型选择 Sheet 切换。</p>
+            <p>2. <span class="text-purple-400">三大语义化图标</span>：思考 (<span class="text-zinc-200 font-bold">大脑神经网络</span>) · 计划 (<span class="text-zinc-200 font-bold">任务清单剪贴板</span>) · 压缩 (<span class="text-zinc-200 font-bold">上下向内挤压收缩</span>)。</p>
           </div>
         </div>
       );
