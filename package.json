@@ -1,6 +1,6 @@
 {
   "name": "maestro-mobile",
-  "version": "0.1.0",
+  "version": "0.2.14",
   "private": true,
   "description": "Maestro Mobile — 在移动端使用 Pi Agent + pi-maestro-flow",
   "type": "module",

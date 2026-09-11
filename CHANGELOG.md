@@ -2,6 +2,22 @@
 
 本文件记录 Maestro Mobile 的显著变更。格式基于 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)。
 
+## [0.2.14] — 2026-09-11
+
+### 修复与加固
+
+- **WS 入站隔离**：单连接超限（>8MB）拦截抛出的 `RangeError`，防止宿主进程因未捕获异常退出（exit 99），仅断开问题连接。
+- **出站背压收敛**：收敛裸 `ws.send` 为单一发送出口，引入软高水位（1MB）、硬上限（32MB）与 5s 宽限期，限制队列驻留内存。
+- **心跳机制**：容忍单次 pong 漏答（连续 2 次无响应才断连），避免高负载下健康连接被误踢。
+- **参数对齐**：修复 `sendError` 16 处 `in_reply_to` 误传问题，解决命令出错时客户端等待 30s 的现象。
+- **死代码清理**：移除无生产调用的 `ws-command-handlers.ts` 与 `jsonl-replay.ts`，并在 `build.sh` 中添加 `rm -rf dist` 防止产物残留。
+- **移动端与协议加固**：
+  - 断连时立即以 `connection_lost` 标记未决命令，保留草稿。
+  - 重连退避加入向下 Jitter，避免并发重连尖峰。
+  - `validateClientCommand` 校验 `id` 类型。
+  - 弹窗终态条目按容量单趟修剪，防止长期运行占用内存。
+  - 优化 Origin 校验解析，支持多形态配置。
+
 ## [0.1.0] — 2026-09-05
 
 首个可用版本：在移动端完整使用 Pi Agent + pi-maestro-flow。

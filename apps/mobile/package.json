@@ -1,6 +1,6 @@
 {
   "name": "@maestro-mobile/app",
-  "version": "0.1.0",
+  "version": "0.2.14",
   "private": true,
   "type": "module",
   "main": "expo-router/entry",
