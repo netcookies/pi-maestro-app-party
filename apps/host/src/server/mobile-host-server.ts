@@ -22,6 +22,7 @@ import type { LiveSessionList } from "../live-sessions.js";
 import { readSettingsOverview, updateSettingsJson } from "../maestro-settings.js";
 import { validateClientCommand } from "@maestro-mobile/shared";
 import { HostSessionListService } from "./helpers.js";
+import { injectMessageToActiveTui } from "../workspace-peer-injector.js";
 
 export interface MobileHostServerOptions {
   token?: string;
@@ -80,8 +81,8 @@ export class MobileHostServer {
   private static readonly HARD_LIMIT_BYTES = 32 * 1024 * 1024;
   private static readonly SLOW_GRACE_MS = 5_000;
   private static readonly DROP_LOG_INTERVAL_MS = 60_000;
-  /** 连续未应答次数上限：2 = 容忍一次漏答（默认 30s 周期即约 60s 无响应才判定死连） */
-  private static readonly HEARTBEAT_MAX_MISSES = 2;
+  /** 连续未应答次数上限：3 = 容忍两次漏答（默认 30s 周期即约 90s 无响应/无数据才判定死连） */
+  private static readonly HEARTBEAT_MAX_MISSES = 3;
   private unsubscribeController: (() => void) | undefined;
   /** listen() 等待中的错误回调；非空表示正在绑定端口 */
   private listenError: ((error: Error) => void) | undefined;
@@ -141,6 +142,8 @@ export class MobileHostServer {
         client.heartbeatMisses = 0;
       });
       ws.on("message", (data) => {
+        // 收到任何入站数据即证明连接存活，清零漏答计数（防止 iOS/RN 客户端因底层 pong 延迟被心跳误杀）
+        client.heartbeatMisses = 0;
         if (client.inflight >= MobileHostServer.MAX_CONCURRENT_COMMANDS) {
           // 限流拒绝也要回 in_reply_to：否则客户端那条命令挂 30s 超时。
           // 此处解析一次只为取 id；解析失败回空（真正的 invalid_json 判定在 handleClientMessage 里）
@@ -782,13 +785,25 @@ export class MobileHostServer {
             this.sendError(client, "invalid_image", "images 元素必须是 base64 data 与 mime 字段齐全的图片", (command as { id?: string }).id ?? "");
             break;
           }
-          // 双端协同：若会话当前正处于流式生成中（如 TUI/后台正在运行），走 steer 介入；空闲状态正常 prompt
-          if (runner.state.runState === "streaming") {
-            await runner.steer(command.message);
-          } else {
-            await runner.prompt(command.message, undefined, images);
+          // 方案 A 双端实时协同：
+          // 1. 优先检查当前会话所在的 cwd 是否正是当前桌面活跃的 TUI 窗口（通过 workspace-telemetry）
+          // 2. 如果是当前活跃桌面窗口，通过 teammate 跨进程信箱直接注入 steer 到桌面终端！
+          //    桌面终端屏幕立刻打字动起来并回答，写盘后由 Watcher 实时推回手机，实现真正的同屏双向同步！
+          // 3. 如果当前没有活跃桌面窗口，或者会话已在流式生成中，走已有 runner 驱动逻辑。
+          const activeTuiOwner = await this.controller.findActiveOwnerForCwd(runner.state.cwd);
+          let injectedToTui = false;
+          if (activeTuiOwner && (!images || images.length === 0)) {
+            injectedToTui = await injectMessageToActiveTui(activeTuiOwner, command.message);
           }
-          this.sendAck(client, command, {});
+
+          if (!injectedToTui) {
+            if (runner.state.runState === "streaming") {
+              await runner.steer(command.message);
+            } else {
+              await runner.prompt(command.message, undefined, images);
+            }
+          }
+          this.sendAck(client, command, { injectedToTui });
           break;
         }
         case "steer": {

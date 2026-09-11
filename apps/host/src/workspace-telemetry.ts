@@ -78,6 +78,7 @@ export class WorkspaceTelemetryReader {
             workspaceId: String(d.workspaceId ?? wsId),
             normalizedCwd: String(d.normalizedCwd ?? ""),
             ownerId: String(d.ownerId ?? ""),
+            ownerNonce: typeof d.ownerNonce === "string" ? d.ownerNonce : undefined,
             pid: Number(d.pid ?? 0),
             sessionId: String(d.sessionId ?? ""),
             publishedAt,

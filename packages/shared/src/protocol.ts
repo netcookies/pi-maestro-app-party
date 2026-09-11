@@ -109,6 +109,7 @@ export interface WorkspaceOwnerState {
   workspaceId: string;
   normalizedCwd: string;
   ownerId: string;
+  ownerNonce?: string;
   pid: number;
   sessionId: string;
   publishedAt: number;

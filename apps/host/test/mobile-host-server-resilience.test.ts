@@ -384,6 +384,25 @@ describe("WS heartbeat miss tolerance", () => {
     expect(killedAt!.misses).toBeGreaterThanOrEqual(2);
     await restore();
   }, 15_000);
+
+  it("收到 message 数据时重置 heartbeatMisses（防止仅依赖 pong 误杀活动客户端）", async () => {
+    ctx = await createServer({ heartbeatIntervalMs: 40 });
+    const conn = connect(ctx.port);
+    await conn.opened;
+    await conn.nextType("host_status");
+
+    const clients = (ctx.server as unknown as { clients: Set<{ heartbeatMisses: number }> }).clients;
+    const client = [...clients][0];
+    client.heartbeatMisses = 2; // 模拟已累积 2 次未应答 pong
+
+    // 客户端发送任意一条有效指令或帧
+    conn.ws.send(JSON.stringify({ type: "list_live_sessions" }));
+    await new Promise((r) => setTimeout(r, 50));
+
+    // 收到 message 后，heartbeatMisses 必须被立即重置为 0
+    expect(client.heartbeatMisses).toBe(0);
+    conn.ws.close();
+  });
 });
 
 describe("search_history 参数钳制", () => {
