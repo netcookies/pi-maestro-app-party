@@ -51,9 +51,13 @@ export function MarkdownText({ text }: { text: string }) {
         {blocks.map((b, i) => {
           switch (b.kind) {
             case "heading": {
-              const size = b.level === 1 ? 20 : b.level === 2 ? 18 : b.level === 3 ? 16 : 15;
+              const level = b.level ?? 1;
+              const hashPrefix = "#".repeat(level) + " ";
+              const size = level === 1 ? 19 : level === 2 ? 17 : level === 3 ? 16 : 15;
+              const headingColor = level === 1 ? theme.text : level === 2 ? theme.accent : theme.mdHeading;
               return (
-                <Text key={i} style={[baseText, { fontSize: size, fontWeight: "700", color: theme.mdHeading, marginVertical: 4 }]}>
+                <Text key={i} style={[baseText, { fontSize: size, fontWeight: "700", color: headingColor, marginVertical: 6 }]}>
+                  <Text style={{ color: theme.accent, opacity: 0.8, fontWeight: "600" }}>{hashPrefix}</Text>
                   {renderInline(b.text ?? "", baseText)}
                 </Text>
               );

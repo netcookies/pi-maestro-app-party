@@ -25,6 +25,14 @@ describe("parseInline", () => {
     const parts = parseInline("这是*斜体*文字");
     expect(parts.filter((p) => p.italic).map((p) => p.text)).toEqual(["斜体"]);
   });
+
+  it("parses bold nested inline code: **`code`**", () => {
+    const parts = parseInline("收到你的最新 iPhone 消息：**`ios 消息测试`**！");
+    const target = parts.find((p) => p.text === "ios 消息测试");
+    expect(target).toBeDefined();
+    expect(target?.bold).toBe(true);
+    expect(target?.code).toBe(true);
+  });
 });
 
 describe("parseBlocks", () => {
@@ -41,6 +49,8 @@ describe("parseBlocks", () => {
     expect(blocks[1].kind).toBe("list");
     expect(blocks[1].ordered).toBe(true);
     expect(blocks[1].lines).toHaveLength(2);
+    expect(blocks[1].lines?.[0]).toContain('**连触发 3 次"加载更早"**');
+    expect(blocks[1].lines?.[1]).toContain("**FAB 一键到底**");
     expect(blocks[2].kind).toBe("paragraph");
   });
 

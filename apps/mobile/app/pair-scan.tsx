@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useRef, useState } from "react";
 import { ActivityIndicator, BackHandler, ScrollView, StyleSheet, Text, TouchableOpacity, View } from "react-native";
 import { router, useNavigation } from "expo-router";
+import { useIsFocused } from "@react-navigation/native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { QRPairScanner } from "../src/components/QRPairScanner";
 import { LineIcon } from "../src/components/LineIcon";
@@ -30,6 +31,7 @@ export default function PairScanScreen() {
   const { theme } = useTheme();
   const { connect } = useHost();
   const navigation = useNavigation();
+  const isFocused = useIsFocused();
   const styles = makeStyles();
   const scanLocked = useRef(false);
   const mountedRef = useRef(true);
@@ -199,8 +201,13 @@ export default function PairScanScreen() {
         <View style={styles.iconButton} />
       </View>
 
-      {state === "scanning" ? (
-        <QRPairScanner disabled={false} onScanned={handleScanned} onError={(message) => { setError(message); setState("error"); }} />
+      {state === "scanning" && isFocused ? (
+        <QRPairScanner
+          active={isFocused && state === "scanning" && !scanLocked.current}
+          disabled={scanLocked.current}
+          onScanned={handleScanned}
+          onError={(message) => { setError(message); setState("error"); }}
+        />
       ) : state === "selecting" && pairing ? (
         <View style={styles.content}>
           <Text style={[styles.heading, { color: theme.text }]}>选择要连接的地址</Text>

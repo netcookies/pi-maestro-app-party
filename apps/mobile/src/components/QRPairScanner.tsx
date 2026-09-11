@@ -4,7 +4,8 @@ import { Linking, StyleSheet, Text, TouchableOpacity, View } from "react-native"
 import { CameraView, useCameraPermissions } from "expo-camera";
 import { MIUIX_RADIUS, MIUIX_SPACE, MIUIX_TYPE, useTheme } from "../theme";
 
-export function QRPairScanner({ disabled = false, onScanned, onError }: {
+export function QRPairScanner({ active = true, disabled = false, onScanned, onError }: {
+  active?: boolean;
   disabled?: boolean;
   onScanned: (raw: string) => void;
   onError?: (message: string) => void;
@@ -34,6 +35,7 @@ export function QRPairScanner({ disabled = false, onScanned, onError }: {
     <View style={styles.cameraWrap}>
       <CameraView
         style={StyleSheet.absoluteFill}
+        active={active && !disabled}
         barcodeScannerSettings={{ barcodeTypes: ["qr"] }}
         onBarcodeScanned={disabled ? undefined : ({ data }) => onScanned(data)}
         onMountError={(event) => onError?.(event.message ?? "相机启动失败")}

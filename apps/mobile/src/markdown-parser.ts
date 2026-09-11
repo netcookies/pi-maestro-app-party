@@ -6,77 +6,44 @@ export interface InlinePart {
   link?: string;
 }
 
-/** 解析行内格式（加粗/斜体/行内代码/链接） */
+/** 解析行内格式（加粗/斜体/行内代码/链接，及其嵌套） */
 export function parseInline(raw: string): InlinePart[] {
   const parts: InlinePart[] = [];
-  // 行内代码优先（`...` 不参与其他解析）
-  const codeRe = /`([^`]+)`/g;
+  // 综合正则匹配行内元素：
+  // 1. 加粗嵌套代码: **`code`**
+  // 2. 加粗普通文本: **bold**
+  // 3. 行内代码: `code`
+  // 4. 链接: [text](url)
+  // 5. 斜体: *italic*
+  const pattern = /(\*\*`([^`]+)`\*\*)|(\*\*([^*]+)\*\*)|(`([^`]+)`)|(\[([^\]]+)\]\(([^)]+)\))|(\*([^*]+)\*)/g;
   let last = 0;
   let m: RegExpExecArray | null;
-  const segments: { start: number; end: number; code: boolean }[] = [];
-  while ((m = codeRe.exec(raw)) !== null) {
-    if (m.index > last) segments.push({ start: last, end: m.index, code: false });
-    segments.push({ start: m.index, end: m.index + m[0].length, code: true });
-    last = m.index + m[0].length;
+  while ((m = pattern.exec(raw)) !== null) {
+    if (m.index > last) {
+      parts.push({ text: raw.slice(last, m.index) });
+    }
+    if (m[1]) {
+      // **`code`**
+      parts.push({ text: m[2], bold: true, code: true });
+    } else if (m[3]) {
+      // **bold**
+      parts.push({ text: m[4], bold: true });
+    } else if (m[5]) {
+      // `code`
+      parts.push({ text: m[6], code: true });
+    } else if (m[7]) {
+      // [text](url)
+      parts.push({ text: m[8], link: m[9] });
+    } else if (m[10]) {
+      // *italic*
+      parts.push({ text: m[11], italic: true });
+    }
+    last = pattern.lastIndex;
   }
-  if (last < raw.length) segments.push({ start: last, end: raw.length, code: false });
-  if (segments.length === 0) segments.push({ start: 0, end: raw.length, code: false });
-
-  for (const seg of segments) {
-    const slice = raw.slice(seg.start, seg.end);
-    if (seg.code) {
-      parts.push({ text: slice.slice(1, -1), code: true });
-      continue;
-    }
-    // 链接 [text](url)
-    const linkRe = /\[([^\]]+)\]\(([^)]+)\)/g;
-    let ll = 0;
-    let lm: RegExpExecArray | null;
-    while ((lm = linkRe.exec(slice)) !== null) {
-      if (lm.index > ll) pushStyled(slice.slice(ll, lm.index), parts);
-      parts.push({ text: lm[1], link: lm[2] });
-      ll = lm.index + lm[0].length;
-    }
-    if (ll < slice.length) pushStyled(slice.slice(ll), parts);
+  if (last < raw.length) {
+    parts.push({ text: raw.slice(last) });
   }
   return parts;
-}
-
-/** 处理加粗 **x** 和斜体 *x* */
-function pushStyled(text: string, out: InlinePart[]): void {
-  const boldRe = /\*\*([^*]+)\*\*/g;
-  let last = 0;
-  let m: RegExpExecArray | null;
-  while ((m = boldRe.exec(text)) !== null) {
-    if (m.index > last) pushItalic(text.slice(last, m.index), out, false);
-    pushItalic(m[1], out, true);
-    last = m.index + m[0].length;
-  }
-  if (last < text.length) pushItalic(text.slice(last), out, false);
-}
-
-function pushItalic(text: string, out: InlinePart[], bold: boolean): void {
-  const italicRe = /\*([^*]+)\*/g;
-  let last = 0;
-  let m: RegExpExecArray | null;
-  while ((m = italicRe.exec(text)) !== null) {
-    if (m.index > last) {
-      const plain = text.slice(last, m.index);
-      if (plain.trim()) {
-        if (bold) out.push({ text: plain, bold });
-        else out.push({ text: plain });
-      }
-    }
-    out.push({ text: m[1], italic: true, ...(bold ? { bold } : {}) });
-    last = m.index + m[0].length;
-  }
-  if (last < text.length) {
-    const rest = text.slice(last);
-    if (rest.trim()) {
-      if (bold) out.push({ text: rest, bold });
-      else out.push({ text: rest });
-    }
-  }
 }
 
 /** 解析 block 结构，返回行级元素 */
@@ -155,7 +122,7 @@ export function parseBlocks(text: string): Block[] {
         const om = l.match(/^(\d+)[.)]\s+(.+)$/);
         const bm = l.match(/^[-*]\s+(.+)$/);
         if (ordered && om) {
-          listLines.push(om[1]);
+          listLines.push(om[2]);
           i++;
         } else if (!ordered && bm) {
           listLines.push(bm[1]);
