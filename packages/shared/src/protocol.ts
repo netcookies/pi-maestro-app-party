@@ -70,6 +70,12 @@ export interface HostSessionSummary {
   messageCount: number;
   updatedAt: string;
   createdAt?: string;
+  /** 累计 Token 用量（若已聚合） */
+  totalTokens?: number;
+  /** 累计成本（美元） */
+  cost?: number;
+  /** 实时上下文用量（若处于活跃/已打开状态） */
+  context?: { tokens: number | null; contextWindow: number; percent: number | null } | null;
 }
 
 export interface HostSessionList {

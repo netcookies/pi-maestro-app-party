@@ -27,7 +27,7 @@ export default function HostSessionsScreen() {
   const { theme } = useTheme();
   const { t } = useI18n();
   const styles = useMemo(() => makeStyles(theme), [theme]);
-  const { listHostSessions, listLiveSessions, openExistingSession, closeSession, loadSessionHistory, isConnected, connectionState, lastError, hostUrl: connectedHostUrl, state: hostState } = useHost();
+  const { listHostSessions, listLiveSessions, openExistingSession, closeSession, loadSessionHistory, fetchSessionUsage, isConnected, connectionState, lastError, hostUrl: connectedHostUrl, state: hostState } = useHost();
   // 当前已打开的会话（P2-4：open 新会话前先 close 旧的，避免 host 端旧 runner 泄漏）
   const openedSessionRef = useRef<string | null>(null);
   const cfg = getConfig();
@@ -39,6 +39,7 @@ export default function HostSessionsScreen() {
   const [sessions, setSessions] = useState<HostSessionSummary[]>([]);
   const sessionsRef = useRef<HostSessionSummary[]>([]);
   const [liveSessions, setLiveSessions] = useState<Map<string, LiveSessionInfo>>(new Map());
+  const [usageMap, setUsageMap] = useState<Record<string, SessionUsageSummary>>({});
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [loadingMore, setLoadingMore] = useState(false);
@@ -313,6 +314,19 @@ export default function HostSessionsScreen() {
     return set;
   }, [hostState.monitor]);
 
+  // 针对当前活跃会话异步拉取最新详细 usage
+  useEffect(() => {
+    if (!isConnected) return;
+    const activeItems = sessions.filter(isSessionActive);
+    for (const item of activeItems.slice(0, 5)) {
+      if (!usageMap[item.id]) {
+        void fetchSessionUsage(item.id).then((u) => {
+          if (u) setUsageMap((prev) => ({ ...prev, [item.id]: u }));
+        });
+      }
+    }
+  }, [sessions, isConnected, fetchSessionUsage, isSessionActive, usageMap]);
+
   /** 每个 cwd 的最新会话 id（sessions 无全局排序保证，这里自行推导） */
   const latestPerCwd = useMemo(() => {
     const m = new Map<string, HostSessionSummary>();
@@ -412,24 +426,50 @@ export default function HostSessionsScreen() {
 
         {/* 2x2 Bento 便当盒仪表盘核心网格 */}
         <View style={styles.bentoGrid}>
-          {/* 格 1：上下文视窗 (模型视窗容量真实展示) */}
+          {/* 格 1：上下文视窗 (优先真实实时上下文，否则显示模型视窗上限) */}
           <View style={styles.bentoCell}>
             <Text style={styles.bentoCellLabel}>{t.contextLabel}</Text>
-            <Text style={styles.bentoCellValue}>
-              {(() => {
-                if (!s.model) return "--";
-                const maxWindow = s.model.includes("gemini") ? "1000k" : s.model.includes("deepseek") ? "128k" : "200k";
-                return `${maxWindow} ${t.modelWindow}`;
-              })()}
-            </Text>
+            {(() => {
+              const liveUsage = usageMap[s.id];
+              const context = s.context ?? liveUsage?.context;
+              return (
+                <Text style={[styles.bentoCellValue, context?.percent != null && { color: theme.accent }]}>
+                  {(() => {
+                    if (context) {
+                      const pct = typeof context.percent === "number" ? Math.round(context.percent) : null;
+                      const winK = context.contextWindow ? Math.round(context.contextWindow / 1000) : 200;
+                      if (context.tokens != null && pct != null) {
+                        const usedK = Math.round(context.tokens / 1000);
+                        return `${usedK}k / ${winK}k (${pct}%)`;
+                      }
+                      if (pct != null) {
+                        return `${pct}% (${winK}k)`;
+                      }
+                    }
+                    if (!s.model) return "--";
+                    const maxWindow = s.model.includes("gemini") ? "1000k" : s.model.includes("deepseek") ? "128k" : "200k";
+                    return `${maxWindow} ${t.modelWindow}`;
+                  })()}
+                </Text>
+              );
+            })()}
           </View>
 
-          {/* 格 2：Token 消耗 (无真实 telemetry 时真实显示 --) */}
+          {/* 格 2：Token 消耗 (有聚合数据时展示，否则安全展示 --) */}
           <View style={styles.bentoCell}>
             <Text style={styles.bentoCellLabel}>{t.tokensLabel}</Text>
-            <Text style={styles.bentoCellValue}>
-              {"--"}
-            </Text>
+            {(() => {
+              const liveUsage = usageMap[s.id];
+              const totalTokens = s.totalTokens ?? liveUsage?.totalTokens;
+              const cost = s.cost ?? liveUsage?.cost;
+              return (
+                <Text style={styles.bentoCellValue}>
+                  {typeof totalTokens === "number" && totalTokens > 0
+                    ? `${(totalTokens / 1000).toFixed(1)}k ($${(cost ?? 0).toFixed(2)})`
+                    : "--"}
+                </Text>
+              );
+            })()}
           </View>
 
           {/* 格 3：状态 (双语化) */}
@@ -449,9 +489,17 @@ export default function HostSessionsScreen() {
           </View>
         </View>
 
-        {/* 上下文健康细条 */}
+        {/* 上下文健康细条：100% 关联真实 context 消耗百分比 */}
         <View style={styles.contextTrack}>
-          <View style={[styles.contextFill, { width: item.live ? "100%" : "0%", backgroundColor: theme.accent }]} />
+          {(() => {
+            const liveUsage = usageMap[s.id];
+            const context = s.context ?? liveUsage?.context;
+            const pct = typeof context?.percent === "number" ? Math.max(0, Math.min(100, Math.round(context.percent))) : 0;
+            const barColor = pct > 90 ? theme.error : pct > 75 ? theme.warning : theme.accent;
+            return (
+              <View style={[styles.contextFill, { width: `${pct}%`, backgroundColor: barColor }]} />
+            );
+          })()}
         </View>
       </TouchableOpacity>
     );
