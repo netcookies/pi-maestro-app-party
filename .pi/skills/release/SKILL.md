@@ -28,7 +28,7 @@ Before running the script, check the things it cannot:
 1. `git log --oneline <last-tag>..HEAD` — does the change set actually warrant this bump type? Breaking change → major; new feature → minor; fixes only → patch.
 2. README quick-start still works? (deps changed → re-verify install steps)
 3. CHANGELOG "已知限制" section still accurate?
-4. Version fields consistent across `package.json` files and `apps/mobile/app.json`?
+4. Version fields consistent across `package.json` files, `apps/mobile/app.json`, and `apps/mobile/ios/MaestroMobile/Info.plist` (handled automatically via `scripts/bump-version.mjs`)?
 
 ### 2. Run the release script
 
@@ -36,7 +36,7 @@ Before running the script, check the things it cannot:
 node scripts/release.mjs <patch|minor|major> [--yes]
 ```
 
-The script does: clean-worktree check → branch check → `pnpm typecheck && pnpm test` → bump all versions (root/host/mobile/shared `package.json` + `app.json`) → generate CHANGELOG section from Conventional Commits (groups 新增/修复/文档/…, skips release/odyssey/chore-deps noise) → commit `release: v<x.y.z>` → tag → push with tags.
+The script does: clean-worktree check → branch check → `pnpm typecheck && pnpm test` → bump all versions (root/host/mobile/shared `package.json`, `app.json`, and iOS `Info.plist` via `scripts/bump-version.mjs`) → generate CHANGELOG section from Conventional Commits (groups 新增/修复/文档/…, skips release/odyssey/chore-deps noise) → commit `release: v<x.y.z>` → tag → push with tags.
 
 ### 3. Post-release
 

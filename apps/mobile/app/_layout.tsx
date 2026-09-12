@@ -38,7 +38,7 @@ function RootNavigator() {
   const { t } = useI18n();
 
   return (
-    <SafeAreaProvider>
+    <>
       <StatusBar style={theme.bg === "#f7f7f5" || theme.name === "notion" ? "dark" : "light"} />
       <Tabs
         screenOptions={{
@@ -112,7 +112,7 @@ function RootNavigator() {
           }}
         />
       </Tabs>
-    </SafeAreaProvider>
+    </>
   );
 }
 

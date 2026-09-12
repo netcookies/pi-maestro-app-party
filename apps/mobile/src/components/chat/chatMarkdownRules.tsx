@@ -1,4 +1,4 @@
-import React, { useState } from "react";
+import React, { useState, useRef } from "react";
 import {
   Platform,
   Pressable,
@@ -6,10 +6,12 @@ import {
   StyleSheet,
   Text,
   View,
+  Animated,
 } from "react-native";
 import { Highlight, themes } from "prism-react-renderer";
 import type { AppTheme } from "../../theme";
 import { LineIcon } from "../LineIcon";
+import { hapticNotificationSuccess } from "../../utils/haptics";
 import { HEADING_AMBER, isHexColor, getContrastColor } from "./color-utils";
 
 function trimTrailingNewLine(str: string): string {
@@ -25,15 +27,27 @@ interface CustomFenceProps {
 
 function CustomFenceBlock({ code, language, theme, onCopyCode }: CustomFenceProps) {
   const [copied, setCopied] = useState(false);
+  const morphAnim = useRef(new Animated.Value(1)).current;
   const isDark = theme.name.includes("dark");
   const prismTheme = isDark ? themes.oneDark : themes.oneLight;
   const monoFont = Platform.OS === "ios" ? "Menlo" : "monospace";
 
   const handleCopy = () => {
     if (onCopyCode) {
+      void hapticNotificationSuccess();
       onCopyCode(code, language);
+      Animated.sequence([
+        Animated.timing(morphAnim, { toValue: 0.2, duration: 100, useNativeDriver: true }),
+        Animated.spring(morphAnim, { toValue: 1, friction: 5, tension: 120, useNativeDriver: true }),
+      ]).start();
       setCopied(true);
-      setTimeout(() => setCopied(false), 2000);
+      setTimeout(() => {
+        Animated.sequence([
+          Animated.timing(morphAnim, { toValue: 0.2, duration: 100, useNativeDriver: true }),
+          Animated.spring(morphAnim, { toValue: 1, friction: 6, tension: 100, useNativeDriver: true }),
+        ]).start();
+        setCopied(false);
+      }, 2000);
     }
   };
 
@@ -69,14 +83,26 @@ function CustomFenceBlock({ code, language, theme, onCopyCode }: CustomFenceProp
               onPress={handleCopy}
               style={fenceStyles.copyBtn}
             >
-              {copied ? (
-                <Text style={[fenceStyles.copiedText, { color: theme.accent }]}>Copied!</Text>
-              ) : (
-                <View style={fenceStyles.copyRow}>
-                  <LineIcon name="copy" size={13} color={theme.muted} />
-                  <Text style={[fenceStyles.copyLabel, { color: theme.muted }]}>Copy</Text>
-                </View>
-              )}
+              <Animated.View
+                style={{
+                  transform: [{ scale: morphAnim }],
+                  flexDirection: "row",
+                  alignItems: "center",
+                  gap: 4,
+                }}
+              >
+                {copied ? (
+                  <>
+                    <LineIcon name="check" size={13} color={theme.success} strokeWidth={2.5} />
+                    <Text style={[fenceStyles.copiedText, { color: theme.success }]}>Copied!</Text>
+                  </>
+                ) : (
+                  <View style={fenceStyles.copyRow}>
+                    <LineIcon name="copy" size={13} color={theme.muted} />
+                    <Text style={[fenceStyles.copyLabel, { color: theme.muted }]}>Copy</Text>
+                  </View>
+                )}
+              </Animated.View>
             </Pressable>
           )}
         </View>

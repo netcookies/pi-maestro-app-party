@@ -1,0 +1,54 @@
+<svg width="1024" height="1024" viewBox="0 0 1024 1024" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="glyphGrad11" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" stop-color="#FFD37D"/>
+      <stop offset="100%" stop-color="#E29A2E"/>
+    </linearGradient>
+  </defs>
+
+  <!-- 满幅全黑底座，无外边距，彻底杜绝 iOS 系统桌面白边 -->
+  <rect width="1024" height="1024" fill="#171717" />
+
+  <!-- 代码背景纹理 (铺满 1024x1024) -->
+  <g font-family="'Courier New', monospace" font-size="36" opacity="0.65">
+    <text x="32" y="90">
+      <tspan fill="#EE7C7C">import</tspan><tspan fill="#C9C9C7"> agent_toolkit </tspan><tspan fill="#EE7C7C">as</tspan><tspan fill="#C9C9C7"> agent, sys, os, json</tspan>
+    </text>
+    <text x="32" y="150">
+      <tspan fill="#EE7C7C">from</tspan><tspan fill="#C9C9C7"> prompt_lib </tspan><tspan fill="#EE7C7C">import</tspan><tspan fill="#C9C9C7"> Pi, tools, memory, cache</tspan>
+    </text>
+    <text x="32" y="270">
+      <tspan fill="#C792EA">@tool</tspan><tspan fill="#C9C9C7">(name=</tspan><tspan fill="#7EE0A6">"reasoning_engine"</tspan><tspan fill="#C9C9C7">, timeout=30)</tspan>
+    </text>
+    <text x="32" y="330">
+      <tspan fill="#EE7C7C">def</tspan><tspan fill="#66B6EA"> handle_prompt</tspan><tspan fill="#C9C9C7">(query: str, ctx: dict) -&gt; str:</tspan>
+    </text>
+    <text x="32" y="390">
+      <tspan fill="#C9C9C7">    plan = agent.think(query, depth=</tspan><tspan fill="#F2994A">3</tspan><tspan fill="#C9C9C7">, ctx=ctx)</tspan>
+    </text>
+    <text x="32" y="450">
+      <tspan fill="#8B8B88">    # ask pi to reason step by step</tspan>
+    </text>
+    <text x="32" y="510">
+      <tspan fill="#EE7C7C">    return</tspan><tspan fill="#66B6EA"> pi</tspan><tspan fill="#C9C9C7">.execute(plan, verbose=</tspan><tspan fill="#F2994A">True</tspan><tspan fill="#C9C9C7">)</tspan>
+    </text>
+    <text x="32" y="630">
+      <tspan fill="#C9C9C7">prompt = f</tspan><tspan fill="#7EE0A6">"explain {topic} simply"</tspan>
+    </text>
+    <text x="32" y="690">
+      <tspan fill="#66B6EA">pi</tspan><tspan fill="#C9C9C7">.temperature = </tspan><tspan fill="#F2994A">0.7</tspan><tspan fill="#C9C9C7">, top_p=</tspan><tspan fill="#F2994A">0.9</tspan>
+    </text>
+    <text x="32" y="810">
+      <tspan fill="#C9C9C7">response = </tspan><tspan fill="#66B6EA">pi</tspan><tspan fill="#C9C9C7">.ask(prompt, stream=</tspan><tspan fill="#F2994A">True</tspan><tspan fill="#C9C9C7">)</tspan>
+    </text>
+    <text x="32" y="870">
+      <tspan fill="#EE7C7C">if</tspan><tspan fill="#C9C9C7"> response.ok </tspan><tspan fill="#EE7C7C">and</tspan><tspan fill="#C9C9C7"> response.confidence &gt; </tspan><tspan fill="#F2994A">0.8</tspan><tspan fill="#C9C9C7">:</tspan>
+    </text>
+    <text x="32" y="930">
+      <tspan fill="#C9C9C7">    agent.log(</tspan><tspan fill="#7EE0A6">"session_end"</tspan><tspan fill="#C9C9C7">, ok=</tspan><tspan fill="#F2994A">True</tspan><tspan fill="#C9C9C7">)</tspan>
+    </text>
+  </g>
+
+  <!-- 中心金标 Pi -->
+  <text x="512" y="585" text-anchor="middle" font-family="'Courier New', monospace" font-size="320" font-weight="600" fill="url(#glyphGrad11)">Pi</text>
+</svg>

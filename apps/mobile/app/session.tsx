@@ -1,7 +1,7 @@
 import React, { useCallback, useEffect, useRef, useState, useMemo } from "react";
 import {
   View, Text, StyleSheet, FlatList, TextInput, TouchableOpacity, KeyboardAvoidingView, Platform, ActivityIndicator,
-  Animated, AccessibilityInfo, LayoutAnimation, UIManager,
+  Animated, AccessibilityInfo, LayoutAnimation, UIManager, PanResponder, Dimensions,
 } from "react-native";
 import { useLocalSearchParams, useRouter } from "expo-router";
 import { useHost } from "../src/store";
@@ -9,6 +9,7 @@ import { useTheme, MIUIX_RADIUS, MIUIX_TYPE, MIUIX_SPACE, hexToRgba } from "../s
 import { getConfig, loadConfig } from "../src/config";
 import { LineIcon } from "../src/components/LineIcon";
 import { useI18n } from "../src/i18n";
+import { hapticImpactLight } from "../src/utils/haptics";
 import { SafeAreaView, useSafeAreaInsets } from "react-native-safe-area-context";
 import type { TimelineItem } from "@maestro-mobile/shared";
 import { ExtensionUiDialog } from "../src/components/ExtensionUiDialog";
@@ -18,6 +19,7 @@ import { ChatMarkdown } from "../src/components/chat/ChatMarkdown";
 import { splitImageSegments } from "../src/image-paths";
 import { ChatComposer } from "../src/components/ChatComposer";
 import { pickImagesFromLibrary } from "../src/image-picker";
+import { SpringBottomSheet } from "../src/components/SpringBottomSheet";
 
 // Android 需显式开启 LayoutAnimation（模块加载时一次性开启，置于组件外）
 if (Platform.OS === "android" && UIManager.setLayoutAnimationEnabledExperimental) {
@@ -43,6 +45,66 @@ export default function SessionScreen() {
 
   // 优化项 2 落地：全屏独立模型选择子页面状态与缓存加载
   const [inModelSelect, setInModelSelect] = useState(false);
+
+  // 进入页面卡片放大展开全屏物理弹性动画
+  const enterAnim = useRef(new Animated.Value(0)).current;
+  useEffect(() => {
+    Animated.spring(enterAnim, {
+      toValue: 1,
+      friction: 8,
+      tension: 100,
+      useNativeDriver: true,
+    }).start();
+  }, [enterAnim]);
+
+  // 左侧边缘手势向右滑动返回（Edge Swipe to Dismiss）
+  const swipeX = useRef(new Animated.Value(0)).current;
+  const edgePanResponder = useRef(
+    PanResponder.create({
+      onStartShouldSetPanResponder: () => false,
+      onMoveShouldSetPanResponder: (evt, gestureState) => {
+        // 只有在屏幕左侧 50px 边缘区域按住，且向右划时才捕获
+        const isFromLeftEdge = evt.nativeEvent.pageX < 50;
+        return isFromLeftEdge && gestureState.dx > 10 && Math.abs(gestureState.dx) > Math.abs(gestureState.dy);
+      },
+      onPanResponderMove: (_, gestureState) => {
+        if (gestureState.dx > 0) {
+          swipeX.setValue(gestureState.dx);
+        }
+      },
+      onPanResponderRelease: (_, gestureState) => {
+        const { width: screenWidth } = Dimensions.get("window");
+        if (gestureState.dx > 120 || gestureState.vx > 0.8) {
+          void hapticImpactLight();
+          if (inModelSelect) {
+            // 若当前处于模型选择全屏子页面，侧滑仅关闭模型选择层，返回当前会话详情页
+            Animated.spring(swipeX, {
+              toValue: 0,
+              friction: 7,
+              tension: 90,
+              useNativeDriver: true,
+            }).start();
+            setInModelSelect(false);
+          } else {
+            Animated.timing(swipeX, {
+              toValue: screenWidth,
+              duration: 180,
+              useNativeDriver: true,
+            }).start(() => {
+              router.replace("/host-sessions");
+            });
+          }
+        } else {
+          Animated.spring(swipeX, {
+            toValue: 0,
+            friction: 7,
+            tension: 90,
+            useNativeDriver: true,
+          }).start();
+        }
+      },
+    }),
+  ).current;
   const [availableModels, setAvailableModels] = useState<{ id: string; provider: string; name: string; reasoning: boolean; vision: boolean }[]>(cachedModelsList);
   const [modelsLoading, setModelsLoading] = useState(false);
   const [refreshingModels, setRefreshingModels] = useState(false);
@@ -322,7 +384,25 @@ export default function SessionScreen() {
   };
 
   return (
-    <View style={[styles.container, { backgroundColor: theme.headerBg }]}>
+    <Animated.View
+      style={[
+        styles.container,
+        {
+          backgroundColor: theme.headerBg,
+          opacity: enterAnim,
+          transform: [
+            { translateX: swipeX },
+            {
+              scale: enterAnim.interpolate({
+                inputRange: [0, 1],
+                outputRange: [0.94, 1],
+              }),
+            },
+          ],
+        },
+      ]}
+      {...edgePanResponder.panHandlers}
+    >
     <SafeAreaView style={[styles.container, { backgroundColor: theme.headerBg }]} edges={["top", "bottom"]}>
     <KeyboardAvoidingView
       style={[styles.container, { backgroundColor: theme.headerBg }]}
@@ -580,109 +660,108 @@ export default function SessionScreen() {
         />
       )}
 
-      {/* ActionSheet: 思考等级、计划模式、Compact 二次确认 */}
-      {actionSheetType && (
-        <View style={styles.actionSheetOverlay}>
-          <TouchableOpacity style={StyleSheet.absoluteFill} onPress={() => setActionSheetType(null)} />
-          <View style={[styles.actionSheetContent, { backgroundColor: theme.cardBg, borderColor: theme.border }]}>
-            {actionSheetType === "think" && (
-              <View>
-                <View style={styles.sheetHeader}>
-                  <Text style={[styles.sheetTitle, { color: theme.text }]}>{t.thinkLevelTitle}</Text>
-                  <TouchableOpacity onPress={() => setActionSheetType(null)}>
-                    <LineIcon name="x" size={16} color={theme.muted} />
-                  </TouchableOpacity>
-                </View>
-                <View style={{ gap: 6 }}>
-                  {["off", "minimal", "low", "medium", "high", "xhigh", "max"].map((lvl) => (
-                    <TouchableOpacity
-                      key={lvl}
-                      style={[
-                        styles.sheetOption,
-                        { borderColor: thinkLevel === lvl ? theme.accent : theme.border, backgroundColor: theme.inputBg },
-                      ]}
-                      onPress={async () => {
-                        setThinkLevel(lvl);
-                        if (id) await setThinking(id, lvl);
-                        setActionSheetType(null);
-                      }}
-                    >
-                      <Text style={[styles.sheetOptionText, { color: theme.text }]}>{lvl}</Text>
-                      {thinkLevel === lvl && <LineIcon name="check" size={16} color={theme.accent} strokeWidth={2.4} />}
-                    </TouchableOpacity>
-                  ))}
-                </View>
-              </View>
-            )}
-
-            {actionSheetType === "plan" && (
-              <View>
-                <View style={styles.sheetHeader}>
-                  <Text style={[styles.sheetTitle, { color: theme.text }]}>{t.planModeTitle}</Text>
-                  <TouchableOpacity onPress={() => setActionSheetType(null)}>
-                    <LineIcon name="x" size={16} color={theme.muted} />
-                  </TouchableOpacity>
-                </View>
-                <View style={{ gap: 6 }}>
-                  {[
-                    { id: "YOLO", label: "YOLO (极速全自动)" },
-                    { id: "APPROVAL DEFAULT", label: "APPROVAL DEFAULT (默认审批)" },
-                    { id: "APPROVAL acceptEdits", label: "APPROVAL acceptEdits (审批编辑)" },
-                    { id: "APPROVAL donAsk", label: "APPROVAL donAsk (静默兜底)" },
-                    { id: "PLAN", label: "PLAN (只读规划模式)" },
-                  ].map((item) => (
-                    <TouchableOpacity
-                      key={item.id}
-                      style={[
-                        styles.sheetOption,
-                        { borderColor: planMode === item.id ? theme.accent : theme.border, backgroundColor: theme.inputBg },
-                      ]}
-                      onPress={() => {
-                        setPlanMode(item.id);
-                        setActionSheetType(null);
-                      }}
-                    >
-                      <Text style={[styles.sheetOptionText, { color: theme.text }]}>{item.label}</Text>
-                      {planMode === item.id && <LineIcon name="check" size={16} color={theme.accent} strokeWidth={2.4} />}
-                    </TouchableOpacity>
-                  ))}
-                </View>
-              </View>
-            )}
-
-            {actionSheetType === "compact_confirm" && (
-              <View style={{ gap: 12 }}>
-                <View style={styles.sheetHeader}>
-                  <Text style={[styles.sheetTitle, { color: theme.text }]}>{t.compactTitle}</Text>
-                  <TouchableOpacity onPress={() => setActionSheetType(null)}>
-                    <LineIcon name="x" size={16} color={theme.muted} />
-                  </TouchableOpacity>
-                </View>
-                <Text style={[styles.sheetDesc, { color: theme.muted }]}>
-                  {t.compactDesc}
-                </Text>
-                <View style={{ flexDirection: "row", gap: 10, marginTop: 4 }}>
-                  <TouchableOpacity
-                    style={[styles.confirmBtn, { backgroundColor: theme.buttonPrimary }]}
-                    onPress={async () => {
-                      setActionSheetType(null);
-                      if (id) await compactSession(id);
-                    }}
-                  >
-                    <Text style={styles.confirmBtnText}>{t.compactConfirm}</Text>
-                  </TouchableOpacity>
-                  <TouchableOpacity
-                    style={[styles.cancelBtn, { borderColor: theme.border, backgroundColor: theme.inputBg }]}
-                    onPress={() => setActionSheetType(null)}
-                  >
-                    <Text style={[styles.cancelBtnText, { color: theme.muted }]}>{t.cancel}</Text>
-                  </TouchableOpacity>
-                </View>
-              </View>
-            )}
+      {/* 底部物理弹簧 ActionSheet: 思考等级、计划模式、Compact 二次确认 */}
+      <SpringBottomSheet
+        visible={Boolean(actionSheetType)}
+        onClose={() => setActionSheetType(null)}
+        contentHeight={actionSheetType === "think" ? 380 : actionSheetType === "plan" ? 320 : 200}
+      >
+        {actionSheetType === "think" && (
+          <View>
+            <View style={styles.sheetHeader}>
+              <Text style={[styles.sheetTitle, { color: theme.text }]}>{t.thinkLevelTitle}</Text>
+              <TouchableOpacity onPress={() => setActionSheetType(null)}>
+                <LineIcon name="x" size={16} color={theme.muted} />
+              </TouchableOpacity>
+            </View>
+            <View style={{ gap: 6 }}>
+              {["off", "minimal", "low", "medium", "high", "xhigh", "max"].map((lvl) => (
+                <TouchableOpacity
+                  key={lvl}
+                  style={[
+                    styles.sheetOption,
+                    { borderColor: thinkLevel === lvl ? theme.accent : theme.border, backgroundColor: theme.inputBg },
+                  ]}
+                  onPress={async () => {
+                    setThinkLevel(lvl);
+                    if (id) await setThinking(id, lvl);
+                    setActionSheetType(null);
+                  }}
+                >
+                  <Text style={[styles.sheetOptionText, { color: theme.text }]}>{lvl}</Text>
+                  {thinkLevel === lvl && <LineIcon name="check" size={16} color={theme.accent} strokeWidth={2.4} />}
+                </TouchableOpacity>
+              ))}
+            </View>
           </View>
-        </View>
-      )}
+        )}
+
+        {actionSheetType === "plan" && (
+          <View>
+            <View style={styles.sheetHeader}>
+              <Text style={[styles.sheetTitle, { color: theme.text }]}>{t.planModeTitle}</Text>
+              <TouchableOpacity onPress={() => setActionSheetType(null)}>
+                <LineIcon name="x" size={16} color={theme.muted} />
+              </TouchableOpacity>
+            </View>
+            <View style={{ gap: 6 }}>
+              {[
+                { id: "YOLO", label: "YOLO (极速全自动)" },
+                { id: "APPROVAL DEFAULT", label: "APPROVAL DEFAULT (默认审批)" },
+                { id: "APPROVAL acceptEdits", label: "APPROVAL acceptEdits (审批编辑)" },
+                { id: "APPROVAL donAsk", label: "APPROVAL donAsk (静默兜底)" },
+                { id: "PLAN", label: "PLAN (只读规划模式)" },
+              ].map((item) => (
+                <TouchableOpacity
+                  key={item.id}
+                  style={[
+                    styles.sheetOption,
+                    { borderColor: planMode === item.id ? theme.accent : theme.border, backgroundColor: theme.inputBg },
+                  ]}
+                  onPress={() => {
+                    setPlanMode(item.id);
+                    setActionSheetType(null);
+                  }}
+                >
+                  <Text style={[styles.sheetOptionText, { color: theme.text }]}>{item.label}</Text>
+                  {planMode === item.id && <LineIcon name="check" size={16} color={theme.accent} strokeWidth={2.4} />}
+                </TouchableOpacity>
+              ))}
+            </View>
+          </View>
+        )}
+
+        {actionSheetType === "compact_confirm" && (
+          <View style={{ gap: 12 }}>
+            <View style={styles.sheetHeader}>
+              <Text style={[styles.sheetTitle, { color: theme.text }]}>{t.compactTitle}</Text>
+              <TouchableOpacity onPress={() => setActionSheetType(null)}>
+                <LineIcon name="x" size={16} color={theme.muted} />
+              </TouchableOpacity>
+            </View>
+            <Text style={[styles.sheetDesc, { color: theme.muted }]}>
+              {t.compactDesc}
+            </Text>
+            <View style={{ flexDirection: "row", gap: 10, marginTop: 4 }}>
+              <TouchableOpacity
+                style={[styles.confirmBtn, { backgroundColor: theme.buttonPrimary }]}
+                onPress={async () => {
+                  setActionSheetType(null);
+                  if (id) await compactSession(id);
+                }}
+              >
+                <Text style={styles.confirmBtnText}>{t.compactConfirm}</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={[styles.cancelBtn, { borderColor: theme.border, backgroundColor: theme.inputBg }]}
+                onPress={() => setActionSheetType(null)}
+              >
+                <Text style={[styles.cancelBtnText, { color: theme.muted }]}>{t.cancel}</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        )}
+      </SpringBottomSheet>
     </KeyboardAvoidingView>
     </SafeAreaView>
 
@@ -836,7 +915,7 @@ export default function SessionScreen() {
         </View>
       </View>
     )}
-    </View>
+    </Animated.View>
   );
 }
 

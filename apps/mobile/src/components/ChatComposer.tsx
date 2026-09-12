@@ -12,10 +12,11 @@
 import React, { useState, useRef, useEffect } from "react";
 import {
   View, Text, TextInput, TouchableOpacity, StyleSheet, Modal, FlatList, Image, ScrollView,
-  Animated, AccessibilityInfo,
+  Animated, AccessibilityInfo, Pressable, KeyboardAvoidingView, Platform,
 } from "react-native";
 import { useTheme } from "../theme";
 import { LineIcon } from "./LineIcon";
+import { hapticImpactMedium } from "../utils/haptics";
 
 export interface ComposerActions {
   send(text: string, images?: { data: string; mime: string }[]): Promise<void>;
@@ -68,6 +69,7 @@ export function ChatComposer({ actions, currentModel, sending, skills = [], plac
   // fsPanel 内嵌面板进出场（RN 内置 Animated）
   const panelAnim = useRef(new Animated.Value(0)).current;
   const panelCloseTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const flyAnim = useRef(new Animated.Value(0)).current;
 
   useEffect(() => {
     if (fsPanel === null) return;
@@ -98,6 +100,24 @@ export function ChatComposer({ actions, currentModel, sending, skills = [], plac
   // 发送失败时恢复草稿；actions.send 在 session 侧已 catch 不一定 reject，这里防御性兜底
   const handleSend = async () => {
     if (!canSend || !actions.send) return;
+    void hapticImpactMedium();
+
+    // 小飞机起飞动效（JS 驱动，避免与原生 SVG 发生图层树断言冲突）
+    if (!reduceMotion) {
+      Animated.sequence([
+        Animated.timing(flyAnim, {
+          toValue: 1,
+          duration: 200,
+          useNativeDriver: false,
+        }),
+        Animated.timing(flyAnim, {
+          toValue: 0,
+          duration: 180,
+          useNativeDriver: false,
+        }),
+      ]).start();
+    }
+
     const msg = text.trim();
     const imgs = [...images];
     setText("");
@@ -249,7 +269,36 @@ export function ChatComposer({ actions, currentModel, sending, skills = [], plac
           onPress={() => void handleSend()}
           disabled={!canSend || sending}
         >
-          <LineIcon name="send" size={16} color="#fff" strokeWidth={2.2} />
+          <Animated.View
+            style={{
+              transform: [
+                {
+                  translateX: flyAnim.interpolate({
+                    inputRange: [0, 0.6, 1],
+                    outputRange: [0, 10, 0],
+                  }),
+                },
+                {
+                  translateY: flyAnim.interpolate({
+                    inputRange: [0, 0.6, 1],
+                    outputRange: [0, -10, 0],
+                  }),
+                },
+                {
+                  scale: flyAnim.interpolate({
+                    inputRange: [0, 0.6, 1],
+                    outputRange: [1, 0.6, 1],
+                  }),
+                },
+              ],
+              opacity: flyAnim.interpolate({
+                inputRange: [0, 0.5, 0.7, 1],
+                outputRange: [1, 0, 0, 1],
+              }),
+            }}
+          >
+            <LineIcon name="send" size={16} color="#fff" strokeWidth={2.2} />
+          </Animated.View>
         </TouchableOpacity>
       </View>
 
@@ -443,46 +492,54 @@ export function ChatComposer({ actions, currentModel, sending, skills = [], plac
 
       <Modal visible={showSkills} transparent animationType="slide" onRequestClose={() => setShowSkills(false)}>
         <View style={styles.modalOverlay}>
-          <View style={[styles.modalSheet, { backgroundColor: theme.cardBg, borderColor: theme.border }]}>
-            <View style={styles.modalHeader}>
-              <Text style={[styles.modalTitle, { color: theme.text }]}>Skills</Text>
-              <TouchableOpacity onPress={() => setShowSkills(false)} accessibilityRole="button" accessibilityLabel="关闭"><LineIcon name="x" size={14} color={theme.muted} strokeWidth={2.2} /></TouchableOpacity>
-            </View>
-            <TextInput
-              style={[styles.skillSearch, { backgroundColor: theme.inputBg, color: theme.text, borderColor: theme.border }]}
-              value={skillQuery}
-              onChangeText={setSkillQuery}
-              placeholder="Search skills..."
-              placeholderTextColor={theme.dim}
-              autoCapitalize="none"
-              autoFocus
-            />
-            <FlatList
-              data={skills
-                .map((s) => (typeof s === "string" ? { name: s, description: undefined } : s))
-                .filter((s) => s.name.toLowerCase().includes(skillQuery.toLowerCase()))}
-              keyExtractor={(s) => s.name}
-              renderItem={({ item }) => (
-                <TouchableOpacity
-                  style={[styles.skillItem, { borderBottomColor: theme.border }]}
-                  onPress={() => { setText(`/skill:${item.name} `); setShowSkills(false); }}
-                >
-                  <Text style={[styles.skillName, { color: theme.text }]} numberOfLines={1}>
-                    /skill:{item.name}
-                  </Text>
-                  {item.description ? (
-                    <Text style={[styles.skillDesc, { color: theme.muted }]} numberOfLines={1}>
-                      {item.description}
+          {/* 点击外部半透明遮罩关闭抽屉 */}
+          <Pressable style={StyleSheet.absoluteFill} onPress={() => setShowSkills(false)} />
+          <KeyboardAvoidingView
+            behavior={Platform.OS === "ios" ? "padding" : "height"}
+            style={{ width: "100%" }}
+          >
+            <View style={[styles.modalSheet, { backgroundColor: theme.cardBg, borderColor: theme.border }]}>
+              <View style={styles.modalHeader}>
+                <Text style={[styles.modalTitle, { color: theme.text }]}>Skills</Text>
+                <TouchableOpacity onPress={() => setShowSkills(false)} accessibilityRole="button" accessibilityLabel="关闭"><LineIcon name="x" size={14} color={theme.muted} strokeWidth={2.2} /></TouchableOpacity>
+              </View>
+              <FlatList
+                data={skills
+                  .map((s) => (typeof s === "string" ? { name: s, description: undefined } : s))
+                  .filter((s) => s.name.toLowerCase().includes(skillQuery.toLowerCase()))}
+                keyExtractor={(s) => s.name}
+                renderItem={({ item }) => (
+                  <TouchableOpacity
+                    style={[styles.skillItem, { borderBottomColor: theme.border }]}
+                    onPress={() => { setText(`/skill:${item.name} `); setShowSkills(false); }}
+                  >
+                    <Text style={[styles.skillName, { color: theme.text }]} numberOfLines={1}>
+                      /skill:{item.name}
                     </Text>
-                  ) : null}
-                </TouchableOpacity>
-              )}
-              ListEmptyComponent={
-                <Text style={[styles.modalEmpty, { color: theme.muted }]}>No skills found</Text>
-              }
-              style={{ maxHeight: 340 }}
-            />
-          </View>
+                    {item.description ? (
+                      <Text style={[styles.skillDesc, { color: theme.muted }]} numberOfLines={1}>
+                        {item.description}
+                      </Text>
+                    ) : null}
+                  </TouchableOpacity>
+                )}
+                ListEmptyComponent={
+                  <Text style={[styles.modalEmpty, { color: theme.muted }]}>No skills found</Text>
+                }
+                style={{ maxHeight: 260 }}
+                keyboardShouldPersistTaps="handled"
+              />
+              {/* 搜索框移到下方，输入法弹出时始终紧贴键盘上方，绝不遮挡搜索结果列表 */}
+              <TextInput
+                style={[styles.skillSearch, { backgroundColor: theme.inputBg, color: theme.text, borderColor: theme.border, marginTop: 10, marginBottom: 4 }]}
+                value={skillQuery}
+                onChangeText={setSkillQuery}
+                placeholder="Search skills..."
+                placeholderTextColor={theme.dim}
+                autoCapitalize="none"
+              />
+            </View>
+          </KeyboardAvoidingView>
         </View>
       </Modal>
 

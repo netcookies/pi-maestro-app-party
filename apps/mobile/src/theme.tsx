@@ -191,6 +191,8 @@ export interface ThemeContextValue {
   themeNames: string[];
   customAccent: string;
   setCustomAccent: (color: string) => void;
+  appearanceChoice: AppearanceChoice;
+  setAppearanceChoice: (choice: AppearanceChoice) => void;
 }
 
 const ThemeContext = createContext<ThemeContextValue | null>(null);
@@ -240,6 +242,18 @@ export function ThemeProvider({ children }: { children: React.ReactNode }) {
     }
   }, [choice, systemScheme]);
 
+  const setAppearanceChoice = useCallback((newChoice: AppearanceChoice) => {
+    setChoice(newChoice);
+    void AsyncStorage.setItem(APPEARANCE_CHOICE_KEY, newChoice).catch(() => {});
+    if (newChoice === "auto") {
+      setThemeName(systemScheme === "dark" ? "miuix-dark" : "miuix-light");
+    } else if (newChoice === "dark") {
+      setThemeName("miuix-dark");
+    } else {
+      setThemeName("miuix-light");
+    }
+  }, [systemScheme]);
+
   const setTheme = useCallback((name: string) => {
     if (!THEMES[name]) return;
     setThemeName(name);
@@ -269,8 +283,10 @@ export function ThemeProvider({ children }: { children: React.ReactNode }) {
       themeNames: Object.keys(THEMES),
       customAccent,
       setCustomAccent,
+      appearanceChoice: choice,
+      setAppearanceChoice,
     };
-  }, [themeName, setTheme, customAccent, setCustomAccent]);
+  }, [themeName, setTheme, customAccent, setCustomAccent, choice, setAppearanceChoice]);
 
   return <ThemeContext.Provider value={value}>{children}</ThemeContext.Provider>;
 }

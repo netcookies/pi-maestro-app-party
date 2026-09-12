@@ -8,7 +8,7 @@
  * Pi / pi-maestro-flow / Maestro CLI 版本协议未提供，显示「待 Host 接入」，不编造。
  */
 import React, { useMemo, useState, useEffect } from "react";
-import { View, Text, StyleSheet, ScrollView, TouchableOpacity, TextInput } from "react-native";
+import { View, Text, StyleSheet, ScrollView, TouchableOpacity, TextInput, Animated } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { useRouter } from "expo-router";
 import { useHost } from "../src/store";
@@ -17,14 +17,16 @@ import { DEFAULT_CONFIG, getConfig, updateConfig, loadConfig, type AppConfig } f
 import { MiuixSwitch } from "../src/components/MiuixSwitch";
 import { MiuixSlider } from "../src/components/MiuixSlider";
 import { LineIcon } from "../src/components/LineIcon";
+import { useTabSwipe } from "../src/hooks/useTabSwipe";
 import { useI18n } from "../src/i18n";
+import { PulsingDot } from "../src/components/PulsingDot";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { HOST_CONN_KEY } from "../src/paired-hosts";
 
 export default function SettingsScreen() {
   const router = useRouter();
   const { connectionState, isConnected, state, hostUrl: connectedHostUrl, token: connectedToken, connect, disconnect } = useHost();
-  const { theme, themeName, setTheme, customAccent, setCustomAccent } = useTheme();
+  const { theme, themeName, setTheme, customAccent, setCustomAccent, appearanceChoice, setAppearanceChoice } = useTheme();
   const { lang, langChoice, t, setLanguageChoice } = useI18n();
 
   const configFields = useMemo(() => [
@@ -40,15 +42,6 @@ export default function SettingsScreen() {
   const [notifAttention, setNotifAttention] = useState(true);
   const [askHaptic, setAskHaptic] = useState(true);
   const [wifiOnly, setWifiOnly] = useState(false);
-
-  // 外观模式：直接维护精准的响应式状态，杜绝推导失误
-  const [appearanceChoice, setAppearanceChoiceState] = useState<"auto" | "light" | "dark">("auto");
-
-  useEffect(() => {
-    void import("../src/config").then(({ getAppearanceChoice }) => {
-      setAppearanceChoiceState(getAppearanceChoice());
-    });
-  }, []);
 
   const [hostUrl, setHostUrl] = useState(connectedHostUrl);
   const [token, setToken] = useState(connectedToken ?? "");
@@ -80,34 +73,37 @@ export default function SettingsScreen() {
   };
 
   const meta = state.hostStatusMeta;
+  const { panHandlers, animatedStyle } = useTabSwipe({ leftRoute: "/monitor" });
 
   return (
-    <View style={[styles.container, { backgroundColor: theme.bg }]}>
-      {/* 统一定制顶栏：顶部状态栏背景与 Header 融为一体，消除灰色断层 */}
-      <SafeAreaView edges={["top"]} style={{ backgroundColor: theme.headerBg }}>
-        <View style={[styles.topHeader, { borderBottomColor: theme.border }]}>
-          <View>
-            <Text style={[styles.topHeaderTitle, { color: theme.text }]}>{t.tabSettings}</Text>
-            <Text style={[styles.topHeaderSub, { color: theme.muted }]}>
-              {t.tabSettings === "设置" ? "偏好、服务器与诊断" : "Preferences, Server & Diagnostics"}
-            </Text>
+    <Animated.View style={[styles.container, animatedStyle, { backgroundColor: theme.bg }]} {...panHandlers}>
+      {/* 统一定制顶栏：顶部状态栏背景与 Header 融为一体，只有下方微阴影 */}
+      <View style={[styles.headerContainer, { backgroundColor: theme.headerBg, borderBottomColor: theme.border }]}>
+        <SafeAreaView edges={["top"]} style={{ backgroundColor: theme.headerBg }}>
+          <View style={styles.topHeader}>
+            <View>
+              <Text style={[styles.topHeaderTitle, { color: theme.text }]}>{t.tabSettings}</Text>
+              <Text style={[styles.topHeaderSub, { color: theme.muted }]}>
+                {t.tabSettings === "设置" ? "偏好、服务器与诊断" : "Preferences, Server & Diagnostics"}
+              </Text>
+            </View>
+            <View
+              style={[
+                styles.topHeaderOnlineBadge,
+                {
+                  borderColor: isConnected ? "rgba(16, 185, 129, 0.4)" : "rgba(239, 68, 68, 0.4)",
+                  backgroundColor: isConnected ? "rgba(16, 185, 129, 0.15)" : "rgba(239, 68, 68, 0.15)",
+                },
+              ]}
+            >
+              <PulsingDot color={isConnected ? theme.success : theme.error} size={6} active={isConnected} />
+              <Text style={[styles.topHeaderOnlineText, { color: isConnected ? theme.success : theme.error }]}>
+                {isConnected ? t.onlineBadge : t.offlineBadge}
+              </Text>
+            </View>
           </View>
-          <View
-            style={[
-              styles.topHeaderOnlineBadge,
-              {
-                borderColor: isConnected ? "rgba(16, 185, 129, 0.4)" : "rgba(239, 68, 68, 0.4)",
-                backgroundColor: isConnected ? "rgba(16, 185, 129, 0.15)" : "rgba(239, 68, 68, 0.15)",
-              },
-            ]}
-          >
-            <View style={[styles.topHeaderGreenDot, { backgroundColor: isConnected ? theme.success : theme.error }]} />
-            <Text style={[styles.topHeaderOnlineText, { color: isConnected ? theme.success : theme.error }]}>
-              {isConnected ? t.onlineBadge : t.offlineBadge}
-            </Text>
-          </View>
-        </View>
-      </SafeAreaView>
+        </SafeAreaView>
+      </View>
 
       <ScrollView style={{ flex: 1 }} contentContainerStyle={styles.content}>
         {/* 卡片 1：外观模式 */}
@@ -138,12 +134,10 @@ export default function SettingsScreen() {
                   ]}
                   onPress={() => {
                     const choice = seg.key as "auto" | "light" | "dark";
-                    setAppearanceChoiceState(choice);
-                    void import("../src/config").then(({ setAppearanceChoice }) => {
-                      setAppearanceChoice(choice);
+                    setAppearanceChoice(choice);
+                    void import("../src/config").then(({ setAppearanceChoice: setCfgChoice }) => {
+                      setCfgChoice(choice);
                     });
-                    if (choice === "dark") setTheme("miuix-dark");
-                    else if (choice === "light") setTheme("miuix-light");
                   }}
                   accessibilityRole="button"
                   accessibilityState={{ selected: active }}
@@ -210,14 +204,14 @@ export default function SettingsScreen() {
           </View>
         </View>
 
-        {/* 卡片 2：系统语言 */}
+        {/* 卡片 2：系统语言 (与外观模式一致的上下结构卡片，国旗 emoji 与跟随系统图标) */}
         <View style={[styles.prefGroup, { backgroundColor: theme.cardBg, borderColor: theme.border }]}>
           <Text style={styles.cardHeaderTitle}>{t.secLanguage}</Text>
           <View style={[styles.segWrap, { backgroundColor: theme.cardInner ?? theme.secondaryContainer ?? theme.inputBg, marginBottom: 0 }]}>
             {[
-              { key: "auto", label: t.tabSettings === "设置" ? "跟随系统 (Auto)" : "System (Auto)" },
-              { key: "zh", label: "简体中文" },
-              { key: "en", label: "English" },
+              { key: "auto", label: t.tabSettings === "设置" ? "跟随系统" : "System", type: "icon" as const, icon: "smartphone" as const },
+              { key: "zh", label: "简体中文", type: "emoji" as const, emoji: "🇨🇳" },
+              { key: "en", label: "English", type: "emoji" as const, emoji: "🇺🇸" },
             ].map((item) => {
               const active = langChoice === item.key;
               return (
@@ -237,7 +231,18 @@ export default function SettingsScreen() {
                   onPress={() => setLanguageChoice(item.key as "auto" | "zh" | "en")}
                   accessibilityRole="button"
                   accessibilityState={{ selected: active }}
+                  accessibilityLabel={`语言：${item.label}`}
                 >
+                  {item.type === "icon" ? (
+                    <LineIcon
+                      name={item.icon}
+                      size={14}
+                      color={active ? "#FFFFFF" : theme.muted}
+                      strokeWidth={active ? 2.2 : 1.8}
+                    />
+                  ) : (
+                    <Text style={{ fontSize: 14, lineHeight: 16 }}>{item.emoji}</Text>
+                  )}
                   <Text
                     style={[
                       styles.segText,
@@ -480,7 +485,7 @@ export default function SettingsScreen() {
           </View>
         </View>
       )}
-    </View>
+    </Animated.View>
   );
 }
 
@@ -494,13 +499,23 @@ function makeStyles(theme: ReturnType<typeof useTheme>["theme"]) {
       fontFamily: "monospace",
       marginBottom: 12,
     },
+    headerContainer: {
+      backgroundColor: theme.headerBg,
+      borderBottomWidth: StyleSheet.hairlineWidth,
+      borderBottomColor: theme.border,
+      shadowColor: "#000",
+      shadowOffset: { width: 0, height: 2 },
+      shadowOpacity: 0.06,
+      shadowRadius: 3,
+      elevation: 3,
+      zIndex: 20,
+    },
     topHeader: {
       flexDirection: "row",
       justifyContent: "space-between",
       alignItems: "center",
       paddingHorizontal: 20,
       paddingVertical: 12,
-      borderBottomWidth: StyleSheet.hairlineWidth,
     },
     topHeaderTitle: { fontSize: 20, fontWeight: "700" },
     topHeaderSub: { fontSize: 11, fontFamily: "monospace", marginTop: 2 },

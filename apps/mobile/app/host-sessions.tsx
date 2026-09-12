@@ -1,6 +1,7 @@
 import React, { useEffect, useState, useCallback, useMemo, useRef } from "react";
 import {
   View, Text, StyleSheet, FlatList, TouchableOpacity, ActivityIndicator, Alert, TextInput,
+  KeyboardAvoidingView, Platform, Animated,
 } from "react-native";
 import { useFocusEffect, useRouter } from "expo-router";
 import { useHost } from "../src/store";
@@ -9,6 +10,9 @@ import { getConfig, loadConfig } from "../src/config";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { LineIcon } from "../src/components/LineIcon";
+import { SpringCard } from "../src/components/SpringCard";
+import { PulsingDot } from "../src/components/PulsingDot";
+import { useTabSwipe } from "../src/hooks/useTabSwipe";
 import { useI18n, formatRelativeTime } from "../src/i18n";
 import type { HostSessionSummary, LiveSessionInfo } from "@maestro-mobile/shared";
 import { canLoadMoreSessions, isLoadMoreResponseCurrent, isTargetedResponseCurrent, mergeHostSessionPage, mergeTargetedHostSessions, shouldBlockSessionListError, shouldRequestTargetedSummaries, type TargetedCapability } from "../src/host-session-pagination";
@@ -21,6 +25,47 @@ type TabKey = "active" | "all";
 type Row =
   | { type: "group"; key: string; cwd: string; count: number }
   | { type: "session"; key: string; session: HostSessionSummary; live: boolean; opening: boolean };
+
+function StaggerCard({ index, tabKey, children }: { index: number; tabKey: string; children: React.ReactNode }) {
+  const anim = useRef(new Animated.Value(0)).current;
+
+  useEffect(() => {
+    anim.setValue(0);
+    const timer = setTimeout(() => {
+      Animated.spring(anim, {
+        toValue: 1,
+        friction: 7,
+        tension: 90,
+        useNativeDriver: true,
+      }).start();
+    }, Math.min(index, 6) * 30);
+    return () => clearTimeout(timer);
+  }, [tabKey, index]);
+
+  return (
+    <Animated.View
+      style={{
+        opacity: anim,
+        transform: [
+          {
+            translateY: anim.interpolate({
+              inputRange: [0, 1],
+              outputRange: [20, 0],
+            }),
+          },
+          {
+            scale: anim.interpolate({
+              inputRange: [0, 1],
+              outputRange: [0.96, 1],
+            }),
+          },
+        ],
+      }}
+    >
+      {children}
+    </Animated.View>
+  );
+}
 
 export default function HostSessionsScreen() {
   const router = useRouter();
@@ -286,15 +331,20 @@ export default function HostSessionsScreen() {
     if (opening) return;
     setOpening(s.id);
     try {
-      const sessionId = await openExistingSession(s.path, s.cwd);
-      // host 端同样有重复 open 先 dispose 旧的修复；这里显式 close 旧会话做双保险
+      // 增加 6 秒超时防卡死保护，网络慢时友好提示而非永远卡住
+      const sessionId = await Promise.race([
+        openExistingSession(s.path, s.cwd),
+        new Promise<string>((_, reject) =>
+          setTimeout(() => reject(new Error("打开会话连接超时，请检查 Host 运行状态")), 6000)
+        ),
+      ]);
       const previous = openedSessionRef.current;
       if (previous && previous !== sessionId) {
         void closeSession(previous);
       }
       openedSessionRef.current = sessionId;
-      // 拉取历史 timeline（回放）
-      await loadSessionHistory(sessionId);
+      // 历史记录异步拉取，不阻塞界面立刻推入路由
+      void loadSessionHistory(sessionId).catch(() => {});
       router.push({ pathname: "/session", params: { id: sessionId } });
     } catch (e) {
       Alert.alert("打开失败", e instanceof Error ? e.message : "未知错误");
@@ -383,7 +433,7 @@ export default function HostSessionsScreen() {
     return rows;
   }, [filtered, liveSessions, opening]);
 
-  const renderItem = ({ item }: { item: Row }) => {
+  const renderItem = ({ item, index }: { item: Row; index: number }) => {
     if (item.type === "group") {
       return (
         <View style={styles.group}>
@@ -396,16 +446,21 @@ export default function HostSessionsScreen() {
     }
     const s = item.session;
     return (
-      <TouchableOpacity
-        style={[styles.sessionItem, item.live && styles.sessionItemLive]}
-        onPress={() => void handleOpen(s)}
-        disabled={item.opening}
-        accessibilityRole="button"
-      >
+      <StaggerCard index={index} tabKey={tab}>
+        <SpringCard
+          style={[styles.sessionItem, item.live && styles.sessionItemLive]}
+          onPress={() => void handleOpen(s)}
+          disabled={item.opening}
+          accessibilityRole="button"
+        >
         {/* 卡片顶行：状态指示点 + 标题 (主标题为文件夹名称) + 模型徽标 */}
         <View style={styles.sessionHeader}>
           <View style={styles.sessionHeaderLeft}>
-            <View style={[styles.liveDotBase, item.live ? styles.liveDotActive : styles.liveDotIdle]} />
+            <PulsingDot
+              color={item.live ? theme.success : theme.dim}
+              size={8}
+              active={item.live}
+            />
             <Text style={styles.sessionTitle} numberOfLines={1}>
               {s.cwdName || (s.cwd ? s.cwd.replace(/\/$/, "").split("/").pop() : null) || s.name || s.title || "(未命名项目)"}
             </Text>
@@ -501,7 +556,8 @@ export default function HostSessionsScreen() {
             );
           })()}
         </View>
-      </TouchableOpacity>
+        </SpringCard>
+      </StaggerCard>
     );
   };
 
@@ -525,33 +581,37 @@ export default function HostSessionsScreen() {
     </View>
   );
 
+  const { panHandlers, animatedStyle } = useTabSwipe({ leftRoute: "/", rightRoute: "/monitor" });
+
   return (
-    <View style={[styles.container, { backgroundColor: theme.bg }]}>
-      {/* 与原型精准一致的顶栏：顶部状态栏背景与 Header 融为一体，消除灰色断层 */}
-      <SafeAreaView edges={["top"]} style={{ backgroundColor: theme.headerBg }}>
-        <View style={[styles.topHeader, { borderBottomColor: theme.border }]}>
-          <View>
-            <Text style={[styles.topHeaderTitle, { color: theme.text }]}>{t.tabSessions}</Text>
-            <Text style={[styles.topHeaderSub, { color: theme.muted }]}>
-              {connectedHostUrl ? (connectedHostUrl.replace(/^wss?:\/\//, "").replace(/\/ws$/, "").split(":")[0]) : "100.98.197.10"} ({tab === "active" ? t.filterActive : t.filterAll})
-            </Text>
+    <Animated.View style={[styles.container, animatedStyle, { backgroundColor: theme.bg }]} {...panHandlers}>
+      {/* 统一定制顶栏：顶部状态栏背景与 Header 融为一体，只有下方微阴影 */}
+      <View style={[styles.headerContainer, { backgroundColor: theme.headerBg, borderBottomColor: theme.border }]}>
+        <SafeAreaView edges={["top"]} style={{ backgroundColor: theme.headerBg }}>
+          <View style={styles.topHeader}>
+            <View>
+              <Text style={[styles.topHeaderTitle, { color: theme.text }]}>{t.tabSessions}</Text>
+              <Text style={[styles.topHeaderSub, { color: theme.muted }]}>
+                {connectedHostUrl ? (connectedHostUrl.replace(/^wss?:\/\//, "").replace(/\/ws$/, "").split(":")[0]) : "100.98.197.10"} ({tab === "active" ? t.filterActive : t.filterAll})
+              </Text>
+            </View>
+            <View
+              style={[
+                styles.topHeaderOnlineBadge,
+                {
+                  borderColor: isConnected ? "rgba(16, 185, 129, 0.4)" : "rgba(239, 68, 68, 0.4)",
+                  backgroundColor: isConnected ? "rgba(16, 185, 129, 0.15)" : "rgba(239, 68, 68, 0.15)",
+                },
+              ]}
+            >
+              <PulsingDot color={isConnected ? theme.success : theme.error} size={6} active={isConnected} />
+              <Text style={[styles.topHeaderOnlineText, { color: isConnected ? theme.success : theme.error }]}>
+                {isConnected ? t.onlineBadge : t.offlineBadge}
+              </Text>
+            </View>
           </View>
-          <View
-            style={[
-              styles.topHeaderOnlineBadge,
-              {
-                borderColor: isConnected ? "rgba(16, 185, 129, 0.4)" : "rgba(239, 68, 68, 0.4)",
-                backgroundColor: isConnected ? "rgba(16, 185, 129, 0.15)" : "rgba(239, 68, 68, 0.15)",
-              },
-            ]}
-          >
-            <View style={[styles.topHeaderGreenDot, { backgroundColor: isConnected ? theme.success : theme.error }]} />
-            <Text style={[styles.topHeaderOnlineText, { color: isConnected ? theme.success : theme.error }]}>
-              {isConnected ? t.onlineBadge : t.offlineBadge}
-            </Text>
-          </View>
-        </View>
-      </SafeAreaView>
+        </SafeAreaView>
+      </View>
 
       {refreshError && sessions.length > 0 ? (
         <View style={styles.inlineError}>
@@ -624,9 +684,13 @@ export default function HostSessionsScreen() {
         </View>
       )}
 
-      {/* 底部原位弹出的整行全宽搜索框 */}
+      {/* 底部原位弹出的整行全宽搜索框（增加键盘避让，键盘弹起时始终悬浮在键盘上方） */}
       {searchBarOpen && (
-        <View style={styles.searchBarPopupWrap}>
+        <KeyboardAvoidingView
+          behavior={Platform.OS === "ios" ? "padding" : "height"}
+          style={styles.searchBarPopupWrap}
+          keyboardVerticalOffset={Platform.OS === "ios" ? 16 : 0}
+        >
           <View style={[styles.searchBarPopup, { backgroundColor: theme.cardBg, borderColor: theme.accent }]}>
             <LineIcon name="search" size={16} color={theme.muted} style={{ marginLeft: 6 }} />
             <TextInput
@@ -649,9 +713,9 @@ export default function HostSessionsScreen() {
               <Text style={styles.searchDoneText}>{t.tabSessions === "会话" ? "完成" : "Done"}</Text>
             </TouchableOpacity>
           </View>
-        </View>
+        </KeyboardAvoidingView>
       )}
-    </View>
+    </Animated.View>
   );
 }
 
@@ -684,21 +748,23 @@ function formatTime(iso: string): string {
 function makeStyles(theme: ReturnType<typeof useTheme>["theme"]) {
   return StyleSheet.create({
     container: { flex: 1, backgroundColor: theme.bg },
+    headerContainer: {
+      backgroundColor: theme.headerBg,
+      borderBottomWidth: StyleSheet.hairlineWidth,
+      borderBottomColor: theme.border,
+      shadowColor: "#000",
+      shadowOffset: { width: 0, height: 2 },
+      shadowOpacity: 0.06,
+      shadowRadius: 3,
+      elevation: 3,
+      zIndex: 20,
+    },
     topHeader: {
       flexDirection: "row",
       justifyContent: "space-between",
       alignItems: "center",
       paddingHorizontal: 20,
       paddingVertical: 12,
-      backgroundColor: theme.headerBg,
-      borderBottomWidth: 1,
-      borderBottomColor: theme.border,
-      shadowColor: "#000",
-      shadowOffset: { width: 0, height: 2 },
-      shadowOpacity: 0.08,
-      shadowRadius: 4,
-      elevation: 4,
-      zIndex: 10,
     },
     topHeaderTitle: { fontSize: 20, fontWeight: "700" },
     topHeaderSub: { fontSize: 11, fontFamily: "monospace", marginTop: 2 },

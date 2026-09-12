@@ -43,6 +43,10 @@ git -C "$REPO_ROOT" diff --quiet || die "工作树有未提交改动，先 commi
 git -C "$REPO_ROOT" rev-parse -q --verify "refs/tags/$TAG" >/dev/null && die "本地已有 tag $TAG"
 note "预检通过"
 
+# ── 同步版本号（package.json / app.json / iOS Info.plist）──────────────
+note "同步版本号为 v$VERSION"
+node "$REPO_ROOT/scripts/bump-version.mjs" "$VERSION"
+
 # ── npm publish（host 包）───────────────────────────────────────────────
 if [[ "$SKIP_NPM" == false ]]; then
   note "npm publish pi-maestro-mobile@$VERSION"

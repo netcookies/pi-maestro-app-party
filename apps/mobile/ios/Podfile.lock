@@ -47,6 +47,8 @@ PODS:
     - ExpoModulesCore
   - ExpoFont (13.3.2):
     - ExpoModulesCore
+  - ExpoHaptics (14.1.4):
+    - ExpoModulesCore
   - ExpoHead (5.1.11):
     - ExpoModulesCore
   - ExpoImagePicker (16.1.4):
@@ -1976,6 +1978,7 @@ DEPENDENCIES:
   - "ExpoDocumentPicker (from `../../../node_modules/.pnpm/expo-document-picker@13.1.6_expo@53.0.27_@babel+core@7.29.7_@expo+metro-runtime@5.0.5_r_65dbef1180a3b6bd2d2d623bb1598911/node_modules/expo-document-picker/ios`)"
   - "ExpoFileSystem (from `../../../node_modules/.pnpm/expo-file-system@18.1.11_expo@53.0.27_@babel+core@7.29.7_@expo+metro-runtime@5.0.5_reac_19538197be1207fa0ba66eb42f9ad2c1/node_modules/expo-file-system/ios`)"
   - "ExpoFont (from `../../../node_modules/.pnpm/expo-font@13.3.2_expo@53.0.27_@babel+core@7.29.7_@expo+metro-runtime@5.0.5_react-native_499d90fc246085eb4e523c42ba8ceb7a/node_modules/expo-font/ios`)"
+  - "ExpoHaptics (from `../../../node_modules/.pnpm/expo-haptics@14.1.4_expo@53.0.27_@babel+core@7.29.7_@expo+metro-runtime@5.0.5_react-nat_a09bb9082b9222bb6adc444e933b1810/node_modules/expo-haptics/ios`)"
   - "ExpoHead (from `../../../node_modules/.pnpm/expo-router@5.1.11_3121b5e982558d26d379fc322120c631/node_modules/expo-router/ios`)"
   - "ExpoImagePicker (from `../../../node_modules/.pnpm/expo-image-picker@16.1.4_expo@53.0.27_@babel+core@7.29.7_@expo+metro-runtime@5.0.5_reac_41ce286d9565f4c649488156cf171895/node_modules/expo-image-picker/ios`)"
   - "ExpoKeepAwake (from `../../../node_modules/.pnpm/expo-keep-awake@14.1.4_expo@53.0.27_@babel+core@7.29.7_@expo+metro-runtime@5.0.5_react-_1123f1adee95173cec00026bd4b146d8/node_modules/expo-keep-awake/ios`)"
@@ -2085,6 +2088,8 @@ EXTERNAL SOURCES:
     :path: "../../../node_modules/.pnpm/expo-file-system@18.1.11_expo@53.0.27_@babel+core@7.29.7_@expo+metro-runtime@5.0.5_reac_19538197be1207fa0ba66eb42f9ad2c1/node_modules/expo-file-system/ios"
   ExpoFont:
     :path: "../../../node_modules/.pnpm/expo-font@13.3.2_expo@53.0.27_@babel+core@7.29.7_@expo+metro-runtime@5.0.5_react-native_499d90fc246085eb4e523c42ba8ceb7a/node_modules/expo-font/ios"
+  ExpoHaptics:
+    :path: "../../../node_modules/.pnpm/expo-haptics@14.1.4_expo@53.0.27_@babel+core@7.29.7_@expo+metro-runtime@5.0.5_react-nat_a09bb9082b9222bb6adc444e933b1810/node_modules/expo-haptics/ios"
   ExpoHead:
     :path: "../../../node_modules/.pnpm/expo-router@5.1.11_3121b5e982558d26d379fc322120c631/node_modules/expo-router/ios"
   ExpoImagePicker:
@@ -2255,6 +2260,7 @@ SPEC CHECKSUMS:
   ExpoDocumentPicker: b263a279685b6640b8c8bc70d71c83067aeaae55
   ExpoFileSystem: 7f92f7be2f5c5ed40a7c9efc8fa30821181d9d63
   ExpoFont: cf508bc2e6b70871e05386d71cab927c8524cc8e
+  ExpoHaptics: 0ff6e0d83cd891178a306e548da1450249d54500
   ExpoHead: cfc12096c9a68cbe25de93a8bfc4781c7689467e
   ExpoImagePicker: 0963da31800c906e01c03e25d7c849f16ebf02a2
   ExpoKeepAwake: bf0811570c8da182bfb879169437d4de298376e7

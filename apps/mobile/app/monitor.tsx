@@ -8,14 +8,19 @@
  *
  * 数据推导复用 src/dashboard-logic.ts 的 windowKey / isWindowSteerable。
  */
-import React, { useState, useCallback, useMemo } from "react";
-import { View, Text, StyleSheet, FlatList, TouchableOpacity, TextInput } from "react-native";
+import React, { useState, useCallback, useMemo, useRef } from "react";
+import { View, Text, StyleSheet, FlatList, TouchableOpacity, TextInput, Animated } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { useHost } from "../src/store";
 import { useTheme, MIUIX_RADIUS, MIUIX_TYPE, MIUIX_SPACE, hexToRgba } from "../src/theme";
 import { LineIcon } from "../src/components/LineIcon";
 import { useI18n } from "../src/i18n";
 import { windowKey, isWindowSteerable, getWindowContextPressure } from "../src/dashboard-logic";
+import { hapticImpactMedium } from "../src/utils/haptics";
+import { SpringCard } from "../src/components/SpringCard";
+import { PulsingDot } from "../src/components/PulsingDot";
+import { SpringBottomSheet } from "../src/components/SpringBottomSheet";
+import { useTabSwipe } from "../src/hooks/useTabSwipe";
 import type { MonitorWindowSummary, MonitorAttentionSummary } from "@maestro-mobile/shared";
 
 export default function MonitorScreen() {
@@ -29,6 +34,7 @@ export default function MonitorScreen() {
   const [target, setTarget] = useState<string | null>(null);
   const [draft, setDraft] = useState("");
   const [sending, setSending] = useState(false);
+  const flyAnim = useRef(new Animated.Value(0)).current;
 
   // 进入页面主动拉取（host 只在变化时推送，后连接会错过）
   React.useEffect(() => {
@@ -55,6 +61,21 @@ export default function MonitorScreen() {
 
   const handleSend = useCallback(async () => {
     if (!resolvedTarget || !canSend) return;
+    void hapticImpactMedium();
+
+    Animated.sequence([
+      Animated.timing(flyAnim, {
+        toValue: 1,
+        duration: 200,
+        useNativeDriver: false,
+      }),
+      Animated.timing(flyAnim, {
+        toValue: 0,
+        duration: 180,
+        useNativeDriver: false,
+      }),
+    ]).start();
+
     setSending(true);
     try {
       const result = await sendSteerWindow(
@@ -89,6 +110,7 @@ export default function MonitorScreen() {
     const todosExpanded = expanded.has(`${key}-todos`);
     const shownAttention = attentionExpanded ? item.attention : item.attention.slice(0, LIMIT);
     const shownTodos = todosExpanded ? item.todos : item.todos.slice(0, LIMIT);
+    const isRunning = item.status === "running";
     const statusClr = statusColor(item.status, theme);
     const completedTodos = item.todos.filter((x) => x.status === "completed").length;
     const pressure = getWindowContextPressure(item);
@@ -99,7 +121,7 @@ export default function MonitorScreen() {
       : 0;
 
     return (
-      <TouchableOpacity
+      <SpringCard
         style={[
           styles.bentoCard,
           selected && { borderColor: theme.accent, borderWidth: 1.5 },
@@ -111,7 +133,7 @@ export default function MonitorScreen() {
         {/* 卡片顶行：状态指示点 + 项目名称 + 目标标识徽标 */}
         <View style={styles.cardHeader}>
           <View style={styles.cardHeaderLeft}>
-            <View style={[styles.dot, { backgroundColor: statusClr }]} />
+            <PulsingDot color={statusClr} size={8} active={isRunning} />
             <Text style={styles.cardTitle} numberOfLines={1}>{item.name ?? t.unnamedWindow}</Text>
           </View>
           <View
@@ -189,37 +211,41 @@ export default function MonitorScreen() {
             )}
           </View>
         )}
-      </TouchableOpacity>
+      </SpringCard>
     );
   }, [resolvedTarget, expanded, theme, styles, t]);
 
+  const { panHandlers, animatedStyle } = useTabSwipe({ leftRoute: "/host-sessions", rightRoute: "/settings" });
+
   return (
-    <View style={[styles.container, { backgroundColor: theme.bg }]}>
-      {/* 统一定制顶栏：顶部状态栏背景与 Header 融为一体，消除灰色断层 */}
-      <SafeAreaView edges={["top"]} style={{ backgroundColor: theme.headerBg }}>
-        <View style={[styles.topHeader, { borderBottomColor: theme.border }]}>
-          <View>
-            <Text style={[styles.topHeaderTitle, { color: theme.text }]}>{t.tabMonitor}</Text>
-            <Text style={[styles.topHeaderSub, { color: theme.muted }]}>
-              {t.tabMonitor === "监控" ? "多窗口协同监督中枢" : "Multi-window supervisor"}
-            </Text>
+    <Animated.View style={[styles.container, animatedStyle, { backgroundColor: theme.bg }]} {...panHandlers}>
+      {/* 统一定制顶栏：顶部状态栏背景与 Header 融为一体，只有下方微阴影 */}
+      <View style={[styles.headerContainer, { backgroundColor: theme.headerBg, borderBottomColor: theme.border }]}>
+        <SafeAreaView edges={["top"]} style={{ backgroundColor: theme.headerBg }}>
+          <View style={styles.topHeader}>
+            <View>
+              <Text style={[styles.topHeaderTitle, { color: theme.text }]}>{t.tabMonitor}</Text>
+              <Text style={[styles.topHeaderSub, { color: theme.muted }]}>
+                {t.tabMonitor === "监控" ? "多窗口协同监督中枢" : "Multi-window supervisor"}
+              </Text>
+            </View>
+            <View
+              style={[
+                styles.topHeaderOnlineBadge,
+                {
+                  borderColor: isConnected ? "rgba(16, 185, 129, 0.4)" : "rgba(239, 68, 68, 0.4)",
+                  backgroundColor: isConnected ? "rgba(16, 185, 129, 0.15)" : "rgba(239, 68, 68, 0.15)",
+                },
+              ]}
+            >
+              <PulsingDot color={isConnected ? theme.success : theme.error} size={6} active={isConnected} />
+              <Text style={[styles.topHeaderOnlineText, { color: isConnected ? theme.success : theme.error }]}>
+                {isConnected ? t.onlineBadge : t.offlineBadge}
+              </Text>
+            </View>
           </View>
-          <View
-            style={[
-              styles.topHeaderOnlineBadge,
-              {
-                borderColor: isConnected ? "rgba(16, 185, 129, 0.4)" : "rgba(239, 68, 68, 0.4)",
-                backgroundColor: isConnected ? "rgba(16, 185, 129, 0.15)" : "rgba(239, 68, 68, 0.15)",
-              },
-            ]}
-          >
-            <View style={[styles.topHeaderGreenDot, { backgroundColor: isConnected ? theme.success : theme.error }]} />
-            <Text style={[styles.topHeaderOnlineText, { color: isConnected ? theme.success : theme.error }]}>
-              {isConnected ? t.onlineBadge : t.offlineBadge}
-            </Text>
-          </View>
-        </View>
-      </SafeAreaView>
+        </SafeAreaView>
+      </View>
 
       {/* 顶部 Attention 汇总告警条 */}
       {totalAttention > 0 && (
@@ -245,51 +271,82 @@ export default function MonitorScreen() {
           keyboardShouldPersistTaps="handled"
         />
       )}
-      {/* 仅在选中窗口时，在 dock 上方弹出精简输入框 “发送到 #window.hashid” */}
-      {resolvedTarget && (
-        <View style={styles.floatingComposerWrap}>
-          <View style={[styles.floatingComposer, { backgroundColor: theme.cardBg, borderColor: theme.accent }]}>
-            <TextInput
-              style={[styles.floatingInput, { color: theme.text }]}
-              value={draft}
-              onChangeText={setDraft}
-              placeholder={`${t.sendTo} #${endpointId.slice(0, 8)}…`}
-              placeholderTextColor={theme.dim}
-              editable={!sending}
-              multiline={false}
-              autoFocus
-              accessibilityLabel={t.sendSupervisionMsg}
-            />
-            <TouchableOpacity
-              style={[
-                styles.floatingSendBtn,
-                {
-                  backgroundColor: theme.accent,
-                  opacity: canSend ? 1 : 0.45,
-                  shadowColor: theme.accent,
-                  shadowOpacity: canSend ? 0.35 : 0,
-                  shadowRadius: 6,
-                  elevation: canSend ? 4 : 0,
-                },
-              ]}
-              onPress={() => void handleSend()}
-              disabled={!canSend}
-              accessibilityRole="button"
-              accessibilityLabel={t.sendSupervisionMsg}
+      {/* 选中窗口时弹出手势 Bottom Sheet，支持手势下滑阻尼关闭 */}
+      <SpringBottomSheet
+        visible={Boolean(resolvedTarget)}
+        onClose={() => setTarget(null)}
+        contentHeight={140}
+      >
+        <View style={[styles.floatingComposer, { backgroundColor: theme.cardBg, borderColor: theme.accent, marginBottom: 8 }]}>
+          <TextInput
+            style={[styles.floatingInput, { color: theme.text }]}
+            value={draft}
+            onChangeText={setDraft}
+            placeholder={`${t.sendTo} #${endpointId.slice(0, 8)}…`}
+            placeholderTextColor={theme.dim}
+            editable={!sending}
+            multiline={false}
+            autoFocus
+            accessibilityLabel={t.sendSupervisionMsg}
+          />
+          <TouchableOpacity
+            style={[
+              styles.floatingSendBtn,
+              {
+                backgroundColor: theme.accent,
+                opacity: canSend ? 1 : 0.45,
+                shadowColor: theme.accent,
+                shadowOpacity: canSend ? 0.35 : 0,
+                shadowRadius: 6,
+                elevation: canSend ? 4 : 0,
+              },
+            ]}
+            onPress={() => void handleSend()}
+            disabled={!canSend}
+            accessibilityRole="button"
+            accessibilityLabel={t.sendSupervisionMsg}
+          >
+            <Animated.View
+              style={{
+                transform: [
+                  {
+                    translateX: flyAnim.interpolate({
+                      inputRange: [0, 0.6, 1],
+                      outputRange: [0, 10, 0],
+                    }),
+                  },
+                  {
+                    translateY: flyAnim.interpolate({
+                      inputRange: [0, 0.6, 1],
+                      outputRange: [0, -10, 0],
+                    }),
+                  },
+                  {
+                    scale: flyAnim.interpolate({
+                      inputRange: [0, 0.6, 1],
+                      outputRange: [1, 0.6, 1],
+                    }),
+                  },
+                ],
+                opacity: flyAnim.interpolate({
+                  inputRange: [0, 0.5, 0.7, 1],
+                  outputRange: [1, 0, 0, 1],
+                }),
+              }}
             >
               <LineIcon name="send" size={15} color="#fff" strokeWidth={2.2} />
-            </TouchableOpacity>
-            <TouchableOpacity
-              onPress={() => setTarget(null)}
-              style={styles.closeTargetBtn}
-              accessibilityLabel="取消选择目标窗口"
-            >
-              <Text style={[styles.closeTargetText, { color: theme.muted }]}>✕</Text>
-            </TouchableOpacity>
-          </View>
+            </Animated.View>
+          </TouchableOpacity>
+          <TouchableOpacity
+            onPress={() => setTarget(null)}
+            style={styles.closeTargetBtn}
+            accessibilityLabel="取消选择目标窗口"
+          >
+            <Text style={[styles.closeTargetText, { color: theme.muted }]}>✕</Text>
+          </TouchableOpacity>
         </View>
-      )}
-    </View>
+      </SpringBottomSheet>
+    </Animated.View>
   );
 }
 
@@ -313,21 +370,23 @@ function sevColor(s: MonitorAttentionSummary["severity"], theme: ReturnType<type
 function makeStyles(theme: ReturnType<typeof useTheme>["theme"]) {
   return StyleSheet.create({
   container: { flex: 1, backgroundColor: theme.bg },
+  headerContainer: {
+    backgroundColor: theme.headerBg,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: theme.border,
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.06,
+    shadowRadius: 3,
+    elevation: 3,
+    zIndex: 20,
+  },
   topHeader: {
     flexDirection: "row",
     justifyContent: "space-between",
     alignItems: "center",
     paddingHorizontal: 20,
     paddingVertical: 12,
-    backgroundColor: theme.headerBg,
-    borderBottomWidth: 1,
-    borderBottomColor: theme.border,
-    shadowColor: "#000",
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.08,
-    shadowRadius: 4,
-    elevation: 4,
-    zIndex: 10,
   },
   topHeaderTitle: { fontSize: 20, fontWeight: "700" },
   topHeaderSub: { fontSize: 11, fontFamily: "monospace", marginTop: 2 },

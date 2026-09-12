@@ -1,4 +1,5 @@
 import React, { createContext, useContext, useEffect, useState, useCallback } from "react";
+import { Platform, NativeModules } from "react-native";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 
 export type Language = "zh" | "en";
@@ -258,7 +259,7 @@ export const DICTIONARIES: Record<Language, I18nDictionary> = {
     connectingHost: "正在连接主机…",
     reconnectingHost: "正在重新连接主机…",
     reconnect: "重新连接",
-    goToPair: "请前往会话页面扫码配对",
+    goToPair: "请前往设置页面配对",
     openSessionHint: "在会话页打开一个会话后显示实时用量",
     savingHost: "正在保存配对…",
     saveParams: "保存参数",
@@ -392,7 +393,7 @@ export const DICTIONARIES: Record<Language, I18nDictionary> = {
     connectingHost: "Connecting to host...",
     reconnectingHost: "Reconnecting to host...",
     reconnect: "Reconnect",
-    goToPair: "Please pair on Sessions tab",
+    goToPair: "Please pair on Settings tab",
     openSessionHint: "Open a session to display live usage",
     savingHost: "Saving pairing...",
     saveParams: "Save Settings",
@@ -412,8 +413,12 @@ export const DICTIONARIES: Record<Language, I18nDictionary> = {
 
 function detectSystemLanguage(): Language {
   try {
-    const locale = Intl.DateTimeFormat().resolvedOptions().locale.toLowerCase();
-    if (locale.startsWith("zh")) return "zh";
+    const localeStr = Intl.DateTimeFormat().resolvedOptions().locale;
+    if (localeStr) {
+      const lower = localeStr.toLowerCase();
+      if (lower.startsWith("en")) return "en";
+      if (lower.startsWith("zh")) return "zh";
+    }
   } catch {}
   return "zh"; // 默认中文友好
 }

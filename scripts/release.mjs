@@ -126,21 +126,13 @@ console.log(`✓ 分支 ${branch}, 工作区干净`);
 console.log("✓ 运行 typecheck + tests...");
 if (run("pnpm typecheck && pnpm test").status !== 0) die("验证失败, 终止发布");
 
-// 2. 版本递进
+// 2. 版本递进 (调用统一版本脚本，确保 package.json、app.json 与 iOS Info.plist 完整一致)
 const prevVersion = JSON.parse(readFileSync(`${ROOT}package.json`, "utf8")).version;
 const version = bumpVersion(prevVersion, bump);
 const date = new Date().toISOString().slice(0, 10);
 console.log(`✓ 版本 ${prevVersion} → ${version}`);
 
-for (const f of PKG_FILES) {
-  const p = `${ROOT}${f}`;
-  const d = JSON.parse(readFileSync(p, "utf8"));
-  d.version = version;
-  writeFileSync(p, JSON.stringify(d, null, 2) + "\n");
-}
-const appJson = `${ROOT}${APP_JSON}`;
-const appRaw = readFileSync(appJson, "utf8");
-writeFileSync(appJson, appRaw.replace(/"version":\s*"[^"]+"/, `"version": "${version}"`));
+run(`node scripts/bump-version.mjs ${version}`);
 
 // 3. CHANGELOG
 const groups = collectChanges(prevVersion ? `v${prevVersion}` : "");
