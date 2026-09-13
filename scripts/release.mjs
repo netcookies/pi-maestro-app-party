@@ -154,7 +154,8 @@ if (!yes) {
 
 sh('git add -A && git commit -m "release: v' + version + '"');
 sh("git tag v" + version);
-console.log(`✓ 已 commit + tag v${version}`);
+sh("git tag maestro-mobile-v" + version);
+console.log(`✓ 已 commit + tag v${version} & maestro-mobile-v${version}`);
 const push = run("git push origin HEAD --follow-tags");
 if (push.status !== 0) console.warn("! push 失败, 请手动 git push origin HEAD --follow-tags");
 else console.log(`🎉 v${version} 发布完成`);
