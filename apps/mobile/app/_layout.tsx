@@ -1,118 +1,81 @@
-import { Tabs, Stack, useRouter, usePathname } from "expo-router";
+import "react-native-gesture-handler";
+import type { ParamListBase, StackNavigationState } from "@react-navigation/native";
+import {
+  createNativeStackNavigator,
+  type NativeStackNavigationEventMap,
+  type NativeStackNavigationOptions,
+} from "@react-navigation/native-stack";
+import { withLayoutContext } from "expo-router";
+import screenTransitions, {
+  type NativeStackAdapterOptions,
+  withScreenTransitions,
+} from "react-native-screen-transitions";
 import { StatusBar } from "expo-status-bar";
 import { SafeAreaProvider } from "react-native-safe-area-context";
 import { GestureHandlerRootView } from "react-native-gesture-handler";
-import { StyleSheet } from "react-native";
+import { StyleSheet, View } from "react-native";
 import { HostStoreProvider } from "../src/store";
 import { ThemeProvider, useTheme } from "../src/theme";
-import { I18nProvider, useI18n } from "../src/i18n";
-import { LineIcon, type LineIconName } from "../src/components/LineIcon";
+import { I18nProvider } from "../src/i18n";
 import { loadConfig } from "../src/config";
 import { useEffect, useRef } from "react";
 import * as Camera from "expo-camera";
 import * as ImagePicker from "expo-image-picker";
 
-/**
- * 导航架构（方向 A：Dashboard 工作台为首页）：
- * 主壳 = 底部 Tabs 4 个（工作台 dashboard / 会话 host-sessions / Monitor / 设置），
- * 会话聊天 session 为 stack 内二级页（无 tab）。
- * index 不再 Redirect，直接作为工作台态势总览页；Teammate 页保留为会话页二级入口（待后续接入）。
- */
-const TAB_ICONS: Record<string, LineIconName> = {
-  dashboard: "workbench",
-  "host-sessions": "chat",
-  teammate: "plan",
-  monitor: "monitor",
-  settings: "settings",
-};
-
-const TAB_LABELS: Record<string, string> = {
-  dashboard: "工作台",
-  sessions: "会话",
-  monitor: "Monitor",
-  settings: "设置",
-};
+const NativeStack = createNativeStackNavigator();
+const TransitionStack = withScreenTransitions(NativeStack);
+type RootStackOptions = NativeStackAdapterOptions<NativeStackNavigationOptions>;
+const Stack = withLayoutContext<
+  RootStackOptions,
+  typeof TransitionStack.Navigator,
+  StackNavigationState<ParamListBase>,
+  NativeStackNavigationEventMap
+>(TransitionStack.Navigator);
 
 function RootNavigator() {
   const { theme } = useTheme();
-  const { t } = useI18n();
 
   return (
-    <>
+    <View style={{ flex: 1, backgroundColor: theme.bg }}>
       <StatusBar style={theme.bg === "#f7f7f5" || theme.name === "notion" ? "dark" : "light"} />
-      <Tabs
+      <Stack
+        id="root"
         screenOptions={{
-          initialRouteName: "index",
           headerShown: false,
           contentStyle: { backgroundColor: theme.bg },
-          tabBarActiveTintColor: theme.accent,
-          tabBarInactiveTintColor: theme.muted,
-          tabBarStyle: {
-            backgroundColor: theme.headerBg,
-            borderTopColor: theme.border,
-            borderTopWidth: 1,
-            shadowColor: "#000",
-            shadowOffset: { width: 0, height: -3 },
-            shadowOpacity: 0.12,
-            shadowRadius: 6,
-            elevation: 8,
-          },
-          tabBarIcon: (opts) => {
-            const name = TAB_ICONS[opts?.route?.name ?? ""] ?? "plan";
-            return <LineIcon name={name} size={22} color={opts?.color ?? "#888"} />;
-          },
+          animation: "slide_from_right",
         }}
       >
-        <Tabs.Screen
-          name="index"
-          options={{
-            title: t.tabWorkbench,
-            tabBarIcon: ({ color }) => <LineIcon name="workbench" size={20} color={color} />,
-          }}
-        />
-        <Tabs.Screen
-          name="host-sessions"
-          options={{
-            title: t.tabSessions,
-            tabBarIcon: ({ color }) => <LineIcon name="chat" size={20} color={color} />,
-          }}
-        />
-        <Tabs.Screen
-          name="teammate"
-          options={{ href: null }}
-        />
-        <Tabs.Screen
-          name="pair"
-          options={{ href: null }}
-        />
-        <Tabs.Screen
-          name="pair-scan"
-          options={{ href: null, headerShown: false }}
-        />
-        <Tabs.Screen
-          name="monitor"
-          options={{
-            title: t.tabMonitor,
-            tabBarIcon: ({ color }) => <LineIcon name="monitor" size={20} color={color} />,
-          }}
-        />
-        <Tabs.Screen
-          name="settings"
-          options={{
-            title: t.tabSettings,
-            tabBarIcon: ({ color }) => <LineIcon name="settings" size={20} color={color} />,
-          }}
-        />
-        <Tabs.Screen
+        <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
+        <Stack.Screen
           name="session"
           options={{
-            href: null,
+            ...screenTransitions.Presets.DraggableCard({
+              gestureDirection: "horizontal",
+            }),
             headerShown: false,
-            tabBarStyle: { display: "none" },
           }}
         />
-      </Tabs>
-    </>
+        <Stack.Screen
+          name="model-select"
+          options={{
+            ...screenTransitions.Presets.DraggableCard({
+              gestureDirection: "horizontal",
+            }),
+            headerShown: false,
+          }}
+        />
+        <Stack.Screen
+          name="pair-scan"
+          options={{
+            ...screenTransitions.Presets.SlideFromBottom({
+              gestureDirection: "vertical",
+            }),
+            headerShown: false,
+          }}
+        />
+      </Stack>
+    </View>
   );
 }
 

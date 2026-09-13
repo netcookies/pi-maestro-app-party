@@ -61,12 +61,13 @@ export function useTabSwipe({
       },
       onPanResponderMove: (_, gestureState) => {
         if (!enabled) return;
-        // 限制拖拽边界：如果左/右侧已没有路由，增加强阻尼
+        // 限制拖拽边界：有效方向最大跟随位移为屏幕宽度的 35%，无路由方向给予强阻尼
+        const maxOffset = SCREEN_WIDTH * 0.35;
         let dx = gestureState.dx;
-        if (dx > 0 && !leftRoute) {
-          dx = dx * 0.2;
-        } else if (dx < 0 && !rightRoute) {
-          dx = dx * 0.2;
+        if (dx > 0) {
+          dx = leftRoute ? Math.min(dx * 0.6, maxOffset) : dx * 0.12;
+        } else if (dx < 0) {
+          dx = rightRoute ? Math.max(dx * 0.6, -maxOffset) : dx * 0.12;
         }
         swipeAnim.setValue(dx);
       },
@@ -76,27 +77,23 @@ export function useTabSwipe({
 
         if (action === "left" && leftRoute) {
           void hapticImpactLight();
-          // 旧页面伴随滑动向右滑出并下沉
-          Animated.parallel([
-            Animated.timing(swipeAnim, {
-              toValue: SCREEN_WIDTH * 0.6,
-              duration: 160,
-              useNativeDriver: true,
-            }),
-          ]).start(() => {
+          // 旧页面伴随滑动向右平滑淡出并下沉
+          Animated.timing(swipeAnim, {
+            toValue: SCREEN_WIDTH * 0.45,
+            duration: 140,
+            useNativeDriver: true,
+          }).start(() => {
             swipeAnim.setValue(0);
             router.replace(leftRoute as any);
           });
         } else if (action === "right" && rightRoute) {
           void hapticImpactLight();
-          // 旧页面伴随滑动向左滑出并下沉
-          Animated.parallel([
-            Animated.timing(swipeAnim, {
-              toValue: -SCREEN_WIDTH * 0.6,
-              duration: 160,
-              useNativeDriver: true,
-            }),
-          ]).start(() => {
+          // 旧页面伴随滑动向左平滑淡出并下沉
+          Animated.timing(swipeAnim, {
+            toValue: -SCREEN_WIDTH * 0.45,
+            duration: 140,
+            useNativeDriver: true,
+          }).start(() => {
             swipeAnim.setValue(0);
             router.replace(rightRoute as any);
           });
@@ -113,21 +110,21 @@ export function useTabSwipe({
     }),
   ).current;
 
-  // 驱动页面下沉微缩放与平移跟随
+  // 驱动页面下沉微缩放与平移跟随（限制下沉深度，防止背景大面积漏出）
   const animatedStyle: Animated.WithAnimatedValue<ViewStyle> = {
     transform: [
       { translateX: swipeAnim },
       {
         scale: swipeAnim.interpolate({
-          inputRange: [-SCREEN_WIDTH, 0, SCREEN_WIDTH],
-          outputRange: [0.95, 1, 0.95],
+          inputRange: [-SCREEN_WIDTH * 0.5, 0, SCREEN_WIDTH * 0.5],
+          outputRange: [0.96, 1, 0.96],
           extrapolate: "clamp",
         }),
       },
     ],
     opacity: swipeAnim.interpolate({
-      inputRange: [-SCREEN_WIDTH, 0, SCREEN_WIDTH],
-      outputRange: [0.88, 1, 0.88],
+      inputRange: [-SCREEN_WIDTH * 0.5, 0, SCREEN_WIDTH * 0.5],
+      outputRange: [0.9, 1, 0.9],
       extrapolate: "clamp",
     }),
   };

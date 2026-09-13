@@ -164,7 +164,7 @@ export function HostConnectCard({ hostUrl, token, onHostUrlChange, onTokenChange
           {/* 扫码配对主按钮 + 地址输入（token 由扫码带入，不再手填） */}
           <TouchableOpacity
             style={[styles.pairBtn, { backgroundColor: theme.buttonPrimary }]}
-            onPress={() => router.push("/pair-scan")}
+            onPress={() => router.push({ pathname: "/pair-scan", params: { from: "settings" } })}
             accessibilityRole="button"
             accessibilityLabel="扫码配对"
           >
@@ -316,7 +316,7 @@ export function HostConnectCard({ hostUrl, token, onHostUrlChange, onTokenChange
                 </TouchableOpacity>
               </View>
             ))}
-            <TouchableOpacity style={[styles.pickerAdd, { borderColor: theme.accent }]} onPress={() => { setPickerOpen(false); router.push("/pair-scan"); }} accessibilityRole="button" accessibilityLabel="扫码添加新 Host">
+            <TouchableOpacity style={[styles.pickerAdd, { borderColor: theme.accent }]} onPress={() => { setPickerOpen(false); router.push({ pathname: "/pair-scan", params: { from: "settings" } }); }} accessibilityRole="button" accessibilityLabel="扫码添加新 Host">
               <Text style={{ color: theme.accent, fontWeight: "600" }}>+ 扫码添加新 Host</Text>
             </TouchableOpacity>
           </View>

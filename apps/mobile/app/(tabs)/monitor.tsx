@@ -11,16 +11,16 @@
 import React, { useState, useCallback, useMemo, useRef } from "react";
 import { View, Text, StyleSheet, FlatList, TouchableOpacity, TextInput, Animated } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
-import { useHost } from "../src/store";
-import { useTheme, MIUIX_RADIUS, MIUIX_TYPE, MIUIX_SPACE, hexToRgba } from "../src/theme";
-import { LineIcon } from "../src/components/LineIcon";
-import { useI18n } from "../src/i18n";
-import { windowKey, isWindowSteerable, getWindowContextPressure } from "../src/dashboard-logic";
-import { hapticImpactMedium } from "../src/utils/haptics";
-import { SpringCard } from "../src/components/SpringCard";
-import { PulsingDot } from "../src/components/PulsingDot";
-import { SpringBottomSheet } from "../src/components/SpringBottomSheet";
-import { useTabSwipe } from "../src/hooks/useTabSwipe";
+import { useHost } from "../../src/store";
+import { useTheme, MIUIX_RADIUS, MIUIX_TYPE, MIUIX_SPACE, hexToRgba } from "../../src/theme";
+import { LineIcon } from "../../src/components/LineIcon";
+import { useI18n } from "../../src/i18n";
+import { windowKey, isWindowSteerable, getWindowContextPressure } from "../../src/dashboard-logic";
+import { hapticImpactMedium } from "../../src/utils/haptics";
+import { SpringCard } from "../../src/components/SpringCard";
+import { PulsingDot } from "../../src/components/PulsingDot";
+import { SpringBottomSheet } from "../../src/components/SpringBottomSheet";
+import { useTabSwipe } from "../../src/hooks/useTabSwipe";
 import type { MonitorWindowSummary, MonitorAttentionSummary } from "@maestro-mobile/shared";
 
 export default function MonitorScreen() {
@@ -215,10 +215,8 @@ export default function MonitorScreen() {
     );
   }, [resolvedTarget, expanded, theme, styles, t]);
 
-  const { panHandlers, animatedStyle } = useTabSwipe({ leftRoute: "/host-sessions", rightRoute: "/settings" });
-
   return (
-    <Animated.View style={[styles.container, animatedStyle, { backgroundColor: theme.bg }]} {...panHandlers}>
+    <View style={[styles.container, { backgroundColor: theme.bg }]}>
       {/* 统一定制顶栏：顶部状态栏背景与 Header 融为一体，只有下方微阴影 */}
       <View style={[styles.headerContainer, { backgroundColor: theme.headerBg, borderBottomColor: theme.border }]}>
         <SafeAreaView edges={["top"]} style={{ backgroundColor: theme.headerBg }}>
@@ -271,13 +269,15 @@ export default function MonitorScreen() {
           keyboardShouldPersistTaps="handled"
         />
       )}
-      {/* 选中窗口时弹出手势 Bottom Sheet，支持手势下滑阻尼关闭 */}
+      {/* 选中窗口时弹出手势 Bottom Sheet，支持手势下滑阻尼关闭与输入法避让 */}
       <SpringBottomSheet
         visible={Boolean(resolvedTarget)}
         onClose={() => setTarget(null)}
         contentHeight={140}
+        containerStyle={{ paddingBottom: 10 }}
+        keyboardVerticalOffset={Platform.OS === "ios" ? 20 : 0}
       >
-        <View style={[styles.floatingComposer, { backgroundColor: theme.cardBg, borderColor: theme.accent, marginBottom: 8 }]}>
+        <View style={[styles.floatingComposer, { backgroundColor: theme.cardBg, borderColor: theme.accent, marginBottom: 0 }]}>
           <TextInput
             style={[styles.floatingInput, { color: theme.text }]}
             value={draft}
@@ -346,7 +346,7 @@ export default function MonitorScreen() {
           </TouchableOpacity>
         </View>
       </SpringBottomSheet>
-    </Animated.View>
+    </View>
   );
 }
 
@@ -401,7 +401,7 @@ function makeStyles(theme: ReturnType<typeof useTheme>["theme"]) {
   },
   topHeaderGreenDot: { width: 6, height: 6, borderRadius: 3 },
   topHeaderOnlineText: { fontSize: 11, fontWeight: "600" },
-  list: { padding: MIUIX_SPACE.lg },
+  list: { padding: MIUIX_SPACE.lg, paddingBottom: 24 },
   empty: { flex: 1, justifyContent: "center", alignItems: "center", padding: MIUIX_SPACE.xxl },
   emptyText: { fontSize: MIUIX_TYPE.body1, color: theme.muted, fontWeight: "600" },
   emptyDesc: { fontSize: MIUIX_TYPE.footnote1, color: theme.dim, marginTop: MIUIX_SPACE.sm },

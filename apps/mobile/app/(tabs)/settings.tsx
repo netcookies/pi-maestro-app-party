@@ -8,20 +8,20 @@
  * Pi / pi-maestro-flow / Maestro CLI 版本协议未提供，显示「待 Host 接入」，不编造。
  */
 import React, { useMemo, useState, useEffect } from "react";
-import { View, Text, StyleSheet, ScrollView, TouchableOpacity, TextInput, Animated } from "react-native";
+import { View, Text, StyleSheet, ScrollView, TouchableOpacity, TextInput, Animated, ActivityIndicator } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { useRouter } from "expo-router";
-import { useHost } from "../src/store";
-import { useTheme, THEMES, MIUIX_RADIUS, MIUIX_TYPE, MIUIX_SPACE, ACCENT_PALETTES } from "../src/theme";
-import { DEFAULT_CONFIG, getConfig, updateConfig, loadConfig, type AppConfig } from "../src/config";
-import { MiuixSwitch } from "../src/components/MiuixSwitch";
-import { MiuixSlider } from "../src/components/MiuixSlider";
-import { LineIcon } from "../src/components/LineIcon";
-import { useTabSwipe } from "../src/hooks/useTabSwipe";
-import { useI18n } from "../src/i18n";
-import { PulsingDot } from "../src/components/PulsingDot";
+import { useHost } from "../../src/store";
+import { useTheme, THEMES, MIUIX_RADIUS, MIUIX_TYPE, MIUIX_SPACE, ACCENT_PALETTES } from "../../src/theme";
+import { DEFAULT_CONFIG, getConfig, updateConfig, loadConfig, type AppConfig } from "../../src/config";
+import { MiuixSwitch } from "../../src/components/MiuixSwitch";
+import { MiuixSlider } from "../../src/components/MiuixSlider";
+import { LineIcon } from "../../src/components/LineIcon";
+import { useTabSwipe } from "../../src/hooks/useTabSwipe";
+import { useI18n } from "../../src/i18n";
+import { PulsingDot } from "../../src/components/PulsingDot";
 import AsyncStorage from "@react-native-async-storage/async-storage";
-import { HOST_CONN_KEY } from "../src/paired-hosts";
+import { HOST_CONN_KEY, persistPairedHost } from "../../src/paired-hosts";
 
 export default function SettingsScreen() {
   const router = useRouter();
@@ -49,6 +49,60 @@ export default function SettingsScreen() {
   // 8 位配对码弹窗
   const [showCodeModal, setShowCodeModal] = useState(false);
   const [codeValue, setCodeValue] = useState("");
+  const [codeHost, setCodeHost] = useState("");
+  const [codeBusy, setCodeBusy] = useState(false);
+  const [codeError, setCodeError] = useState<string | null>(null);
+
+  const openCodeModal = () => {
+    setCodeError(null);
+    if (!codeHost.trim()) {
+      try {
+        if (hostUrl) {
+          const match = hostUrl.match(/wss?:\/\/([^/:]+)/i);
+          if (match?.[1]) setCodeHost(match[1]);
+        }
+      } catch { /* ignore */ }
+    }
+    setShowCodeModal(true);
+  };
+
+  const handleCodeConnect = async () => {
+    const trimmedCode = codeValue.trim().toUpperCase();
+    const trimmedHost = codeHost.trim();
+    if (!trimmedCode || !trimmedHost) {
+      setCodeError("请完整输入配对码与 PC 端点地址");
+      return;
+    }
+    setCodeBusy(true);
+    setCodeError(null);
+    try {
+      const port = "4739";
+      const res = await fetch(`http://${trimmedHost}:${port}/api/pair-short?code=${encodeURIComponent(trimmedCode)}`, {
+        signal: AbortSignal.timeout(5000),
+      });
+      if (!res.ok) {
+        throw new Error(res.status === 404 ? "配对码无效或已过期，请在 PC 重新执行 /maestro-mobile qr" : `Host 响应错误: ${res.status}`);
+      }
+      const data = (await res.json()) as { token?: string; ips?: string[]; port?: number };
+      const finalToken = data.token ?? "";
+      const finalPort = data.port ?? 4739;
+      const finalWsUrl = `ws://${trimmedHost}:${finalPort}/ws`;
+      await persistPairedHost({
+        name: `${trimmedHost}:${finalPort}`,
+        hostUrl: finalWsUrl,
+        token: finalToken,
+      });
+      setHostUrl(finalWsUrl);
+      setToken(finalToken);
+      connect(finalWsUrl, finalToken);
+      setShowCodeModal(false);
+      setCodeValue("");
+    } catch (e) {
+      setCodeError(e instanceof Error ? e.message : "换取配对失败，请确认手机与 PC 在同一网络");
+    } finally {
+      setCodeBusy(false);
+    }
+  };
 
   useEffect(() => {
     void AsyncStorage.getItem(HOST_CONN_KEY).then((val) => {
@@ -73,10 +127,8 @@ export default function SettingsScreen() {
   };
 
   const meta = state.hostStatusMeta;
-  const { panHandlers, animatedStyle } = useTabSwipe({ leftRoute: "/monitor" });
-
   return (
-    <Animated.View style={[styles.container, animatedStyle, { backgroundColor: theme.bg }]} {...panHandlers}>
+    <View style={[styles.container, { backgroundColor: theme.bg }]}>
       {/* 统一定制顶栏：顶部状态栏背景与 Header 融为一体，只有下方微阴影 */}
       <View style={[styles.headerContainer, { backgroundColor: theme.headerBg, borderBottomColor: theme.border }]}>
         <SafeAreaView edges={["top"]} style={{ backgroundColor: theme.headerBg }}>
@@ -135,7 +187,7 @@ export default function SettingsScreen() {
                   onPress={() => {
                     const choice = seg.key as "auto" | "light" | "dark";
                     setAppearanceChoice(choice);
-                    void import("../src/config").then(({ setAppearanceChoice: setCfgChoice }) => {
+                    void import("../../src/config").then(({ setAppearanceChoice: setCfgChoice }) => {
                       setCfgChoice(choice);
                     });
                   }}
@@ -331,7 +383,7 @@ export default function SettingsScreen() {
 
             <TouchableOpacity
               style={{ flex: 1, paddingVertical: 8, borderRadius: MIUIX_RADIUS.md, backgroundColor: theme.buttonPrimary, alignItems: "center", flexDirection: "row", justifyContent: "center", gap: 5 }}
-              onPress={() => router.push("/pair-scan")}
+              onPress={() => router.push({ pathname: "/pair-scan", params: { from: "settings" } })}
             >
               <LineIcon name="qrcode" size={13} color="#fff" />
               <Text style={{ fontSize: 11, fontWeight: "700", color: "#fff" }}>{t.btnScan}</Text>
@@ -339,7 +391,7 @@ export default function SettingsScreen() {
 
             <TouchableOpacity
               style={{ flex: 1, paddingVertical: 8, borderRadius: MIUIX_RADIUS.md, borderWidth: 1, borderColor: theme.border, backgroundColor: theme.cardInner ?? theme.secondaryContainer ?? theme.inputBg, alignItems: "center", flexDirection: "row", justifyContent: "center", gap: 5 }}
-              onPress={() => setShowCodeModal(true)}
+              onPress={openCodeModal}
             >
               <LineIcon name="key" size={13} color={theme.text} />
               <Text style={{ fontSize: 11, fontWeight: "600", color: theme.text }}>{t.pairedCode}</Text>
@@ -453,29 +505,63 @@ export default function SettingsScreen() {
           <TouchableOpacity
             style={[StyleSheet.absoluteFillObject, { backgroundColor: "rgba(0,0,0,0.5)" }]}
             activeOpacity={1}
-            onPress={() => setShowCodeModal(false)}
+            onPress={() => !codeBusy && setShowCodeModal(false)}
           />
           <View style={{ flex: 1, justifyContent: "center", alignItems: "center", padding: 20 }}>
-            <View style={{ width: "100%", maxWidth: 320, backgroundColor: theme.cardBg, borderRadius: 20, padding: 20, borderWidth: 1, borderColor: theme.border, shadowColor: "#000", shadowOpacity: 0.3, shadowRadius: 10, elevation: 10 }}>
-              <Text style={{ fontSize: 14, fontWeight: "700", color: theme.text, marginBottom: 8 }}>{t.enterPairCode}</Text>
-              <Text style={{ fontSize: 11, color: theme.muted, marginBottom: 12 }}>{t.pairCodeHint}</Text>
+            <View style={{ width: "100%", maxWidth: 340, backgroundColor: theme.cardBg, borderRadius: 20, padding: 20, borderWidth: 1, borderColor: theme.border, shadowColor: "#000", shadowOpacity: 0.3, shadowRadius: 10, elevation: 10 }}>
+              <Text style={{ fontSize: 15, fontWeight: "700", color: theme.text, marginBottom: 4 }}>{t.enterPairCode}</Text>
+              <Text style={{ fontSize: 11, color: theme.muted, marginBottom: 12 }}>
+                PC 执行 /maestro-mobile qr 后的 8 位短码及 PC 局域网 IP
+              </Text>
+
+              {/* 配对码输入 */}
+              <Text style={{ fontSize: 10, fontWeight: "600", color: theme.dim, marginBottom: 4, fontFamily: "monospace" }}>配对码 (8 位字符)</Text>
               <TextInput
-                style={{ backgroundColor: theme.inputBg, color: theme.text, borderRadius: 10, padding: 10, fontSize: 14, borderWidth: 1, borderColor: theme.border, marginBottom: 10, fontFamily: "monospace", textAlign: "center" }}
+                style={{ backgroundColor: theme.inputBg, color: theme.text, borderRadius: 10, padding: 10, fontSize: 14, borderWidth: 1, borderColor: theme.border, marginBottom: 10, fontFamily: "monospace", textAlign: "center", letterSpacing: 2 }}
                 value={codeValue}
-                onChangeText={setCodeValue}
-                placeholder="84920153"
+                onChangeText={(text) => setCodeValue(text.toUpperCase().replace(/[^A-Z0-9]/g, "").slice(0, 8))}
+                placeholder="如 CMNX5H4K"
                 placeholderTextColor={theme.dim}
                 autoFocus
+                autoCapitalize="characters"
+                autoCorrect={false}
               />
+
+              {/* 端点地址输入 */}
+              <Text style={{ fontSize: 10, fontWeight: "600", color: theme.dim, marginBottom: 4, fontFamily: "monospace" }}>PC 端点地址 (IP 或域名)</Text>
+              <TextInput
+                style={{ backgroundColor: theme.inputBg, color: theme.text, borderRadius: 10, padding: 10, fontSize: 14, borderWidth: 1, borderColor: theme.border, marginBottom: 12, fontFamily: "monospace" }}
+                value={codeHost}
+                onChangeText={setCodeHost}
+                placeholder="如 192.168.1.5 或 127.0.0.1"
+                placeholderTextColor={theme.dim}
+                autoCapitalize="none"
+                autoCorrect={false}
+                keyboardType="numbers-and-punctuation"
+              />
+
+              {/* 错误提示 */}
+              {codeError && (
+                <Text style={{ fontSize: 11, color: theme.error, marginBottom: 10, textAlign: "center" }}>
+                  {codeError}
+                </Text>
+              )}
+
               <View style={{ flexDirection: "row", gap: 8 }}>
                 <TouchableOpacity
-                  style={{ flex: 1, padding: 10, borderRadius: 10, backgroundColor: theme.buttonPrimary, alignItems: "center" }}
-                  onPress={() => setShowCodeModal(false)}
+                  style={{ flex: 1, padding: 11, borderRadius: 10, backgroundColor: theme.buttonPrimary, alignItems: "center", opacity: codeBusy || !codeValue.trim() || !codeHost.trim() ? 0.6 : 1 }}
+                  disabled={codeBusy || !codeValue.trim() || !codeHost.trim()}
+                  onPress={() => void handleCodeConnect()}
                 >
-                  <Text style={{ color: "#fff", fontWeight: "700", fontSize: 12 }}>{t.confirmConnect}</Text>
+                  {codeBusy ? (
+                    <ActivityIndicator size="small" color="#fff" />
+                  ) : (
+                    <Text style={{ color: "#fff", fontWeight: "700", fontSize: 12 }}>{t.confirmConnect}</Text>
+                  )}
                 </TouchableOpacity>
                 <TouchableOpacity
-                  style={{ padding: 10, borderRadius: 10, borderWidth: 1, borderColor: theme.border, alignItems: "center" }}
+                  style={{ padding: 11, borderRadius: 10, borderWidth: 1, borderColor: theme.border, alignItems: "center" }}
+                  disabled={codeBusy}
                   onPress={() => setShowCodeModal(false)}
                 >
                   <Text style={{ color: theme.muted, fontSize: 12 }}>{t.cancel}</Text>
@@ -485,7 +571,7 @@ export default function SettingsScreen() {
           </View>
         </View>
       )}
-    </Animated.View>
+    </View>
   );
 }
 
@@ -530,7 +616,7 @@ function makeStyles(theme: ReturnType<typeof useTheme>["theme"]) {
     },
     topHeaderGreenDot: { width: 6, height: 6, borderRadius: 3 },
     topHeaderOnlineText: { fontSize: 11, fontWeight: "600" },
-    content: { padding: MIUIX_SPACE.lg, paddingBottom: MIUIX_SPACE.xxl },
+    content: { padding: MIUIX_SPACE.lg, paddingBottom: 24 },
     smallTitle: { fontSize: MIUIX_TYPE.footnote1, fontWeight: "600", color: theme.onBackgroundVariant ?? theme.muted, marginBottom: MIUIX_SPACE.sm, marginTop: MIUIX_SPACE.xs },
     // SegmentedControl（设计稿 seg-wrap：滑块式三段）
     segWrap: { flexDirection: "row", borderRadius: MIUIX_RADIUS.md, padding: 3, marginBottom: MIUIX_SPACE.lg },

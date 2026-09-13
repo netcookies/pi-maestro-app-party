@@ -36,116 +36,40 @@ let cachedModelsList: { id: string; provider: string; name: string; reasoning: b
 export default function SessionScreen() {
   const { id } = useLocalSearchParams<{ id: string }>();
   const router = useRouter();
-  const { state, sendPrompt, sendAbort, answerDialog, cancelDialog, loadMoreHistory, searchHistory, listModels, setModel, setThinking, listSkills, compactSession, renameSession, isConnected, connectionState } = useHost();
+  const { state, sendPrompt, sendAbort, answerDialog, cancelDialog, loadSessionHistory, loadMoreHistory, searchHistory, listModels, setModel, setThinking, listSkills, compactSession, renameSession, isConnected, connectionState } = useHost();
   const { theme } = useTheme();
   const { t } = useI18n();
   const cfg = getConfig();
   const session = state.sessions.get(id ?? "");
   const insets = useSafeAreaInsets();
 
-  // 优化项 2 落地：全屏独立模型选择子页面状态与缓存加载
-  const [inModelSelect, setInModelSelect] = useState(false);
-
-  // 进入页面卡片放大展开全屏物理弹性动画
-  const enterAnim = useRef(new Animated.Value(0)).current;
-  useEffect(() => {
-    Animated.spring(enterAnim, {
-      toValue: 1,
-      friction: 8,
-      tension: 100,
-      useNativeDriver: true,
-    }).start();
-  }, [enterAnim]);
-
-  // 左侧边缘手势向右滑动返回（Edge Swipe to Dismiss）
-  const swipeX = useRef(new Animated.Value(0)).current;
-  const edgePanResponder = useRef(
-    PanResponder.create({
-      onStartShouldSetPanResponder: () => false,
-      onMoveShouldSetPanResponder: (evt, gestureState) => {
-        // 只有在屏幕左侧 50px 边缘区域按住，且向右划时才捕获
-        const isFromLeftEdge = evt.nativeEvent.pageX < 50;
-        return isFromLeftEdge && gestureState.dx > 10 && Math.abs(gestureState.dx) > Math.abs(gestureState.dy);
-      },
-      onPanResponderMove: (_, gestureState) => {
-        if (gestureState.dx > 0) {
-          swipeX.setValue(gestureState.dx);
-        }
-      },
-      onPanResponderRelease: (_, gestureState) => {
-        const { width: screenWidth } = Dimensions.get("window");
-        if (gestureState.dx > 120 || gestureState.vx > 0.8) {
-          void hapticImpactLight();
-          if (inModelSelect) {
-            // 若当前处于模型选择全屏子页面，侧滑仅关闭模型选择层，返回当前会话详情页
-            Animated.spring(swipeX, {
-              toValue: 0,
-              friction: 7,
-              tension: 90,
-              useNativeDriver: true,
-            }).start();
-            setInModelSelect(false);
-          } else {
-            Animated.timing(swipeX, {
-              toValue: screenWidth,
-              duration: 180,
-              useNativeDriver: true,
-            }).start(() => {
-              router.replace("/host-sessions");
-            });
-          }
-        } else {
-          Animated.spring(swipeX, {
-            toValue: 0,
-            friction: 7,
-            tension: 90,
-            useNativeDriver: true,
-          }).start();
-        }
-      },
-    }),
-  ).current;
-  const [availableModels, setAvailableModels] = useState<{ id: string; provider: string; name: string; reasoning: boolean; vision: boolean }[]>(cachedModelsList);
-  const [modelsLoading, setModelsLoading] = useState(false);
-  const [refreshingModels, setRefreshingModels] = useState(false);
-  const [selectedModelDraft, setSelectedModelDraft] = useState<string>("");
-  const [modelSearchQuery, setModelSearchQuery] = useState("");
-
-  // 获取模型列表（带全局缓存更新与 SWR 预取）
-  const fetchModels = useCallback(async (isRefresh = false) => {
-    if (!id) return;
-    if (cachedModelsList.length === 0 && !isRefresh) {
-      setModelsLoading(true);
+  // 统一的 FAB（回到底部向下箭头）显示状态判定逻辑
+  const updateFabState = useCallback((y: number, contentH: number, viewH: number) => {
+    if (contentH <= 0 || viewH <= 0) return;
+    const maxY = contentH - viewH;
+    const atBottom = y >= maxY - cfg.stickBottomTolerance;
+    stickToBottom.current = atBottom;
+    const nextFab = !atBottom && maxY > 20;
+    if (showFabRef.current !== nextFab) {
+      showFabRef.current = nextFab;
+      animateLayout();
+      setShowFab(nextFab);
     }
-    if (isRefresh) setRefreshingModels(true);
-    try {
-      const ms = await listModels(id);
-      if (Array.isArray(ms) && ms.length > 0) {
-        cachedModelsList = ms;
-        setAvailableModels(ms);
-      }
-    } catch {
-      // 失败静默，保留已有缓存
-    } finally {
-      setModelsLoading(false);
-      setRefreshingModels(false);
-    }
-  }, [id, listModels]);
+  }, [cfg.stickBottomTolerance]);
 
   // 优化项 1 落地：FloatingToolBar 状态回显与操作
   const [thinkLevel, setThinkLevel] = useState("xhigh");
   const [planMode, setPlanMode] = useState("YOLO");
   const [actionSheetType, setActionSheetType] = useState<"think" | "plan" | "compact_confirm" | null>(null);
 
-  // 确保配置加载与后台预取模型（冷启动直接进本页时）
+  // 确保配置加载与会话数据、技能后台预取（冷启动直接进本页时）
   useEffect(() => {
     void loadConfig();
     if (id) {
+      void loadSessionHistory(id).catch(() => {});
       void listSkills(id).then(setAvailableSkills).catch(() => {});
-      // 后台静默预取模型，若已缓存则刷新，若未缓存则就绪备用
-      void fetchModels();
     }
-  }, [id, fetchModels]);
+  }, [id, loadSessionHistory, listSkills]);
   const [input, setInput] = useState("");
   const [sending, setSending] = useState(false);
   const [loadingMore, setLoadingMore] = useState(false);
@@ -174,6 +98,16 @@ export default function SessionScreen() {
   // ChatComposer 状态
   const [availableSkills, setAvailableSkills] = useState<string[]>([]);
   const [currentModelId, setCurrentModelId] = useState<string | undefined>(session?.model ? String((session.model as { id?: string })?.id ?? "") : undefined);
+
+  // 确保 session.model 发生变更或由子页面更新后同步回显当前模型 Badge
+  useEffect(() => {
+    const curName = typeof session?.model === "string"
+      ? session.model
+      : (session?.model as { name?: string; id?: string })?.name ?? (session?.model as { name?: string; id?: string })?.id;
+    if (curName) {
+      setCurrentModelId(curName);
+    }
+  }, [session?.model]);
   const contentHeightBefore = useRef(0);
   const pendingOffsetRestore = useRef(false);
   // P2-8：FlatList onContentSizeChange/onScroll 记录的真实内容高度与视口高度
@@ -212,6 +146,40 @@ export default function SessionScreen() {
   const pendingDialog = state.dialogs[0];
   const fabBottom = insets.bottom + composerHeight + 16;
 
+  // 活跃工作态感知：从用户发送消息开始，贯穿思考（thinking）、工具执行（tool）、模型流式输出，直到完整任务终结
+  const [isTurnWorking, setIsTurnWorking] = useState(false);
+  const lastItem = timeline[timeline.length - 1];
+
+  useEffect(() => {
+    // 若 Host 明确广播进入 streaming，或者本地处于发送中，标记工作中
+    if (session?.runState === "streaming" || sending) {
+      setIsTurnWorking(true);
+      return;
+    }
+
+    // 若 Host 明确广播为 idle 且本地网络请求已完成：
+    if (session?.runState === "idle" && !sending) {
+      // 1. 如果最新一条消息依然是用户刚发的消息，说明模型刚接单，还在思考或排队，保持工作中
+      if (lastItem && lastItem.kind === "user") {
+        return;
+      }
+      // 2. 如果最新一条是思考（thinking）或工具调用（tool/toolCall），说明模型还在后台干活，保持工作中
+      if (lastItem && (lastItem.kind === "thinking" || lastItem.kind === "tool")) {
+        return;
+      }
+      // 3. 只有当任务真正结束（无中间态）时，退出工作中状态
+      setIsTurnWorking(false);
+    }
+  }, [session?.runState, sending, lastItem?.id, lastItem?.kind]);
+
+  const handleAbort = useCallback(() => {
+    setSending(false);
+    setIsTurnWorking(false);
+    if (id) void sendAbort(id);
+  }, [id, sendAbort]);
+
+  const isStreaming = Boolean(isTurnWorking || session?.runState === "streaming" || sending);
+
   // reduce-motion 时跳过布局动画，加 try/catch 避免 Fabric 新架构初次布局时崩溃
   const animateLayout = useCallback(() => {
     try {
@@ -239,23 +207,45 @@ export default function SessionScreen() {
     return () => { anim.stop(); pulseOpacity.setValue(1); };
   }, [session?.runState, reduceMotion, pulseOpacity]);
 
+  // 精准双重吸底：先以 requestAnimationFrame/scrollToEnd 快速定位，再在动画末期按实际测量最大 offset 二次校准
+  const scrollToBottom = useCallback((animated = true) => {
+    stickToBottom.current = true;
+    if (showFabRef.current) {
+      showFabRef.current = false;
+      setShowFab(false);
+    }
+    if (!listRef.current) return;
+    listRef.current.scrollToEnd({ animated });
+    setTimeout(() => {
+      const maxY = lastContentHeight.current - viewportHeight.current;
+      if (maxY > 0) {
+        listRef.current?.scrollToOffset({
+          offset: maxY + 40,
+          animated: false,
+        });
+      }
+    }, animated ? 100 : 25);
+  }, []);
+
   useEffect(() => {
     // 新消息时滚动到底部（仅在用户位于底部附近时跟随）
     if (timeline.length > 0 && stickToBottom.current) {
-      setTimeout(() => listRef.current?.scrollToEnd({ animated: true }), 100);
+      scrollToBottom(true);
     }
-  }, [timeline.length]);
+  }, [timeline.length, scrollToBottom]);
   const handleSend = async () => {
     const text = input.trim();
     if (!text || !id) return;
     // 断连/重连中禁止发送（输入保留，待恢复连接后再发）
     if (!isConnected) return;
+    setIsTurnWorking(true);
     setSending(true);
     try {
       await sendPrompt(id, text);
       // 发送成功才清空输入；失败（超时/断连 reject）保留草稿，错误由 store.lastError 提示
       setInput("");
     } catch {
+      setIsTurnWorking(false);
       // 保留 input 不清空
     } finally {
       setSending(false);
@@ -290,7 +280,7 @@ export default function SessionScreen() {
     }
   }, []);
 
-  const renderItem = ({ item }: { item: ListRow }) => {
+  const renderItem = ({ item, index }: { item: ListRow; index: number }) => {
     // 虚拟行：顶部“加载更早”按钮（参与正常 cell 测量，避免 header 高度错乱）
     if (item.id === LOAD_MORE_ID) {
       return hasMore ? (
@@ -340,7 +330,7 @@ export default function SessionScreen() {
       );
     }
 
-    const isLastAssistant = isAssistant && sending && index === timeline.length - 1;
+    const isLastAssistant = isAssistant && sending && typeof index === "number" && index === timeline.length - 1;
 
     // 非 tool：普通气泡（assistant 走 markdown）
     return (
@@ -384,25 +374,7 @@ export default function SessionScreen() {
   };
 
   return (
-    <Animated.View
-      style={[
-        styles.container,
-        {
-          backgroundColor: theme.headerBg,
-          opacity: enterAnim,
-          transform: [
-            { translateX: swipeX },
-            {
-              scale: enterAnim.interpolate({
-                inputRange: [0, 1],
-                outputRange: [0.94, 1],
-              }),
-            },
-          ],
-        },
-      ]}
-      {...edgePanResponder.panHandlers}
-    >
+    <View style={[styles.container, { backgroundColor: theme.headerBg }]}>
     <SafeAreaView style={[styles.container, { backgroundColor: theme.headerBg }]} edges={["top", "bottom"]}>
     <KeyboardAvoidingView
       style={[styles.container, { backgroundColor: theme.headerBg }]}
@@ -410,7 +382,13 @@ export default function SessionScreen() {
     >
       <View style={styles.header}>
         <TouchableOpacity
-          onPress={() => router.replace("/host-sessions")}
+          onPress={() => {
+            if (router.canGoBack()) {
+              router.back();
+            } else {
+              router.replace("/host-sessions");
+            }
+          }}
           style={styles.backBtn}
           accessibilityRole="button"
           accessibilityLabel="返回会话列表"
@@ -423,14 +401,18 @@ export default function SessionScreen() {
         <TouchableOpacity
           onPress={() => {
             const curName = typeof session?.model === "string" ? session.model : (session?.model as { name?: string; id?: string })?.name ?? (session?.model as { name?: string; id?: string })?.id ?? "";
-            setSelectedModelDraft(currentModelId ?? curName);
-            setInModelSelect(true);
-            // 立即打开（若有缓存秒开），同时后台或前台刷新
-            void fetchModels();
+            router.push({
+              pathname: "/model-select",
+              params: {
+                id: id ?? "",
+                currentModelId: currentModelId ?? curName,
+              },
+            });
           }}
           style={styles.modelHeaderBtn}
           accessibilityRole="button"
           accessibilityLabel="选择模型"
+          hitSlop={{ top: 15, bottom: 15, left: 20, right: 20 }}
         >
           <Text style={styles.modelHeaderBtnText} numberOfLines={1}>
             {currentModelId ?? (typeof session?.model === "string" ? session.model : (session?.model as { name?: string; id?: string })?.name ?? (session?.model as { name?: string; id?: string })?.id ?? "Model")}
@@ -503,6 +485,11 @@ export default function SessionScreen() {
         }
         style={[styles.list, { backgroundColor: theme.bg }]}
         contentContainerStyle={styles.listContent}
+        onLayout={(e) => {
+          const h = e.nativeEvent.layout.height;
+          viewportHeight.current = h;
+          updateFabState(lastScrollY.current, lastContentHeight.current, h);
+        }}
         onContentSizeChange={(w, h) => {
           lastContentHeight.current = h;
           // prepend 完成后：锚点 = 原 offset + 新增高度（停在新段落底部）
@@ -516,24 +503,27 @@ export default function SessionScreen() {
                 offset: Math.max(0, lastScrollY.current + delta),
                 animated: false,
               });
+              return;
             }
+          }
+
+          // 核心修复：若此前正处于吸底状态，随内容被撑高（新文字/工具卡片展开）必须自动吸附到底部，严禁将其误判为离开底部！
+          if (stickToBottom.current) {
+            scrollToBottom(false);
+          } else {
+            // 只有当用户主动向上滑动后，才作为背景高度变化更新向下箭头 FAB
+            updateFabState(lastScrollY.current, h, viewportHeight.current);
           }
         }}
         onScroll={(e) => {
           const y = e.nativeEvent.contentOffset.y;
+          const contentH = e.nativeEvent.contentSize.height;
+          const viewH = e.nativeEvent.layoutMeasurement.height;
           lastScrollY.current = y;
-          contentHeightBefore.current = e.nativeEvent.contentSize.height;
-          viewportHeight.current = e.nativeEvent.layoutMeasurement.height;
-          const maxY = e.nativeEvent.contentSize.height - e.nativeEvent.layoutMeasurement.height;
-          // 底部附近 → 跟随底部；离开底部 → 停止跟随
-          const atBottom = y >= maxY - cfg.stickBottomTolerance;
-          stickToBottom.current = atBottom;
-          const nextFab = !atBottom && maxY > 0;
-          if (showFabRef.current !== nextFab) {
-            showFabRef.current = nextFab;
-            animateLayout();
-            setShowFab(nextFab);
-          }
+          contentHeightBefore.current = contentH;
+          viewportHeight.current = viewH;
+          updateFabState(y, contentH, viewH);
+
           // 顶部懒加载：接近顶部且有更多时拉取更早历史（带冷却防连环）
           if (y < cfg.loadMoreThreshold && hasMore && !loadingMore && Date.now() >= loadCooldownUntil.current) {
             void handleLoadMore();
@@ -542,76 +532,73 @@ export default function SessionScreen() {
         scrollEventThrottle={100}
       />
 
-      {session?.runState === "streaming" && (
-        <TouchableOpacity style={styles.abortButton} onPress={() => id && sendAbort(id)}>
-          <Text style={styles.abortText}>■ 停止</Text>
-        </TouchableOpacity>
-      )}
-
       {/* 底部悬浮 Floating Bar：左侧是纯单色状态药丸，右侧是向下一键到底 FAB，水平基线完全一致 */}
-      <View
-        style={[
-          styles.floatingBarContainer,
-          { bottom: composerHeight + 12 },
-        ]}
-        pointerEvents="box-none"
-      >
-        <View style={[styles.floatingToolPill, { backgroundColor: theme.cardBg, borderColor: theme.border }]}>
-          {/* 1. 思考等级 */}
-          <TouchableOpacity
-            style={styles.floatingToolBtn}
-            onPress={() => setActionSheetType("think")}
-            accessibilityRole="button"
-            accessibilityLabel="思考等级"
-          >
-            <LineIcon name="thinkBrain" size={15} color={theme.accent} />
-            <Text style={[styles.floatingToolText, { color: theme.text }]}>{thinkLevel}</Text>
-          </TouchableOpacity>
+      {!actionSheetType && (
+        <View
+          style={[
+            styles.floatingBarContainer,
+            { bottom: composerHeight + 12 },
+          ]}
+          pointerEvents="box-none"
+        >
+          <View style={[styles.floatingToolPill, { backgroundColor: theme.cardBg, borderColor: theme.border }]}>
+            {/* 1. 思考等级 */}
+            <TouchableOpacity
+              style={styles.floatingToolBtn}
+              onPress={() => setActionSheetType("think")}
+              accessibilityRole="button"
+              accessibilityLabel="思考等级"
+              hitSlop={{ top: 8, bottom: 8, left: 8, right: 6 }}
+            >
+              <LineIcon name="thinkBrain" size={15} color={theme.accent} />
+              <Text style={[styles.floatingToolText, { color: theme.text }]}>{thinkLevel}</Text>
+            </TouchableOpacity>
 
-          <View style={[styles.pillDivider, { backgroundColor: theme.border }]} />
+            <View style={[styles.pillDivider, { backgroundColor: theme.border }]} />
 
-          {/* 2. 计划模式 */}
-          <TouchableOpacity
-            style={styles.floatingToolBtn}
-            onPress={() => setActionSheetType("plan")}
-            accessibilityRole="button"
-            accessibilityLabel="计划模式"
-          >
-            <LineIcon name="planClipboard" size={15} color={theme.accent} />
-            <Text style={[styles.floatingToolText, { color: theme.text }]} numberOfLines={1}>{planMode}</Text>
-          </TouchableOpacity>
+            {/* 2. 计划模式 */}
+            <TouchableOpacity
+              style={styles.floatingToolBtn}
+              onPress={() => setActionSheetType("plan")}
+              accessibilityRole="button"
+              accessibilityLabel="计划模式"
+              hitSlop={{ top: 8, bottom: 8, left: 6, right: 6 }}
+            >
+              <LineIcon name="planClipboard" size={15} color={theme.accent} />
+              <Text style={[styles.floatingToolText, { color: theme.text }]} numberOfLines={1}>{planMode}</Text>
+            </TouchableOpacity>
 
-          <View style={[styles.pillDivider, { backgroundColor: theme.border }]} />
+            <View style={[styles.pillDivider, { backgroundColor: theme.border }]} />
 
-          {/* 3. 上下文压缩 */}
-          <TouchableOpacity
-            style={styles.floatingToolBtnOnlyIcon}
-            onPress={() => setActionSheetType("compact_confirm")}
-            accessibilityRole="button"
-            accessibilityLabel="压缩上下文"
-          >
-            <LineIcon name="compactSqueeze" size={15} color={theme.muted} />
-          </TouchableOpacity>
+            {/* 3. 上下文压缩 */}
+            <TouchableOpacity
+              style={styles.floatingToolBtnOnlyIcon}
+              onPress={() => setActionSheetType("compact_confirm")}
+              accessibilityRole="button"
+              accessibilityLabel="压缩上下文"
+              hitSlop={{ top: 8, bottom: 8, left: 6, right: 8 }}
+            >
+              <LineIcon name="compactSqueeze" size={15} color={theme.muted} />
+            </TouchableOpacity>
+          </View>
+
+          {showFab ? (
+            <TouchableOpacity
+              style={[styles.fab, { backgroundColor: theme.accent }]}
+              accessibilityLabel="回到底部"
+              hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}
+              onPress={() => {
+                animateLayout();
+                scrollToBottom(true);
+              }}
+            >
+              <LineIcon name="arrowDown" size={18} color="#fff" strokeWidth={2.4} />
+            </TouchableOpacity>
+          ) : (
+            <View style={{ width: 42, height: 42 }} />
+          )}
         </View>
-
-        {showFab ? (
-          <TouchableOpacity
-            style={[styles.fab, { backgroundColor: theme.accent }]}
-            accessibilityLabel="回到底部"
-            onPress={() => {
-              animateLayout();
-              stickToBottom.current = true;
-              showFabRef.current = false;
-              setShowFab(false);
-              listRef.current?.scrollToEnd({ animated: true });
-            }}
-          >
-            <LineIcon name="arrowDown" size={18} color="#fff" strokeWidth={2.4} />
-          </TouchableOpacity>
-        ) : (
-          <View style={{ width: 42, height: 42 }} />
-        )}
-      </View>
+      )}
 
       <View
         onLayout={(e) => setComposerHeight(e.nativeEvent.layout.height)}
@@ -623,9 +610,13 @@ export default function SessionScreen() {
             if (!id) return;
             // 断连时禁止发送；throw 使 ChatComposer 恢复草稿（其内部先清空后发送）
             if (!isConnected) throw new Error("未连接到主机");
+            setIsTurnWorking(true);
             setSending(true);
             try {
               await sendPrompt(id, text, imgs);
+            } catch (err) {
+              setIsTurnWorking(false);
+              throw err;
             } finally {
               setSending(false);
             }
@@ -643,7 +634,10 @@ export default function SessionScreen() {
           },
           compact: async () => (id ? compactSession(id) : { ok: false, error: "no session" }),
           renameSession: async (name) => (id ? renameSession(id, name) : { ok: false, error: "no session" }),
+          abort: handleAbort,
         }}
+        isStreaming={isStreaming}
+        onAbort={handleAbort}
         currentModel={currentModelId
           ? (session?.model as { name?: string } | undefined)?.name ?? currentModelId
           : (session?.model as { name?: string } | undefined)?.name}
@@ -764,158 +758,7 @@ export default function SessionScreen() {
       </SpringBottomSheet>
     </KeyboardAvoidingView>
     </SafeAreaView>
-
-    {/* 独立全屏模型选择子页面 (置于最顶层，直接使用 insets.top 贴顶，完全脱离外层 KeyboardAvoidingView 干扰) */}
-    {inModelSelect && (
-      <View
-        style={[
-          StyleSheet.absoluteFill,
-          {
-            backgroundColor: theme.headerBg,
-            zIndex: 100,
-            paddingTop: insets.top,
-            paddingBottom: Math.max(insets.bottom, 12),
-          },
-        ]}
-      >
-        <View style={[styles.header, { borderBottomColor: theme.border }]}>
-          <TouchableOpacity
-            onPress={() => setInModelSelect(false)}
-            style={styles.backBtn}
-            accessibilityRole="button"
-            accessibilityLabel="返回"
-          >
-            <LineIcon name="arrowLeft" size={20} color={theme.text} strokeWidth={2.4} />
-          </TouchableOpacity>
-          <Text style={styles.headerTitle}>
-            {t.tabSessions === "会话" ? "选择会话模型" : "Select Session Model"}
-          </Text>
-          <TouchableOpacity
-            onPress={async () => {
-              if (id && selectedModelDraft) {
-                await setModel(id, selectedModelDraft);
-                setCurrentModelId(selectedModelDraft);
-              }
-              setInModelSelect(false);
-            }}
-            style={[styles.modelApplyBtn, { backgroundColor: theme.buttonPrimary }]}
-          >
-            <Text style={styles.modelApplyBtnText}>
-              {t.tabSessions === "会话" ? "应用" : "Apply"}
-            </Text>
-          </TouchableOpacity>
-        </View>
-
-        <View style={{ flex: 1, backgroundColor: theme.bg }}>
-        <View style={[styles.modelSearchRow, { backgroundColor: theme.cardBg, borderColor: theme.border }]}>
-          <LineIcon name="search" size={15} color={theme.muted} style={{ marginLeft: 8 }} />
-          <TextInput
-            style={[styles.modelSearchInput, { color: theme.text }]}
-            placeholder={t.tabSessions === "会话" ? "搜索模型名称或厂商 (Gemini, Claude, GPT...)" : "Search model name or provider..."}
-            placeholderTextColor={theme.dim}
-            value={modelSearchQuery}
-            onChangeText={setModelSearchQuery}
-          />
-          {modelSearchQuery.length > 0 && (
-            <TouchableOpacity onPress={() => setModelSearchQuery("")} style={{ padding: 6 }}>
-              <LineIcon name="x" size={14} color={theme.muted} />
-            </TouchableOpacity>
-          )}
-        </View>
-
-        {modelsLoading && availableModels.length === 0 ? (
-          <View style={{ flex: 1, alignItems: "center", justifyContent: "center", gap: 10 }}>
-            <ActivityIndicator size="large" color={theme.accent} />
-            <Text style={{ color: theme.muted, fontSize: 13 }}>正在检索可用模型列表...</Text>
-          </View>
-        ) : (
-          <FlatList
-            data={(availableModels || []).filter((m) => {
-              if (!modelSearchQuery.trim()) return true;
-              const q = modelSearchQuery.toLowerCase();
-              const idStr = String(m?.id ?? "").toLowerCase();
-              const provStr = String(m?.provider ?? "").toLowerCase();
-              const nameStr = String(m?.name ?? "").toLowerCase();
-              return idStr.includes(q) || provStr.includes(q) || nameStr.includes(q);
-            })}
-            keyExtractor={(m) => m?.id ?? Math.random().toString()}
-            contentContainerStyle={{ padding: 16, gap: 10 }}
-            keyboardShouldPersistTaps="handled"
-            refreshing={refreshingModels}
-            onRefresh={() => void fetchModels(true)}
-            ListEmptyComponent={
-              <View style={{ alignItems: "center", paddingVertical: 48, gap: 8 }}>
-                <Text style={{ color: theme.muted, fontSize: 13 }}>未找到匹配的模型</Text>
-                <TouchableOpacity
-                  onPress={() => void fetchModels(true)}
-                  style={{ paddingHorizontal: 12, paddingVertical: 6, borderRadius: 12, borderWidth: 1, borderColor: theme.border }}
-                >
-                  <Text style={{ color: theme.accent, fontSize: 12 }}>重新加载</Text>
-                </TouchableOpacity>
-              </View>
-            }
-            renderItem={({ item: m }) => {
-              const isSelected = selectedModelDraft === m.id;
-              return (
-                <TouchableOpacity
-                  style={[
-                    styles.modelCard,
-                    { borderColor: isSelected ? theme.accent : theme.border, backgroundColor: theme.cardBg },
-                  ]}
-                  onPress={() => setSelectedModelDraft(m.id)}
-                >
-                  <View style={styles.modelCardHeader}>
-                    <Text style={[styles.modelCardTitle, { color: theme.text }]}>{m.name || m.id}</Text>
-                    {isSelected && <LineIcon name="check" size={16} color={theme.accent} strokeWidth={2.4} />}
-                  </View>
-                  <Text style={[styles.modelCardProvider, { color: theme.muted }]}>{m.provider} · #{m.id}</Text>
-                  <View style={styles.modelCardTags}>
-                    {m.reasoning && (
-                      <View
-                        style={{
-                          flexDirection: "row",
-                          alignItems: "center",
-                          backgroundColor: hexToRgba(theme.accent, 0.14),
-                          borderWidth: 1,
-                          borderColor: hexToRgba(theme.accent, 0.35),
-                          paddingHorizontal: 8,
-                          paddingVertical: 3,
-                          borderRadius: 8,
-                        }}
-                      >
-                        <Text style={{ fontSize: 10, fontFamily: "monospace", color: theme.accent, fontWeight: "600" }}>
-                          ● {t.reasoningLabel}
-                        </Text>
-                      </View>
-                    )}
-                    {m.vision && (
-                      <View
-                        style={{
-                          flexDirection: "row",
-                          alignItems: "center",
-                          backgroundColor: "rgba(59, 130, 246, 0.14)",
-                          borderWidth: 1,
-                          borderColor: "rgba(59, 130, 246, 0.35)",
-                          paddingHorizontal: 8,
-                          paddingVertical: 3,
-                          borderRadius: 8,
-                        }}
-                      >
-                        <Text style={{ fontSize: 10, fontFamily: "monospace", color: "#60A5FA", fontWeight: "600" }}>
-                          ● {t.visionLabel}
-                        </Text>
-                      </View>
-                    )}
-                  </View>
-                </TouchableOpacity>
-              );
-            }}
-          />
-        )}
-        </View>
-      </View>
-    )}
-    </Animated.View>
+    </View>
   );
 }
 

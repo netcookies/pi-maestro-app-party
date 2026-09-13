@@ -12,14 +12,16 @@
 import React, { useState, useRef, useEffect } from "react";
 import {
   View, Text, TextInput, TouchableOpacity, StyleSheet, Modal, FlatList, Image, ScrollView,
-  Animated, AccessibilityInfo, Pressable, KeyboardAvoidingView, Platform,
+  Animated, AccessibilityInfo, Pressable, KeyboardAvoidingView, Platform, Easing,
 } from "react-native";
+import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useTheme } from "../theme";
 import { LineIcon } from "./LineIcon";
 import { hapticImpactMedium } from "../utils/haptics";
 
 export interface ComposerActions {
   send(text: string, images?: { data: string; mime: string }[]): Promise<void>;
+  abort?(): Promise<void> | void;
   listModels?(): Promise<{ id: string; provider: string; name: string; reasoning: boolean; vision: boolean }[]>;
   setModel?(modelId: string): Promise<{ ok: boolean; error?: string }>;
   setThinking?(level: string): Promise<{ ok: boolean; error?: string }>;
@@ -33,6 +35,10 @@ interface Props {
   currentModel?: string;
   /** 发送中状态 */
   sending?: boolean;
+  /** 会话是否正在流式运行（运行中展示旋转停止按钮） */
+  isStreaming?: boolean;
+  /** 终止运行回调 */
+  onAbort?: () => void;
   /** 可用 skills（名称或 {name, description} 对象列表） */
   skills?: (string | { name: string; description?: string })[];
   placeholder?: string;
@@ -40,8 +46,9 @@ interface Props {
 
 const THINKING_LEVELS = ["off", "minimal", "low", "medium", "high", "xhigh", "max"];
 
-export function ChatComposer({ actions, currentModel, sending, skills = [], placeholder }: Props) {
+export function ChatComposer({ actions, currentModel, sending, isStreaming = false, onAbort, skills = [], placeholder }: Props) {
   const { theme } = useTheme();
+  const insets = useSafeAreaInsets();
   const [text, setText] = useState("");
   const [images, setImages] = useState<{ data: string; mime: string }[]>([]);
   const [showModels, setShowModels] = useState(false);
@@ -54,6 +61,25 @@ export function ChatComposer({ actions, currentModel, sending, skills = [], plac
   const [focused, setFocused] = useState(false);
   const [fullscreenEdit, setFullscreenEdit] = useState(false);
   const [fsPanel, setFsPanel] = useState<null | "models" | "thinking" | "plan" | "skills">(null);
+
+  // 运行态 Spinning 进度环无限旋转动画
+  const spinAnim = useRef(new Animated.Value(0)).current;
+  useEffect(() => {
+    if (!isStreaming) {
+      spinAnim.setValue(0);
+      return;
+    }
+    const loop = Animated.loop(
+      Animated.timing(spinAnim, {
+        toValue: 1,
+        duration: 1100,
+        easing: Easing.linear,
+        useNativeDriver: true,
+      }),
+    );
+    loop.start();
+    return () => loop.stop();
+  }, [isStreaming, spinAnim]);
 
   // reduce-motion：系统开启时动画直接置终值，不播动画
   const [reduceMotion, setReduceMotion] = useState(false);
@@ -249,64 +275,118 @@ export function ChatComposer({ actions, currentModel, sending, skills = [], plac
             </TouchableOpacity>
           )}
         </View>
-        {/* 发送按钮 */}
-        <TouchableOpacity
-          style={[
-            styles.sendButton,
-            {
-              backgroundColor: theme.accent,
-              opacity: canSend && !sending ? 1 : 0.45,
-              shadowColor: theme.accent,
-              shadowOpacity: canSend && !sending ? 0.35 : 0,
-              shadowRadius: 6,
-              elevation: canSend && !sending ? 4 : 0,
-            },
-          ]}
-          hitSlop={{ top: 4, bottom: 4, left: 4, right: 4 }}
-          accessibilityRole="button"
-          accessibilityLabel="发送消息"
-          accessibilityState={{ disabled: !canSend || sending, busy: sending }}
-          onPress={() => void handleSend()}
-          disabled={!canSend || sending}
-        >
-          <Animated.View
-            style={{
-              transform: [
-                {
-                  translateX: flyAnim.interpolate({
-                    inputRange: [0, 0.6, 1],
-                    outputRange: [0, 10, 0],
-                  }),
-                },
-                {
-                  translateY: flyAnim.interpolate({
-                    inputRange: [0, 0.6, 1],
-                    outputRange: [0, -10, 0],
-                  }),
-                },
-                {
-                  scale: flyAnim.interpolate({
-                    inputRange: [0, 0.6, 1],
-                    outputRange: [1, 0.6, 1],
-                  }),
-                },
-              ],
-              opacity: flyAnim.interpolate({
-                inputRange: [0, 0.5, 0.7, 1],
-                outputRange: [1, 0, 0, 1],
-              }),
+        {/* 运行中：停止按钮（旋转进度环 + 中间方块）；空闲中：发送按钮（纸飞机） */}
+        {isStreaming ? (
+          <TouchableOpacity
+            style={[
+              styles.sendButton,
+              {
+                backgroundColor: theme.cardBg,
+                borderColor: theme.border,
+                borderWidth: 1,
+                shadowColor: theme.accent,
+                shadowOpacity: 0.25,
+                shadowRadius: 5,
+                elevation: 3,
+              },
+            ]}
+            hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+            accessibilityRole="button"
+            accessibilityLabel="停止运行"
+            onPress={() => {
+              void hapticImpactMedium();
+              onAbort?.() ?? actions.abort?.();
             }}
           >
-            <LineIcon name="send" size={16} color="#fff" strokeWidth={2.2} />
-          </Animated.View>
-        </TouchableOpacity>
+            {/* 外层旋转圆环：带缺口的强调色边框环 */}
+            <Animated.View
+              style={{
+                position: "absolute",
+                width: 28,
+                height: 28,
+                borderRadius: 14,
+                borderWidth: 2,
+                borderColor: theme.accent,
+                borderTopColor: "transparent",
+                transform: [
+                  {
+                    rotate: spinAnim.interpolate({
+                      inputRange: [0, 1],
+                      outputRange: ["0deg", "360deg"],
+                    }),
+                  },
+                ],
+              }}
+            />
+            {/* 中间停止实心方块 */}
+            <View
+              style={{
+                width: 10,
+                height: 10,
+                borderRadius: 2,
+                backgroundColor: theme.accent,
+              }}
+            />
+          </TouchableOpacity>
+        ) : (
+          <TouchableOpacity
+            style={[
+              styles.sendButton,
+              {
+                backgroundColor: theme.accent,
+                opacity: canSend && !sending ? 1 : 0.45,
+                shadowColor: theme.accent,
+                shadowOpacity: canSend && !sending ? 0.35 : 0,
+                shadowRadius: 6,
+                elevation: canSend && !sending ? 4 : 0,
+              },
+            ]}
+            hitSlop={{ top: 4, bottom: 4, left: 4, right: 4 }}
+            accessibilityRole="button"
+            accessibilityLabel="发送消息"
+            accessibilityState={{ disabled: !canSend || sending, busy: sending }}
+            onPress={() => void handleSend()}
+            disabled={!canSend || sending}
+          >
+            <Animated.View
+              style={{
+                transform: [
+                  {
+                    translateX: flyAnim.interpolate({
+                      inputRange: [0, 0.6, 1],
+                      outputRange: [0, 10, 0],
+                    }),
+                  },
+                  {
+                    translateY: flyAnim.interpolate({
+                      inputRange: [0, 0.6, 1],
+                      outputRange: [0, -10, 0],
+                    }),
+                  },
+                  {
+                    scale: flyAnim.interpolate({
+                      inputRange: [0, 0.6, 1],
+                      outputRange: [1, 0.6, 1],
+                    }),
+                  },
+                ],
+                opacity: flyAnim.interpolate({
+                  inputRange: [0, 0.5, 0.7, 1],
+                  outputRange: [1, 0, 0, 1],
+                }),
+              }}
+            >
+              <LineIcon name="send" size={16} color="#fff" strokeWidth={2.2} />
+            </Animated.View>
+          </TouchableOpacity>
+        )}
       </View>
 
       {/* 全屏编辑弹窗 */}
       <Modal visible={fullscreenEdit} animationType="slide" onRequestClose={() => setFullscreenEdit(false)}>
         <View style={[styles.fsRoot, { backgroundColor: theme.bg }]}>
           {/* 右上角最小化 */}
-          <View style={[styles.fsTopBar, { paddingTop: 60 }]}>
+          <View style={[styles.fsTopBar, { paddingTop: Math.max(insets.top, 16) }]}>
             <Text style={[styles.fsTitle, { color: theme.muted }]}>Edit</Text>
             <TouchableOpacity
               style={[styles.fsMinBtn, { backgroundColor: theme.cardBg, borderColor: theme.border }]}
@@ -330,8 +410,17 @@ export function ChatComposer({ actions, currentModel, sending, skills = [], plac
             textAlignVertical="top"
             maxLength={8000}
           />
-          {/* 底部工具栏（聚焦时显示） */}
-          <View style={[styles.fsToolbar, { borderTopColor: theme.border, backgroundColor: theme.headerBg }]}>
+          {/* 底部工具栏（聚焦时显示，适配底部安全区防裁切） */}
+          <View
+            style={[
+              styles.fsToolbar,
+              {
+                borderTopColor: theme.border,
+                backgroundColor: theme.headerBg,
+                paddingBottom: Math.max(insets.bottom, 12),
+              },
+            ]}
+          >
             <TouchableOpacity
               onPress={() => { setFsPanel("models"); if (models.length === 0) loadModels(); }}
               style={styles.fsToolBtn}
@@ -356,27 +445,75 @@ export function ChatComposer({ actions, currentModel, sending, skills = [], plac
               <Text style={[styles.toolLabel, { color: theme.muted }]}>Image</Text>
             </TouchableOpacity>
             <View style={styles.fsSpacer} />
-            <TouchableOpacity
-              style={[
-                styles.sendButton,
-                {
-                  backgroundColor: theme.accent,
-                  opacity: canSend && !sending ? 1 : 0.45,
-                  shadowColor: theme.accent,
-                  shadowOpacity: canSend && !sending ? 0.35 : 0,
-                  shadowRadius: 6,
-                  elevation: canSend && !sending ? 4 : 0,
-                },
-              ]}
-              hitSlop={{ top: 4, bottom: 4, left: 4, right: 4 }}
-              accessibilityRole="button"
-              accessibilityLabel="发送消息"
-              accessibilityState={{ disabled: !canSend || sending, busy: sending }}
-              onPress={() => { setFullscreenEdit(false); void handleSend(); }}
-              disabled={!canSend || sending}
-            >
-              <LineIcon name="send" size={16} color="#fff" strokeWidth={2.2} />
-            </TouchableOpacity>
+            {isStreaming ? (
+              <TouchableOpacity
+                style={[
+                  styles.sendButton,
+                  {
+                    backgroundColor: theme.cardBg,
+                    borderColor: theme.border,
+                    borderWidth: 1,
+                  },
+                ]}
+                hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                accessibilityRole="button"
+                accessibilityLabel="停止运行"
+                onPress={() => {
+                  void hapticImpactMedium();
+                  onAbort?.() ?? actions.abort?.();
+                }}
+              >
+                <Animated.View
+                  style={{
+                    position: "absolute",
+                    width: 28,
+                    height: 28,
+                    borderRadius: 14,
+                    borderWidth: 2,
+                    borderColor: theme.accent,
+                    borderTopColor: "transparent",
+                    transform: [
+                      {
+                        rotate: spinAnim.interpolate({
+                          inputRange: [0, 1],
+                          outputRange: ["0deg", "360deg"],
+                        }),
+                      },
+                    ],
+                  }}
+                />
+                <View
+                  style={{
+                    width: 10,
+                    height: 10,
+                    borderRadius: 2,
+                    backgroundColor: theme.accent,
+                  }}
+                />
+              </TouchableOpacity>
+            ) : (
+              <TouchableOpacity
+                style={[
+                  styles.sendButton,
+                  {
+                    backgroundColor: theme.accent,
+                    opacity: canSend && !sending ? 1 : 0.45,
+                    shadowColor: theme.accent,
+                    shadowOpacity: canSend && !sending ? 0.35 : 0,
+                    shadowRadius: 6,
+                    elevation: canSend && !sending ? 4 : 0,
+                  },
+                ]}
+                hitSlop={{ top: 4, bottom: 4, left: 4, right: 4 }}
+                accessibilityRole="button"
+                accessibilityLabel="发送消息"
+                accessibilityState={{ disabled: !canSend || sending, busy: sending }}
+                onPress={() => { setFullscreenEdit(false); void handleSend(); }}
+                disabled={!canSend || sending}
+              >
+                <LineIcon name="send" size={16} color="#fff" strokeWidth={2.2} />
+              </TouchableOpacity>
+            )}
           </View>
 
           {/* 内嵌面板（全屏内的工具弹层，非独立 Modal，避免层级问题） */}
@@ -390,6 +527,7 @@ export function ChatComposer({ actions, currentModel, sending, skills = [], plac
                     backgroundColor: theme.cardBg,
                     borderColor: theme.border,
                     opacity: panelAnim,
+                    paddingBottom: Math.max(insets.bottom, 16),
                     transform: [{ translateY: panelAnim.interpolate({ inputRange: [0, 1], outputRange: [24, 0] }) }],
                   },
                 ]}

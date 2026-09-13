@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useRef, useState } from "react";
 import { ActivityIndicator, BackHandler, ScrollView, StyleSheet, Text, TouchableOpacity, View } from "react-native";
-import { router, useNavigation } from "expo-router";
+import { router, useLocalSearchParams, useNavigation } from "expo-router";
 import { useIsFocused } from "@react-navigation/native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { QRPairScanner } from "../src/components/QRPairScanner";
@@ -32,6 +32,7 @@ export default function PairScanScreen() {
   const { theme } = useTheme();
   const { t } = useI18n();
   const { connect } = useHost();
+  const params = useLocalSearchParams<{ ws?: string; token?: string; ips?: string; c?: string; p?: string; from?: string }>();
   const navigation = useNavigation();
   const isFocused = useIsFocused();
   const styles = makeStyles();
@@ -42,6 +43,34 @@ export default function PairScanScreen() {
   const navigationAllowedRef = useRef(false);
   const commitInProgressRef = useRef(false);
   const isActive = useCallback(() => isPairingFlowActive(mountedRef.current, cancelledRef.current, abortControllerRef.current.signal.aborted), []);
+
+  // 支持深度链接直接带参数直连 (maestro-mobile://pair-scan?ws=...&token=...)
+  useEffect(() => {
+    if (!params || (!params.ws && !params.c)) return;
+    if (params.ws) {
+      const targetWs = params.ws;
+      const targetToken = params.token ?? "";
+      let hostDisplay = targetWs.replace(/^wss?:\/\//i, "").replace(/\/ws$/i, "");
+      void saveAndConnect({
+        hostUrl: targetWs,
+        token: targetToken,
+        displayHost: hostDisplay,
+        candidateIps: [],
+        port: "4739",
+      });
+    } else if (params.c) {
+      const rawIps = params.ips ?? "127.0.0.1";
+      const ips = rawIps.split(",").map((s) => s.trim()).filter(isIp);
+      const port = params.p ?? "4739";
+      void exchangeShortCode({
+        hostUrl: `ws://${ips[0] ?? "127.0.0.1"}:${port}/ws`,
+        displayHost: `${ips[0] ?? "127.0.0.1"}:${port}`,
+        candidateIps: ips.length > 0 ? ips : ["127.0.0.1"],
+        port,
+        shortCode: params.c,
+      });
+    }
+  }, [params.ws, params.token, params.c, params.ips, params.p, saveAndConnect, exchangeShortCode]);
 
   useEffect(() => () => {
     mountedRef.current = false;
@@ -101,7 +130,11 @@ export default function PairScanScreen() {
       if (!isActive()) return;
       navigationAllowedRef.current = true;
       commitInProgressRef.current = false;
-      router.replace("/host-sessions");
+      if (params.from === "settings" || router.canGoBack()) {
+        router.back();
+      } else {
+        router.replace("/settings");
+      }
     } catch (cause) {
       commitInProgressRef.current = false;
       if (!isActive()) return;
@@ -171,8 +204,11 @@ export default function PairScanScreen() {
     }
     cancelledRef.current = true;
     abortControllerRef.current.abort();
-    // 显式精准返回设置页，绝不跳回工作台
-    router.replace("/settings");
+    if (router.canGoBack()) {
+      router.back();
+    } else {
+      router.replace("/settings");
+    }
   };
 
   function reset() {
@@ -197,7 +233,15 @@ export default function PairScanScreen() {
   return (
     <SafeAreaView style={[styles.container, { backgroundColor: theme.bg }]} edges={["top", "bottom"]}>
       <View style={[styles.header, { borderBottomColor: theme.border }]}>
-        <TouchableOpacity onPress={cancelAndBack} disabled={state === "saving"} accessibilityRole="button" accessibilityLabel="返回设置页" accessibilityState={{ disabled: state === "saving" }} style={[styles.iconButton, state === "saving" && styles.disabled]}>
+        <TouchableOpacity
+          onPress={cancelAndBack}
+          disabled={state === "saving"}
+          accessibilityRole="button"
+          accessibilityLabel="返回设置页"
+          accessibilityState={{ disabled: state === "saving" }}
+          style={[styles.iconButton, state === "saving" && styles.disabled]}
+          hitSlop={{ top: 20, bottom: 20, left: 20, right: 30 }}
+        >
           <LineIcon name="arrowLeft" size={20} color={theme.text} strokeWidth={2.4} />
         </TouchableOpacity>
         <Text style={[styles.title, { color: theme.text }]}>{t.scanQrTitle}</Text>

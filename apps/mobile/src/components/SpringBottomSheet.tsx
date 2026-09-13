@@ -21,6 +21,7 @@ interface SpringBottomSheetProps {
   children: React.ReactNode;
   containerStyle?: ViewStyle;
   contentHeight?: number;
+  keyboardVerticalOffset?: number;
 }
 
 export function shouldDismissSheet(
@@ -38,6 +39,7 @@ export function SpringBottomSheet({
   children,
   containerStyle,
   contentHeight = 320,
+  keyboardVerticalOffset = 0,
 }: SpringBottomSheetProps) {
   const { theme } = useTheme();
   const translateY = useRef(new Animated.Value(SCREEN_HEIGHT)).current;
@@ -119,7 +121,7 @@ export function SpringBottomSheet({
   if (!visible) return null;
 
   return (
-    <View style={StyleSheet.absoluteFillObject} pointerEvents="box-none">
+    <View style={[StyleSheet.absoluteFillObject, { zIndex: 999, elevation: 50 }]} pointerEvents="box-none">
       {/* 半透明遮罩层 */}
       <Animated.View
         style={[
@@ -132,7 +134,8 @@ export function SpringBottomSheet({
 
       {/* 键盘避让容器：输入法弹出时抽屉自动向上托起，不被输入法遮挡 */}
       <KeyboardAvoidingView
-        behavior={Platform.OS === "ios" ? "padding" : "height"}
+        behavior={Platform.OS === "ios" ? "padding" : undefined}
+        keyboardVerticalOffset={keyboardVerticalOffset}
         style={styles.keyboardWrap}
         pointerEvents="box-none"
       >
@@ -171,10 +174,7 @@ const styles = StyleSheet.create({
     justifyContent: "flex-end",
   },
   sheetContainer: {
-    position: "absolute",
-    bottom: 0,
-    left: 0,
-    right: 0,
+    width: "100%",
     borderTopLeftRadius: MIUIX_RADIUS.lg,
     borderTopRightRadius: MIUIX_RADIUS.lg,
     borderTopWidth: 1,

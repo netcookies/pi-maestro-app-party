@@ -4,18 +4,18 @@ import {
   KeyboardAvoidingView, Platform, Animated,
 } from "react-native";
 import { useFocusEffect, useRouter } from "expo-router";
-import { useHost } from "../src/store";
-import { useTheme, MIUIX_RADIUS, MIUIX_TYPE, MIUIX_SPACE, hexToRgba } from "../src/theme";
-import { getConfig, loadConfig } from "../src/config";
+import { useHost } from "../../src/store";
+import { useTheme, MIUIX_RADIUS, MIUIX_TYPE, MIUIX_SPACE, hexToRgba } from "../../src/theme";
+import { getConfig, loadConfig } from "../../src/config";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { SafeAreaView } from "react-native-safe-area-context";
-import { LineIcon } from "../src/components/LineIcon";
-import { SpringCard } from "../src/components/SpringCard";
-import { PulsingDot } from "../src/components/PulsingDot";
-import { useTabSwipe } from "../src/hooks/useTabSwipe";
-import { useI18n, formatRelativeTime } from "../src/i18n";
+import { LineIcon } from "../../src/components/LineIcon";
+import { SpringCard } from "../../src/components/SpringCard";
+import { PulsingDot } from "../../src/components/PulsingDot";
+import { useTabSwipe } from "../../src/hooks/useTabSwipe";
+import { useI18n, formatRelativeTime } from "../../src/i18n";
 import type { HostSessionSummary, LiveSessionInfo } from "@maestro-mobile/shared";
-import { canLoadMoreSessions, isLoadMoreResponseCurrent, isTargetedResponseCurrent, mergeHostSessionPage, mergeTargetedHostSessions, shouldBlockSessionListError, shouldRequestTargetedSummaries, type TargetedCapability } from "../src/host-session-pagination";
+import { canLoadMoreSessions, isLoadMoreResponseCurrent, isTargetedResponseCurrent, mergeHostSessionPage, mergeTargetedHostSessions, shouldBlockSessionListError, shouldRequestTargetedSummaries, type TargetedCapability } from "../../src/host-session-pagination";
 
 const PAGE_SIZE = 30;
 
@@ -581,10 +581,8 @@ export default function HostSessionsScreen() {
     </View>
   );
 
-  const { panHandlers, animatedStyle } = useTabSwipe({ leftRoute: "/", rightRoute: "/monitor" });
-
   return (
-    <Animated.View style={[styles.container, animatedStyle, { backgroundColor: theme.bg }]} {...panHandlers}>
+    <View style={[styles.container, { backgroundColor: theme.bg }]}>
       {/* 统一定制顶栏：顶部状态栏背景与 Header 融为一体，只有下方微阴影 */}
       <View style={[styles.headerContainer, { backgroundColor: theme.headerBg, borderBottomColor: theme.border }]}>
         <SafeAreaView edges={["top"]} style={{ backgroundColor: theme.headerBg }}>
@@ -637,7 +635,7 @@ export default function HostSessionsScreen() {
           keyExtractor={(r) => r.key}
           renderItem={renderItem}
           extraData={t}
-          contentContainerStyle={[styles.list, { paddingBottom: 100 }]}
+          contentContainerStyle={[styles.list, { paddingBottom: 80 }]}
           keyboardShouldPersistTaps="handled"
           refreshing={refreshing}
           onRefresh={() => void loadFirstPage(debouncedQuery, true)}
@@ -715,7 +713,7 @@ export default function HostSessionsScreen() {
           </View>
         </KeyboardAvoidingView>
       )}
-    </Animated.View>
+    </View>
   );
 }
 
@@ -831,7 +829,7 @@ function makeStyles(theme: ReturnType<typeof useTheme>["theme"]) {
     contextFill: { height: "100%", borderRadius: 2 },
     floatingBarContainer: {
       position: "absolute",
-      bottom: 24,
+      bottom: 16,
       left: 16,
       right: 16,
       flexDirection: "row",
@@ -876,7 +874,7 @@ function makeStyles(theme: ReturnType<typeof useTheme>["theme"]) {
     },
     searchBarPopupWrap: {
       position: "absolute",
-      bottom: 24,
+      bottom: 16,
       left: 16,
       right: 16,
       zIndex: 60,

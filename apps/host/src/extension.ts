@@ -18,6 +18,7 @@ import { openSync, closeSync, chmodSync } from "node:fs";
 import { join } from "node:path";
 import { homedir } from "node:os";
 import { fileURLToPath } from "node:url";
+import qrcodeTerminal from "qrcode-terminal";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 
 const PID_FILE = join(homedir(), ".pi", "maestro-mobile.pid");
@@ -311,22 +312,35 @@ export default function maestroHostExtension(pi: ExtensionAPI): void {
         // c= 短码保留给未来「token 轮换/免内联」模式（App 侧优先短码，无则用内联 token）。
         const primary = `ws://${shown[0]}:${port}/ws`;
         const url = `maestro-mobile://pair?ws=${encodeURIComponent(primary)}&token=${encodeURIComponent(token)}&ips=${encodeURIComponent(shown.join(","))}&c=${code}&p=${port}`;
+        
+        // 1. 静默生成备用 PNG（0600 权限，供无相机或文件查看需要），彻底移除自动唤起外部 open 弹窗
         const { generateQrPng } = await import("./server/qr-png.js");
-        // 单一固定文件名 + 0600 权限：PNG 内嵌 token，绝不能按 code 累积成堆、也不能同机他用户可读。
         const pngPath = join(homedir(), ".pi", PAIR_QR_FILE);
         await sweepStalePairPng(pngPath);
         await writeFile(pngPath, generateQrPng(url), { mode: 0o600 });
-        await chmod(pngPath, 0o600); // 已存在时 mode 选项不生效，显式收紧
-        const opener = process.platform === "darwin" ? "open" : process.platform === "win32" ? "start" : "xdg-open";
-        try {
-          execFile(opener, process.platform === "win32" ? ["", pngPath] : [pngPath], () => { /* 忽略失败：无 GUI 环境 */ });
-        } catch { /* 无 GUI 环境（Docker/SSH）忽略，路径已打印 */ }
-        ctx.ui.notify(
-          `配对短码: ${code}（5 分钟有效）· ${shown.length} 个候选地址\n` +
-          `二维码已打开（图片对比度足够，任何扫码器可识别）；如未弹出请手动打开：${pngPath}\n` +
-          `或在 App 里选「输入配对码」直接填 ${code}`,
-          "info",
-        );
+        await chmod(pngPath, 0o600);
+
+        // 2. 纯正 TUI 就地直显：在当前终端渲染字符二维码，并在下方完整打印端点和配对短码
+        const qrAscii = await new Promise<string>((resolve) => {
+          qrcodeTerminal.generate(url, { small: true }, (ascii: string) => {
+            resolve(ascii);
+          });
+        });
+
+        const endpointsList = shown.map((ip) => `  • ws://${ip}:${port}/ws`).join("\n");
+        const banner =
+          `\n${qrAscii}\n\n` +
+          `📱 Maestro Mobile 配对就绪\n` +
+          `────────────────────────────────────────\n` +
+          `配对短码:   ${code}  (5分钟有效)\n` +
+          `服务端口:   ${port}\n` +
+          `候选端点:\n${endpointsList}\n` +
+          `────────────────────────────────────────\n` +
+          `• 使用 App 直接扫描上方二维码即可连接\n` +
+          `• 或在 App 中选择「手动连接」输入上述候选端点与配对短码\n` +
+          `• 备用图片文件: ${pngPath}\n`;
+
+        ctx.ui.notify(banner, "info");
         return;
       }
 

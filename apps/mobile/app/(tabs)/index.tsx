@@ -12,19 +12,19 @@ import React, { useCallback, useMemo, useState } from "react";
 import { View, Text, StyleSheet, FlatList, TouchableOpacity, ScrollView, ActivityIndicator, Animated } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { useRouter } from "expo-router";
-import { useHost } from "../src/store";
-import { useTheme, MIUIX_RADIUS, MIUIX_TYPE, MIUIX_SPACE, hexToRgba } from "../src/theme";
-import { LineIcon } from "../src/components/LineIcon";
-import { SpringCard } from "../src/components/SpringCard";
-import { PulsingDot } from "../src/components/PulsingDot";
-import { useTabSwipe } from "../src/hooks/useTabSwipe";
-import { useI18n } from "../src/i18n";
+import { useHost } from "../../src/store";
+import { useTheme, MIUIX_RADIUS, MIUIX_TYPE, MIUIX_SPACE, hexToRgba } from "../../src/theme";
+import { LineIcon } from "../../src/components/LineIcon";
+import { SpringCard } from "../../src/components/SpringCard";
+import { PulsingDot } from "../../src/components/PulsingDot";
+import { useTabSwipe } from "../../src/hooks/useTabSwipe";
+import { useI18n } from "../../src/i18n";
 import {
   deriveDashboardMetrics,
   windowKey,
   getWindowContextPressure,
   type PendingAskItem,
-} from "../src/dashboard-logic";
+} from "../../src/dashboard-logic";
 import type { MonitorWindowSummary, SessionUsageSummary } from "@maestro-mobile/shared";
 
 /** 2x2 指标卡定义 */
@@ -40,7 +40,7 @@ function formatTokens(n: number): string {
 
 export default function DashboardScreen() {
   const router = useRouter();
-  const { state, isConnected, connectionState, fetchMonitorState, fetchSessionUsage, openSessionContinue, answerExtensionUi, cancelExtensionUi } = useHost();
+  const { state, isConnected, connectionState, fetchMonitorState, fetchSessionUsage, openSessionContinue, loadSessionHistory, answerExtensionUi, cancelExtensionUi } = useHost();
   const { theme } = useTheme();
   const { t } = useI18n();
   const styles = React.useMemo(() => makeStyles(theme), [theme]);
@@ -141,7 +141,10 @@ export default function DashboardScreen() {
       if (!item.cwd) return;
       try {
         const sessionId = await openSessionContinue(item.cwd);
-        if (sessionId) router.push({ pathname: "/session", params: { id: sessionId } });
+        if (sessionId) {
+          void loadSessionHistory(sessionId).catch(() => {});
+          router.push({ pathname: "/session", params: { id: sessionId } });
+        }
       } catch {}
     };
     const pressure = getWindowContextPressure(item);
@@ -215,10 +218,8 @@ export default function DashboardScreen() {
     </View>
   ), [styles, t]);
 
-  const { panHandlers, animatedStyle } = useTabSwipe({ rightRoute: "/host-sessions" });
-
   return (
-    <Animated.View style={[styles.container, animatedStyle, { backgroundColor: theme.bg }]} {...panHandlers}>
+    <View style={[styles.container, { backgroundColor: theme.bg }]}>
       {/* 统一定制顶栏：顶部状态栏背景与 Header 融为一体，只有下方微阴影 */}
       <View style={[styles.headerContainer, { backgroundColor: theme.headerBg, borderBottomColor: theme.border }]}>
         <SafeAreaView edges={["top"]} style={{ backgroundColor: theme.headerBg }}>
@@ -433,7 +434,7 @@ export default function DashboardScreen() {
           />
         )}
       </ScrollView>
-    </Animated.View>
+    </View>
   );
 }
 
@@ -471,7 +472,7 @@ function makeStyles(theme: ReturnType<typeof useTheme>["theme"]) {
     },
     topHeaderGreenDot: { width: 6, height: 6, borderRadius: 3 },
     topHeaderOnlineText: { fontSize: 11, fontWeight: "600" },
-    content: { padding: MIUIX_SPACE.lg, paddingBottom: MIUIX_SPACE.xxl },
+    content: { padding: MIUIX_SPACE.lg, paddingBottom: 24 },
     // Hero（设计稿 hero：纯净深邃卡片 + 细微光边框，无悬浮阴影）
     hero: {
       backgroundColor: theme.cardBg,
