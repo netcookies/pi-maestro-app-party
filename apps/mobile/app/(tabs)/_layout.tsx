@@ -9,7 +9,7 @@ import {
   type NativeSyntheticEvent,
   type NativeScrollEvent,
 } from "react-native";
-import { usePathname } from "expo-router";
+import { usePathname, useLocalSearchParams } from "expo-router";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useTheme } from "../../src/theme";
 import { useI18n } from "../../src/i18n";
@@ -48,14 +48,44 @@ export default function TabLayout() {
   const { t } = useI18n();
   const insets = useSafeAreaInsets();
   const pathname = usePathname();
+  const params = useLocalSearchParams<{ tab?: string }>();
 
   const [pageWidth, setPageWidth] = useState(() => Dimensions.get("window").width);
   const [activeIndex, setActiveIndex] = useState(() => {
+    if (params.tab) {
+      if (params.tab === "settings") return 3;
+      if (params.tab === "monitor") return 2;
+      if (params.tab === "sessions" || params.tab === "host-sessions") return 1;
+      if (params.tab === "workbench" || params.tab === "dashboard") return 0;
+    }
     const fromPath = getIndexFromPathname(pathname);
     return fromPath !== null ? fromPath : lastActiveTabIndex;
   });
   const pagerRef = useRef<ScrollView>(null);
   const isProgrammaticScroll = useRef(false);
+
+  // 监听 query 参数中的 tab
+  useEffect(() => {
+    if (params.tab) {
+      let target: number | null = null;
+      if (params.tab === "settings") target = 3;
+      else if (params.tab === "monitor") target = 2;
+      else if (params.tab === "sessions" || params.tab === "host-sessions") target = 1;
+      else if (params.tab === "workbench" || params.tab === "dashboard") target = 0;
+
+      if (target !== null && target !== activeIndex) {
+        lastActiveTabIndex = target;
+        setActiveIndex(target);
+        if (pageWidth > 0) {
+          isProgrammaticScroll.current = true;
+          pagerRef.current?.scrollTo({ x: target * pageWidth, animated: true });
+          setTimeout(() => {
+            isProgrammaticScroll.current = false;
+          }, 350);
+        }
+      }
+    }
+  }, [params.tab, pageWidth]);
 
   // 初始挂载或屏幕宽度就绪时，恢复至记忆的 Tab 位置
   useEffect(() => {

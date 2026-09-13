@@ -4,13 +4,17 @@
 
 ![Android Host 连接成功](docs/images/screenshots/android-host-connected.png)
 
-![iOS 正在运行](docs/images/screenshots/ios-launched.png)
+<div align="center">
 
-![iOS 会话列表](docs/images/screenshots/ios-sessions.png)
+| 工作台概览 (Workbench) | 会话管理 (Sessions) | 流式交互与控制 (Chat) |
+| :---: | :---: | :---: |
+| <img src="docs/images/screenshots/ios-launched.png" width="260" /> | <img src="docs/images/screenshots/ios-sessions.png" width="260" /> | <img src="docs/images/screenshots/ios-chat.png" width="260" /> |
 
-![iOS 监控](docs/images/screenshots/ios-monitor.png)
+| 独立模型选择 (Models) | 窗口与遥测监控 (Monitor) | 系统与配对设置 (Settings) |
+| :---: | :---: | :---: |
+| <img src="docs/images/screenshots/ios-model-select.png" width="260" /> | <img src="docs/images/screenshots/ios-monitor.png" width="260" /> | <img src="docs/images/screenshots/ios-settings.png" width="260" /> |
 
-![iOS Teammate](docs/images/screenshots/ios-teammate.png)
+</div>
 
 ---
 
