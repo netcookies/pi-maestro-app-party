@@ -52,7 +52,7 @@ describe("MobileHostServer", () => {
     const res = await fetch(`${ctx.url}/api/status`);
     expect(res.status).toBe(200);
     const body = (await res.json()) as { version: string; sessions: number };
-    expect(body.version).toBe("0.1.0");
+    expect(body.version).toBe("0.3.2");
     expect(body.sessions).toBe(0);
   });
 
@@ -181,6 +181,73 @@ describe("MobileHostServer", () => {
     expect(msg.ok).toBe(false);
     expect(msg.error.code).toBe("unsupported_command");
     ws.close();
+  });
+
+  it("prompt command routes only to matching session TUI and never pollutes monitor session", async () => {
+    let runnerPromptCalled = false;
+    const workerRunner = {
+      id: "sess-worker-1",
+      state: {
+        id: "sess-worker-1", cwd: ctx.tmpDir, title: "Worker Task", runState: "idle",
+        messageCount: 0, pendingMessageCount: 0, updatedAt: "",
+      },
+      hasMoreHistory: false,
+      snapshot: () => ({ session: workerRunner.state, timeline: [], nextSeq: 0, hasMoreHistory: false }),
+      eventsSince: () => [],
+      loadMoreHistory: async () => ({ items: [], hasMore: false, totalEntries: 0 }),
+      searchHistory: async () => ({ matches: [], totalEntries: 0 }),
+      prompt: async () => { runnerPromptCalled = true; },
+      steer: async () => {},
+      followUp: async () => {},
+      abort: async () => {},
+      respondToExtensionUi: () => false,
+      dispose: async () => {},
+    };
+
+    (ctx.controller as unknown as { sessions: Map<string, typeof workerRunner> }).sessions.set("sess-worker-1", workerRunner);
+
+    // 模拟 telemetry 中同一个 cwd 下有一个活跃的 monitor 窗口和一个离线的 worker 窗口
+    const fakeOwners = [
+      {
+        workspaceId: "ws-test",
+        normalizedCwd: ctx.tmpDir,
+        ownerId: "owner-monitor-62ebda",
+        ownerNonce: "nonce-mon",
+        pid: 1001,
+        sessionId: "sess-monitor-control",
+        publishedAt: 2000,
+        alive: true,
+        ageMs: 10,
+        contextPressure: 50,
+        agents: [],
+        settled: [],
+        backgroundJobs: [],
+      },
+    ];
+
+    (ctx.controller as unknown as { telemetryReader: { read: () => Promise<{ owners: typeof fakeOwners }> } }).telemetryReader = {
+      read: async () => ({ owners: fakeOwners }),
+    };
+
+    // 发送 prompt 给 sess-worker-1
+    await new Promise<void>((resolve, reject) => {
+      const ws = new WebSocket(`${ctx.url.replace("http", "ws")}/ws`);
+      ws.on("open", () => {
+        ws.send(JSON.stringify({ type: "prompt", sessionId: "sess-worker-1", message: "这是给Worker的任务" }));
+      });
+      ws.on("message", (data) => {
+        const msg = JSON.parse(data.toString()) as { type: string; ok: boolean; result?: { injectedToTui: boolean } };
+        if (msg.type === "command_result") {
+          expect(msg.ok).toBe(true);
+          // 核心断言：由于当前没有匹配 sess-worker-1 的桌面 TUI 窗口，决不能注入给排在前面的 monitor 窗口！
+          expect(msg.result?.injectedToTui).toBe(false);
+          expect(runnerPromptCalled).toBe(true);
+          ws.close();
+          resolve();
+        }
+      });
+      ws.on("error", reject);
+    });
   });
 });
 describe("MobileHostServer.listen error propagation", () => {

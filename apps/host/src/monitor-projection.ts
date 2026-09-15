@@ -44,6 +44,64 @@ function projectAgent(a: unknown): TeammateAgentState | null {
   };
 }
 
+interface ProgressEvent {
+  kind: string;
+  toolName?: string;
+  toolCallId?: string;
+  status?: string;
+  phase?: string;
+  text?: string;
+}
+
+function extractPendingAsk(mainProgress: unknown): { pendingAsk?: MonitorWindowSummary["pendingAsk"]; attentionMessage?: string } {
+  if (!mainProgress || typeof mainProgress !== "object") return {};
+  const events = (mainProgress as { events?: ProgressEvent[] }).events;
+  if (!Array.isArray(events) || events.length === 0) return {};
+
+  const completedToolCallIds = new Set<string>();
+  let runningTool: ProgressEvent | undefined;
+  let lastAssistantText = "";
+  let settled = false;
+
+  for (let i = events.length - 1; i >= 0; i--) {
+    const ev = events[i];
+    if (ev.kind === "lifecycle" && (ev.phase === "agent_settled" || ev.phase === "turn_end")) {
+      settled = true;
+    }
+    if (ev.kind === "lifecycle" && ev.phase === "turn_start") {
+      settled = false;
+    }
+
+    if (ev.kind === "tool" && ev.toolCallId) {
+      if (ev.status === "completed" || ev.status === "failed") {
+        completedToolCallIds.add(ev.toolCallId);
+      } else if (ev.status === "running") {
+        if (!completedToolCallIds.has(ev.toolCallId) && !settled && !runningTool) {
+          runningTool = ev;
+        }
+      }
+    }
+
+    if (!lastAssistantText && ev.kind === "assistant" && ev.text) {
+      lastAssistantText = ev.text.trim();
+    }
+  }
+
+  if (runningTool && runningTool.toolName && (runningTool.toolName.includes("ask") || runningTool.toolName.includes("question") || runningTool.toolName.includes("confirm"))) {
+    const questionText = lastAssistantText || `正在执行 ${runningTool.toolName}，等待用户交互`;
+    return {
+      pendingAsk: {
+        toolCallId: runningTool.toolCallId ?? "",
+        toolName: runningTool.toolName,
+        question: questionText,
+      },
+      attentionMessage: questionText,
+    };
+  }
+
+  return {};
+}
+
 export function projectWindow(o: WorkspaceOwnerState): MonitorWindowSummary {
   const identity = {
     workspaceId: o.workspaceId,
@@ -64,6 +122,15 @@ export function projectWindow(o: WorkspaceOwnerState): MonitorWindowSummary {
       contextPressure: o.contextPressure,
     },
   };
+  const { pendingAsk, attentionMessage } = extractPendingAsk(o.mainProgress);
+  const attention: MonitorWindowSummary["attention"] = [];
+  if (attentionMessage) {
+    attention.push({
+      code: "ask_pending",
+      severity: "warning",
+      message: attentionMessage,
+    });
+  }
   return {
     identity,
     name: o.normalizedCwd.split("/").filter(Boolean).pop() ?? o.normalizedCwd,
@@ -72,8 +139,10 @@ export function projectWindow(o: WorkspaceOwnerState): MonitorWindowSummary {
     lifecycle: o.alive ? "running" : "disconnected",
     workStatus: agents.length > 0 ? "active" : "idle",
     todos: [],
-    attention: [],
+    attention,
     facets: [facet],
+    ...(pendingAsk ? { pendingAsk } : {}),
+    ...(o.mainLastSettle && typeof o.mainLastSettle === "object" && "at" in o.mainLastSettle ? { lastSettle: o.mainLastSettle as { at: number; lastResult: string } } : {}),
   };
 }
 

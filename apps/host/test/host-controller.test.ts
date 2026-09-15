@@ -37,7 +37,7 @@ describe("HostController", () => {
   it("returns initial status", () => {
     const status = controller.getStatus();
     expect(status.ok).toBe(true);
-    expect(status.version).toBe("0.1.0");
+    expect(status.version).toBe("0.3.2");
     expect(status.sessions).toBe(0);
     expect(status.uptimeMs).toBeGreaterThanOrEqual(0);
   });
@@ -79,5 +79,83 @@ describe("HostController", () => {
 
   it("closeSession returns false for unknown session", async () => {
     expect(await controller.closeSession("unknown")).toBe(false);
+  });
+
+  it("findActiveOwnerForSession strictly routes to matching session and filters monitor window by default", async () => {
+    // 构造伪造的 telemetryReader
+    const fakeOwners = [
+      {
+        workspaceId: "ws-1",
+        normalizedCwd: tmpDir,
+        ownerId: "owner-monitor-62ebda",
+        ownerNonce: "nonce-mon",
+        pid: 1001,
+        sessionId: "session-monitor",
+        sessionName: "#control-62ebda",
+        publishedAt: 2000, // 最新的心跳
+        alive: true,
+        ageMs: 100,
+        contextPressure: 50,
+        agents: [],
+        settled: [],
+        backgroundJobs: [],
+      },
+      {
+        workspaceId: "ws-1",
+        normalizedCwd: tmpDir,
+        ownerId: "owner-worker-1a1f09",
+        ownerNonce: "nonce-worker",
+        pid: 1002,
+        sessionId: "session-worker-a",
+        publishedAt: 1500,
+        alive: true,
+        ageMs: 200,
+        contextPressure: 20,
+        agents: [],
+        settled: [],
+        backgroundJobs: [],
+      },
+      {
+        workspaceId: "ws-1",
+        normalizedCwd: tmpDir,
+        ownerId: "owner-worker-e56b18",
+        ownerNonce: "nonce-worker-2",
+        pid: 1003,
+        sessionId: "session-worker-b",
+        publishedAt: 1600,
+        alive: true,
+        ageMs: 150,
+        contextPressure: 15,
+        agents: [],
+        settled: [],
+        backgroundJobs: [],
+      },
+    ];
+
+    (controller as unknown as { telemetryReader: { read: () => Promise<{ owners: typeof fakeOwners }> } }).telemetryReader = {
+      read: async () => ({ owners: fakeOwners }),
+    };
+
+    // 1. 指定 worker session，必须精准命中 worker owner，绝不命中 monitor
+    const workerOwner = await controller.findActiveOwnerForSession(tmpDir, "session-worker-a");
+    expect(workerOwner).toBeDefined();
+    expect(workerOwner?.ownerId).toBe("owner-worker-1a1f09");
+
+    // 2. 默认情况下（allowMonitor=false），即使传入 monitor 的 sessionId，也会被安全拦截过滤，防止业务消息注入监控窗口
+    const defaultMonitorAttempt = await controller.findActiveOwnerForSession(tmpDir, "session-monitor");
+    expect(defaultMonitorAttempt).toBeUndefined();
+
+    // 3. 显式开启 allowMonitor: true 时，允许寻址 monitor 窗口（用于特定监督场景）
+    const explicitMonitorOwner = await controller.findActiveOwnerForSession(tmpDir, "session-monitor", { allowMonitor: true });
+    expect(explicitMonitorOwner).toBeDefined();
+    expect(explicitMonitorOwner?.ownerId).toBe("owner-monitor-62ebda");
+
+    // 4. 指定一个非桌面的未知 session，必须返回 undefined，绝对不能降级落到 monitor 窗口
+    const unknownOwner = await controller.findActiveOwnerForSession(tmpDir, "session-unknown-c");
+    expect(unknownOwner).toBeUndefined();
+
+    // 5. 未指定 sessionId，但存在多个同 cwd 活跃窗口时，禁止盲猜，返回 undefined
+    const ambiguousOwner = await controller.findActiveOwnerForSession(tmpDir);
+    expect(ambiguousOwner).toBeUndefined();
   });
 });

@@ -19,6 +19,25 @@ import type { WorkspaceOwner } from "./workspace-telemetry.js";
  * - 调度 MaestroStateReader 定期读取
  * - 处理 client commands
  */
+/**
+ * 判定一个 workspace owner 是否处于 Monitor / 监督控制模式（如 #control 窗口）。
+ * 依据：
+ * 1. sessionName 包含 control / monitor（例如 #control·<hash> 或 monitor）；
+ * 2. mainLastSettle 中包含 monitor / agent-watch / <monitor_mode> 等巡检标志。
+ */
+export function isMonitorOwner(owner: WorkspaceOwner): boolean {
+  if (owner.sessionName && /control|monitor/i.test(owner.sessionName)) {
+    return true;
+  }
+  if (owner.mainLastSettle && typeof owner.mainLastSettle === "object") {
+    const lastResult = String((owner.mainLastSettle as { lastResult?: unknown }).lastResult ?? "");
+    if (/peer\s+[a-f0-9]{8}|agent-watch|monitor\s+mode|<monitor_mode>/i.test(lastResult)) {
+      return true;
+    }
+  }
+  return false;
+}
+
 export class HostController {
   private readonly sessions = new Map<string, SessionRunner>();
   private readonly eventLog = new EventLog();
@@ -67,15 +86,43 @@ export class HostController {
     return this.telemetryReader.read();
   }
 
-  /** 查询匹配该 cwd 的当前活跃桌面 TUI 窗口（heartbeat 新鲜且 cwd 一致） */
-  async findActiveOwnerForCwd(cwd: string): Promise<WorkspaceOwner | undefined> {
+  /**
+   * 查询匹配该会话的当前活跃桌面 TUI 窗口：
+   * - 必须 heartbeat 新鲜且 cwd 一致；
+   * - 默认过滤处于 Monitor 控制模式下的窗口（allowMonitor=false），防止业务消息错投进监控窗口；
+   * - 若提供了 sessionId，严格按 sessionId 匹配；
+   * - 若未提供 sessionId，仅在同 cwd 仅有唯一活跃非监控窗口时返回，多窗口歧义时返回 undefined 防止误投。
+   */
+  async findActiveOwnerForSession(
+    cwd: string,
+    sessionId?: string,
+    options?: { allowMonitor?: boolean },
+  ): Promise<WorkspaceOwner | undefined> {
     try {
       const t = await this.telemetryReader.read();
       const normCwd = normalize(cwd);
-      return t.owners.find((o) => o.alive && normalize(o.normalizedCwd) === normCwd);
+      let aliveOwners = t.owners.filter((o) => o.alive && normalize(o.normalizedCwd) === normCwd);
+      if (aliveOwners.length === 0) return undefined;
+
+      // 默认过滤 Monitor 监督窗口，业务 prompt 消息绝不注入监控会话
+      if (!options?.allowMonitor) {
+        aliveOwners = aliveOwners.filter((o) => !isMonitorOwner(o));
+      }
+
+      if (sessionId) {
+        return aliveOwners.find((o) => o.sessionId === sessionId);
+      }
+
+      // 未指定 sessionId 时的安全兜底：仅当存在唯一活跃窗口时才返回，多个窗口存在歧义时绝不盲猜
+      return aliveOwners.length === 1 ? aliveOwners[0] : undefined;
     } catch {
       return undefined;
     }
+  }
+
+  /** 查询匹配该 cwd 的当前活跃桌面 TUI 窗口（兼容别名，内部转调 findActiveOwnerForSession） */
+  async findActiveOwnerForCwd(cwd: string, sessionId?: string, options?: { allowMonitor?: boolean }): Promise<WorkspaceOwner | undefined> {
+    return this.findActiveOwnerForSession(cwd, sessionId, options);
   }
 
   /** 轮询 telemetry，状态变化时推送 monitor_state 事件（single-flight + 稳定键变更检测） */
@@ -106,7 +153,7 @@ export class HostController {
     const uptimeMs = Date.now() - this._startedAt;
     return {
       ok: true,
-      version: "0.1.0",
+      version: "0.3.2",
       maestroDetected: this.maestroDetected,
       ...this.componentVersions,
       sessions: this.sessions.size,

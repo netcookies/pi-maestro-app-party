@@ -125,7 +125,7 @@ describe("P2-1: 初始推送契约", () => {
     expect(messages[0].type).toBe("host_status");
     expect(typeof messages[0].status).toBe("string");
     expect(messages[1].type).toBe("host_info");
-    expect(messages[1].info).toMatchObject({ ok: true, version: "0.1.0" });
+    expect(messages[1].info).toMatchObject({ ok: true, version: "0.3.2" });
     ws.close();
   });
 });

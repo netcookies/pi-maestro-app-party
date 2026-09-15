@@ -433,10 +433,10 @@ export class SdkSessionRunner implements SessionRunner {
 
       const content = extractText(msg.content);
       const imageBlocks = imageBlocksFromContent(msg.content);
-      const imageCallItems = role === "assistant" || role === "system"
-        ? toolCallImageItems(msg.content, createdAt)
+      const toolCallList = role === "assistant" || role === "system"
+        ? toolCallItems(msg.content, createdAt, seenToolResults, items.length)
         : [];
-      if (!content && imageBlocks.length === 0 && imageCallItems.length === 0 && role !== "thinking" && role !== "system") continue;
+      if (!content && imageBlocks.length === 0 && toolCallList.length === 0 && role !== "thinking" && role !== "system") continue;
 
       if (role === "user") {
         const imagePaths = materializeImages(imageBlocks);
@@ -451,8 +451,8 @@ export class SdkSessionRunner implements SessionRunner {
         });
       } else if (role === "assistant" || role === "system") {
         if (content) items.push({ id: `replay-assistant-${items.length}`, kind: "assistant", text: content, createdAt });
-        for (const imageItem of imageCallItems) {
-          items.push({ ...imageItem, id: `replay-toolcall-${items.length}` });
+        for (const callItem of toolCallList) {
+          items.push(callItem);
         }
       } else if (role === "thinking") {
         items.push({ id: `replay-thinking-${items.length}`, kind: "thinking", text: content, createdAt });
@@ -718,6 +718,47 @@ function toolCallImageItems(content: unknown, createdAt: string): TimelineItem[]
     const path = typeof args?.path === "string" ? args.path.trim() : "";
     if (!path || !TOOL_IMAGE_EXT.test(path)) continue;
     items.push({ id: "", kind: "tool", text: path, createdAt, toolName: "read" });
+  }
+  return items;
+}
+
+function toolCallItems(content: unknown, createdAt: string, seenToolResults: Set<string>, baseIndex: number): TimelineItem[] {
+  if (!Array.isArray(content)) return [];
+  const items: TimelineItem[] = [];
+  for (const block of content) {
+    const value = block as Record<string, unknown>;
+    if (value.type !== "toolCall") continue;
+    const name = String(value.name ?? "");
+    const callId = String(value.id ?? "");
+    let args: Record<string, unknown> | undefined;
+    if (value.arguments && typeof value.arguments === "object") {
+      args = value.arguments as Record<string, unknown>;
+    } else if (typeof value.arguments === "string") {
+      try {
+        const parsed = JSON.parse(value.arguments) as unknown;
+        if (parsed && typeof parsed === "object") args = parsed as Record<string, unknown>;
+      } catch {
+        args = undefined;
+      }
+    }
+    if (name === "read") {
+      const path = typeof args?.path === "string" ? args.path.trim() : "";
+      if (path && TOOL_IMAGE_EXT.test(path)) {
+        items.push({ id: `replay-toolcall-${baseIndex + items.length}`, kind: "tool", text: path, createdAt, toolName: "read" });
+      }
+    } else if (name.includes("ask") || name.includes("question") || name.includes("confirm")) {
+      const isSettled = callId ? seenToolResults.has(callId) : false;
+      items.push({
+        id: callId ? `replay-ask-${callId}` : `replay-ask-${baseIndex + items.length}`,
+        kind: "tool",
+        text: `提问交互：${name}`,
+        createdAt,
+        toolName: name,
+        toolCallId: callId || undefined,
+        toolArgs: args as unknown as JsonValue,
+        status: isSettled ? "completed" : "running",
+      });
+    }
   }
   return items;
 }

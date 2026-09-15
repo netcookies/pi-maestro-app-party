@@ -101,4 +101,69 @@ describe("steer_window", () => {
       expect(typeof result.error).toBe("string");
     });
   });
+
+  it("steer_window directly injects to matching active TUI owner mailbox when not opened in host", async () => {
+    const fakeOwner = {
+      workspaceId: "ws-test",
+      normalizedCwd: tmpDir,
+      ownerId: "owner-target-123",
+      ownerNonce: "nonce-123",
+      pid: 9999,
+      sessionId: "sess-tui-active",
+      publishedAt: Date.now(),
+      alive: true,
+      ageMs: 10,
+      contextPressure: 10,
+      agents: [],
+      settled: [],
+      backgroundJobs: [],
+    };
+
+    (controller as unknown as { telemetryReader: { read: () => Promise<{ owners: typeof fakeOwner[] }> } }).telemetryReader = {
+      read: async () => ({ owners: [fakeOwner] }),
+    };
+
+    await withWs(async (ws) => {
+      const reply = await request(ws, { type: "steer_window", endpointId: "sess-tui-active", cwd: tmpDir, message: "来自移动端监督" });
+      expect(reply.ok).toBe(true);
+      const result = reply.result as { ok: boolean; sessionId: string; tookOver: boolean };
+      expect(result.ok).toBe(true);
+      expect(result.sessionId).toBe("sess-tui-active");
+      expect(result.tookOver).toBe(false);
+    });
+  });
+
+  it("steer_window takes over session with exact sessionFile matching endpointId and refuses takeover without exact file", async () => {
+    // 1. 当无法定位 exact sessionFile 时，报错拒绝盲目接管
+    await withWs(async (ws) => {
+      const reply = await request(ws, { type: "steer_window", endpointId: "sess-no-file", cwd: tmpDir, message: "hello" });
+      expect(reply.ok).toBe(true);
+      const result = reply.result as { ok: boolean; tookOver: boolean; error?: string };
+      expect(result.ok).toBe(false);
+      expect(result.tookOver).toBe(false);
+      expect(result.error).toContain("无法定位目标会话");
+    });
+
+    // 2. 当 listSessions 能匹配到精确 sessionFile 时，以该 sessionFile 接管打开
+    let openedSessionFile: string | undefined;
+    const { runner, steered } = makeRunner("sess-matched-file");
+    controller.listSessions = async () => [
+      { id: "sess-matched-file", path: join(tmpDir, "target.jsonl"), cwd: tmpDir },
+    ];
+    controller.openSession = async (req: { cwd: string; sessionFile?: string }) => {
+      openedSessionFile = req.sessionFile;
+      (controller as unknown as { sessions: Map<string, SessionRunner> }).sessions.set("sess-matched-file", runner);
+      return runner;
+    };
+
+    await withWs(async (ws) => {
+      const reply = await request(ws, { type: "steer_window", endpointId: "sess-matched-file", cwd: tmpDir, message: "精准接管测试" });
+      expect(reply.ok).toBe(true);
+      const result = reply.result as { ok: boolean; tookOver: boolean };
+      expect(result.ok).toBe(true);
+      expect(result.tookOver).toBe(true);
+      expect(openedSessionFile).toBe(join(tmpDir, "target.jsonl"));
+      expect(steered).toEqual(["精准接管测试"]);
+    });
+  });
 });

@@ -3,7 +3,7 @@ import type { Duplex } from "node:stream";
 import type { RawData } from "ws";
 import { URL } from "node:url";
 import { WebSocketServer, type WebSocket } from "ws";
-import { readFile, open, stat } from "node:fs/promises";
+import { readFile, writeFile, open, stat } from "node:fs/promises";
 import { realpath } from "node:fs/promises";
 import { isAbsolute, normalize, join } from "node:path";
 import { homedir, tmpdir } from "node:os";
@@ -17,6 +17,7 @@ import type {
 } from "@maestro-mobile/shared";
 import type { HostController } from "../host-controller.js";
 import { projectMonitorState } from "../monitor-projection.js";
+import { replayTailFromJsonl } from "../jsonl-pager.js";
 import type { RuntimeFactory } from "../types.js";
 import type { LiveSessionList } from "../live-sessions.js";
 import { readSettingsOverview, updateSettingsJson } from "../maestro-settings.js";
@@ -790,11 +791,12 @@ export class MobileHostServer {
             break;
           }
           // 方案 A 双端实时协同：
-          // 1. 优先检查当前会话所在的 cwd 是否正是当前桌面活跃的 TUI 窗口（通过 workspace-telemetry）
+          // 1. 优先检查当前会话所在的 cwd 是否正是当前桌面活跃的 TUI 窗口（通过 workspace-telemetry），
+          //    必须严格匹配 sessionId，防止同 cwd 下存在多个窗口或 Monitor 控制窗口时发生错投！
           // 2. 如果是当前活跃桌面窗口，通过 teammate 跨进程信箱直接注入 steer 到桌面终端！
           //    桌面终端屏幕立刻打字动起来并回答，写盘后由 Watcher 实时推回手机，实现真正的同屏双向同步！
           // 3. 如果当前没有活跃桌面窗口，或者会话已在流式生成中，走已有 runner 驱动逻辑。
-          const activeTuiOwner = await this.controller.findActiveOwnerForCwd(runner.state.cwd);
+          const activeTuiOwner = await this.controller.findActiveOwnerForSession(runner.state.cwd, runner.id);
           let injectedToTui = false;
           if (activeTuiOwner && (!images || images.length === 0)) {
             injectedToTui = await injectMessageToActiveTui(activeTuiOwner, command.message);
@@ -818,7 +820,7 @@ export class MobileHostServer {
           break;
         }
         case "steer_window": {
-          // 监督会话跨窗口发送：已打开 → 直接 steer；未打开 → 接管（open_session continue）后 steer。
+          // 监督会话跨窗口发送：已打开 → 直接 steer；未打开但有活跃 TUI → 信箱直接注入；均无 → 精确 sessionFile 接管后 steer。
           // 接管语义：Host 打开的会话与原桌面 Pi 进程并行写同一 JSONL，移动端 UI 必须明示「接管并发送」。
           const existing = this.controller.getSession(command.endpointId);
           if (existing) {
@@ -826,8 +828,68 @@ export class MobileHostServer {
             this.sendAck(client, command, { ok: true, sessionId: command.endpointId, tookOver: false });
             break;
           }
+          // 优先检查桌面是否存在以该 endpointId (sessionId) 运行的活跃 TUI 窗口（允许针对 monitor 窗口进行专门的监督 steer）
+          let activeOwner = command.cwd ? await this.controller.findActiveOwnerForSession(command.cwd, command.endpointId, { allowMonitor: true }) : undefined;
+          if (!activeOwner) {
+            try {
+              const telemetry = await this.controller.readTelemetry();
+              activeOwner = telemetry.owners.find((o) => o.sessionId === command.endpointId);
+            } catch {}
+          }
+          // 尝试写入 /tmp/pi-ask-response 协助 TUI 正在运行的 showAskWizard 闭环
           try {
-            const runner = await this.controller.openSession({ cwd: command.cwd, mode: "continue", sessionFile: undefined });
+            const telemetry = await this.controller.readTelemetry();
+            const owner = telemetry.owners.find((o) => o.sessionId === command.endpointId);
+            const progressObj = owner?.mainProgress as Record<string, unknown> | undefined;
+            const events = Array.isArray(progressObj?.events) ? (progressObj?.events as Array<Record<string, unknown>>) : [];
+            const runningAsk = [...events].reverse().find(
+              (e) => e.kind === "tool" && typeof e.toolName === "string" && (e.toolName.includes("ask") || e.toolName.includes("question")) && e.status === "running"
+            );
+            let payload: Record<string, unknown>;
+            try {
+              payload = JSON.parse(command.message);
+            } catch {
+              payload = { selected: [command.message], value: command.message };
+            }
+            const payloadStr = JSON.stringify(payload);
+            await writeFile("/tmp/pi-ask-response-latest.json", payloadStr, "utf8").catch(() => {});
+            if (runningAsk && typeof runningAsk.toolCallId === "string") {
+              await writeFile(`/tmp/pi-ask-response-${runningAsk.toolCallId}.json`, payloadStr, "utf8").catch(() => {});
+            }
+          } catch {}
+
+          if (activeOwner) {
+            const injected = await injectMessageToActiveTui(activeOwner, command.message);
+            if (injected) {
+              this.sendAck(client, command, { ok: true, sessionId: command.endpointId, tookOver: false });
+              break;
+            }
+          }
+          try {
+            // 接管会话时必须精确解析 targetSessionFile，绝不使用盲目 continueRecent(cwd)
+            let targetSessionFile: string | undefined;
+            try {
+              const sessions = await this.controller.listSessions(command.cwd);
+              const matched = (sessions as Record<string, unknown>[]).find((s) => s.id === command.endpointId);
+              if (matched) {
+                targetSessionFile = (typeof matched.path === "string" ? matched.path : undefined)
+                  ?? (typeof matched.sessionFile === "string" ? matched.sessionFile : undefined);
+              }
+            } catch {
+              // listSessions 失败时保持 undefined
+            }
+
+            if (!targetSessionFile) {
+              this.sendAck(client, command, {
+                ok: false,
+                sessionId: command.endpointId,
+                tookOver: false,
+                error: `无法定位目标会话 (${command.endpointId}) 的会话文件，禁止盲目接管`,
+              });
+              break;
+            }
+
+            const runner = await this.controller.openSession({ cwd: command.cwd, sessionFile: targetSessionFile });
             await runner.steer(command.message);
             this.sendAck(client, command, { ok: true, sessionId: runner.id, tookOver: true });
           } catch (error) {
@@ -875,8 +937,44 @@ export class MobileHostServer {
           break;
         }
         case "get_snapshot": {
-          const runner = this.controller.getSession(command.sessionId);
-          if (!runner) { this.sendError(client, "session_not_found", undefined, (command as { id?: string }).id ?? ""); break; }
+          let runner = this.controller.getSession(command.sessionId);
+          if (!runner) {
+            try {
+              const telemetry = await this.controller.readTelemetry();
+              const owner = telemetry.owners.find((o) => o.sessionId === command.sessionId);
+              if (owner) {
+                const sessions = (await this.controller.listSessions(owner.normalizedCwd)) as HostSessionSummary[];
+                const target = sessions.find((s) => s.id === command.sessionId);
+                if (target) {
+                  const page = await replayTailFromJsonl(target.path, 100);
+                  const snapshot: SessionSnapshot = {
+                    session: {
+                      id: command.sessionId,
+                      cwd: target.cwd,
+                      title: target.cwdName || target.cwd.split("/").pop() || "",
+                      runState: "idle",
+                      messageCount: page.totalEntries,
+                      pendingMessageCount: 0,
+                      updatedAt: target.updatedAt,
+                      sessionFile: target.path,
+                      model: target.model,
+                    },
+                    timeline: page.items,
+                    nextSeq: page.totalEntries + 1,
+                  };
+                  this.sendFrame(client, {
+                    type: "command_result",
+                    in_reply_to: (command as { id?: string }).id ?? "",
+                    ok: true,
+                    result: snapshot,
+                  }, "required", "command_result");
+                  break;
+                }
+              }
+            } catch {}
+            this.sendError(client, "session_not_found", undefined, (command as { id?: string }).id ?? "");
+            break;
+          }
           const snapshot = runner.snapshot() satisfies SessionSnapshot;
           this.sendFrame(client, {
             type: "command_result",

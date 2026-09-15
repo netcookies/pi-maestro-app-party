@@ -16,7 +16,7 @@
  *  cursor=N 表示尾部 N 条已发，下一页往前取更早的。
  */
 import { open } from "node:fs/promises";
-import type { TimelineItem } from "@maestro-mobile/shared";
+import type { TimelineItem, JsonValue } from "@maestro-mobile/shared";
 import { imageBlocksFromContent, materializeImages } from "./image-cache.js";
 
 export interface PageResult {
@@ -128,6 +128,16 @@ async function scanWindow(filePath: string, opts: WindowOptions): Promise<PageRe
       console.warn(`[maestro-mobile] pager: ${filePath} 跳过 ${skippedOversize} 行超 ${MAX_LINE_BYTES} 字节的异常行`);
     }
 
+    // 扫描结束后：依据全量收集到的 toolResult 结算所有 toolCall 状态
+    for (const group of ring) {
+      if (!group) continue;
+      for (const it of group) {
+        if (it.toolCallId && seenToolResults.has(it.toolCallId)) {
+          it.status = "completed";
+        }
+      }
+    }
+
     // ring 现在 = 最后 want 条 message（含 null 占位）。返回窗口 [skip, skip+limit) 的 item
     const end = Math.max(0, ring.length - opts.skip);
     const start = Math.max(0, end - opts.limit);
@@ -228,8 +238,8 @@ function parseMessageLineItems(
   if (role === "assistant" || role === "system") {
     const items: TimelineItem[] = [];
     if (text) items.push({ id: `replay-assistant-${index}`, kind: "assistant", text, createdAt });
-    for (const callItem of toolCallImageItems(msg.content, createdAt)) {
-      items.push({ ...callItem, id: `replay-toolcall-${index}-${items.length}` });
+    for (const callItem of toolCallItems(msg.content, createdAt, seenToolResults, index)) {
+      items.push(callItem);
     }
     return items;
   }
@@ -318,12 +328,14 @@ export async function searchInJsonl(
   }
 }
 
-function toolCallImageItems(content: unknown, createdAt: string): TimelineItem[] {
+function toolCallItems(content: unknown, createdAt: string, seenToolResults: Set<string>, index: number): TimelineItem[] {
   if (!Array.isArray(content)) return [];
   const items: TimelineItem[] = [];
   for (const block of content) {
     const value = block as Record<string, unknown>;
-    if (value.type !== "toolCall" || value.name !== "read") continue;
+    if (value.type !== "toolCall") continue;
+    const name = String(value.name ?? "");
+    const callId = String(value.id ?? "");
     const argsValue = value.arguments;
     let args: Record<string, unknown> | undefined;
     if (argsValue && typeof argsValue === "object") {
@@ -336,9 +348,23 @@ function toolCallImageItems(content: unknown, createdAt: string): TimelineItem[]
         args = undefined;
       }
     }
-    const path = typeof args?.path === "string" ? args.path.trim() : "";
-    if (path && TOOL_IMAGE_EXT.test(path)) {
-      items.push({ id: "", kind: "tool", text: path, createdAt, toolName: "read" });
+    if (name === "read") {
+      const path = typeof args?.path === "string" ? args.path.trim() : "";
+      if (path && TOOL_IMAGE_EXT.test(path)) {
+        items.push({ id: `replay-toolcall-${index}-${items.length}`, kind: "tool", text: path, createdAt, toolName: "read" });
+      }
+    } else if (name.includes("ask") || name.includes("question") || name.includes("confirm")) {
+      const isSettled = callId ? seenToolResults.has(callId) : false;
+      items.push({
+        id: callId ? `replay-ask-${callId}` : `replay-ask-${index}-${items.length}`,
+        kind: "tool",
+        text: `提问交互：${name}`,
+        createdAt,
+        toolName: name,
+        toolCallId: callId || undefined,
+        toolArgs: args as unknown as JsonValue,
+        status: isSettled ? "completed" : "running",
+      });
     }
   }
   return items;

@@ -31,6 +31,7 @@ export interface TimelineItem {
   toolArgs?: JsonValue;
   toolResult?: JsonValue;
   isError?: boolean;
+  status?: "running" | "completed" | "failed";
   /** Host-cache absolute image paths; raw image bytes never travel in timeline events. */
   images?: string[];
 }
@@ -118,8 +119,11 @@ export interface WorkspaceOwnerState {
   ownerNonce?: string;
   pid: number;
   sessionId: string;
+  sessionName?: string;
   publishedAt: number;
   contextPressure: JsonValue;
+  mainLastSettle?: JsonValue;
+  mainProgress?: JsonValue;
   agents: JsonValue[];
   settled: JsonValue[];
   backgroundJobs: JsonValue[];
@@ -230,6 +234,16 @@ export type MonitorFacet = TeammateAgentsFacet;
 /** Monitor 窗口状态 */
 // ─────────────────────────────────────────────────────────────────────────────
 
+export interface MonitorPendingAsk {
+  toolCallId: string;
+  toolName: string;
+  title?: string;
+  question?: string;
+  options?: Array<{ label: string; description?: string }>;
+  header?: string;
+  multiSelect?: boolean;
+}
+
 export interface MonitorWindowSummary {
   identity: {
     workspaceId: string;
@@ -247,6 +261,8 @@ export interface MonitorWindowSummary {
   todos: MonitorTodoSummary[];
   attention: MonitorAttentionSummary[];
   facets: MonitorFacet[];
+  pendingAsk?: MonitorPendingAsk;
+  lastSettle?: { at: number; lastResult: string };
 }
 
 export interface MonitorTodoSummary {
