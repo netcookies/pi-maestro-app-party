@@ -21,6 +21,11 @@ import { loadConfig } from "../src/config";
 import { useEffect, useRef } from "react";
 import * as Camera from "expo-camera";
 import * as ImagePicker from "expo-image-picker";
+import { useRouter } from "expo-router";
+import { useHost } from "../src/store";
+import { initNotificationService, notifyPendingAsk, notifyAgentSettled } from "../src/notifications";
+import * as Notifications from "expo-notifications";
+import { InAppNotificationBanner } from "../src/components/InAppNotificationBanner";
 
 const NativeStack = createNativeStackNavigator();
 const TransitionStack = withScreenTransitions(NativeStack);
@@ -79,8 +84,80 @@ function RootNavigator() {
   );
 }
 
+function NotificationWatcher() {
+  const { state, fetchMonitorState, isConnected } = useHost();
+
+  // 全局定时同步 monitor 状态，确保在任何页面都能及时捕获未决 ask 与完成事件
+  useEffect(() => {
+    if (!isConnected) return;
+    void fetchMonitorState();
+    const timer = setInterval(() => {
+      void fetchMonitorState();
+    }, 2500);
+    return () => clearInterval(timer);
+  }, [isConnected, fetchMonitorState]);
+
+  // 监听 Ask 待办状态并触发系统通知
+  useEffect(() => {
+    const windows = state.monitor?.windows ?? [];
+    for (const w of windows) {
+      if (w.pendingAsk && w.pendingAsk.toolCallId) {
+        void notifyPendingAsk(
+          w.identity.endpointId,
+          w.pendingAsk.toolCallId,
+          w.name ?? "桌面会话",
+          w.pendingAsk.question ?? "需要您的操作确认",
+          w.name,
+        );
+      }
+    }
+  }, [state.monitor?.windows]);
+
+  // 监听 Agent 完成结算状态并触发完成通知
+  const prevSettledTimes = useRef<Map<string, number>>(new Map());
+  useEffect(() => {
+    const windows = state.monitor?.windows ?? [];
+    for (const w of windows) {
+      if (w.lastSettle && typeof w.lastSettle.at === "number") {
+        const prev = prevSettledTimes.current.get(w.identity.endpointId);
+        if (prev === undefined) {
+          // 首次加载初始化记录，不补弹历史完成通知
+          prevSettledTimes.current.set(w.identity.endpointId, w.lastSettle.at);
+        } else if (w.lastSettle.at > prev) {
+          prevSettledTimes.current.set(w.identity.endpointId, w.lastSettle.at);
+          void notifyAgentSettled(
+            w.identity.endpointId,
+            w.name ?? "桌面会话",
+            w.lastSettle.lastResult,
+          );
+        }
+      }
+    }
+  }, [state.monitor?.windows]);
+
+  return null;
+}
+
 export default function RootLayout() {
   const permissionsRequested = useRef(false);
+  const router = useRouter();
+
+  // 监听系统通知点击跳转
+  useEffect(() => {
+    const subscription = Notifications.addNotificationResponseReceivedListener((response) => {
+      try {
+        const data = response.notification.request.content.data;
+        const sessionId = typeof data?.sessionId === "string" ? data.sessionId : null;
+        if (sessionId) {
+          router.push({
+            pathname: "/session",
+            params: { id: sessionId },
+          });
+        }
+      } catch {}
+    });
+    return () => subscription.remove();
+  }, [router]);
 
   // Ask once at app entry. Camera and library are independent; neither implies microphone access.
   useEffect(() => {
@@ -89,6 +166,7 @@ export default function RootLayout() {
     void (async () => {
       try { await Camera.requestCameraPermissionsAsync(); } catch { /* permission prompt unavailable */ }
       try { await ImagePicker.requestMediaLibraryPermissionsAsync(); } catch { /* permission prompt unavailable */ }
+      try { await initNotificationService(); } catch { /* notification unavailable */ }
     })();
   }, []);
 
@@ -103,6 +181,8 @@ export default function RootLayout() {
         <ThemeProvider>
           <I18nProvider>
             <HostStoreProvider>
+              <NotificationWatcher />
+              <InAppNotificationBanner />
               <RootNavigator />
             </HostStoreProvider>
           </I18nProvider>

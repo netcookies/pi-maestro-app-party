@@ -220,9 +220,17 @@ export function ThemeProvider({ children }: { children: React.ReactNode }) {
       if (cancelled) return;
       if (savedChoice === "auto" || savedChoice === "light" || savedChoice === "dark") {
         setChoice(savedChoice);
-      }
-      if (savedTheme && THEMES[savedTheme]) {
+        if (savedChoice === "auto") {
+          setThemeName(systemScheme === "dark" ? "miuix-dark" : "miuix-light");
+        } else if (savedChoice === "dark") {
+          setThemeName("miuix-dark");
+        } else {
+          setThemeName("miuix-light");
+        }
+      } else if (savedTheme && THEMES[savedTheme]) {
         setThemeName(savedTheme);
+      } else {
+        setThemeName(systemScheme === "dark" ? "miuix-dark" : "miuix-light");
       }
       if (savedAccent) {
         setCustomAccentState(savedAccent);

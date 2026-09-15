@@ -44,14 +44,11 @@ export default function MonitorScreen() {
   // 可控会话集合：Host 已打开（有 SessionRunner）的会话 id
   const controllableSessionIds = useMemo(() => state.sessions, [state.sessions]);
 
-  // 目标解析：优先用户选择；无选择时自动指向唯一 attention 窗口（若有）
+  // 目标解析：仅在用户显式点击卡片选择时生效，绝不自动隐式选中任何窗口
   const resolvedTarget = useMemo(() => {
-    if (target) {
-      const w = windows.find((x) => windowKey(x) === target);
-      return w ? { key: target, window: w } : null;
-    }
-    const attentionWindows = windows.filter((w) => w.attention.length > 0);
-    return attentionWindows.length === 1 ? { key: windowKey(attentionWindows[0]), window: attentionWindows[0] } : null;
+    if (!target) return null;
+    const w = windows.find((x) => windowKey(x) === target);
+    return w ? { key: target, window: w } : null;
   }, [target, windows]);
 
   const endpointId = resolvedTarget?.window.identity.endpointId ?? "";

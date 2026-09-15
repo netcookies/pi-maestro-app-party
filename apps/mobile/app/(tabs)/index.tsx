@@ -40,11 +40,12 @@ function formatTokens(n: number): string {
 
 export default function DashboardScreen() {
   const router = useRouter();
-  const { state, isConnected, connectionState, fetchMonitorState, fetchSessionUsage, openSessionContinue, loadSessionHistory, answerExtensionUi, cancelExtensionUi } = useHost();
+  const { state, isConnected, connectionState, fetchMonitorState, fetchSessionUsage, openSessionContinue, openExistingSession, loadSessionHistory, answerExtensionUi, cancelExtensionUi } = useHost();
   const { theme } = useTheme();
   const { t } = useI18n();
   const styles = React.useMemo(() => makeStyles(theme), [theme]);
   const [currentAskIndex, setCurrentAskIndex] = useState(0);
+  const [openingAsk, setOpeningAsk] = useState(false);
 
   const windows = state.monitor?.windows ?? [];
 
@@ -85,9 +86,9 @@ export default function DashboardScreen() {
       : t.goToPair;
   const canOpenPairing = connectionState === "disconnected";
 
-  // 待处理 ask 弹窗投影（extension-ui 队列 pending 项，来自 AppState.dialogs）
-  const pendingAsks = React.useMemo<PendingAskItem[]>(
-    () => state.dialogs
+  // 待处理 ask 弹窗投影（聚合 extension-ui 队列 pending 项，以及来自 monitor windows 的交互等待）
+  const pendingAsks = React.useMemo<PendingAskItem[]>(() => {
+    const list: PendingAskItem[] = state.dialogs
       .filter((d) => d.status === "pending")
       .map((d) => ({
         requestId: d.request.id,
@@ -95,9 +96,26 @@ export default function DashboardScreen() {
         method: d.request.method,
         title: d.request.title,
         message: d.request.message,
-      })),
-    [state.dialogs],
-  );
+      }));
+
+    // 聚合桌面活跃窗口的 pendingAsk 或 ask_pending attention
+    const existingSessionIds = new Set(list.map((x) => x.sessionId));
+    for (const w of state.monitor?.windows ?? []) {
+      if (w.status === "running" && !existingSessionIds.has(w.identity.endpointId)) {
+        const askAttention = w.attention.find((a) => a.code === "ask_pending");
+        if (w.pendingAsk || askAttention) {
+          list.push({
+            requestId: w.pendingAsk?.toolCallId || w.identity.ownerId,
+            sessionId: w.identity.endpointId,
+            method: "confirm",
+            title: `${w.name ? `[${w.name}] ` : ""}问答确认`,
+            message: w.pendingAsk?.question || askAttention?.message || "当前窗口正在等待用户确认或作答",
+          });
+        }
+      }
+    }
+    return list;
+  }, [state.dialogs, state.monitor?.windows]);
 
   const metrics = React.useMemo(
     () => deriveDashboardMetrics({ monitor: state.monitor, maestro: state.maestro, pendingAsks }, new Date()),
@@ -324,7 +342,11 @@ export default function DashboardScreen() {
 
         {/* 待处理 Ask 弹窗卡片（支持多条队列角标与前后切换） */}
         {pendingAsks.length > 0 && pendingAsks[currentAskIndex] && (
-          <View style={[styles.askCard, { backgroundColor: theme.secondaryContainer ?? theme.cardBg, borderColor: theme.warning }]}>
+          <TouchableOpacity
+            activeOpacity={0.92}
+            onPress={() => router.push({ pathname: "/session", params: { id: pendingAsks[currentAskIndex].sessionId } })}
+            style={[styles.askCard, { backgroundColor: theme.secondaryContainer ?? theme.cardBg, borderColor: theme.warning }]}
+          >
             <View style={styles.askHeader}>
               <View style={styles.askTitleWrap}>
                 <LineIcon name="bolt" size={16} color={theme.warning} />
@@ -337,13 +359,19 @@ export default function DashboardScreen() {
                 {pendingAsks.length > 1 && (
                   <View style={styles.askNavBtns}>
                     <TouchableOpacity
-                      onPress={() => setCurrentAskIndex((prev) => (prev > 0 ? prev - 1 : pendingAsks.length - 1))}
+                      onPress={(e) => {
+                        e.stopPropagation?.();
+                        setCurrentAskIndex((prev) => (prev > 0 ? prev - 1 : pendingAsks.length - 1));
+                      }}
                       style={[styles.askNavBtn, { backgroundColor: theme.inputBg }]}
                     >
                       <Text style={[styles.askNavBtnText, { color: theme.text }]}>‹</Text>
                     </TouchableOpacity>
                     <TouchableOpacity
-                      onPress={() => setCurrentAskIndex((prev) => (prev < pendingAsks.length - 1 ? prev + 1 : 0))}
+                      onPress={(e) => {
+                        e.stopPropagation?.();
+                        setCurrentAskIndex((prev) => (prev < pendingAsks.length - 1 ? prev + 1 : 0));
+                      }}
                       style={[styles.askNavBtn, { backgroundColor: theme.inputBg }]}
                     >
                       <Text style={[styles.askNavBtnText, { color: theme.text }]}>›</Text>
@@ -358,29 +386,43 @@ export default function DashboardScreen() {
 
             <View style={styles.askActionRow}>
               <TouchableOpacity
-                style={[styles.askApproveBtn, { backgroundColor: theme.buttonPrimary }]}
-                onPress={() => {
-                  void answerExtensionUi(pendingAsks[currentAskIndex].sessionId, pendingAsks[currentAskIndex].requestId, true);
-                  if (currentAskIndex >= pendingAsks.length - 1 && currentAskIndex > 0) {
-                    setCurrentAskIndex(currentAskIndex - 1);
+                style={[styles.askApproveBtn, { backgroundColor: theme.buttonPrimary }, openingAsk && { opacity: 0.7 }]}
+                disabled={openingAsk}
+                onPress={async (e) => {
+                  e.stopPropagation?.();
+                  const targetAsk = pendingAsks[currentAskIndex];
+                  if (targetAsk) {
+                    setOpeningAsk(true);
+                    try {
+                      if (targetAsk.cwd) {
+                        await openExistingSession(targetAsk.sessionId, targetAsk.cwd);
+                      }
+                      await loadSessionHistory(targetAsk.sessionId);
+                      router.push({ pathname: "/session", params: { id: targetAsk.sessionId } });
+                    } catch {
+                      router.push({ pathname: "/session", params: { id: targetAsk.sessionId } });
+                    } finally {
+                      setOpeningAsk(false);
+                    }
                   }
                 }}
               >
-                <Text style={styles.askBtnText}>{t.askConfirm}</Text>
+                <Text style={styles.askBtnText}>{openingAsk ? "加载中…" : "查看会话与作答"}</Text>
               </TouchableOpacity>
               <TouchableOpacity
                 style={[styles.askRejectBtn, { backgroundColor: theme.inputBg, borderColor: theme.border }]}
-                onPress={() => {
+                onPress={(e) => {
+                  e.stopPropagation?.();
                   void cancelExtensionUi(pendingAsks[currentAskIndex].sessionId, pendingAsks[currentAskIndex].requestId);
                   if (currentAskIndex >= pendingAsks.length - 1 && currentAskIndex > 0) {
                     setCurrentAskIndex(currentAskIndex - 1);
                   }
                 }}
               >
-                <Text style={[styles.askBtnText, { color: theme.muted }]}>{t.askReject}</Text>
+                <Text style={[styles.askBtnText, { color: theme.muted }]}>忽略</Text>
               </TouchableOpacity>
             </View>
-          </View>
+          </TouchableOpacity>
         )}
 
         {/* 现在运行 */}

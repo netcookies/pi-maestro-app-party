@@ -22,6 +22,12 @@ interface SpringBottomSheetProps {
   containerStyle?: ViewStyle;
   contentHeight?: number;
   keyboardVerticalOffset?: number;
+  /** 可选多档吸附高度（从小到大排序，例如 [280, 480, 720]） */
+  snapPoints?: number[];
+  /** 初始档位索引（默认 0） */
+  initialSnapIndex?: number;
+  /** 档位发生变更时的回调 */
+  onSnapChange?: (index: number) => void;
 }
 
 export function shouldDismissSheet(
@@ -40,14 +46,32 @@ export function SpringBottomSheet({
   containerStyle,
   contentHeight = 320,
   keyboardVerticalOffset = 0,
+  snapPoints,
+  initialSnapIndex = 0,
+  onSnapChange,
 }: SpringBottomSheetProps) {
   const { theme } = useTheme();
   const translateY = useRef(new Animated.Value(SCREEN_HEIGHT)).current;
   const backdropOpacity = useRef(new Animated.Value(0)).current;
 
+  // 多档位高度计算
+  const hasSnaps = Array.isArray(snapPoints) && snapPoints.length > 0;
+  const maxHeight = hasSnaps ? snapPoints[snapPoints.length - 1] : contentHeight;
+  // 档位对应的 translateY 偏移：最大档偏移为 0，低档位偏移为 (maxHeight - h)
+  const snapOffsets = useRef<number[]>([]);
+  snapOffsets.current = hasSnaps ? snapPoints.map((h) => Math.max(0, maxHeight - h)) : [0];
+
+  const currentSnapIndex = useRef(initialSnapIndex);
+  const baseOffset = useRef(hasSnaps ? snapOffsets.current[initialSnapIndex] ?? 0 : 0);
+
   useEffect(() => {
     if (visible) {
       void hapticImpactLight();
+      const initIdx = Math.max(0, Math.min(initialSnapIndex, snapOffsets.current.length - 1));
+      currentSnapIndex.current = initIdx;
+      const targetOffset = hasSnaps ? snapOffsets.current[initIdx] : 0;
+      baseOffset.current = targetOffset;
+
       Animated.parallel([
         Animated.timing(backdropOpacity, {
           toValue: 1,
@@ -55,7 +79,7 @@ export function SpringBottomSheet({
           useNativeDriver: true,
         }),
         Animated.spring(translateY, {
-          toValue: 0,
+          toValue: targetOffset,
           friction: 8,
           tension: 80,
           useNativeDriver: true,
@@ -69,51 +93,99 @@ export function SpringBottomSheet({
           useNativeDriver: true,
         }),
         Animated.timing(translateY, {
-          toValue: contentHeight + 100,
+          toValue: SCREEN_HEIGHT,
           duration: 200,
           useNativeDriver: true,
         }),
       ]).start();
     }
-  }, [visible, contentHeight, backdropOpacity, translateY]);
+  }, [visible, contentHeight, initialSnapIndex, hasSnaps, backdropOpacity, translateY]);
 
   const panResponder = useRef(
     PanResponder.create({
       onStartShouldSetPanResponder: () => true,
       onMoveShouldSetPanResponder: (_, gestureState) => {
-        // 只有向下滑动才捕获，允许内部水平操作
-        return gestureState.dy > 5;
+        // 当支持多档时，允许手势上下拖拽；单档只在向下滑动时拦截
+        return hasSnaps ? Math.abs(gestureState.dy) > 3 : gestureState.dy > 5;
       },
       onPanResponderMove: (_, gestureState) => {
-        if (gestureState.dy > 0) {
-          translateY.setValue(gestureState.dy);
+        if (!hasSnaps) {
+          if (gestureState.dy > 0) translateY.setValue(gestureState.dy);
+          return;
         }
+        const raw = baseOffset.current + gestureState.dy;
+        // 向上拖过最大档位时增加阻尼
+        const damped = raw < 0 ? raw * 0.25 : raw;
+        translateY.setValue(damped);
       },
       onPanResponderRelease: (_, gestureState) => {
-        // 下滑超过 80 或甩动速度快时关闭
-        if (shouldDismissSheet(gestureState.dy, gestureState.vy)) {
+        if (!hasSnaps) {
+          // 单档原有逻辑：下滑超过 80 或甩动速度快时关闭
+          if (shouldDismissSheet(gestureState.dy, gestureState.vy)) {
+            void hapticImpactLight();
+            Animated.parallel([
+              Animated.timing(backdropOpacity, { toValue: 0, duration: 180, useNativeDriver: true }),
+              Animated.timing(translateY, { toValue: SCREEN_HEIGHT, duration: 200, useNativeDriver: true }),
+            ]).start(() => onClose());
+          } else {
+            Animated.spring(translateY, { toValue: 0, friction: 7, tension: 90, useNativeDriver: true }).start();
+          }
+          return;
+        }
+
+        // 多档位吸附计算
+        const offsets = snapOffsets.current;
+        const currentVal = baseOffset.current + gestureState.dy;
+        const lowestOffset = offsets[0] ?? 0;
+
+        // 向下拖动超过最低档 70 或在最低档快速下滑时关闭
+        const isDismissGesture = (currentSnapIndex.current === 0 && gestureState.dy > 70)
+          || (gestureState.vy > 0.8 && gestureState.dy > 30)
+          || (currentVal > lowestOffset + 80);
+
+        if (isDismissGesture) {
           void hapticImpactLight();
           Animated.parallel([
-            Animated.timing(backdropOpacity, {
-              toValue: 0,
-              duration: 180,
-              useNativeDriver: true,
-            }),
-            Animated.timing(translateY, {
-              toValue: contentHeight + 100,
-              duration: 200,
-              useNativeDriver: true,
-            }),
+            Animated.timing(backdropOpacity, { toValue: 0, duration: 180, useNativeDriver: true }),
+            Animated.timing(translateY, { toValue: SCREEN_HEIGHT, duration: 200, useNativeDriver: true }),
           ]).start(() => onClose());
-        } else {
-          // 回弹
-          Animated.spring(translateY, {
-            toValue: 0,
-            friction: 7,
-            tension: 90,
-            useNativeDriver: true,
-          }).start();
+          return;
         }
+
+        // 速度冲量判定：快速向上或向下轻甩切换档位
+        let targetIdx = currentSnapIndex.current;
+        if (gestureState.vy < -0.4 && targetIdx < offsets.length - 1) {
+          targetIdx += 1;
+        } else if (gestureState.vy > 0.4 && targetIdx > 0) {
+          targetIdx -= 1;
+        } else {
+          // 找最近距离的档位
+          let minDiff = Infinity;
+          offsets.forEach((off, idx) => {
+            const diff = Math.abs(currentVal - off);
+            if (diff < minDiff) {
+              minDiff = diff;
+              targetIdx = idx;
+            }
+          });
+        }
+
+        const finalOffset = offsets[targetIdx] ?? 0;
+        const indexChanged = targetIdx !== currentSnapIndex.current;
+        currentSnapIndex.current = targetIdx;
+        baseOffset.current = finalOffset;
+
+        if (indexChanged) {
+          void hapticImpactLight();
+          onSnapChange?.(targetIdx);
+        }
+
+        Animated.spring(translateY, {
+          toValue: finalOffset,
+          friction: 8,
+          tension: 85,
+          useNativeDriver: true,
+        }).start();
       },
     }),
   ).current;
@@ -189,15 +261,15 @@ const styles = StyleSheet.create({
   },
   handleArea: {
     width: "100%",
-    height: 24,
+    height: 34,
     alignItems: "center",
     justifyContent: "center",
   },
   handleBar: {
-    width: 36,
-    height: 4,
-    borderRadius: 2,
-    opacity: 0.5,
+    width: 40,
+    height: 5,
+    borderRadius: 2.5,
+    opacity: 0.6,
   },
   content: {
     paddingHorizontal: 16,

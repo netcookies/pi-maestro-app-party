@@ -38,14 +38,11 @@ export function ExtensionUiDialog({ request, onAnswer, onCancel }: Props) {
   const confirmDisabled =
     submitting ||
     (showInput && freeText.trim().length === 0) ||
-    // 保留原语义：选项分支未选中但输入了自定义答案时仍可确认
-    (hasOptions && !isSingleSelect && selected.length === 0 && freeText.trim().length === 0);
+    (hasOptions && selected.length === 0 && freeText.trim().length === 0);
 
   const runAnswer = (produce: () => void | Promise<void>) => {
     if (submitting) return;
     setSubmitting(true);
-    // 弹窗通常在作答后被父级卸载；复位保证异常或复用场景下状态干净
-    // 父级返回 Promise（WS bridge 异步送达）时保持 submitting 直到 settle，防重复提交（RV-003）
     Promise.resolve()
       .then(produce)
       .catch(() => undefined)
@@ -55,7 +52,7 @@ export function ExtensionUiDialog({ request, onAnswer, onCancel }: Props) {
   const handleSelect = (option: string) => {
     if (submitting) return;
     if (isSingleSelect) {
-      runAnswer(() => onAnswer([option]));
+      setSelected([option]);
       return;
     }
     setSelected((prev) =>
@@ -86,7 +83,20 @@ export function ExtensionUiDialog({ request, onAnswer, onCancel }: Props) {
   return (
     <Modal transparent animationType="fade" visible>
       <View style={styles.overlay}>
-        <View style={[styles.dialog, { backgroundColor: theme.cardBg, borderColor: theme.border }]}>
+        <View
+          style={[
+            styles.dialog,
+            {
+              backgroundColor: theme.cardBg ?? "#FFFFFF",
+              borderColor: theme.border,
+              shadowColor: "#000",
+              shadowOffset: { width: 0, height: 8 },
+              shadowOpacity: 0.25,
+              shadowRadius: 20,
+              elevation: 12,
+            },
+          ]}
+        >
           <Text style={[styles.title, { color: theme.text }]}>{request.title ?? "询问"}</Text>
           {request.message ? <Text style={[styles.message, { color: theme.muted }]}>{request.message}</Text> : null}
 
@@ -102,7 +112,8 @@ export function ExtensionUiDialog({ request, onAnswer, onCancel }: Props) {
                     isSelected && { borderColor: theme.accent, backgroundColor: withAlpha(theme.accent, "22") },
                   ]}
                   onPress={() => handleSelect(option)}
-                  accessibilityRole={isSingleSelect ? "radio" : "checkbox"}
+                  accessibilityRole="button"
+                  accessibilityLabel={option}
                   accessibilityState={{ selected: isSelected }}
                 >
                   <Text style={[styles.optionText, { color: theme.text }, isSelected && { color: theme.accent }]}>
@@ -163,26 +174,26 @@ export function ExtensionUiDialog({ request, onAnswer, onCancel }: Props) {
 const styles = StyleSheet.create({
   overlay: {
     flex: 1,
-    backgroundColor: "rgba(0,0,0,0.6)",
+    backgroundColor: "rgba(0,0,0,0.55)",
     justifyContent: "center",
-    padding: 24,
+    padding: 20,
   },
   dialog: {
-    borderRadius: 14,
+    borderRadius: 18,
     padding: 20,
     borderWidth: 1,
     maxHeight: "80%",
   },
-  title: { fontSize: 17, fontWeight: "600", marginBottom: 8 },
-  message: { fontSize: 14, marginBottom: 12 },
-  optionsList: { maxHeight: 250, marginBottom: 12 },
+  title: { fontSize: 18, fontWeight: "700", marginBottom: 6 },
+  message: { fontSize: 14, lineHeight: 20, marginBottom: 14 },
+  optionsList: { maxHeight: 280, marginBottom: 14 },
   option: {
-    borderRadius: 8,
+    borderRadius: 10,
     padding: 12,
-    marginBottom: 6,
+    marginBottom: 8,
     borderWidth: 1,
   },
-  optionText: { fontSize: 15 },
+  optionText: { fontSize: 15, fontWeight: "500" },
   input: {
     borderRadius: 8,
     paddingHorizontal: 12,

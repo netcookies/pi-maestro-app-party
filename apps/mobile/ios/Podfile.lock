@@ -1,11 +1,15 @@
 PODS:
   - boost (1.84.0)
   - DoubleConversion (1.1.6)
+  - EXApplication (6.0.2):
+    - ExpoModulesCore
   - EXConstants (17.1.8):
     - ExpoModulesCore
   - EXImageLoader (5.1.0):
     - ExpoModulesCore
     - React-Core
+  - EXNotifications (0.29.14):
+    - ExpoModulesCore
   - Expo (53.0.27):
     - DoubleConversion
     - ExpoModulesCore
@@ -2117,8 +2121,10 @@ PODS:
 DEPENDENCIES:
   - "boost (from `../../../node_modules/.pnpm/react-native@0.79.6_@babel+core@7.29.7_@types+react@19.0.14_react@19.0.0/node_modules/react-native/third-party-podspecs/boost.podspec`)"
   - "DoubleConversion (from `../../../node_modules/.pnpm/react-native@0.79.6_@babel+core@7.29.7_@types+react@19.0.14_react@19.0.0/node_modules/react-native/third-party-podspecs/DoubleConversion.podspec`)"
+  - "EXApplication (from `../../../node_modules/.pnpm/expo-application@6.0.2_expo@53.0.27_@babel+core@7.29.7_@expo+metro-runtime@5.0.5_react-_03196979d66f20ac4c93244160756d79/node_modules/expo-application/ios`)"
   - "EXConstants (from `../../../node_modules/.pnpm/expo-constants@17.1.8_expo@53.0.27_@babel+core@7.29.7_@expo+metro-runtime@5.0.5_react-n_ae7620bf2e3bd494f0becbb5391590e9/node_modules/expo-constants/ios`)"
   - "EXImageLoader (from `../../../node_modules/.pnpm/expo-image-loader@5.1.0_expo@53.0.27_@babel+core@7.29.7_@expo+metro-runtime@5.0.5_react_a8ed94705edf1dcbebc545a32b96ee6e/node_modules/expo-image-loader/ios`)"
+  - "EXNotifications (from `../../../node_modules/.pnpm/expo-notifications@0.29.14_expo@53.0.27_@babel+core@7.29.7_@expo+metro-runtime@5.0.5_re_86417c5cd44ff46ca4f3ed841e3f9534/node_modules/expo-notifications/ios`)"
   - "Expo (from `../../../node_modules/.pnpm/expo@53.0.27_@babel+core@7.29.7_@expo+metro-runtime@5.0.5_react-native@0.79.6_@babel+co_3d639af496bc0e55983c111ed1e77554/node_modules/expo`)"
   - "ExpoAsset (from `../../../node_modules/.pnpm/expo-asset@11.1.7_expo@53.0.27_@babel+core@7.29.7_@expo+metro-runtime@5.0.5_react-nativ_821d1d10e5bdf933c0671713731b9575/node_modules/expo-asset/ios`)"
   - "ExpoCamera (from `../../../node_modules/.pnpm/expo-camera@16.1.11_expo@53.0.27_@babel+core@7.29.7_@expo+metro-runtime@5.0.5_react-nat_39b297b21a67ebbee2240a45f1aa17d2/node_modules/expo-camera/ios`)"
@@ -2220,10 +2226,14 @@ EXTERNAL SOURCES:
     :podspec: "../../../node_modules/.pnpm/react-native@0.79.6_@babel+core@7.29.7_@types+react@19.0.14_react@19.0.0/node_modules/react-native/third-party-podspecs/boost.podspec"
   DoubleConversion:
     :podspec: "../../../node_modules/.pnpm/react-native@0.79.6_@babel+core@7.29.7_@types+react@19.0.14_react@19.0.0/node_modules/react-native/third-party-podspecs/DoubleConversion.podspec"
+  EXApplication:
+    :path: "../../../node_modules/.pnpm/expo-application@6.0.2_expo@53.0.27_@babel+core@7.29.7_@expo+metro-runtime@5.0.5_react-_03196979d66f20ac4c93244160756d79/node_modules/expo-application/ios"
   EXConstants:
     :path: "../../../node_modules/.pnpm/expo-constants@17.1.8_expo@53.0.27_@babel+core@7.29.7_@expo+metro-runtime@5.0.5_react-n_ae7620bf2e3bd494f0becbb5391590e9/node_modules/expo-constants/ios"
   EXImageLoader:
     :path: "../../../node_modules/.pnpm/expo-image-loader@5.1.0_expo@53.0.27_@babel+core@7.29.7_@expo+metro-runtime@5.0.5_react_a8ed94705edf1dcbebc545a32b96ee6e/node_modules/expo-image-loader/ios"
+  EXNotifications:
+    :path: "../../../node_modules/.pnpm/expo-notifications@0.29.14_expo@53.0.27_@babel+core@7.29.7_@expo+metro-runtime@5.0.5_re_86417c5cd44ff46ca4f3ed841e3f9534/node_modules/expo-notifications/ios"
   Expo:
     :path: "../../../node_modules/.pnpm/expo@53.0.27_@babel+core@7.29.7_@expo+metro-runtime@5.0.5_react-native@0.79.6_@babel+co_3d639af496bc0e55983c111ed1e77554/node_modules/expo"
   ExpoAsset:
@@ -2405,8 +2415,10 @@ EXTERNAL SOURCES:
 SPEC CHECKSUMS:
   boost: 7e761d76ca2ce687f7cc98e698152abd03a18f90
   DoubleConversion: cb417026b2400c8f53ae97020b2be961b59470cb
+  EXApplication: 4c72f6017a14a65e338c5e74fca418f35141e819
   EXConstants: d3d551cb154718f5161c4247304e96aa59f6cca7
   EXImageLoader: 4d3d3284141f1a45006cc4d0844061c182daf7ee
+  EXNotifications: 9d3d17e52c95f377750d4a2ae553a716313dd4aa
   Expo: 7e07803ccc34cdf144a0d51cc2684a60628b6593
   ExpoAsset: ef06e880126c375f580d4923fdd1cdf4ee6ee7d6
   ExpoCamera: e1879906d41184e84b57d7643119f8509414e318

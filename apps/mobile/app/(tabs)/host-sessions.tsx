@@ -387,10 +387,22 @@ export default function HostSessionsScreen() {
     return m;
   }, [sessions]);
 
+  /** 处于 running 状态的窗口所绑定的 sessionId 集合（与工作台、监控 Tab 的绿灯严格一致） */
+  const runningWindowSessionIds = useMemo(() => {
+    const ids = new Set<string>();
+    for (const w of hostState.monitor?.windows ?? []) {
+      if (w.status === "running" && w.identity?.endpointId) {
+        ids.add(w.identity.endpointId);
+      }
+    }
+    return ids;
+  }, [hostState.monitor?.windows]);
+
   const isSessionActive = useCallback((s: HostSessionSummary) =>
     liveSessions.has(s.id)
+    || runningWindowSessionIds.has(s.id)
     || (runningWindowCwds.has(s.cwd) && latestPerCwd.get(s.cwd)?.id === s.id),
-  [liveSessions, runningWindowCwds, latestPerCwd]);
+  [liveSessions, runningWindowSessionIds, runningWindowCwds, latestPerCwd]);
 
   // Tab 只过滤已加载数据；文本搜索由 Host 对全库执行。
   const filtered = useMemo(() => {
@@ -425,7 +437,7 @@ export default function HostSessionsScreen() {
           type: "session",
           key: `s:${s.id}`,
           session: s,
-          live: liveSessions.has(s.id),
+          live: isSessionActive(s),
           opening: opening === s.id,
         });
       }
@@ -453,7 +465,7 @@ export default function HostSessionsScreen() {
           disabled={item.opening}
           accessibilityRole="button"
         >
-        {/* 卡片顶行：状态指示点 + 标题 (主标题为文件夹名称) + 模型徽标 */}
+        {/* 卡片顶行：状态指示点 + 标题 (主标题为文件夹名称) + 高光色 ID 徽标 */}
         <View style={styles.sessionHeader}>
           <View style={styles.sessionHeaderLeft}>
             <PulsingDot
@@ -465,11 +477,9 @@ export default function HostSessionsScreen() {
               {s.cwdName || (s.cwd ? s.cwd.replace(/\/$/, "").split("/").pop() : null) || s.name || s.title || "(未命名项目)"}
             </Text>
           </View>
-          {s.model ? (
-            <View style={styles.modelBadge}>
-              <Text style={styles.modelBadgeText}>{s.model}</Text>
-            </View>
-          ) : null}
+          <View style={styles.modelBadge}>
+            <Text style={styles.modelBadgeText}>#{s.id.slice(0, 8)}</Text>
+          </View>
           {item.opening && <ActivityIndicator size="small" color={theme.accent} style={{ marginLeft: 6 }} />}
         </View>
 
@@ -803,12 +813,12 @@ function makeStyles(theme: ReturnType<typeof useTheme>["theme"]) {
     modelBadge: {
       paddingHorizontal: 8,
       paddingVertical: 2,
-      borderRadius: 12,
+      borderRadius: 10,
       backgroundColor: hexToRgba(theme.accent, 0.14),
       borderWidth: 1,
       borderColor: hexToRgba(theme.accent, 0.35),
     },
-    modelBadgeText: { fontSize: 10, fontFamily: "monospace", color: theme.accent },
+    modelBadgeText: { fontSize: 9, fontFamily: "monospace", color: theme.accent, fontWeight: "600" },
     pathRow: { flexDirection: "row", alignItems: "center", gap: 5, marginTop: 4, marginBottom: 8 },
     pathText: { fontSize: 11, fontFamily: "monospace", color: theme.muted, flex: 1 },
     bentoGrid: {

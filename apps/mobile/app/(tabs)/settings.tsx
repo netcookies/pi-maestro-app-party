@@ -17,11 +17,13 @@ import { DEFAULT_CONFIG, getConfig, updateConfig, loadConfig, type AppConfig } f
 import { MiuixSwitch } from "../../src/components/MiuixSwitch";
 import { MiuixSlider } from "../../src/components/MiuixSlider";
 import { LineIcon } from "../../src/components/LineIcon";
+import Constants from "expo-constants";
 import { useTabSwipe } from "../../src/hooks/useTabSwipe";
 import { useI18n } from "../../src/i18n";
 import { PulsingDot } from "../../src/components/PulsingDot";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { HOST_CONN_KEY, persistPairedHost } from "../../src/paired-hosts";
+import { getNotificationSettings, setNotificationSettings } from "../../src/notifications";
 
 export default function SettingsScreen() {
   const router = useRouter();
@@ -38,10 +40,19 @@ export default function SettingsScreen() {
   const styles = useMemo(() => makeStyles(theme), [theme]);
   const [config, setConfig] = useState<AppConfig>(getConfig());
   const [configDraft, setConfigDraft] = useState<Partial<AppConfig>>({});
-  // 本地行为偏好
-  const [notifAttention, setNotifAttention] = useState(true);
-  const [askHaptic, setAskHaptic] = useState(true);
-  const [wifiOnly, setWifiOnly] = useState(false);
+  // 本地真实通知与提醒偏好
+  const [notifAsk, setNotifAsk] = useState(() => getNotificationSettings().askEnabled);
+  const [notifSettled, setNotifSettled] = useState(() => getNotificationSettings().settledEnabled);
+
+  const handleToggleNotifAsk = (val: boolean) => {
+    setNotifAsk(val);
+    void setNotificationSettings({ askEnabled: val });
+  };
+
+  const handleToggleNotifSettled = (val: boolean) => {
+    setNotifSettled(val);
+    void setNotificationSettings({ settledEnabled: val });
+  };
 
   const [hostUrl, setHostUrl] = useState(connectedHostUrl);
   const [token, setToken] = useState(connectedToken ?? "");
@@ -429,18 +440,18 @@ export default function SettingsScreen() {
           <View style={[styles.prefDivider, { backgroundColor: theme.dividerLine ?? theme.border }]} />
           <View style={styles.prefRow}>
             <View style={styles.prefMain}>
-              <Text style={styles.prefLabel}>{t.notifAttentionLabel}</Text>
-              <Text style={styles.prefSummary}>{t.notifAttentionDesc}</Text>
+              <Text style={styles.prefLabel}>Ask 待办提问通知</Text>
+              <Text style={styles.prefSummary}>收到决策或操作确认时弹出系统横幅与震动</Text>
             </View>
-            <MiuixSwitch value={notifAttention} onValueChange={setNotifAttention} accessibilityLabel={t.notifAttentionLabel} />
+            <MiuixSwitch value={notifAsk} onValueChange={handleToggleNotifAsk} accessibilityLabel="Ask 待办提问通知" />
           </View>
           <View style={[styles.prefDivider, { backgroundColor: theme.dividerLine ?? theme.border }]} />
           <View style={styles.prefRow}>
             <View style={styles.prefMain}>
-              <Text style={styles.prefLabel}>{t.wifiOnlyLabel}</Text>
-              <Text style={styles.prefSummary}>{t.wifiOnlyDesc}</Text>
+              <Text style={styles.prefLabel}>Agent 轮次完成通知</Text>
+              <Text style={styles.prefSummary}>本轮任务思考、输出或工具执行全部结束时提醒</Text>
             </View>
-            <MiuixSwitch value={wifiOnly} onValueChange={setWifiOnly} accessibilityLabel={t.wifiOnlyLabel} />
+            <MiuixSwitch value={notifSettled} onValueChange={handleToggleNotifSettled} accessibilityLabel="Agent 轮次完成通知" />
           </View>
         </View>
 
@@ -451,7 +462,7 @@ export default function SettingsScreen() {
             <View style={styles.prefMain}>
               <Text style={styles.prefLabel}>{t.versionApp}</Text>
             </View>
-            <Text style={styles.prefValue}>0.2.15 (Build 15)</Text>
+            <Text style={styles.prefValue}>{Constants.expoConfig?.version ?? "0.3.2"}</Text>
           </View>
           <View style={[styles.prefDivider, { backgroundColor: theme.dividerLine ?? theme.border }]} />
           <View style={styles.prefRow}>
@@ -461,39 +472,39 @@ export default function SettingsScreen() {
                 {meta ? `${t.runningTime} ${Math.round((meta.uptimeMs ?? 0) / 1000)}s · ${meta.sessions ?? 0} ${t.sessionsCount}` : t.showAfterConnect}
               </Text>
             </View>
-            <Text style={styles.prefValue}>{meta?.version ?? "0.2.15"}</Text>
+            <Text style={styles.prefValue}>{meta?.version ?? (isConnected ? "0.3.2" : "未连接")}</Text>
           </View>
           <View style={[styles.prefDivider, { backgroundColor: theme.dividerLine ?? theme.border }]} />
           <View style={styles.prefRow}>
             <View style={styles.prefMain}>
               <Text style={styles.prefLabel}>{t.versionPi}</Text>
-              <Text style={styles.prefSummary}>{t.versionPiSummary}</Text>
+              <Text style={styles.prefSummary}>底层编码 Agent 引擎</Text>
             </View>
-            <Text style={styles.prefValue}>{meta?.piVersion ?? "v0.56.0-native"}</Text>
+            <Text style={styles.prefValue}>{meta?.piVersion ?? (isConnected ? "未检测到" : "未连接")}</Text>
           </View>
           <View style={[styles.prefDivider, { backgroundColor: theme.dividerLine ?? theme.border }]} />
           <View style={styles.prefRow}>
             <View style={styles.prefMain}>
               <Text style={styles.prefLabel}>{t.versionFlow}</Text>
-              <Text style={styles.prefSummary}>{t.versionFlowSummary}</Text>
+              <Text style={styles.prefSummary}>编排流与协作扩展</Text>
             </View>
-            <Text style={styles.prefValue}>{meta?.flowVersion ?? "3.0.0-odyssey"}</Text>
+            <Text style={styles.prefValue}>{meta?.flowVersion ?? (isConnected ? "未安装" : "未连接")}</Text>
           </View>
           <View style={[styles.prefDivider, { backgroundColor: theme.dividerLine ?? theme.border }]} />
           <View style={styles.prefRow}>
             <View style={styles.prefMain}>
               <Text style={styles.prefLabel}>{t.versionCli}</Text>
             </View>
-            <Text style={styles.prefValue}>{meta?.maestroCliVersion ?? "3.0.0 (Global)"}</Text>
+            <Text style={styles.prefValue}>{meta?.maestroCliVersion ?? (isConnected ? "未检测到" : "未连接")}</Text>
           </View>
           <View style={[styles.prefDivider, { backgroundColor: theme.dividerLine ?? theme.border }]} />
           <View style={styles.prefRow}>
             <View style={styles.prefMain}>
               <Text style={styles.prefLabel}>{t.versionCompat}</Text>
-              <Text style={styles.prefSummary}>{t.versionCompatSummary}</Text>
+              <Text style={styles.prefSummary}>全协议链路兼容性</Text>
             </View>
-            <Text style={[styles.prefValue, { color: theme.success }]}>
-              {t.versionCompatVal}
+            <Text style={[styles.prefValue, { color: isConnected ? theme.success : theme.muted }]}>
+              {isConnected ? "Host 直通就绪" : "等待连接"}
             </Text>
           </View>
         </View>

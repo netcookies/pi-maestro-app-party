@@ -1,18 +1,22 @@
 import React, { useCallback, useEffect, useRef, useState, useMemo } from "react";
 import {
-  View, Text, StyleSheet, FlatList, TextInput, TouchableOpacity, KeyboardAvoidingView, Platform, ActivityIndicator,
+  View, Text, StyleSheet, FlatList, TextInput, TouchableOpacity, Pressable, KeyboardAvoidingView, Platform, ActivityIndicator,
   Animated, AccessibilityInfo, LayoutAnimation, UIManager, PanResponder, Dimensions,
 } from "react-native";
+import * as Clipboard from "expo-clipboard";
 import { useLocalSearchParams, useRouter } from "expo-router";
 import { useHost } from "../src/store";
 import { useTheme, MIUIX_RADIUS, MIUIX_TYPE, MIUIX_SPACE, hexToRgba } from "../src/theme";
 import { getConfig, loadConfig } from "../src/config";
 import { LineIcon } from "../src/components/LineIcon";
 import { useI18n } from "../src/i18n";
-import { hapticImpactLight } from "../src/utils/haptics";
+import { hapticImpactLight, hapticImpactMedium, hapticNotificationSuccess } from "../src/utils/haptics";
 import { SafeAreaView, useSafeAreaInsets } from "react-native-safe-area-context";
 import type { TimelineItem } from "@maestro-mobile/shared";
+import AsyncStorage from "@react-native-async-storage/async-storage";
 import { ExtensionUiDialog } from "../src/components/ExtensionUiDialog";
+import { AskWizardDialog, type AskAnswer, type QuestionSpec } from "../src/components/AskWizardDialog";
+import { setActiveViewingSession } from "../src/notifications";
 import { InlineImage } from "../src/components/InlineImage";
 import { CollapsibleTool } from "../src/components/CollapsibleTool";
 import { ChatMarkdown } from "../src/components/chat/ChatMarkdown";
@@ -36,7 +40,7 @@ let cachedModelsList: { id: string; provider: string; name: string; reasoning: b
 export default function SessionScreen() {
   const { id } = useLocalSearchParams<{ id: string }>();
   const router = useRouter();
-  const { state, sendPrompt, sendAbort, answerDialog, cancelDialog, loadSessionHistory, loadMoreHistory, searchHistory, listModels, setModel, setThinking, listSkills, compactSession, renameSession, isConnected, connectionState } = useHost();
+  const { state, sendPrompt, sendAbort, sendSteerWindow, answerDialog, cancelDialog, loadSessionHistory, loadMoreHistory, searchHistory, listModels, setModel, setThinking, listSkills, compactSession, renameSession, isConnected, connectionState } = useHost();
   const { theme } = useTheme();
   const { t } = useI18n();
   const cfg = getConfig();
@@ -66,9 +70,13 @@ export default function SessionScreen() {
   useEffect(() => {
     void loadConfig();
     if (id) {
+      setActiveViewingSession(id);
       void loadSessionHistory(id).catch(() => {});
       void listSkills(id).then(setAvailableSkills).catch(() => {});
     }
+    return () => {
+      setActiveViewingSession(null);
+    };
   }, [id, loadSessionHistory, listSkills]);
   const [input, setInput] = useState("");
   const [sending, setSending] = useState(false);
@@ -98,6 +106,24 @@ export default function SessionScreen() {
   // ChatComposer 状态
   const [availableSkills, setAvailableSkills] = useState<string[]>([]);
   const [currentModelId, setCurrentModelId] = useState<string | undefined>(session?.model ? String((session.model as { id?: string })?.id ?? "") : undefined);
+  // 复制反馈状态（记录被复制消息的 id）
+  const [copiedId, setCopiedId] = useState<string | null>(null);
+  // 选中文本抽屉状态（存放当前长按查看/选择的消息文本）
+  const [selectionText, setSelectionText] = useState<string | null>(null);
+
+  const handleCopyMessage = useCallback(async (msgId: string, text: string) => {
+    if (!text) return;
+    try {
+      await Clipboard.setStringAsync(text);
+      void hapticNotificationSuccess();
+      setCopiedId(msgId);
+      setTimeout(() => {
+        setCopiedId((curr) => (curr === msgId ? null : curr));
+      }, 1500);
+    } catch (err) {
+      console.warn("Failed to copy message:", err);
+    }
+  }, []);
 
   // 确保 session.model 发生变更或由子页面更新后同步回显当前模型 Badge
   useEffect(() => {
@@ -143,34 +169,170 @@ export default function SessionScreen() {
 
   const styles = useMemo(() => makeStyles(theme), [theme]);
   const timeline = state.timelines.get(id ?? "") ?? [];
-  const pendingDialog = state.dialogs[0];
+  const [dismissedAskIds, setDismissedAskIds] = useState<Set<string>>(new Set());
+
+  // 恢复已忽略或已完成的 ask 交互 ID，重启 app 后不重复弹出
+  useEffect(() => {
+    void AsyncStorage.getItem("maestro-mobile.dismissed-asks").then((raw) => {
+      if (raw) {
+        try {
+          const arr = JSON.parse(raw);
+          if (Array.isArray(arr)) {
+            setDismissedAskIds(new Set(arr));
+          }
+        } catch {}
+      }
+    });
+  }, []);
+
+  const markAskDismissed = (callId: string) => {
+    setDismissedAskIds((prev) => {
+      const next = new Set(prev).add(callId);
+      void AsyncStorage.setItem("maestro-mobile.dismissed-asks", JSON.stringify([...next])).catch(() => {});
+      return next;
+    });
+  };
+
+  // 识别 timeline 中正在运行的多题问答向导（ask-user-question）
+  const activeAskWizard = useMemo(() => {
+    const curWin = state.monitor?.windows?.find((w) => w.sessionId === id);
+    const targetCallId = curWin?.pendingAsk?.toolCallId;
+
+    for (let i = timeline.length - 1; i >= 0; i--) {
+      const item = timeline[i];
+      if (item.kind === "tool" && item.toolName && (item.toolName.includes("ask") || item.toolName.includes("question"))) {
+        const callId = item.toolCallId || item.id;
+        if (dismissedAskIds.has(callId)) continue;
+        // 若 monitor 提供了明确的 running targetCallId，则严格对齐该 callId
+        if (targetCallId && item.toolCallId !== targetCallId) continue;
+        if (item.status === "completed") continue;
+
+        const args = item.toolArgs as Record<string, unknown> | undefined;
+        const rawQuestions = Array.isArray(args?.questions) ? (args.questions as QuestionSpec[]) : undefined;
+        if (rawQuestions && rawQuestions.length > 0) {
+          return {
+            callId,
+            questions: rawQuestions,
+          };
+        }
+      }
+    }
+    return null;
+  }, [timeline, dismissedAskIds, state.monitor?.windows, id]);
+
+  // 待处理单项交互弹窗：优先本地直通 dialog
+  const activeAskDialog = useMemo(() => {
+    if (activeAskWizard) return null; // 存在问答向导时优先展示向导
+
+    // 1. 本地直通 dialog
+    const directDialog = state.dialogs.find((d) => d.request.sessionId === id && d.status === "pending");
+    if (directDialog) {
+      return {
+        request: directDialog.request,
+        isDirect: true,
+      };
+    }
+
+    return null;
+  }, [activeAskWizard, state.dialogs, id]);
+
+  const handleAnswerWizard = async (answers: AskAnswer[]) => {
+    if (!activeAskWizard) return;
+    const callId = activeAskWizard.callId;
+    markAskDismissed(callId);
+
+    const answerSummaries = answers.map((a, i) => {
+      const chosen = a.selected.join("、");
+      const extra = a.text ? ` (${a.text})` : "";
+      return `${i + 1}. ${a.question} → ${chosen || "无"}${extra}`;
+    });
+    const summaryText = answerSummaries.join("\n");
+    const payload = JSON.stringify({ answers, summary: summaryText });
+
+    if (id) {
+      const curCwd = session?.cwd ?? "";
+      try {
+        await sendSteerWindow(id, curCwd, payload);
+      } catch {}
+    }
+  };
+
+  const handleCancelWizard = () => {
+    if (!activeAskWizard) return;
+    const callId = activeAskWizard.callId;
+    markAskDismissed(callId);
+    if (id) {
+      const curCwd = session?.cwd ?? "";
+      try {
+        void sendSteerWindow(id, curCwd, JSON.stringify({ cancelled: true }));
+      } catch {}
+    }
+  };
+
+  const handleAnswerAsk = async (value: string | string[]) => {
+    if (!activeAskDialog) return;
+    if (activeAskDialog.isDirect) {
+      void answerDialog(activeAskDialog.request.id, value);
+    }
+  };
+
+  const handleCancelAsk = () => {
+    if (!activeAskDialog) return;
+    if (activeAskDialog.isDirect) {
+      cancelDialog(activeAskDialog.request.id);
+    }
+  };
+
   const fabBottom = insets.bottom + composerHeight + 16;
+
+  // 关联当前会话对应的桌面/后台窗口状态
+  const currentWindow = useMemo(() => {
+    if (!id) return null;
+    return state.monitor?.windows?.find(
+      (w) => w.identity.endpointId === id || w.identity.sessionId === id,
+    ) ?? null;
+  }, [state.monitor?.windows, id]);
+
+  const isWindowRunning = currentWindow?.status === "running";
 
   // 活跃工作态感知：从用户发送消息开始，贯穿思考（thinking）、工具执行（tool）、模型流式输出，直到完整任务终结
   const [isTurnWorking, setIsTurnWorking] = useState(false);
   const lastItem = timeline[timeline.length - 1];
 
   useEffect(() => {
-    // 若 Host 明确广播进入 streaming，或者本地处于发送中，标记工作中
-    if (session?.runState === "streaming" || sending) {
+    // 1. 若 Host 明确广播进入 streaming，或者本地处于发送中，或者窗口处于 running，必须保持工作中
+    if (session?.runState === "streaming" || sending || isWindowRunning) {
       setIsTurnWorking(true);
       return;
     }
 
-    // 若 Host 明确广播为 idle 且本地网络请求已完成：
-    if (session?.runState === "idle" && !sending) {
-      // 1. 如果最新一条消息依然是用户刚发的消息，说明模型刚接单，还在思考或排队，保持工作中
-      if (lastItem && lastItem.kind === "user") {
+    // 2. 若本地网络请求还在发送中，保持工作中
+    if (sending) {
+      setIsTurnWorking(true);
+      return;
+    }
+
+    // 3. 检查消息流中间态：如果最新消息依然在思考、等待首包或正在执行工具，保持工作中
+    if (lastItem) {
+      if (lastItem.kind === "user") {
+        setIsTurnWorking(true);
         return;
       }
-      // 2. 如果最新一条是思考（thinking）或工具调用（tool/toolCall），说明模型还在后台干活，保持工作中
-      if (lastItem && (lastItem.kind === "thinking" || lastItem.kind === "tool")) {
+      if (lastItem.kind === "thinking") {
+        setIsTurnWorking(true);
         return;
       }
-      // 3. 只有当任务真正结束（无中间态）时，退出工作中状态
+      if (lastItem.kind === "tool") {
+        setIsTurnWorking(true);
+        return;
+      }
+    }
+
+    // 4. 只有当窗口已非 running、Host 侧为 idle 且无未决中间态时，才真正标记本轮回复已完毕
+    if (session?.runState === "idle" || !session) {
       setIsTurnWorking(false);
     }
-  }, [session?.runState, sending, lastItem?.id, lastItem?.kind]);
+  }, [session?.runState, sending, isWindowRunning, lastItem?.id, lastItem?.kind]);
 
   const handleAbort = useCallback(() => {
     setSending(false);
@@ -178,7 +340,7 @@ export default function SessionScreen() {
     if (id) void sendAbort(id);
   }, [id, sendAbort]);
 
-  const isStreaming = Boolean(isTurnWorking || session?.runState === "streaming" || sending);
+  const isStreaming = Boolean(isTurnWorking || session?.runState === "streaming" || sending || isWindowRunning);
 
   // reduce-motion 时跳过布局动画，加 try/catch 避免 Fabric 新架构初次布局时崩溃
   const animateLayout = useCallback(() => {
@@ -332,13 +494,19 @@ export default function SessionScreen() {
 
     const isLastAssistant = isAssistant && sending && typeof index === "number" && index === timeline.length - 1;
 
-    // 非 tool：普通气泡（assistant 走 markdown）
+    // 非 tool：普通气泡（长按呼出文本自由选择抽屉，右下角提供一键复制）
     return (
-      <View
+      <TouchableOpacity
+        activeOpacity={0.88}
         style={[
           styles.bubble,
           isUser ? styles.bubbleUser : styles.bubbleAgent,
         ]}
+        onLongPress={() => {
+          void hapticImpactMedium();
+          setSelectionText(displayText);
+        }}
+        delayLongPress={300}
       >
         {isThinking && <Text style={styles.thinkingLabel}>思考</Text>}
         {hasImages ? (
@@ -369,7 +537,32 @@ export default function SessionScreen() {
             {displayText}
           </Text>
         )}
-      </View>
+
+        {/* Agent 消息右下角复制按钮（快捷复制全文） */}
+        {isAssistant && !isThinking && (
+          <View style={styles.bubbleActionRow}>
+            <TouchableOpacity
+              style={styles.copyBtn}
+              onPress={(e) => {
+                e.stopPropagation?.();
+                void handleCopyMessage(item.id, displayText);
+              }}
+              hitSlop={{ top: 8, bottom: 8, left: 12, right: 8 }}
+              accessibilityRole="button"
+              accessibilityLabel="快捷复制全文"
+            >
+              <LineIcon
+                name={copiedId === item.id ? "check" : "copy"}
+                size={14}
+                color={copiedId === item.id ? theme.success : theme.dim ?? theme.muted}
+              />
+              {copiedId === item.id && (
+                <Text style={[styles.copySuccessText, { color: theme.success }]}>已复制</Text>
+              )}
+            </TouchableOpacity>
+          </View>
+        )}
+      </TouchableOpacity>
     );
   };
 
@@ -386,12 +579,13 @@ export default function SessionScreen() {
             if (router.canGoBack()) {
               router.back();
             } else {
-              router.replace("/host-sessions");
+              router.replace("/(tabs)");
             }
           }}
           style={styles.backBtn}
           accessibilityRole="button"
           accessibilityLabel="返回会话列表"
+          hitSlop={{ top: 16, bottom: 16, left: 16, right: 24 }}
         >
           <LineIcon name="arrowLeft" size={20} color={theme.text} strokeWidth={2.4} />
         </TouchableOpacity>
@@ -646,11 +840,19 @@ export default function SessionScreen() {
       />
       </View>
 
-      {pendingDialog && (
+      {activeAskWizard && (
+        <AskWizardDialog
+          questions={activeAskWizard.questions}
+          onAnswer={handleAnswerWizard}
+          onCancel={handleCancelWizard}
+        />
+      )}
+
+      {activeAskDialog && (
         <ExtensionUiDialog
-          request={pendingDialog.request}
-          onAnswer={(value) => answerDialog(pendingDialog.request.id, value)}
-          onCancel={() => cancelDialog(pendingDialog.request.id)}
+          request={activeAskDialog.request}
+          onAnswer={handleAnswerAsk}
+          onCancel={handleCancelAsk}
         />
       )}
 
@@ -756,6 +958,100 @@ export default function SessionScreen() {
           </View>
         )}
       </SpringBottomSheet>
+
+      {/* 文本选择抽屉：长按消息呼出，手柄支持三档自由拖拽吸附（36% / 60% / 88%） */}
+      {(() => {
+        if (!selectionText) return null;
+        const screenH = Dimensions.get("window").height;
+        const text = selectionText;
+        const len = text.length;
+        const lines = text.split("\n").length;
+        const snapPoints = [
+          Math.round(screenH * 0.36),
+          Math.round(screenH * 0.60),
+          Math.round(screenH * 0.88),
+        ];
+        // 初始档位：短文紧凑档(0)，中篇普通档(1)，长篇沉浸档(2)
+        const initialSnapIndex = (len < 120 && lines <= 3) ? 0 : (len < 500 && lines <= 10) ? 1 : 2;
+        const textH = snapPoints[2] - 110;
+
+        return (
+          <SpringBottomSheet
+            visible={Boolean(selectionText)}
+            onClose={() => setSelectionText(null)}
+            snapPoints={snapPoints}
+            initialSnapIndex={initialSnapIndex}
+            containerStyle={{ height: snapPoints[2] }}
+          >
+            <View style={styles.sheetHeader}>
+              <View style={{ flexDirection: "row", alignItems: "center", gap: 6, flex: 1, minWidth: 0 }}>
+                <LineIcon name="chat" size={16} color={theme.accent} />
+                <Text style={[styles.sheetTitle, { color: theme.text }]} numberOfLines={1}>选择与复制文字</Text>
+              </View>
+              <TouchableOpacity
+                onPress={async () => {
+                  await Clipboard.setStringAsync(selectionText);
+                  void hapticNotificationSuccess();
+                  setSelectionText(null);
+                }}
+                style={{
+                  flexDirection: "row",
+                  alignItems: "center",
+                  gap: 4,
+                  paddingVertical: 5,
+                  paddingHorizontal: 9,
+                  borderRadius: MIUIX_RADIUS.sm,
+                  backgroundColor: theme.inputBg,
+                  borderWidth: 1,
+                  borderColor: theme.border,
+                }}
+                accessibilityRole="button"
+                accessibilityLabel="一键复制全部"
+                hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+              >
+                <LineIcon name="copy" size={14} color={theme.accent} />
+                <Text style={{ fontSize: 12, color: theme.accent, fontWeight: "600" }}>复制全文</Text>
+              </TouchableOpacity>
+            </View>
+            <Text style={{ fontSize: 12, color: theme.muted, marginBottom: 10 }}>
+              提示：按住顶部手柄可上下拖动调整大小；长按文字可自由选中
+            </Text>
+            {Platform.OS === "ios" ? (
+              <TextInput
+                value={selectionText ?? ""}
+                editable={false}
+                multiline={true}
+                scrollEnabled={true}
+                selectionColor={theme.accent}
+                style={{
+                  fontSize: 15,
+                  lineHeight: 24,
+                  color: theme.text,
+                  fontFamily: "Menlo",
+                  height: textH,
+                  paddingTop: 4,
+                  paddingBottom: 28,
+                }}
+              />
+            ) : (
+              <ScrollView style={{ height: textH }} contentContainerStyle={{ paddingBottom: 28 }}>
+                <Text
+                  selectable={true}
+                  selectionColor={theme.accent}
+                  style={{
+                    fontSize: 15,
+                    lineHeight: 24,
+                    color: theme.text,
+                    fontFamily: "monospace",
+                  }}
+                >
+                  {selectionText ?? ""}
+                </Text>
+              </ScrollView>
+            )}
+          </SpringBottomSheet>
+        );
+      })()}
     </KeyboardAvoidingView>
     </SafeAreaView>
     </View>
@@ -852,6 +1148,25 @@ function makeStyles(theme: ReturnType<typeof useTheme>["theme"]) {
       borderWidth: 0,
       padding: 0,
       marginBottom: 8,
+    },
+    bubbleActionRow: {
+      flexDirection: "row",
+      justifyContent: "flex-end",
+      alignItems: "center",
+      marginTop: 4,
+      paddingTop: 2,
+    },
+    copyBtn: {
+      flexDirection: "row",
+      alignItems: "center",
+      paddingHorizontal: 4,
+      paddingVertical: 2,
+      borderRadius: MIUIX_RADIUS.sm,
+      gap: 4,
+    },
+    copySuccessText: {
+      fontSize: 11,
+      fontWeight: "600",
     },
     toolImages: { marginTop: 8 },
     loadMoreWrap: { alignItems: "center", paddingVertical: 10 },
