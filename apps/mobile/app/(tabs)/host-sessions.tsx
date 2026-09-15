@@ -353,16 +353,27 @@ export default function HostSessionsScreen() {
     }
   };
 
-  // Monitor running 窗口按 cwd 归并：这些窗口的「最近会话」也算活跃（窗口 running 但 agent 空闲时
-  // jsonl mtime 超过 live 阈值，纯 liveSessions 判定会漏掉 —— 用户在工作台/Monitor 看得到它却
-  // 在活跃 tab 找不到）
-  const runningWindowCwds = useMemo(() => {
+  // Monitor 桌面打开窗口（running 运行中 / idle 待命中 / sleeping 休眠待命）按 cwd 归并
+  const activeWindowCwds = useMemo(() => {
     const set = new Set<string>();
     for (const w of hostState.monitor?.windows ?? []) {
-      if (w.status === "running" && w.cwd) set.add(w.cwd);
+      if ((w.status === "running" || w.status === "idle" || w.status === "sleeping") && w.cwd) {
+        set.add(w.cwd);
+      }
     }
     return set;
   }, [hostState.monitor]);
+
+  /** 桌面打开窗口（running / idle / sleeping）绑定的 sessionId 映射，用于精准指示灯与活跃过滤 */
+  const windowStatusMap = useMemo(() => {
+    const map = new Map<string, "running" | "idle" | "sleeping">();
+    for (const w of hostState.monitor?.windows ?? []) {
+      if (w.identity?.endpointId && (w.status === "running" || w.status === "idle" || w.status === "sleeping")) {
+        map.set(w.identity.endpointId, w.status as "running" | "idle" | "sleeping");
+      }
+    }
+    return map;
+  }, [hostState.monitor?.windows]);
 
   // 针对当前活跃会话异步拉取最新详细 usage
   useEffect(() => {
@@ -387,22 +398,11 @@ export default function HostSessionsScreen() {
     return m;
   }, [sessions]);
 
-  /** 处于 running 状态的窗口所绑定的 sessionId 集合（与工作台、监控 Tab 的绿灯严格一致） */
-  const runningWindowSessionIds = useMemo(() => {
-    const ids = new Set<string>();
-    for (const w of hostState.monitor?.windows ?? []) {
-      if (w.status === "running" && w.identity?.endpointId) {
-        ids.add(w.identity.endpointId);
-      }
-    }
-    return ids;
-  }, [hostState.monitor?.windows]);
-
   const isSessionActive = useCallback((s: HostSessionSummary) =>
     liveSessions.has(s.id)
-    || runningWindowSessionIds.has(s.id)
-    || (runningWindowCwds.has(s.cwd) && latestPerCwd.get(s.cwd)?.id === s.id),
-  [liveSessions, runningWindowSessionIds, runningWindowCwds, latestPerCwd]);
+    || windowStatusMap.has(s.id)
+    || (activeWindowCwds.has(s.cwd) && latestPerCwd.get(s.cwd)?.id === s.id),
+  [liveSessions, windowStatusMap, activeWindowCwds, latestPerCwd]);
 
   // Tab 只过滤已加载数据；文本搜索由 Host 对全库执行。
   const filtered = useMemo(() => {
@@ -468,11 +468,25 @@ export default function HostSessionsScreen() {
         {/* 卡片顶行：状态指示点 + 标题 (主标题为文件夹名称) + 高光色 ID 徽标 */}
         <View style={styles.sessionHeader}>
           <View style={styles.sessionHeaderLeft}>
-            <PulsingDot
-              color={item.live ? theme.success : theme.dim}
-              size={8}
-              active={item.live}
-            />
+            {(() => {
+              const winStatus = windowStatusMap.get(s.id);
+              const dotColor = winStatus === "running"
+                ? theme.success
+                : winStatus === "idle"
+                ? "#0A84FF"
+                : winStatus === "sleeping"
+                ? theme.warning
+                : item.live
+                ? theme.success
+                : theme.dim;
+              return (
+                <PulsingDot
+                  color={dotColor}
+                  size={8}
+                  active={winStatus === "running" || (winStatus === undefined && item.live)}
+                />
+              );
+            })()}
             <Text style={styles.sessionTitle} numberOfLines={1}>
               {s.cwdName || (s.cwd ? s.cwd.replace(/\/$/, "").split("/").pop() : null) || s.name || s.title || "(未命名项目)"}
             </Text>
@@ -537,12 +551,35 @@ export default function HostSessionsScreen() {
             })()}
           </View>
 
-          {/* 格 3：状态 (双语化) */}
+          {/* 格 3：状态 (绿/蓝/黄/灰四色精准表达) */}
           <View style={styles.bentoCell}>
             <Text style={styles.bentoCellLabel}>{t.cacheLabel}</Text>
-            <Text style={[styles.bentoCellValue, { color: item.live ? theme.success : theme.muted }]}>
-              {item.live ? t.statusActive : t.readyLabel}
-            </Text>
+            {(() => {
+              const winStatus = windowStatusMap.get(s.id);
+              const label = winStatus === "running"
+                ? t.statusActive
+                : winStatus === "idle"
+                ? "待命中"
+                : winStatus === "sleeping"
+                ? "休眠中"
+                : item.live
+                ? t.statusActive
+                : t.readyLabel;
+              const clr = winStatus === "running"
+                ? theme.success
+                : winStatus === "idle"
+                ? "#0A84FF"
+                : winStatus === "sleeping"
+                ? theme.warning
+                : item.live
+                ? theme.success
+                : theme.muted;
+              return (
+                <Text style={[styles.bentoCellValue, { color: clr }]}>
+                  {label}
+                </Text>
+              );
+            })()}
           </View>
 
           {/* 格 4：对话与时间 (条数与更新时间整合，100% 双语) */}

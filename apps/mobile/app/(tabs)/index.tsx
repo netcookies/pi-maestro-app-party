@@ -154,7 +154,7 @@ export default function DashboardScreen() {
 
   const renderWindowRow = useCallback(({ item }: { item: MonitorWindowSummary }) => {
     const isRunning = item.status === "running";
-    const statusColor = isRunning ? theme.success : item.status === "sleeping" ? theme.warning : theme.muted;
+    const statusColor = isRunning ? theme.success : item.status === "idle" ? "#0A84FF" : item.status === "sleeping" ? theme.warning : theme.muted;
     const openWindow = async () => {
       if (!item.cwd) return;
       try {

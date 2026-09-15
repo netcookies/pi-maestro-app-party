@@ -294,6 +294,13 @@ export default function SessionScreen() {
   }, [state.monitor?.windows, id]);
 
   const isWindowRunning = currentWindow?.status === "running";
+  const hasDesktopWindow = Boolean(
+    currentWindow && (
+      currentWindow.status === "running" ||
+      currentWindow.status === "idle" ||
+      currentWindow.status === "sleeping"
+    ),
+  );
 
   // 活跃工作态感知：从用户发送消息开始，贯穿思考（thinking）、工具执行（tool）、模型流式输出，直到完整任务终结
   const [isTurnWorking, setIsTurnWorking] = useState(false);
@@ -841,6 +848,8 @@ export default function SessionScreen() {
           : (session?.model as { name?: string } | undefined)?.name}
         sending={sending || !isConnected}
         skills={availableSkills}
+        disabled={!hasDesktopWindow}
+        placeholder={hasDesktopWindow ? "Message..." : "桌面未打开此会话窗口（只读浏览）"}
       />
       </View>
 

@@ -161,7 +161,8 @@ export default function TeammateScreen() {
 
 function statusColor(state: string, theme: ReturnType<typeof useTheme>["theme"]) {
   switch (state) {
-    case "completed": return { color: theme.success };
+    case "running": case "completed": return { color: theme.success };
+    case "idle": return { color: "#0A84FF" };
     case "failed": case "timeout": return { color: theme.error };
     case "active": case "published": case "accepted": return { color: theme.accent };
     case "pending": case "prepared": return { color: theme.muted };

@@ -42,11 +42,13 @@ interface Props {
   /** 可用 skills（名称或 {name, description} 对象列表） */
   skills?: (string | { name: string; description?: string })[];
   placeholder?: string;
+  /** 是否禁用输入（例如桌面未打开对应窗口的历史会话） */
+  disabled?: boolean;
 }
 
 const THINKING_LEVELS = ["off", "minimal", "low", "medium", "high", "xhigh", "max"];
 
-export function ChatComposer({ actions, currentModel, sending, isStreaming = false, onAbort, skills = [], placeholder }: Props) {
+export function ChatComposer({ actions, currentModel, sending, isStreaming = false, onAbort, skills = [], placeholder, disabled = false }: Props) {
   const { theme } = useTheme();
   const insets = useSafeAreaInsets();
   const [text, setText] = useState("");
@@ -232,38 +234,41 @@ export function ChatComposer({ actions, currentModel, sending, isStreaming = fal
       )}
 
       {/* 标准四件套输入行: [ / | 📎 | 输入框 | 🚀 ] */}
-      <View style={styles.inputRow}>
+      <View style={[styles.inputRow, disabled && { opacity: 0.55 }]}>
         {/* / 按钮：弹 skill 弹窗 */}
         <TouchableOpacity
-          onPress={() => setShowSkills(true)}
+          onPress={() => !disabled && setShowSkills(true)}
           style={[styles.slashBtn, { borderColor: theme.border }]}
+          disabled={disabled}
           hitSlop={{ top: 4, bottom: 4, left: 4, right: 4 }}>
-          <Text style={[styles.slashText, { color: theme.accent }]}>/</Text>
+          <Text style={[styles.slashText, { color: disabled ? theme.muted : theme.accent }]}>/</Text>
         </TouchableOpacity>
         {/* 图片按钮：选图发送 */}
         <TouchableOpacity
-          onPress={pickImage}
+          onPress={disabled ? undefined : pickImage}
           style={[styles.slashBtn, { borderColor: theme.border }]}
+          disabled={disabled}
           hitSlop={{ top: 4, bottom: 4, left: 4, right: 4 }}
           accessibilityRole="button"
           accessibilityLabel="添加图片"
         >
-          <LineIcon name="clip" size={18} color={theme.text} />
+          <LineIcon name="clip" size={18} color={disabled ? theme.muted : theme.text} />
         </TouchableOpacity>
         {/* 输入框（聚焦时内侧右缘显示全屏按钮） */}
         <View style={styles.inputWrap}>
           <TextInput
-            style={[styles.input, { backgroundColor: theme.inputBg, color: theme.text, borderColor: focused ? theme.accent : theme.border }]}
+            style={[styles.input, { backgroundColor: theme.inputBg, color: disabled ? theme.muted : theme.text, borderColor: focused && !disabled ? theme.accent : theme.border }]}
             value={text}
             onChangeText={setText}
             placeholder={placeholder ?? "Message..."}
             placeholderTextColor={theme.dim}
             multiline
             maxLength={4000}
-            onFocus={() => setFocused(true)}
+            editable={!disabled}
+            onFocus={() => !disabled && setFocused(true)}
             onBlur={() => setFocused(false)}
           />
-          {focused && (
+          {focused && !disabled && (
             <TouchableOpacity
               style={[styles.expandBtn, { backgroundColor: theme.cardBg, borderColor: theme.border }]}
               hitSlop={{ top: 9, bottom: 9, left: 9, right: 9 }}
@@ -334,19 +339,19 @@ export function ChatComposer({ actions, currentModel, sending, isStreaming = fal
               styles.sendButton,
               {
                 backgroundColor: theme.accent,
-                opacity: canSend && !sending ? 1 : 0.45,
+                opacity: canSend && !sending && !disabled ? 1 : 0.45,
                 shadowColor: theme.accent,
-                shadowOpacity: canSend && !sending ? 0.35 : 0,
+                shadowOpacity: canSend && !sending && !disabled ? 0.35 : 0,
                 shadowRadius: 6,
-                elevation: canSend && !sending ? 4 : 0,
+                elevation: canSend && !sending && !disabled ? 4 : 0,
               },
             ]}
             hitSlop={{ top: 4, bottom: 4, left: 4, right: 4 }}
             accessibilityRole="button"
             accessibilityLabel="发送消息"
-            accessibilityState={{ disabled: !canSend || sending, busy: sending }}
-            onPress={() => void handleSend()}
-            disabled={!canSend || sending}
+            accessibilityState={{ disabled: !canSend || sending || disabled, busy: sending }}
+            onPress={() => !disabled && void handleSend()}
+            disabled={!canSend || sending || disabled}
           >
             <Animated.View
               style={{

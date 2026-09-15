@@ -350,6 +350,7 @@ export default function MonitorScreen() {
 function statusColor(s: string, theme: ReturnType<typeof useTheme>["theme"]) {
   switch (s) {
     case "running": case "active": return theme.success;
+    case "idle": return "#0A84FF";
     case "sleeping": return theme.warning;
     case "failed": case "disconnected": return theme.error;
     default: return theme.muted;
