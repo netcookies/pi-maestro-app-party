@@ -68,7 +68,7 @@ export default function TeammateScreen() {
           <View style={styles.scheduleHeader}>
             <Text style={styles.scheduleTitle}>{w.name ?? "Pi 会话"}</Text>
             <Text style={[styles.scheduleState, statusColor(w.status, theme)]}>
-              {w.status === "running" ? "运行中" : w.status === "sleeping" ? "睡眠" : w.status}
+              {w.status === "running" ? "运行中" : w.status === "sleeping" ? "睡眠" : w.status === "idle" ? "空闲" : w.status}
             </Text>
           </View>
           <Text style={styles.progress}>

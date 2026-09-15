@@ -312,7 +312,13 @@ export default function SessionScreen() {
       return;
     }
 
-    // 3. 检查消息流中间态：如果最新消息依然在思考、等待首包或正在执行工具，保持工作中
+    // 3. 检查会话空闲终结态：若 Host 明确处于 idle 或未接管且窗口非 running，收敛为非工作中
+    if (session?.runState === "idle" || (!session && !isWindowRunning)) {
+      setIsTurnWorking(false);
+      return;
+    }
+
+    // 4. 检查消息流中间态：如果最新消息依然在思考、等待首包或正在执行工具，保持工作中
     if (lastItem) {
       if (lastItem.kind === "user") {
         setIsTurnWorking(true);
@@ -322,17 +328,15 @@ export default function SessionScreen() {
         setIsTurnWorking(true);
         return;
       }
-      if (lastItem.kind === "tool") {
+      if (lastItem.kind === "tool" && lastItem.status === "running") {
         setIsTurnWorking(true);
         return;
       }
     }
 
-    // 4. 只有当窗口已非 running、Host 侧为 idle 且无未决中间态时，才真正标记本轮回复已完毕
-    if (session?.runState === "idle" || !session) {
-      setIsTurnWorking(false);
-    }
-  }, [session?.runState, sending, isWindowRunning, lastItem?.id, lastItem?.kind]);
+    // 5. 其他情况下默认收敛为非工作中
+    setIsTurnWorking(false);
+  }, [session?.runState, sending, isWindowRunning, lastItem?.id, lastItem?.kind, lastItem?.status]);
 
   const handleAbort = useCallback(() => {
     setSending(false);

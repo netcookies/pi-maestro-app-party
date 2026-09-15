@@ -52,7 +52,7 @@ describe("MobileHostServer", () => {
     const res = await fetch(`${ctx.url}/api/status`);
     expect(res.status).toBe(200);
     const body = (await res.json()) as { version: string; sessions: number };
-    expect(body.version).toBe("0.3.2");
+    expect(body.version).toBe("0.4.0");
     expect(body.sessions).toBe(0);
   });
 

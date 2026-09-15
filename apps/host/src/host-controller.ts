@@ -7,8 +7,18 @@ import { WorkspaceTelemetryReader } from "./workspace-telemetry.js";
 import { projectMonitorState, telemetryStableKey, monitorStateEvent } from "./monitor-projection.js";
 import { VersionDetector, type ComponentVersions } from "./version-detector.js";
 import { EventLog } from "./event-log.js";
-import { normalize } from "node:path";
+import { readFileSync } from "node:fs";
+import { normalize, dirname, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 import type { WorkspaceOwner } from "./workspace-telemetry.js";
+
+const __dirname = dirname(fileURLToPath(import.meta.url));
+let hostPackageVersion = "0.4.0";
+try {
+  const rawPkg = readFileSync(resolve(__dirname, "../package.json"), "utf8");
+  const parsed = JSON.parse(rawPkg) as { version?: string };
+  if (parsed.version) hostPackageVersion = parsed.version;
+} catch {}
 
 /**
  * HostController — 集中管理所有会话 + Maestro 状态 + 事件分发
@@ -153,7 +163,7 @@ export class HostController {
     const uptimeMs = Date.now() - this._startedAt;
     return {
       ok: true,
-      version: "0.3.2",
+      version: hostPackageVersion,
       maestroDetected: this.maestroDetected,
       ...this.componentVersions,
       sessions: this.sessions.size,

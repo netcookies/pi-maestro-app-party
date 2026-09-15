@@ -1,0 +1,882 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Maestro Mobile V6 - 会话分层治理与 Monitor 监督中枢原型</title>
+  <!-- React & Babel CDN -->
+  <script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+  <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+  <!-- Tailwind CSS -->
+  <script src="https://cdn.tailwindcss.com"></script>
+  <!-- Google Fonts -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com">
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
+
+  <script>
+    tailwind.config = {
+      darkMode: 'class',
+      theme: {
+        extend: {
+          fontFamily: {
+            sans: ['Inter', '-apple-system', 'BlinkMacSystemFont', 'sans-serif'],
+            mono: ['JetBrains Mono', 'monospace'],
+          },
+          colors: {
+            appDark: '#090A0F',
+            cardBgDark: '#12141C',
+            cardInnerDark: '#191C26',
+            cardBorderDark: '#232736',
+            appLight: '#F5F6F9',
+            cardBgLight: '#FFFFFF',
+            cardInnerLight: '#F8F9FA',
+            cardBorderLight: '#E5E7EB',
+            accentAmber: '#F59E0B',
+            accentGreen: '#10B981',
+            accentBlue: '#3B82F6',
+            accentRed: '#EF4444',
+          }
+        }
+      }
+    }
+  </script>
+  <style>
+    body {
+      background-color: #030407;
+      color: #E6EDF3;
+      user-select: none;
+      -webkit-font-smoothing: antialiased;
+    }
+    .iphone-frame {
+      width: 414px;
+      height: 874px;
+      border-radius: 54px;
+      position: relative;
+      overflow: hidden;
+      transition: background-color 0.3s ease, color 0.3s ease;
+    }
+    .no-scrollbar::-webkit-scrollbar { display: none; }
+    .no-scrollbar { -ms-overflow-style: none; scrollbar-width: none; }
+    .glass-dock {
+      background: rgba(14, 16, 23, 0.94);
+      backdrop-filter: blur(24px);
+      -webkit-backdrop-filter: blur(24px);
+    }
+    .glass-light {
+      background: rgba(255, 255, 255, 0.92);
+      backdrop-filter: blur(20px);
+      -webkit-backdrop-filter: blur(20px);
+    }
+    @keyframes pulseDot {
+      0%, 100% { opacity: 1; transform: scale(1); }
+      50% { opacity: 0.4; transform: scale(0.85); }
+    }
+    .dot-pulse {
+      animation: pulseDot 2s infinite ease-in-out;
+    }
+  </style>
+</head>
+<body class="flex flex-col items-center justify-center min-h-screen py-4">
+
+  <div id="root"></div>
+
+  <script type="text/babel">
+    const { useState, useMemo, useRef } = React;
+
+    // --- 线性单色矢量图标库 ---
+    const Icons = {
+      Workbench: ({ size = 18, className = "" }) => (
+        <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={className}><rect x="3" y="3" width="7" height="7"></rect><rect x="14" y="3" width="7" height="7"></rect><rect x="14" y="14" width="7" height="7"></rect><rect x="3" y="14" width="7" height="7"></rect></svg>
+      ),
+      Sessions: ({ size = 18, className = "" }) => (
+        <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={className}><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"></path></svg>
+      ),
+      Monitor: ({ size = 18, className = "" }) => (
+        <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={className}><rect x="2" y="3" width="20" height="14" rx="2" ry="2"></rect><line x1="8" y1="21" x2="16" y2="21"></line><line x1="12" y1="17" x2="12" y2="21"></line></svg>
+      ),
+      Settings: ({ size = 18, className = "" }) => (
+        <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={className}><circle cx="12" cy="12" r="3"></circle><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"></path></svg>
+      ),
+      Folder: ({ size = 15, className = "" }) => (
+        <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={className}><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"></path></svg>
+      ),
+      ChevronRight: ({ size = 16, className = "" }) => (
+        <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={className}><polyline points="9 18 15 12 9 6"></polyline></svg>
+      ),
+      ChevronDown: ({ size = 16, className = "" }) => (
+        <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={className}><polyline points="6 9 12 15 18 9"></polyline></svg>
+      ),
+      AlertTriangle: ({ size = 16, className = "" }) => (
+        <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={className}><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"></path><line x1="12" y1="9" x2="12" y2="13"></line><line x1="12" y1="17" x2="12.01" y2="17"></line></svg>
+      ),
+      Play: ({ size = 14, className = "" }) => (
+        <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={className}><polygon points="5 3 19 12 5 21 5 3"></polygon></svg>
+      ),
+      StopCircle: ({ size = 16, className = "" }) => (
+        <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={className}><circle cx="12" cy="12" r="10"></circle><rect x="9" y="9" width="6" height="6"></rect></svg>
+      ),
+      Send: ({ size = 15, className = "" }) => (
+        <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={className}><line x1="22" y1="2" x2="11" y2="13"></line><polygon points="22 2 15 22 11 13 2 9 22 2"></polygon></svg>
+      ),
+      Search: ({ size = 15, className = "" }) => (
+        <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={className}><circle cx="11" cy="11" r="8"></circle><line x1="21" y1="21" x2="16.65" y2="16.65"></line></svg>
+      ),
+      ExternalLink: ({ size = 15, className = "" }) => (
+        <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={className}><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"></path><polyline points="15 3 21 3 21 9"></polyline><line x1="10" y1="14" x2="21" y2="3"></line></svg>
+      ),
+      Terminal: ({ size = 14, className = "" }) => (
+        <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={className}><polyline points="4 17 10 11 4 5"></polyline><line x1="12" y1="19" x2="20" y2="19"></line></svg>
+      ),
+      CheckSquare: ({ size = 14, className = "" }) => (
+        <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={className}><polyline points="9 11 12 14 22 4"></polyline><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"></path></svg>
+      )
+    };
+
+    // --- 真实仿真数据：按项目（CWD）聚合的会话档案 ---
+    const MOCK_PROJECT_SESSIONS = [
+      {
+        project: "pi-maestro-app-party",
+        cwd: "/Users/isulewli/Projects/pi-maestro-app-party",
+        icon: "⚡",
+        activeCount: 1,
+        totalCount: 5,
+        sessions: [
+          { id: "01a09bc4", title: "验证设置页与系统通知闭环", status: "running", updatedAt: "1分钟前", tokens: "45.2k", lastMsg: "已完成多题交互向导与本地推送测试。" },
+          { id: "01a087a2", title: "修复 WS 边界背压与内存治理", status: "idle", updatedAt: "2天前", tokens: "128.4k", lastMsg: "已收敛为单一 sendFrame 闸门。" },
+          { id: "01a073f1", title: "Miuix UI 重构与视觉语言落地", status: "idle", updatedAt: "5天前", tokens: "96.1k", lastMsg: "Token 基建与高危发现复评完毕。" }
+        ]
+      },
+      {
+        project: "isulewTools",
+        cwd: "/Users/isulewli/AndroidStudioProjects/isulewTools",
+        icon: "🛠",
+        activeCount: 1,
+        totalCount: 8,
+        sessions: [
+          { id: "01a098bc", title: "Android 锁屏歌词抓取服务优化", status: "running", updatedAt: "4分钟前", tokens: "38.1k", lastMsg: "MediaSessionService 前台保活通知配置完毕。" },
+          { id: "01a09095", title: "网易云与 QQ 音乐歌词跨端解析", status: "idle", updatedAt: "昨天", tokens: "84.5k", lastMsg: "添加纯纯看导出的 lrc 时间轴对齐规则。" }
+        ]
+      },
+      {
+        project: "WorkSpace4AI",
+        cwd: "/Users/isulewli/Projects/WorkSpace4AI",
+        icon: "🧠",
+        activeCount: 0,
+        totalCount: 3,
+        sessions: [
+          { id: "01a0a13c", title: "多智能体协作工作流编排评估", status: "idle", updatedAt: "3小时前", tokens: "15.7k", lastMsg: "DAG 拓扑调度链路方案已初步收敛。" }
+        ]
+      }
+    ];
+
+    // --- 真实仿真数据：/monitor 原生监督大盘节点 ---
+    const MOCK_MONITOR_WINDOWS = [
+      {
+        endpointId: "01a09bc4",
+        name: "party-worker-1",
+        project: "pi-maestro-app-party",
+        cwd: "/Users/isulewli/Projects/pi-maestro-app-party",
+        status: "running",
+        objective: "验证端到端多题问答向导与 iOS 系统级推送通知闭环",
+        activeStep: "正在等待人类对第 1/2 题作出操作确认",
+        activeTool: "ask-user-question",
+        contextPressure: 24, // 24%
+        todos: [
+          { id: "1", subject: "编写 AskWizardDialog 组件", done: true },
+          { id: "2", subject: "在 ask.ts 增加外部文件监听", done: true },
+          { id: "3", subject: "触发系统推送并在真机核验", done: false }
+        ],
+        attention: [
+          { code: "ask_pending", severity: "warning", message: "待决问答: 是否确认开始进行代码重构？" }
+        ]
+      },
+      {
+        endpointId: "01a098bc",
+        name: "tools-agent-2",
+        project: "isulewTools",
+        cwd: "/Users/isulewli/AndroidStudioProjects/isulewTools",
+        status: "running",
+        objective: "重构 MediaNotificationListener 并运行 instrumented 单元测试",
+        activeStep: "正在执行 bash: ./gradlew :app:testDebugUnitTest",
+        activeTool: "bash",
+        contextPressure: 68, // 68%
+        todos: [
+          { id: "1", subject: "提取 NotificationCollector", done: true },
+          { id: "2", subject: "跑通全套单元测试", done: false }
+        ],
+        attention: []
+      },
+      {
+        endpointId: "01a09095",
+        name: "metadata-parser",
+        project: "isulewTools",
+        cwd: "/Users/isulewli/AndroidStudioProjects/isulewTools",
+        status: "sleeping",
+        objective: "完成歌曲封面自动匹配 API 接入与降级策略设计",
+        activeStep: "已完成本轮全部执行，等待新指令",
+        activeTool: "none",
+        contextPressure: 88, // 88% (高危压力)
+        todos: [
+          { id: "1", subject: "集成酷狗/网易双源 fallback", done: true },
+          { id: "2", subject: "压缩缓存目录尺寸", done: true }
+        ],
+        attention: [
+          { code: "context_pressure_high", severity: "warning", message: "上下文视窗已消耗 88%，建议执行 Compact Session" }
+        ]
+      }
+    ];
+
+    function App() {
+      const [tab, setTab] = useState("monitor"); // 默认展示全新重构的 Monitor
+      const [appearance, setAppearance] = useState("dark");
+      const isDark = appearance === "dark";
+
+      // 会话列表相关状态
+      const [selectedProject, setSelectedProject] = useState("all");
+      const [expandedProjects, setExpandedProjects] = useState({ "pi-maestro-app-party": true, "isulewTools": true });
+      const [searchQuery, setSearchQuery] = useState("");
+
+      // 监控中枢交互状态
+      const [activeSuperviseWindow, setActiveSuperviseWindow] = useState(null);
+      const [steerMsg, setSteerMsg] = useState("");
+      const [monitorFilter, setMonitorFilter] = useState("all"); // 'all' | 'attention' | 'running'
+
+      // 主题样式类
+      const bgClass = isDark ? "bg-appDark text-zinc-100" : "bg-appLight text-zinc-900";
+      const cardClass = isDark ? "bg-cardBgDark border-cardBorderDark text-zinc-200" : "bg-cardBgLight border-cardBorderLight text-zinc-800 shadow-sm";
+      const cardInnerClass = isDark ? "bg-cardInnerDark border-zinc-800" : "bg-cardInnerLight border-zinc-200";
+      const dockClass = isDark ? "glass-dock border-cardBorderDark" : "glass-light border-zinc-200 shadow-lg";
+
+      const toggleProject = (p) => {
+        setExpandedProjects(prev => ({ ...prev, [p]: !prev[p] }));
+      };
+
+      // 筛选监控窗口
+      const filteredWindows = useMemo(() => {
+        if (monitorFilter === "attention") return MOCK_MONITOR_WINDOWS.filter(w => w.attention.length > 0);
+        if (monitorFilter === "running") return MOCK_MONITOR_WINDOWS.filter(w => w.status === "running");
+        return MOCK_MONITOR_WINDOWS;
+      }, [monitorFilter]);
+
+      const attentionCount = MOCK_MONITOR_WINDOWS.filter(w => w.attention.length > 0).length;
+
+      return (
+        <div class="flex flex-col items-center w-full max-w-5xl py-2">
+          
+          {/* 顶栏说明 */}
+          <div class="w-full mb-3 flex flex-col md:flex-row items-center justify-between gap-3 px-4">
+            <div>
+              <div class="flex items-center gap-2">
+                <span class="px-2.5 py-0.5 rounded-full bg-amber-500/20 text-amber-400 border border-amber-500/40 text-xs font-mono font-bold">
+                  Maestro Mobile V6 原型
+                </span>
+                <span class="font-bold text-sm">会话分层治理与 /monitor 监督中枢重构方案</span>
+              </div>
+              <p class="text-xs text-zinc-400 mt-1 font-mono">
+                1. 剥离工作台冗长列表 ｜ 2. 会话按工作区折叠管理 ｜ 3. Monitor 升级为目标动作一体的真实监督舱
+              </p>
+            </div>
+
+            {/* 外观切换 */}
+            <div class="flex items-center bg-zinc-900 border border-zinc-800 rounded-xl p-0.5 font-mono text-xs">
+              <button
+                onClick={() => setAppearance("dark")}
+                class={`px-3 py-1.5 rounded-lg transition-all ${appearance === "dark" ? "bg-amber-500 text-black font-bold shadow" : "text-zinc-400"}`}
+              >
+                深色大盘
+              </button>
+              <button
+                onClick={() => setAppearance("light")}
+                class={`px-3 py-1.5 rounded-lg transition-all ${appearance === "light" ? "bg-amber-500 text-black font-bold shadow" : "text-zinc-400"}`}
+              >
+                浅色清新
+              </button>
+            </div>
+          </div>
+
+          {/* iPhone 16 Pro 机框容器 */}
+          <div class={`iphone-frame border-4 border-zinc-800 shadow-2xl flex flex-col ${bgClass}`}>
+            
+            {/* iOS 灵动岛与状态栏 */}
+            <div class="h-11 pt-3 px-7 flex justify-between items-center z-50">
+              <span class="text-xs font-semibold font-mono tracking-tight">09:41</span>
+              {/* Dynamic Island */}
+              <div class="w-28 h-6 bg-black rounded-full flex items-center justify-center gap-2 shadow-inner">
+                <span class="w-2 h-2 rounded-full bg-emerald-500 dot-pulse"></span>
+                <span class="text-[10px] text-zinc-400 font-mono">2 Live</span>
+              </div>
+              <div class="flex items-center gap-1.5 text-xs">
+                <span>5G</span>
+                <div class="w-5 h-2.5 border border-current rounded-sm p-0.5 flex items-center">
+                  <div class="h-full w-full bg-current rounded-xs"></div>
+                </div>
+              </div>
+            </div>
+
+            {/* 页面主内容区域 */}
+            <div class="flex-1 overflow-hidden flex flex-col relative">
+
+              {/* ========================================================================= */}
+              {/* TAB 1: 工作台（Workbench）—— 去除冗长窗口列表，聚焦今日态势与高优先级待办 */}
+              {/* ========================================================================= */}
+              {tab === "workbench" && (
+                <div class="flex-1 overflow-y-auto px-4 pt-2 pb-24 space-y-3.5 no-scrollbar">
+                  
+                  {/* 顶栏 Header */}
+                  <div class="flex justify-between items-center py-1">
+                    <div>
+                      <h1 class="text-lg font-bold">工作台</h1>
+                      <p class="text-[11px] opacity-60 font-mono">今日态势总览与核心待办</p>
+                    </div>
+                    <div class="flex items-center gap-1.5 px-2.5 py-1 rounded-full border border-emerald-500/30 bg-emerald-500/10 text-emerald-400 text-xs font-mono">
+                      <span class="w-1.5 h-1.5 rounded-full bg-emerald-500 dot-pulse"></span>
+                      <span>Host 在线</span>
+                    </div>
+                  </div>
+
+                  {/* 核心看板：Token 与花费 */}
+                  <div class={`p-4 rounded-3xl border shadow-sm ${cardClass}`}>
+                    <div class="flex justify-between items-center text-xs opacity-70 font-mono">
+                      <span>今日 Token 总用量</span>
+                      <span class="text-emerald-400 font-bold">$0.3421 估算花费</span>
+                    </div>
+                    <div class="flex items-baseline gap-2 mt-1">
+                      <span class="text-3xl font-bold font-mono text-amber-500">208.4k</span>
+                      <span class="text-xs opacity-50 font-mono">tokens</span>
+                    </div>
+                    <div class="w-full h-1.5 bg-zinc-800 rounded-full mt-3 overflow-hidden flex">
+                      <div class="bg-amber-500 h-full" style={{ width: "65%" }}></div>
+                      <div class="bg-blue-500 h-full" style={{ width: "20%" }}></div>
+                      <div class="bg-purple-500 h-full" style={{ width: "15%" }}></div>
+                    </div>
+                    <div class="flex justify-between text-[10px] opacity-60 font-mono mt-1.5">
+                      <span>Input: 142k (68%)</span>
+                      <span>Output: 66.4k (32%)</span>
+                    </div>
+                  </div>
+
+                  {/* 2x2 指标看板 */}
+                  <div class="grid grid-cols-2 gap-2.5 font-mono">
+                    <div class={`p-3 rounded-2xl border ${cardClass}`}>
+                      <div class="text-[11px] opacity-60">活跃 / 托管窗口</div>
+                      <div class="text-xl font-bold text-emerald-400 mt-0.5">2 / 3</div>
+                    </div>
+                    <div class={`p-3 rounded-2xl border ${cardClass}`}>
+                      <div class="text-[11px] opacity-60">今日 Run 成功率</div>
+                      <div class="text-xl font-bold text-blue-400 mt-0.5">100%</div>
+                    </div>
+                    <div class={`p-3 rounded-2xl border ${cardClass}`}>
+                      <div class="text-[11px] opacity-60">未决待办 (Ask)</div>
+                      <div class="text-xl font-bold text-amber-400 mt-0.5">1 题待确认</div>
+                    </div>
+                    <div class={`p-3 rounded-2xl border ${cardClass}`}>
+                      <div class="text-[11px] opacity-60">高危关注告警</div>
+                      <div class="text-xl font-bold text-red-400 mt-0.5">{attentionCount} 项需注意</div>
+                    </div>
+                  </div>
+
+                  {/* 高优先级行动区：Ask 提问强提醒（点击直接打开问答向导） */}
+                  <div class="rounded-3xl border-2 border-amber-500/80 bg-amber-500/10 p-4 shadow-lg space-y-2">
+                    <div class="flex justify-between items-center">
+                      <div class="flex items-center gap-1.5 text-amber-500 font-bold text-xs">
+                        <Icons.AlertTriangle size={15} />
+                        <span>待决交互确认 (Ask)</span>
+                      </div>
+                      <span class="text-[10px] font-mono px-2 py-0.5 rounded-full bg-amber-500 text-black font-bold">
+                        1 / 1 题
+                      </span>
+                    </div>
+                    <div class="text-xs font-bold text-zinc-100">
+                      [pi-maestro-app-party] 代码重构确认
+                    </div>
+                    <p class="text-[11px] text-zinc-300 leading-relaxed font-mono">
+                      我将使用 ask-user-question 弹出一道单选题，确认是否开始代码重构。
+                    </p>
+                    <div class="flex gap-2 pt-1">
+                      <button 
+                        onClick={() => alert("正在从工作台直达向导弹窗！")}
+                        class="flex-1 py-2 bg-amber-500 hover:bg-amber-400 text-black font-bold text-xs rounded-xl shadow transition-all font-mono"
+                      >
+                        ⚡ 立即前往作答
+                      </button>
+                      <button class="px-3 py-2 border border-zinc-700 bg-zinc-800 text-zinc-300 text-xs rounded-xl font-mono">
+                        稍后
+                      </button>
+                    </div>
+                  </div>
+
+                  {/* 全新设计：工作台底部不再列长列表，而是提供轻量监督速览入口 */}
+                  <div class={`p-4 rounded-3xl border flex items-center justify-between cursor-pointer hover:border-amber-500/50 transition-all ${cardClass}`}
+                    onClick={() => setTab("monitor")}
+                  >
+                    <div class="flex items-center gap-3">
+                      <div class="w-10 h-10 rounded-2xl bg-amber-500/15 border border-amber-500/30 flex items-center justify-center text-amber-500">
+                        <Icons.Monitor size={20} />
+                      </div>
+                      <div>
+                        <div class="text-xs font-bold flex items-center gap-1.5">
+                          <span>多窗口监督中枢 (Cockpit)</span>
+                          <span class="w-2 h-2 rounded-full bg-emerald-500 dot-pulse"></span>
+                        </div>
+                        <div class="text-[11px] opacity-60 font-mono mt-0.5">
+                          当前 2 个 Agent 正在执行任务 · 1 个就绪
+                        </div>
+                      </div>
+                    </div>
+                    <Icons.ChevronRight size={16} className="opacity-50" />
+                  </div>
+
+                </div>
+              )}
+
+              {/* ========================================================================= */}
+              {/* TAB 2: 会话管理（Sessions）—— 按项目折叠管理，解决找会话大海捞针 */}
+              {/* ========================================================================= */}
+              {tab === "sessions" && (
+                <div class="flex-1 overflow-y-auto px-4 pt-2 pb-24 space-y-3 no-scrollbar">
+                  
+                  {/* 顶栏 Header */}
+                  <div class="flex justify-between items-center py-1">
+                    <div>
+                      <h1 class="text-lg font-bold">会话档案</h1>
+                      <p class="text-[11px] opacity-60 font-mono">按工作区组织的历史与活跃会话</p>
+                    </div>
+                    <button 
+                      onClick={() => alert("新建会话")}
+                      class="px-2.5 py-1 rounded-xl bg-amber-500 text-black font-bold text-xs font-mono flex items-center gap-1 shadow"
+                    >
+                      <span>+ 新建会话</span>
+                    </button>
+                  </div>
+
+                  {/* 搜索栏 */}
+                  <div class={`flex items-center gap-2 px-3 py-2 rounded-2xl border ${cardInnerClass}`}>
+                    <Icons.Search size={14} className="opacity-50" />
+                    <input
+                      type="text"
+                      placeholder="搜索会话标题、ID 或关键词…"
+                      value={searchQuery}
+                      onChange={(e) => setSearchQuery(e.target.value)}
+                      class="bg-transparent text-xs focus:outline-none flex-1 font-mono placeholder:opacity-50"
+                    />
+                    {searchQuery && (
+                      <button onClick={() => setSearchQuery("")} class="text-xs opacity-50">✕</button>
+                    )}
+                  </div>
+
+                  {/* 核心亮点：项目分类胶囊选择器 (Project Filter Pills) */}
+                  <div class="flex items-center gap-1.5 overflow-x-auto no-scrollbar py-1">
+                    <button
+                      onClick={() => setSelectedProject("all")}
+                      class={`px-3 py-1.5 rounded-xl text-xs font-mono font-medium transition-all whitespace-nowrap ${
+                        selectedProject === "all" ? "bg-amber-500 text-black font-bold shadow" : `${cardInnerClass} opacity-70`
+                      }`}
+                    >
+                      全部项目 ({MOCK_PROJECT_SESSIONS.reduce((acc, p) => acc + p.totalCount, 0)})
+                    </button>
+                    {MOCK_PROJECT_SESSIONS.map(p => (
+                      <button
+                        key={p.project}
+                        onClick={() => setSelectedProject(p.project)}
+                        class={`px-3 py-1.5 rounded-xl text-xs font-mono font-medium transition-all flex items-center gap-1.5 whitespace-nowrap ${
+                          selectedProject === p.project ? "bg-amber-500 text-black font-bold shadow" : `${cardInnerClass} opacity-70`
+                        }`}
+                      >
+                        <span>{p.icon}</span>
+                        <span>{p.project}</span>
+                        <span class="opacity-60">({p.totalCount})</span>
+                      </button>
+                    ))}
+                  </div>
+
+                  {/* 项目分组列表：支持折叠与展开 */}
+                  <div class="space-y-3 pt-1">
+                    {MOCK_PROJECT_SESSIONS
+                      .filter(p => selectedProject === "all" || p.project === selectedProject)
+                      .map(p => {
+                        const isExpanded = expandedProjects[p.project] ?? true;
+                        return (
+                          <div key={p.project} class={`rounded-3xl border overflow-hidden ${cardClass}`}>
+                            {/* 分组头部：点击收起/展开 */}
+                            <div 
+                              onClick={() => toggleProject(p.project)}
+                              class={`p-3.5 flex items-center justify-between cursor-pointer border-b ${
+                                isExpanded ? "border-zinc-800/80" : "border-transparent"
+                              } hover:bg-zinc-800/30 transition-all`}
+                            >
+                              <div class="flex items-center gap-2.5 min-w-0">
+                                <span class="text-base">{p.icon}</span>
+                                <div class="min-w-0">
+                                  <div class="text-xs font-bold truncate flex items-center gap-2">
+                                    <span>{p.project}</span>
+                                    {p.activeCount > 0 && (
+                                      <span class="px-1.5 py-0.2 rounded-full bg-emerald-500/20 text-emerald-400 text-[10px] font-mono">
+                                        {p.activeCount} 活跃中
+                                      </span>
+                                    )}
+                                  </div>
+                                  <div class="text-[10px] opacity-50 font-mono truncate">{p.cwd}</div>
+                                </div>
+                              </div>
+                              <div class="flex items-center gap-2">
+                                <span class="text-[11px] font-mono opacity-50">{p.sessions.length} 个会话</span>
+                                {isExpanded ? <Icons.ChevronDown size={15} /> : <Icons.ChevronRight size={15} />}
+                              </div>
+                            </div>
+
+                            {/* 组内会话列表 */}
+                            {isExpanded && (
+                              <div class="divide-y divide-zinc-800/40">
+                                {p.sessions.map(s => (
+                                  <div 
+                                    key={s.id}
+                                    onClick={() => alert(`打开会话: ${s.title}`)}
+                                    class="p-3.5 hover:bg-zinc-800/20 cursor-pointer transition-all space-y-1.5"
+                                  >
+                                    <div class="flex justify-between items-center">
+                                      <div class="flex items-center gap-2 min-w-0">
+                                        <span class={`w-2 h-2 rounded-full ${s.status === "running" ? "bg-emerald-500 dot-pulse" : "bg-zinc-600"}`}></span>
+                                        <span class="text-xs font-bold truncate">{s.title}</span>
+                                      </div>
+                                      <span class="text-[10px] font-mono opacity-50">#{s.id}</span>
+                                    </div>
+                                    <div class="text-[11px] opacity-70 line-clamp-1 font-mono">{s.lastMsg}</div>
+                                    <div class="flex justify-between items-center text-[10px] opacity-50 font-mono pt-0.5">
+                                      <span>最后活动: {s.updatedAt}</span>
+                                      <span>消耗: {s.tokens}</span>
+                                    </div>
+                                  </div>
+                                ))}
+                              </div>
+                            )}
+                          </div>
+                        );
+                      })}
+                  </div>
+
+                </div>
+              )}
+
+              {/* ========================================================================= */}
+              {/* TAB 3: 监控中枢（Monitor）—— 彻底回归 /monitor 监督大盘定位 */}
+              {/* ========================================================================= */}
+              {tab === "monitor" && (
+                <div class="flex-1 overflow-y-auto px-4 pt-2 pb-24 space-y-3.5 no-scrollbar">
+                  
+                  {/* 顶栏 Header */}
+                  <div class="flex justify-between items-center py-1">
+                    <div>
+                      <div class="flex items-center gap-2">
+                        <h1 class="text-lg font-bold">监督中枢</h1>
+                        <span class="px-2 py-0.5 rounded-full bg-amber-500/20 text-amber-400 border border-amber-500/30 text-[10px] font-mono font-bold">
+                          /monitor 协议对齐
+                        </span>
+                      </div>
+                      <p class="text-[11px] opacity-60 font-mono">Workspace 并发 Agent 态势与异常告警</p>
+                    </div>
+                    
+                    {/* 状态徽标 */}
+                    <div class="flex items-center gap-1.5 px-2.5 py-1 rounded-full border border-emerald-500/30 bg-emerald-500/10 text-emerald-400 text-xs font-mono">
+                      <span class="w-1.5 h-1.5 rounded-full bg-emerald-500 dot-pulse"></span>
+                      <span>3 窗口托管</span>
+                    </div>
+                  </div>
+
+                  {/* 状态分流过滤器 */}
+                  <div class="grid grid-cols-3 gap-1.5 p-1 rounded-2xl border font-mono text-xs" style={{ backgroundColor: isDark ? "#12141C" : "#F0F2F5" }}>
+                    <button
+                      onClick={() => setMonitorFilter("all")}
+                      class={`py-1.5 rounded-xl font-medium transition-all ${
+                        monitorFilter === "all" ? "bg-amber-500 text-black font-bold shadow" : "opacity-60"
+                      }`}
+                    >
+                      全部 (3)
+                    </button>
+                    <button
+                      onClick={() => setMonitorFilter("attention")}
+                      class={`py-1.5 rounded-xl font-medium transition-all flex items-center justify-center gap-1 ${
+                        monitorFilter === "attention" ? "bg-red-500 text-white font-bold shadow" : "opacity-60 text-red-400"
+                      }`}
+                    >
+                      <span>告警/阻塞</span>
+                      <span>({attentionCount})</span>
+                    </button>
+                    <button
+                      onClick={() => setMonitorFilter("running")}
+                      class={`py-1.5 rounded-xl font-medium transition-all flex items-center justify-center gap-1 ${
+                        monitorFilter === "running" ? "bg-emerald-600 text-white font-bold shadow" : "opacity-60 text-emerald-400"
+                      }`}
+                    >
+                      <span>运行中</span>
+                      <span>(2)</span>
+                    </button>
+                  </div>
+
+                  {/* 核心亮点：Attention-First 告警优先展示 */}
+                  {attentionCount > 0 && monitorFilter !== "running" && (
+                    <div class="rounded-3xl border border-red-500/60 bg-red-500/10 p-3.5 space-y-2">
+                      <div class="flex items-center justify-between">
+                        <div class="flex items-center gap-1.5 text-red-400 font-bold text-xs">
+                          <Icons.AlertTriangle size={15} />
+                          <span>需人工干预的异常事件 ({attentionCount})</span>
+                        </div>
+                        <span class="text-[10px] font-mono text-red-300">优先级: HIGH</span>
+                      </div>
+                      <div class="text-[11px] text-zinc-300 space-y-1 font-mono">
+                        <div>· [party-worker-1] <span class="text-amber-400 font-bold">ask_pending</span>: 正在等待人工确认重构代码</div>
+                        <div>· [metadata-parser] <span class="text-red-400 font-bold">context_pressure_high</span>: 上下文视窗已达 88%</div>
+                      </div>
+                    </div>
+                  )}
+
+                  {/* 窗口监督卡片列表：真正展示 Objective 目标 + 当前活跃动作 */}
+                  <div class="space-y-3">
+                    {filteredWindows.map((w) => {
+                      const isRunning = w.status === "running";
+                      const hasAttention = w.attention.length > 0;
+                      const pressure = w.contextPressure;
+
+                      return (
+                        <div
+                          key={w.endpointId}
+                          class={`p-4 rounded-3xl border transition-all ${cardClass} ${
+                            hasAttention ? "border-amber-500/60 shadow-md" : ""
+                          }`}
+                        >
+                          {/* 卡片顶行：状态点 + 窗口名称 + 项目归属 */}
+                          <div class="flex justify-between items-center mb-2">
+                            <div class="flex items-center gap-2 min-w-0">
+                              <span class={`w-2.5 h-2.5 rounded-full ${
+                                isRunning ? "bg-emerald-500 dot-pulse" : "bg-zinc-600"
+                              }`}></span>
+                              <span class="font-bold text-xs truncate">{w.name}</span>
+                              <span class="text-[10px] font-mono px-2 py-0.5 rounded-full bg-zinc-800 text-zinc-400">
+                                {w.project}
+                              </span>
+                            </div>
+                            <span class="text-[10px] font-mono opacity-50">#{w.endpointId.slice(0, 8)}</span>
+                          </div>
+
+                          {/* 核心亮点 1: 突出显示窗口的目标任务 (Objective) */}
+                          <div class={`p-2.5 rounded-2xl border mb-2.5 ${cardInnerClass}`}>
+                            <div class="text-[10px] opacity-50 font-mono mb-0.5">当前目标 (Objective):</div>
+                            <div class="text-xs font-semibold text-zinc-200 leading-snug">
+                              {w.objective}
+                            </div>
+                          </div>
+
+                          {/* 核心亮点 2: 正在执行的动态 (Active Tool / Step) */}
+                          <div class="flex items-center justify-between text-xs font-mono mb-2">
+                            <div class="flex items-center gap-1.5 text-emerald-400 truncate">
+                              <Icons.Terminal size={13} />
+                              <span class="truncate">{w.activeStep}</span>
+                            </div>
+                          </div>
+
+                          {/* 待办进度条与上下文视窗压力 */}
+                          <div class="space-y-1.5 pt-1 border-t border-zinc-800/40">
+                            <div class="flex justify-between items-center text-[10px] opacity-60 font-mono">
+                              <span>Flow 任务进度 ({w.todos.filter(t => t.done).length}/{w.todos.length})</span>
+                              <span class={pressure >= 80 ? "text-red-400 font-bold" : ""}>
+                                上下文视窗: {pressure}%
+                              </span>
+                            </div>
+                            <div class="w-full h-1.5 bg-zinc-800 rounded-full overflow-hidden flex">
+                              <div 
+                                class="bg-amber-500 h-full rounded-full transition-all" 
+                                style={{ width: `${(w.todos.filter(t => t.done).length / w.todos.length) * 100}%` }}
+                              ></div>
+                            </div>
+                          </div>
+
+                          {/* 核心亮点 3: 监督动作栏（取代旧版繁琐的常驻输入框） */}
+                          <div class="flex items-center gap-2 mt-3.5 pt-2 border-t border-zinc-800/40">
+                            <button
+                              onClick={() => setActiveSuperviseWindow(w)}
+                              class="flex-1 py-1.5 rounded-xl bg-amber-500/15 hover:bg-amber-500/25 text-amber-400 border border-amber-500/30 text-xs font-mono font-bold flex items-center justify-center gap-1.5 transition-all"
+                            >
+                              <Icons.Send size={13} />
+                              <span>干预指令 (Steer)</span>
+                            </button>
+                            <button
+                              onClick={() => alert(`跳转至 ${w.name} 的全屏交互会话页面`)}
+                              class="px-3 py-1.5 rounded-xl border border-zinc-700 bg-zinc-800/80 text-zinc-300 text-xs font-mono flex items-center gap-1 hover:border-zinc-500 transition-all"
+                            >
+                              <Icons.ExternalLink size={13} />
+                              <span>进入会话</span>
+                            </button>
+                            <button
+                              onClick={() => alert(`已向 ${w.name} 发送强行终止信号 (Abort)`)}
+                              class="px-2.5 py-1.5 rounded-xl border border-red-900/60 bg-red-950/40 text-red-400 text-xs font-mono hover:bg-red-900/40 transition-all"
+                              title="强行中止当前任务"
+                            >
+                              <Icons.StopCircle size={14} />
+                            </button>
+                          </div>
+
+                        </div>
+                      );
+                    })}
+                  </div>
+
+                </div>
+              )}
+
+              {/* ========================================================================= */}
+              {/* TAB 4: 设置页（Settings）—— 真实探测元数据与真实通知开关 */}
+              {/* ========================================================================= */}
+              {tab === "settings" && (
+                <div class="flex-1 overflow-y-auto px-4 pt-2 pb-24 space-y-3.5 no-scrollbar">
+                  
+                  {/* 顶栏 Header */}
+                  <div class="flex justify-between items-center py-1">
+                    <div>
+                      <h1 class="text-lg font-bold">设置</h1>
+                      <p class="text-[11px] opacity-60 font-mono">系统首选项与引擎元数据</p>
+                    </div>
+                    <div class="text-[11px] font-mono text-zinc-500">v0.4.0</div>
+                  </div>
+
+                  {/* 业务通知设置（真实落地） */}
+                  <div class={`p-4 rounded-3xl border space-y-3 ${cardClass}`}>
+                    <div class="text-xs font-bold font-mono">系统与推送通知</div>
+                    
+                    <div class="flex justify-between items-center text-xs">
+                      <div>
+                        <div class="font-semibold text-zinc-200">Ask 待办提问通知</div>
+                        <div class="text-[10px] opacity-50">收到操作或决策确认时下发系统横幅与震动</div>
+                      </div>
+                      <div class="w-9 h-5 bg-amber-500 rounded-full p-0.5 flex items-center justify-end shadow">
+                        <div class="w-4 h-4 rounded-full bg-black"></div>
+                      </div>
+                    </div>
+
+                    <div class="border-t border-zinc-800 pt-2.5 flex justify-between items-center text-xs">
+                      <div>
+                        <div class="font-semibold text-zinc-200">Agent 轮次完成通知</div>
+                        <div class="text-[10px] opacity-50">本轮思考与工具执行全部结束时下发提醒</div>
+                      </div>
+                      <div class="w-9 h-5 bg-amber-500 rounded-full p-0.5 flex items-center justify-end shadow">
+                        <div class="w-4 h-4 rounded-full bg-black"></div>
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* 真实版本信息 */}
+                  <div class={`p-4 rounded-3xl border space-y-2 text-xs font-mono ${cardClass}`}>
+                    <div class="font-bold mb-2">组件与引擎版本 (真实探测)</div>
+                    <div class="flex justify-between opacity-70">
+                      <span>Maestro Mobile App:</span>
+                      <span class="font-bold text-amber-500">0.4.0 (Build 19)</span>
+                    </div>
+                    <div class="flex justify-between opacity-70">
+                      <span>Host 协同服务:</span>
+                      <span>0.3.2</span>
+                    </div>
+                    <div class="flex justify-between opacity-70">
+                      <span>Pi 会话引擎:</span>
+                      <span>0.79.10</span>
+                    </div>
+                    <div class="flex justify-between opacity-70">
+                      <span>pi-maestro-flow:</span>
+                      <span>0.30.0</span>
+                    </div>
+                    <div class="flex justify-between opacity-70">
+                      <span>Maestro CLI:</span>
+                      <span>0.5.86</span>
+                    </div>
+                  </div>
+
+                </div>
+              )}
+
+              {/* 弹窗：监督干预指令输入浮层 (Steer Intervention Sheet) */}
+              {activeSuperviseWindow && (
+                <div class="absolute inset-0 bg-black/80 z-50 flex flex-col justify-end p-4 animate-fade-in">
+                  <div class={`rounded-3xl border p-4 space-y-3 shadow-2xl ${cardClass}`}>
+                    <div class="flex justify-between items-center pb-2 border-b border-zinc-800">
+                      <div class="flex items-center gap-2">
+                        <Icons.Send size={15} className="text-amber-500" />
+                        <span class="text-xs font-bold font-mono">向 #{activeSuperviseWindow.name} 注入干预指令</span>
+                      </div>
+                      <button onClick={() => setActiveSuperviseWindow(null)} class="text-xs opacity-60">✕</button>
+                    </div>
+
+                    <div class="text-[11px] opacity-70 font-mono">
+                      当前目标: {activeSuperviseWindow.objective}
+                    </div>
+
+                    <textarea
+                      rows="3"
+                      value={steerMsg}
+                      onChange={(e) => setSteerMsg(e.target.value)}
+                      placeholder="输入协同引导策略（如：跳过耗时集成测试，先输出精简报告）…"
+                      class={`w-full p-2.5 rounded-2xl border text-xs focus:outline-none focus:border-amber-500 font-mono ${
+                        isDark ? "bg-black/60 border-zinc-700 text-white" : "bg-white border-zinc-300 text-zinc-900"
+                      }`}
+                    ></textarea>
+
+                    <div class="flex gap-2">
+                      <button
+                        onClick={() => {
+                          alert(`已成功向 ${activeSuperviseWindow.name} 发送 Steer 协同修正指令！`);
+                          setSteerMsg("");
+                          setActiveSuperviseWindow(null);
+                        }}
+                        class="flex-1 py-2 rounded-xl bg-amber-500 hover:bg-amber-400 text-black font-bold text-xs font-mono shadow"
+                      >
+                        ⚡ 确认注入干预
+                      </button>
+                      <button
+                        onClick={() => setActiveSuperviseWindow(null)}
+                        class="px-4 py-2 rounded-xl border border-zinc-700 text-xs font-mono opacity-80"
+                      >
+                        取消
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              {/* 底部 iOS Navigation Dock */}
+              <div class={`absolute bottom-0 inset-x-0 h-20 border-t flex items-center justify-around px-2 z-40 ${dockClass}`}>
+                {[
+                  { id: "workbench", label: "工作台", icon: Icons.Workbench },
+                  { id: "sessions", label: "会话档案", icon: Icons.Sessions },
+                  { id: "monitor", label: "监督中枢", icon: Icons.Monitor, badge: attentionCount },
+                  { id: "settings", label: "设置", icon: Icons.Settings }
+                ].map((item) => {
+                  const active = tab === item.id;
+                  const Icon = item.icon;
+                  return (
+                    <button
+                      key={item.id}
+                      onClick={() => setTab(item.id)}
+                      class={`flex flex-col items-center gap-1 py-1 px-3 rounded-2xl transition-all relative ${
+                        active ? "text-amber-500 scale-105" : "text-zinc-500 hover:text-zinc-300"
+                      }`}
+                    >
+                      <Icon size={20} />
+                      <span class="text-[10px] font-semibold tracking-tight">{item.label}</span>
+                      {item.badge > 0 && (
+                        <span class="absolute top-0.5 right-2 w-4 h-4 rounded-full bg-red-500 text-white text-[9px] font-bold flex items-center justify-center font-mono shadow">
+                          {item.badge}
+                        </span>
+                      )}
+                    </button>
+                  );
+                })}
+              </div>
+
+            </div>
+          </div>
+        </div>
+      );
+    }
+
+    ReactDOM.render(<App />, document.getElementById("root"));
+  </script>
+</body>
+</html>

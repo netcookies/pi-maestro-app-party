@@ -53,6 +53,105 @@ interface ProgressEvent {
   text?: string;
 }
 
+export interface WindowExecutionState {
+  isMainRunning: boolean;
+  status: "running" | "idle" | "sleeping";
+  lifecycle: "running" | "settled" | "disconnected";
+  workStatus: "active" | "idle";
+}
+
+/**
+ * 精准判定窗口执行状态与生命周期阶段：
+ * - 进程存活并不等于窗口正在运行（o.alive 仅代表进程心跳在线与通道连通）；
+ * - 结合 mainProgress 事件流、mainLastSettle 时间戳、未决工具调用与子智能体状态，
+ *   严格识别主会话是否已经沉降（agent_settled/agent_end/turn_end）。
+ */
+export function inspectWindowExecutionState(
+  o: WorkspaceOwnerState,
+  agents: TeammateAgentState[],
+  now = Date.now(),
+): WindowExecutionState {
+  if (!o.alive) {
+    return {
+      isMainRunning: false,
+      status: "sleeping",
+      lifecycle: "disconnected",
+      workStatus: "idle",
+    };
+  }
+
+  let isMainRunning = false;
+
+  const progress = o.mainProgress && typeof o.mainProgress === "object"
+    ? (o.mainProgress as { events?: ProgressEvent[]; updatedAt?: number })
+    : undefined;
+  const events = Array.isArray(progress?.events) ? progress.events : [];
+
+  if (events.length > 0) {
+    const completedTools = new Set<string>();
+    let hasRunningTool = false;
+    let latestLifecyclePhase: string | undefined;
+
+    for (let i = events.length - 1; i >= 0; i--) {
+      const ev = events[i];
+
+      if (ev.kind === "lifecycle" && ev.phase && !latestLifecyclePhase) {
+        latestLifecyclePhase = ev.phase;
+      }
+
+      if (ev.kind === "tool" && ev.toolCallId) {
+        if (ev.status === "completed" || ev.status === "failed") {
+          completedTools.add(ev.toolCallId);
+        } else if (ev.status === "running") {
+          if (!completedTools.has(ev.toolCallId)) {
+            hasRunningTool = true;
+          }
+        }
+      }
+    }
+
+    if (latestLifecyclePhase === "agent_settled" || latestLifecyclePhase === "agent_end") {
+      // 明确已沉降结束（无论之前是否有未决 tool，agent_settled 代表本轮彻底结束）
+      isMainRunning = false;
+    } else if (latestLifecyclePhase === "agent_start" || latestLifecyclePhase === "turn_start") {
+      // 新轮次正在执行
+      isMainRunning = true;
+    } else if (hasRunningTool) {
+      // 存在未完成的工具调用且尚未 settle
+      isMainRunning = true;
+    } else if (latestLifecyclePhase === "turn_end") {
+      // 一轮结束且无 running tool
+      isMainRunning = false;
+    }
+  } else {
+    // events 为空或不存在时，检查 mainLastSettle 与 mainActivityAt
+    const settleAt = o.mainLastSettle && typeof o.mainLastSettle === "object" && "at" in o.mainLastSettle
+      ? Number((o.mainLastSettle as { at: unknown }).at)
+      : 0;
+    const mainActAt = typeof o.mainActivityAt === "number" ? o.mainActivityAt : 0;
+
+    if (settleAt > 0 && settleAt >= mainActAt) {
+      // 最近一次活动即为 settle，主会话处于已沉降空闲
+      isMainRunning = false;
+    } else if (mainActAt > 0 && now - mainActAt <= 30_000 && mainActAt > settleAt) {
+      // 最近 30 秒内有活动且在上次 settle 之后，主会话正在运行
+      isMainRunning = true;
+    } else {
+      isMainRunning = false;
+    }
+  }
+
+  const hasRunningAgent = agents.some((a) => a.status === "running");
+  const isRunning = isMainRunning || hasRunningAgent;
+
+  return {
+    isMainRunning,
+    status: isRunning ? "running" : "idle",
+    lifecycle: isRunning ? "running" : "settled",
+    workStatus: hasRunningAgent ? "active" : "idle",
+  };
+}
+
 function extractPendingAsk(mainProgress: unknown): { pendingAsk?: MonitorWindowSummary["pendingAsk"]; attentionMessage?: string } {
   if (!mainProgress || typeof mainProgress !== "object") return {};
   const events = (mainProgress as { events?: ProgressEvent[] }).events;
@@ -131,13 +230,15 @@ export function projectWindow(o: WorkspaceOwnerState): MonitorWindowSummary {
       message: attentionMessage,
     });
   }
+  const execState = inspectWindowExecutionState(o, agents);
+
   return {
     identity,
     name: o.normalizedCwd.split("/").filter(Boolean).pop() ?? o.normalizedCwd,
     cwd: o.normalizedCwd,
-    status: o.alive ? "running" : "sleeping",
-    lifecycle: o.alive ? "running" : "disconnected",
-    workStatus: agents.length > 0 ? "active" : "idle",
+    status: execState.status,
+    lifecycle: execState.lifecycle,
+    workStatus: execState.workStatus,
     todos: [],
     attention,
     facets: [facet],

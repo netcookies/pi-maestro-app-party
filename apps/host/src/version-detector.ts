@@ -101,12 +101,12 @@ export class VersionDetector {
     };
   }
 
-  /** Pi：自身依赖（host 直接依赖 SDK，最可靠）→ 宿主 ~/.pi 目录 → pi bin */
+  /** Pi：优先探测宿主系统当前激活的 pi CLI（真实运行环境）→ 宿主全局 npm → 自身依赖兜底 */
   private async detectPi(): Promise<string | undefined> {
     return (
-      await this.selfDependencyVersion("@earendil-works/pi-coding-agent")
+      await binVersion("pi")
       ?? await versionFromPkgPath(piAgentModulePath("@earendil-works/pi-coding-agent"))
-      ?? await binVersion("pi")
+      ?? await this.selfDependencyVersion("@earendil-works/pi-coding-agent")
     );
   }
 

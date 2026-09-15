@@ -37,7 +37,7 @@ describe("HostController", () => {
   it("returns initial status", () => {
     const status = controller.getStatus();
     expect(status.ok).toBe(true);
-    expect(status.version).toBe("0.3.2");
+    expect(status.version).toBe("0.4.0");
     expect(status.sessions).toBe(0);
     expect(status.uptimeMs).toBeGreaterThanOrEqual(0);
   });

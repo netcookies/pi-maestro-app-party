@@ -121,6 +121,7 @@ export interface WorkspaceOwnerState {
   sessionId: string;
   sessionName?: string;
   publishedAt: number;
+  mainActivityAt?: number;
   contextPressure: JsonValue;
   mainLastSettle?: JsonValue;
   mainProgress?: JsonValue;
