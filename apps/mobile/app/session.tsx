@@ -577,7 +577,7 @@ export default function SessionScreen() {
       style={[styles.container, { backgroundColor: theme.headerBg }]}
       behavior={Platform.OS === "ios" ? "padding" : undefined}
     >
-      <View style={styles.header}>
+      <View style={[styles.header, { paddingTop: Platform.OS === "ios" ? Math.max(insets.top, 50) : insets.top }]}>
         <TouchableOpacity
           onPress={() => {
             if (router.canGoBack()) {
@@ -593,7 +593,33 @@ export default function SessionScreen() {
         >
           <LineIcon name="arrowLeft" size={20} color={theme.text} strokeWidth={2.4} />
         </TouchableOpacity>
-        <Text style={styles.headerTitle} numberOfLines={1}>{session?.title ?? "会话"}</Text>
+        <View style={styles.headerTitleBox}>
+          <Text style={styles.headerTitle} numberOfLines={1}>{session?.title ?? "会话"}</Text>
+          {currentWindow && (
+            <View style={styles.windowStatusRow}>
+              <View
+                style={[
+                  styles.windowStatusDot,
+                  {
+                    backgroundColor:
+                      currentWindow.status === "running"
+                        ? theme.success
+                        : currentWindow.status === "idle"
+                        ? theme.accent
+                        : theme.warning,
+                  },
+                ]}
+              />
+              <Text style={[styles.windowStatusText, { color: currentWindow.status === "running" ? theme.success : currentWindow.status === "idle" ? theme.accent : theme.muted }]}>
+                {currentWindow.status === "running"
+                  ? "桌面窗口运行中"
+                  : currentWindow.status === "idle"
+                  ? "桌面窗口已就绪"
+                  : "桌面窗口休眠中"}
+              </Text>
+            </View>
+          )}
+        </View>
         
         {/* 右侧：当前模型 Badge，点击进入独立全屏“模型选择”子页面 */}
         <TouchableOpacity
@@ -1070,18 +1096,38 @@ function makeStyles(theme: ReturnType<typeof useTheme>["theme"]) {
       justifyContent: "space-between",
       alignItems: "center",
       paddingHorizontal: MIUIX_SPACE.lg,
-      paddingVertical: MIUIX_SPACE.sm,
+      paddingTop: 10,
+      paddingBottom: 8,
       backgroundColor: theme.headerBg,
       borderBottomWidth: 1,
       borderBottomColor: theme.border,
     },
+    headerTitleBox: {
+      flex: 1,
+      alignItems: "center",
+      justifyContent: "center",
+      marginHorizontal: 4,
+    },
     headerTitle: {
-      fontSize: 15,
+      fontSize: 14,
       fontWeight: "600",
       color: theme.text,
-      flex: 1,
       textAlign: "center",
-      marginHorizontal: 8,
+    },
+    windowStatusRow: {
+      flexDirection: "row",
+      alignItems: "center",
+      gap: 4,
+      marginTop: 2,
+    },
+    windowStatusDot: {
+      width: 6,
+      height: 6,
+      borderRadius: 3,
+    },
+    windowStatusText: {
+      fontSize: 10,
+      fontWeight: "500",
     },
     headerStatus: { fontSize: MIUIX_TYPE.footnote2, color: theme.muted, minWidth: 56, textAlign: "right" },
     headerRight: { flexDirection: "row", alignItems: "center", gap: 6, minWidth: 72, justifyContent: "flex-end" },

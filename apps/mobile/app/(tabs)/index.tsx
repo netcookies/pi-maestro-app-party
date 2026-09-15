@@ -154,7 +154,8 @@ export default function DashboardScreen() {
 
   const renderWindowRow = useCallback(({ item }: { item: MonitorWindowSummary }) => {
     const isRunning = item.status === "running";
-    const statusColor = isRunning ? theme.success : item.status === "sleeping" ? theme.warning : theme.muted;
+    const isIdle = item.status === "idle";
+    const statusColor = isRunning ? theme.success : isIdle ? theme.accent : item.status === "sleeping" ? theme.warning : theme.muted;
     const openWindow = async () => {
       if (!item.cwd) return;
       try {
@@ -185,6 +186,19 @@ export default function DashboardScreen() {
           <View style={styles.cardHeaderLeft}>
             <PulsingDot color={statusColor} size={8} active={isRunning} />
             <Text style={styles.cardTitle} numberOfLines={1}>{item.name ?? t.unnamedWindow}</Text>
+            <View
+              style={[
+                styles.statusPill,
+                {
+                  backgroundColor: hexToRgba(statusColor, 0.12),
+                  borderColor: hexToRgba(statusColor, 0.28),
+                },
+              ]}
+            >
+              <Text style={[styles.statusPillText, { color: statusColor }]}>
+                {isRunning ? "运行中" : isIdle ? "已就绪" : item.status === "sleeping" ? "休眠" : "离线"}
+              </Text>
+            </View>
           </View>
           <View style={styles.modelBadge}>
             <Text style={styles.modelBadgeText}>#{item.identity.endpointId.slice(0, 8)}</Text>
@@ -574,6 +588,17 @@ function makeStyles(theme: ReturnType<typeof useTheme>["theme"]) {
     },
     cardHeader: { flexDirection: "row", justifyContent: "space-between", alignItems: "center" },
     cardHeaderLeft: { flexDirection: "row", alignItems: "center", gap: 8, flex: 1, minWidth: 0 },
+    statusPill: {
+      paddingHorizontal: 6,
+      paddingVertical: 1.5,
+      borderRadius: 999,
+      borderWidth: StyleSheet.hairlineWidth,
+      marginLeft: 2,
+    },
+    statusPillText: {
+      fontSize: 10,
+      fontWeight: "600",
+    },
     cardTitle: { fontSize: 13, fontWeight: "700", color: theme.text },
     modelBadge: {
       paddingHorizontal: 8,
