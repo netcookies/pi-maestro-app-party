@@ -907,9 +907,32 @@ export class MobileHostServer {
         }
         case "abort": {
           const runner = this.controller.getSession(command.sessionId);
-          if (!runner) { this.sendError(client, "session_not_found", undefined, (command as { id?: string }).id ?? ""); break; }
-          await runner.abort();
-          this.sendAck(client, command, {});
+          if (runner) {
+            await runner.abort();
+            this.sendAck(client, command, { ok: true });
+            break;
+          }
+
+          // 桌面活跃 TUI 窗口支持：若 host 无内存 runner，向对应活跃终端进程转发 SIGINT 信号中断
+          try {
+            const telemetry = await this.controller.readTelemetry();
+            const owner = telemetry.owners.find(
+              (o) => o.sessionId === command.sessionId || o.ownerId === command.sessionId,
+            );
+            if (owner && owner.pid && owner.alive) {
+              try {
+                process.kill(owner.pid, "SIGINT");
+                this.sendAck(client, command, { ok: true, forwardedToPid: owner.pid });
+                break;
+              } catch (killError) {
+                console.warn(`[maestro-mobile] abort: 向桌面 TUI 进程 (PID ${owner.pid}) 发送 SIGINT 失败:`, killError);
+              }
+            }
+          } catch (err) {
+            console.warn(`[maestro-mobile] abort: 查询桌面 telemetry 异常:`, err);
+          }
+
+          this.sendError(client, "session_not_found", undefined, (command as { id?: string }).id ?? "");
           break;
         }
         case "extension_ui_response": {

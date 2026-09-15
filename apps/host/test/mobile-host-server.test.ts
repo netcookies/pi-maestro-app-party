@@ -249,6 +249,95 @@ describe("MobileHostServer", () => {
       ws.on("error", reject);
     });
   });
+
+  it("handles abort command: calls runner.abort when session is in host memory", async () => {
+    let abortCalled = false;
+    const runner = {
+      id: "sess-host-run",
+      state: { id: "sess-host-run", cwd: ctx.tmpDir, title: "Host Run", runState: "streaming", messageCount: 1, pendingMessageCount: 0, updatedAt: "" },
+      hasMoreHistory: false,
+      snapshot: () => ({ session: runner.state, timeline: [], nextSeq: 0, hasMoreHistory: false }),
+      eventsSince: () => [],
+      loadMoreHistory: async () => ({ items: [], hasMore: false, totalEntries: 0 }),
+      searchHistory: async () => ({ matches: [], totalEntries: 0 }),
+      prompt: async () => {},
+      steer: async () => {},
+      followUp: async () => {},
+      abort: async () => { abortCalled = true; },
+      respondToExtensionUi: () => false,
+      dispose: async () => {},
+    };
+    (ctx.controller as unknown as { sessions: Map<string, typeof runner> }).sessions.set("sess-host-run", runner);
+
+    await new Promise<void>((resolve, reject) => {
+      const ws = new WebSocket(`${ctx.url.replace("http", "ws")}/ws`);
+      ws.on("open", () => {
+        ws.send(JSON.stringify({ type: "abort", sessionId: "sess-host-run", id: "cmd-abort-1" }));
+      });
+      ws.on("message", (raw) => {
+        const d = JSON.parse(raw.toString());
+        if (d.type === "command_result" && d.in_reply_to === "cmd-abort-1") {
+          expect(abortCalled).toBe(true);
+          ws.close();
+          resolve();
+        }
+      });
+      ws.on("error", reject);
+    });
+  });
+
+  it("handles abort command: forwards SIGINT when session belongs to an active desktop TUI window", async () => {
+    const fakeOwner = {
+      workspaceId: "ws-test",
+      normalizedCwd: ctx.tmpDir,
+      ownerId: "owner-tui-12345",
+      ownerNonce: "nonce-1",
+      pid: 99999, // 模拟目标终端 PID
+      sessionId: "sess-desktop-tui-1",
+      publishedAt: Date.now(),
+      alive: true,
+      ageMs: 10,
+      contextPressure: 20,
+      agents: [],
+      settled: [],
+      backgroundJobs: [],
+    };
+
+    (ctx.controller as unknown as { telemetryReader: { read: () => Promise<{ owners: typeof fakeOwner[] }> } }).telemetryReader = {
+      read: async () => ({ owners: [fakeOwner] }),
+    };
+
+    let killedPid: number | undefined;
+    let killedSignal: string | number | undefined;
+    const origKill = process.kill;
+    process.kill = ((pid: number, signal?: string | number) => {
+      killedPid = pid;
+      killedSignal = signal;
+      return true;
+    }) as typeof process.kill;
+
+    try {
+      await new Promise<void>((resolve, reject) => {
+        const ws = new WebSocket(`${ctx.url.replace("http", "ws")}/ws`);
+        ws.on("open", () => {
+          ws.send(JSON.stringify({ type: "abort", sessionId: "sess-desktop-tui-1", id: "cmd-abort-2" }));
+        });
+        ws.on("message", (raw) => {
+          const d = JSON.parse(raw.toString());
+          if (d.type === "command_result" && d.in_reply_to === "cmd-abort-2") {
+            expect(d.result?.forwardedToPid).toBe(99999);
+            expect(killedPid).toBe(99999);
+            expect(killedSignal).toBe("SIGINT");
+            ws.close();
+            resolve();
+          }
+        });
+        ws.on("error", reject);
+      });
+    } finally {
+      process.kill = origKill;
+    }
+  });
 });
 describe("MobileHostServer.listen error propagation", () => {
   // 回归：端口被占时 listen() 必须 reject（而非永不 settle 导致 uncaughtException 裸崩）

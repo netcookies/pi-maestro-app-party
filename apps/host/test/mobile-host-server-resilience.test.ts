@@ -396,8 +396,9 @@ describe("WS heartbeat miss tolerance", () => {
     client.heartbeatMisses = 2; // 模拟已累积 2 次未应答 pong
 
     // 客户端发送任意一条有效指令或帧
-    conn.ws.send(JSON.stringify({ type: "list_live_sessions" }));
-    await new Promise((r) => setTimeout(r, 50));
+    const reply = conn.nextType("command_result");
+    conn.ws.send(JSON.stringify({ id: "h1", type: "list_live_sessions" }));
+    await reply;
 
     // 收到 message 后，heartbeatMisses 必须被立即重置为 0
     expect(client.heartbeatMisses).toBe(0);

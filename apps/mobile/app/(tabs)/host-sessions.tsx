@@ -551,32 +551,20 @@ export default function HostSessionsScreen() {
             })()}
           </View>
 
-          {/* 格 3：状态 (绿/蓝/黄/灰四色精准表达) */}
+          {/* 格 3：缓存命中 (Prompt Cache 命中率) */}
           <View style={styles.bentoCell}>
             <Text style={styles.bentoCellLabel}>{t.cacheLabel}</Text>
             {(() => {
-              const winStatus = windowStatusMap.get(s.id);
-              const label = winStatus === "running"
-                ? t.statusActive
-                : winStatus === "idle"
-                ? "待命中"
-                : winStatus === "sleeping"
-                ? "休眠中"
-                : item.live
-                ? t.statusActive
-                : t.readyLabel;
-              const clr = winStatus === "running"
-                ? theme.success
-                : winStatus === "idle"
-                ? "#0A84FF"
-                : winStatus === "sleeping"
-                ? theme.warning
-                : item.live
-                ? theme.success
-                : theme.muted;
+              const liveUsage = usageMap[s.id];
+              const cacheRead = (s as { cacheRead?: number }).cacheRead ?? liveUsage?.cacheRead;
+              const input = liveUsage?.input;
+              const totalInput = (typeof input === "number" ? input : 0) + (typeof cacheRead === "number" ? cacheRead : 0);
+              const cacheRate = totalInput > 0 && typeof cacheRead === "number"
+                ? Math.round((cacheRead / totalInput) * 100)
+                : null;
               return (
-                <Text style={[styles.bentoCellValue, { color: clr }]}>
-                  {label}
+                <Text style={[styles.bentoCellValue, cacheRate !== null && cacheRate > 0 && { color: theme.success }]}>
+                  {cacheRate !== null ? `${cacheRate}%` : "--"}
                 </Text>
               );
             })()}
