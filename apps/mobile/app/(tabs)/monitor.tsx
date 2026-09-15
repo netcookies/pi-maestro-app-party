@@ -132,25 +132,6 @@ export default function MonitorScreen() {
           <View style={styles.cardHeaderLeft}>
             <PulsingDot color={statusClr} size={8} active={isRunning} />
             <Text style={styles.cardTitle} numberOfLines={1}>{item.name ?? t.unnamedWindow}</Text>
-            <View
-              style={[
-                styles.statusPill,
-                {
-                  backgroundColor: hexToRgba(statusClr, 0.12),
-                  borderColor: hexToRgba(statusClr, 0.28),
-                },
-              ]}
-            >
-              <Text style={[styles.statusPillText, { color: statusClr }]}>
-                {item.status === "running"
-                  ? "运行中"
-                  : item.status === "idle"
-                  ? "已就绪"
-                  : item.status === "sleeping"
-                  ? "休眠"
-                  : "离线"}
-              </Text>
-            </View>
           </View>
           <View
             style={[
@@ -369,7 +350,6 @@ export default function MonitorScreen() {
 function statusColor(s: string, theme: ReturnType<typeof useTheme>["theme"]) {
   switch (s) {
     case "running": case "active": return theme.success;
-    case "idle": return theme.accent;
     case "sleeping": return theme.warning;
     case "failed": case "disconnected": return theme.error;
     default: return theme.muted;
@@ -432,17 +412,6 @@ function makeStyles(theme: ReturnType<typeof useTheme>["theme"]) {
   },
   cardHeader: { flexDirection: "row", justifyContent: "space-between", alignItems: "center" },
   cardHeaderLeft: { flexDirection: "row", alignItems: "center", gap: 8, flex: 1, minWidth: 0 },
-  statusPill: {
-    paddingHorizontal: 6,
-    paddingVertical: 1.5,
-    borderRadius: 999,
-    borderWidth: StyleSheet.hairlineWidth,
-    marginLeft: 2,
-  },
-  statusPillText: {
-    fontSize: 10,
-    fontWeight: "600",
-  },
   cardTitle: { fontSize: 13, fontWeight: "700", color: theme.text },
   dot: { width: 8, height: 8, borderRadius: 4 },
   modelBadge: {
