@@ -7,8 +7,9 @@
  * - 暴露 connect / disconnect / sendPrompt / answerDialog 等动作
  */
 import React, { createContext, useContext, useEffect, useMemo, useReducer, useRef, useState, useCallback } from "react";
-import type { ExtensionUiRequest, HostEvent, HostSessionList, LiveSessionList, TimelineItem, SessionUsageSummary } from "@maestro-mobile/shared";
+import type { ExtensionUiRequest, HostEvent, HostSessionList, TimelineItem, SessionUsageSummary } from "@maestro-mobile/shared";
 import { HostClient, type ConnectionState } from "./host-client";
+import { isServerSessionPresentation, filterSessionsByVisibility } from "./host-session-pagination";
 import { ExtensionUiQueue } from "./extension-ui-queue";
 import {
   createInitialState,
@@ -35,7 +36,6 @@ export interface HostStoreValue {
   /** 关闭 host 上的会话 runner（P2-4：避免重复 open 泄漏旧实例） */
   closeSession(sessionId: string): Promise<void>;
   listHostSessions(options?: { cwd?: string; limit?: number; cursor?: string; query?: string; sessionIds?: string[]; latestForCwds?: string[] }): Promise<HostSessionList>;
-  listLiveSessions(): Promise<LiveSessionList>;
   loadSessionHistory(sessionId: string): Promise<void>;
   loadMoreHistory(sessionId: string, count?: number): Promise<{ items: TimelineItem[]; hasMore: boolean; totalEntries: number }>;
   searchHistory(sessionId: string, keyword: string, maxResults?: number, previewLength?: number): Promise<{ matches: { index: number; text: string; kind: string }[]; totalEntries: number }>;
@@ -44,7 +44,6 @@ export interface HostStoreValue {
   getMaestroSettings(): Promise<{ files: { key: string; label: string; path: string; data: Record<string, unknown> }[]; observedAt: string }>;
   /** 会话 token 用量（JSONL 聚合 + SDK context）；目标会话未打开时返回 null */
   fetchSessionUsage(sessionId: string): Promise<SessionUsageSummary | null>;
-  fetchMonitorState(): Promise<boolean>;
   updateMaestroSettings(patch: Record<string, unknown>): Promise<{ ok: boolean; error?: string }>;
   setModel(sessionId: string, modelId: string): Promise<{ ok: boolean; error?: string }>;
   setThinking(sessionId: string, level: string): Promise<{ ok: boolean; error?: string }>;
@@ -52,8 +51,6 @@ export interface HostStoreValue {
   renameSession(sessionId: string, name: string): Promise<{ ok: boolean; error?: string }>;
   sendPrompt(sessionId: string, message: string, images?: { data: string; mime: string }[]): Promise<void>;
   sendSteer(sessionId: string, message: string): Promise<void>;
-  /** 跨窗口监督发送：未打开的窗口会被 Host 接管（返回 tookOver=true） */
-  sendSteerWindow(endpointId: string, cwd: string, message: string): Promise<{ ok: boolean; sessionId: string; tookOver: boolean; error?: string }>;
   sendAbort(sessionId: string): Promise<void>;
   answerDialog(requestId: string, value: string | string[]): void;
   cancelDialog(requestId: string): void;
@@ -132,6 +129,7 @@ export function HostStoreProvider({ children }: { children: React.ReactNode }) {
       reconnectBaseMs: 1000,
       reconnectMaxMs: 15000,
       onEvent: dispatchBuffered,
+      onRevisionChange: (revision) => dispatch({ type: "__revision", revision }),
       // ISS-002：断连导致的命令失败必须提示到 UI（app/session.tsx 承诺「错误由 store.lastError 提示」，
       // 但 lastError 原本只由 host 推的事件写入，本地 reject 进不了 reducer）。
       // ISS-20260910 review F-002：走本地内部事件而非合成 host `error` 帧，避免 seq 占位 0 的域歧义。
@@ -227,12 +225,14 @@ export function HostStoreProvider({ children }: { children: React.ReactNode }) {
 
   const listHostSessions = useCallback(async (options: { cwd?: string; limit?: number; cursor?: string; query?: string; sessionIds?: string[]; latestForCwds?: string[] } = {}): Promise<HostSessionList> => {
     const result = await getClient().sendCommand({ type: "list_host_sessions", ...options });
-    return result as HostSessionList;
-  }, [getClient]);
-
-  const listLiveSessions = useCallback(async (): Promise<LiveSessionList> => {
-    const result = await getClient().sendCommand({ type: "list_live_sessions" });
-    return result as LiveSessionList;
+    const list = result as HostSessionList;
+    if (!list || !Array.isArray(list.sessions) || typeof list.observedAt !== "string") {
+      throw new Error("Invalid session list response");
+    }
+    if (list.sessions.some((session) => session.presentation !== undefined && !isServerSessionPresentation(session.presentation))) {
+      throw new Error("Invalid session presentation");
+    }
+    return { ...list, sessions: filterSessionsByVisibility(list.sessions, "session_list") };
   }, [getClient]);
 
   const sendPrompt = useCallback(async (sessionId: string, message: string, images?: { data: string; mime: string }[]) => {
@@ -268,23 +268,6 @@ export function HostStoreProvider({ children }: { children: React.ReactNode }) {
     }
   }, [getClient]);
 
-  const fetchMonitorState = useCallback(async (): Promise<boolean> => {
-    try {
-      // host 已用共享 projector 投影好 MonitorState；运行时校验后再 dispatch（防异常/恶意载荷）
-      const result = await getClient().sendCommand({ type: "get_monitor_state" }) as unknown;
-      if (
-        result && typeof result === "object" && !Array.isArray(result)
-        && Array.isArray((result as { windows?: unknown }).windows)
-      ) {
-        dispatch({ type: "monitor_state", state: result } as unknown as Parameters<typeof dispatch>[0]);
-        return true;
-      }
-      return false;
-    } catch {
-      return false;
-    }
-  }, [getClient]);
-
   const setModel = useCallback(async (sessionId: string, modelId: string) => {
     const result = await getClient().sendCommand({ type: "set_model", sessionId, modelId });
     return result as { ok: boolean; error?: string };
@@ -307,11 +290,6 @@ export function HostStoreProvider({ children }: { children: React.ReactNode }) {
 
   const sendSteer = useCallback(async (sessionId: string, message: string) => {
     await getClient().sendCommand({ type: "steer", sessionId, message });
-  }, [getClient]);
-
-  const sendSteerWindow = useCallback(async (endpointId: string, cwd: string, message: string): Promise<{ ok: boolean; sessionId: string; tookOver: boolean; error?: string }> => {
-    const result = await getClient().sendCommand({ type: "steer_window", endpointId, cwd, message });
-    return result as { ok: boolean; sessionId: string; tookOver: boolean; error?: string };
   }, [getClient]);
 
   const sendAbort = useCallback(async (sessionId: string) => {
@@ -393,7 +371,6 @@ export function HostStoreProvider({ children }: { children: React.ReactNode }) {
       openExistingSession,
       closeSession,
       listHostSessions,
-      listLiveSessions,
       loadSessionHistory,
       loadMoreHistory,
       searchHistory,
@@ -402,20 +379,18 @@ export function HostStoreProvider({ children }: { children: React.ReactNode }) {
       getMaestroSettings,
       updateMaestroSettings,
       fetchSessionUsage,
-      fetchMonitorState,
       setModel,
       setThinking,
       compactSession,
       renameSession,
       sendPrompt,
       sendSteer,
-      sendSteerWindow,
       sendAbort,
       answerDialog,
       cancelDialog,
       lastError: state.lastError,
     }),
-    [state, connectionState, hostUrl, token, connect, disconnect, openSession, openExistingSession, closeSession, listHostSessions, listLiveSessions, loadSessionHistory, loadMoreHistory, searchHistory, listModels, listSkills, getMaestroSettings, updateMaestroSettings, fetchSessionUsage, fetchMonitorState, setModel, setThinking, compactSession, renameSession, sendPrompt, sendSteer, sendSteerWindow, sendAbort, answerDialog, cancelDialog],
+    [state, connectionState, hostUrl, token, connect, disconnect, openSession, openExistingSession, closeSession, listHostSessions, loadSessionHistory, loadMoreHistory, searchHistory, listModels, listSkills, getMaestroSettings, updateMaestroSettings, fetchSessionUsage, setModel, setThinking, compactSession, renameSession, sendPrompt, sendSteer, sendAbort, answerDialog, cancelDialog],
   );
 
   return <HostStoreContext.Provider value={value}>{children}</HostStoreContext.Provider>;

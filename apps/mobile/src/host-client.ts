@@ -12,7 +12,9 @@ import type {
   HostEvent,
   SessionSnapshot,
   ExtensionUiResponse,
+  ProtocolCapability,
 } from "@maestro-mobile/shared";
+import { MOBILE_PROTOCOL_VERSION } from "@maestro-mobile/shared";
 
 export type ConnectionState = "connecting" | "connected" | "disconnected" | "reconnecting";
 
@@ -27,13 +29,16 @@ export interface HostClientOptions {
   wsFactory?: (url: string, token?: string) => WebSocketLike;
   /** 测试注入的随机源（0~1），用于重连退避 jitter；默认 Math.random */
   random?: () => number;
+  /** 客户端版本会随 hello 发送，供 Host 诊断协商。 */
+  clientVersion?: string;
+  /** 未指定时声明 Mobile 当前支持的会话/监控读取能力。 */
+  capabilities?: ProtocolCapability[];
   onEvent?: (event: HostEvent) => void;
   onStateChange?: (state: ConnectionState) => void;
+  onRevisionChange?: (revision: number) => void;
   /**
    * 连接层错误（命令因断连而未被确认）回调。rejection 仍会冒泡给调用方，
-   * 本回调只负责把错误送进 store 的 lastError 通道：app/session.tsx:151 注释声称
-   * 「错误由 store.lastError 提示」，但 lastError 此前只由 host 推的事件写入，
-   * 客户端本地 reject 实际进不了 reducer → UI 静默。
+   * 本回调只负责把错误送进 store 的 lastError 通道。
    */
   onConnectionError?: (message: string) => void;
 }
@@ -78,6 +83,15 @@ export class CommandConnectionLostError extends Error {
   }
 }
 
+export class ProtocolNotReadyError extends Error {
+  readonly code = "protocol_not_ready";
+
+  constructor() {
+    super("Protocol v2 handshake is not ready");
+    this.name = "ProtocolNotReadyError";
+  }
+}
+
 export class HostClient {
   private ws: WebSocketLike | null = null;
   private state: ConnectionState = "disconnected";
@@ -102,6 +116,12 @@ export class HostClient {
   }>();
   private commandSeq = 0;
   private heartbeatPingTimer: ReturnType<typeof setInterval> | null = null;
+  private protocolReady = false;
+  private helloSeq = 0;
+
+  get isProtocolReady(): boolean {
+    return this.protocolReady;
+  }
 
   constructor(private readonly options: HostClientOptions) {
     this.reconnectBaseMs = options.reconnectBaseMs ?? 1000;
@@ -132,6 +152,7 @@ export class HostClient {
       this.reconnectTimer = null;
     }
     this.stopPing();
+    this.protocolReady = false;
     this.ws?.close();
     this.ws = null;
     this.setState("disconnected");
@@ -167,6 +188,9 @@ export class HostClient {
 
   /** 发送命令并等待响应 */
   sendCommand(command: ClientCommand & { id?: string }, timeoutMs = 30_000): Promise<unknown> {
+    if (!this.protocolReady || !this.ws || this.ws.readyState !== WS_OPEN) {
+      return Promise.reject(new ProtocolNotReadyError());
+    }
     const id = command.id ?? `cmd-${++this.commandSeq}`;
     const payload = { ...command, id };
     return new Promise((resolve, reject) => {
@@ -234,24 +258,18 @@ export class HostClient {
 
     ws.onopen = () => {
       if (generation !== this.socketGeneration || this.closed) return;
-      this.startPing();
-      // 连接需稳定保持 30s 才清零退避，防握手后反复断开退化为每秒重试
-      this.connectedAt = Date.now();
-      this.setState("connected");
-      setTimeout(() => {
-        if (generation === this.socketGeneration && this.ws === ws && Date.now() - this.connectedAt >= 30_000) {
-          this.reconnectAttempt = 0;
-        }
-      }, 30_000);
+      this.protocolReady = false;
+      this.sendHello();
     };
 
     ws.onmessage = (data) => {
       if (generation !== this.socketGeneration) return;
-      this.handleRawMessage(data.data);
+      this.handleRawMessage(data.data, generation);
     };
 
     ws.onclose = () => {
       this.stopPing();
+      this.protocolReady = false;
       if (this.closed || generation !== this.socketGeneration) return;
       // 意外断连：立即以可区分错误 settle 在途命令。此前只重连不清 pending，
       // 它们会各自挂满 30s timer 才报 timeout（UI 表现为无响应），且 timeout 文案无法区分
@@ -326,7 +344,18 @@ export class HostClient {
     }
   }
 
-  private handleRawMessage(raw: unknown): void {
+  private sendHello(): void {
+    const hello = {
+      type: "protocol_hello" as const,
+      protocolVersion: MOBILE_PROTOCOL_VERSION,
+      clientVersion: this.options.clientVersion ?? "0.4.0",
+      capabilities: this.options.capabilities ?? ["session_control", "extension_ui", "monitor_read", "session_filter"],
+      requestId: `hello-${++this.helloSeq}`,
+    };
+    this.sendRaw(JSON.stringify(hello));
+  }
+
+  private handleRawMessage(raw: unknown, generation?: number): void {
     let message: unknown;
     try {
       message = JSON.parse(String(raw));
@@ -336,7 +365,35 @@ export class HostClient {
 
     if (message && typeof message === "object") {
       const m = message as Record<string, unknown>;
+      if (m.type === "protocol_ready") {
+        if (m.protocolVersion !== MOBILE_PROTOCOL_VERSION || typeof m.hostVersion !== "string"
+          || !Array.isArray(m.capabilities) || !m.capabilities.every((cap) => typeof cap === "string")
+          || typeof m.revision !== "number" || !Number.isFinite(m.revision)) {
+          this.options.onConnectionError?.("invalid protocol_ready frame");
+          return;
+        }
+        this.protocolReady = true;
+        this.connectedAt = Date.now();
+        this.startPing();
+        this.setState("connected");
+        this.options.onRevisionChange?.(m.revision);
+        setTimeout(() => {
+          if (generation === this.socketGeneration && this.ws && Date.now() - this.connectedAt >= 30_000) this.reconnectAttempt = 0;
+        }, 30_000);
+        return;
+      }
+      if (m.type === "protocol_error") {
+        this.protocolReady = false;
+        this.stopPing();
+        this.setState("disconnected");
+        const code = typeof m.code === "string" ? m.code : "protocol_error";
+        const detail = typeof m.message === "string" ? m.message : "Protocol v2 handshake failed";
+        this.options.onConnectionError?.(`${code}: ${detail}`);
+        this.rejectAllPending("not_connected");
+        return;
+      }
       if (m.type === "command_result") {
+        if (typeof m.revision === "number" && Number.isFinite(m.revision)) this.options.onRevisionChange?.(m.revision);
         this.resolveCommand(m);
         return;
       }

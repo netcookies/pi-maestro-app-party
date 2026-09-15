@@ -60,6 +60,24 @@ describe("AppState reducer", () => {
     expect(state.sessions.get("s1")?.title).toBe("Test");
   });
 
+  it("keeps app revision monotonic and rejects stale server presentation updates", () => {
+    const presentation = (revision: number) => ({
+      role: "session" as const, visibility: "session_list" as const,
+      control: { mode: "readonly" as const, canPrompt: false, canSteer: false, canFollowUp: false, canAbort: false, canAnswerAsk: false },
+      revision,
+    });
+    let state = reduceEvent(createInitialState(), { type: "__revision", revision: 5 });
+    expect(reduceEvent(state, { type: "__revision", revision: 3 }).revision).toBe(5);
+    state = reduceEvent(state, { type: "session_updated", seq: 1, session: {
+      id: "s1", cwd: "/test", title: "new", runState: "idle", messageCount: 0, pendingMessageCount: 0, updatedAt: "", presentation: presentation(5),
+    } });
+    state = reduceEvent(state, { type: "session_updated", seq: 2, session: {
+      id: "s1", cwd: "/test", title: "stale", runState: "idle", messageCount: 0, pendingMessageCount: 0, updatedAt: "", presentation: presentation(4),
+    } });
+    expect(state.sessions.get("s1")?.title).toBe("new");
+    expect(state.revision).toBe(5);
+  });
+
   it("handles timeline_item event", () => {
     const item: TimelineItem = {
       id: "t1", kind: "user", text: "hello", createdAt: "",

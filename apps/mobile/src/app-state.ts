@@ -12,6 +12,7 @@ import type {
   MaestroState,
   MonitorState,
   SessionState,
+  SessionPresentation,
   TimelineItem,
   ExtensionUiRequest,
   ExtensionUiResponse,
@@ -29,6 +30,8 @@ export interface AppState {
   monitor: MonitorState | null;
   dialogs: DialogEntry[];
   lastError: string | null;
+  /** Host directory/projection revision; never decreases on stale responses. */
+  revision: number;
 }
 
 export function createInitialState(): AppState {
@@ -41,6 +44,7 @@ export function createInitialState(): AppState {
     monitor: null,
     dialogs: [],
     lastError: null,
+    revision: 0,
   };
 }
 
@@ -100,6 +104,11 @@ export interface LocalErrorEvent {
   message: string;
 }
 
+export interface RevisionEvent {
+  type: "__revision";
+  revision: number;
+}
+
 /** reducer 可接受的全部 action：host 事件流 + 本地内部事件 */
 export type AppAction =
   | HostEvent
@@ -107,7 +116,31 @@ export type AppAction =
   | HistoryPrependEvent
   | EventBatchEvent
   | DialogSendFailedEvent
-  | LocalErrorEvent;
+  | LocalErrorEvent
+  | RevisionEvent;
+
+function revisionOf(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : undefined;
+}
+
+function isSessionPresentation(value: unknown): value is SessionPresentation {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const p = value as Record<string, unknown>;
+  const control = p.control;
+  if (!control || typeof control !== "object" || Array.isArray(control)) return false;
+  const c = control as Record<string, unknown>;
+  return (p.role === "session" || p.role === "monitor")
+    && (p.visibility === "session_list" || p.visibility === "monitor_tab" || p.visibility === "hidden")
+    && revisionOf(p.revision) !== undefined
+    && (c.mode === "host" || c.mode === "desktop_plugin" || c.mode === "readonly")
+    && typeof c.canPrompt === "boolean" && typeof c.canSteer === "boolean"
+    && typeof c.canFollowUp === "boolean" && typeof c.canAbort === "boolean"
+    && typeof c.canAnswerAsk === "boolean";
+}
+
+function withRevision(state: AppState, revision: number | undefined): AppState {
+  return revision !== undefined && revision > state.revision ? { ...state, revision } : state;
+}
 
 /** 纯 reducer：处理一个 HostEvent，返回新状态（不可变更新）
  * 额外支持内部事件 __history_load（批量替换 timeline）/ __event_batch（H4 微批）/ __dialog_send_failed */
@@ -120,6 +153,9 @@ export function reduceEvent(state: AppState, event: AppAction, deps: AppStateDep
     return s;
   }
   const queue = deps.dialogQueue;
+  if (event.type === "__revision") {
+    return withRevision(state, revisionOf(event.revision));
+  }
   if (event.type === "__dialog_send_failed") {
     // 恢复弹窗使用户已选答案不丢，同时写 lastError（否则从用户视角看是「点了没反应」）。
     // reopen 而非 enqueue：保留原 receivedAt，且已过期/已被修剪时不恢复（S_CONFIRM 回归修正）。
@@ -161,8 +197,26 @@ export function reduceEvent(state: AppState, event: AppAction, deps: AppStateDep
 
     case "session_updated": {
       const sessions = new Map(state.sessions);
-      sessions.set(event.session.id, event.session);
-      return { ...state, sessions };
+      const current = sessions.get(event.session.id);
+      const incomingPresentation = isSessionPresentation(event.session.presentation)
+        ? event.session.presentation
+        : undefined;
+      const currentRevision = revisionOf(current?.presentation?.revision);
+      const incomingRevision = revisionOf(incomingPresentation?.revision);
+      // A delayed update must not replace a newer server projection for this session.
+      if (current && currentRevision !== undefined && incomingRevision !== undefined && incomingRevision < currentRevision) {
+        return withRevision(state, incomingRevision);
+      }
+      const session = incomingPresentation
+        ? { ...event.session, presentation: incomingPresentation }
+        : current?.presentation
+          ? { ...event.session, presentation: current.presentation }
+          : (() => {
+              const { presentation: _ignored, ...withoutPresentation } = event.session;
+              return withoutPresentation as SessionState;
+            })();
+      sessions.set(event.session.id, session);
+      return withRevision({ ...state, sessions }, incomingRevision);
     }
 
     case "timeline_item": {
@@ -202,8 +256,13 @@ export function reduceEvent(state: AppState, event: AppAction, deps: AppStateDep
     case "maestro_state":
       return { ...state, maestro: event.state };
 
-    case "monitor_state":
-      return { ...state, monitor: event.state };
+    case "monitor_state": {
+      const revision = revisionOf(event.state.revision);
+      const monitor = revision !== undefined && state.monitor?.revision !== undefined && revision < state.monitor.revision
+        ? state.monitor
+        : { ...event.state, windows: event.state.windows.filter((window) => window.presentation?.visibility === "monitor_tab") };
+      return withRevision({ ...state, monitor }, revision);
+    }
 
     case "extension_ui_request": {
       if (!queue) return state;

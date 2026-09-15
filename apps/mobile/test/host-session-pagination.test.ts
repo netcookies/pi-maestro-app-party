@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { HostSessionList, HostSessionSummary } from "@maestro-mobile/shared";
-import { canLoadMoreSessions, isLoadMoreResponseCurrent, isTargetedResponseCurrent, mergeHostSessionPage, mergeTargetedHostSessions, shouldBlockSessionListError, shouldRequestTargetedSummaries } from "../src/host-session-pagination";
+import { canLoadMoreSessions, filterSessionsByVisibility, isLoadMoreResponseCurrent, isServerSessionPresentation, isTargetedResponseCurrent, mergeHostSessionPage, mergeSessionPresentation, mergeTargetedHostSessions, shouldBlockSessionListError, shouldRequestTargetedSummaries } from "../src/host-session-pagination";
 
 function session(id: string, title = id): HostSessionSummary {
   return {
@@ -14,6 +14,25 @@ function page(sessions: HostSessionSummary[], extra: Partial<HostSessionList> = 
 }
 
 describe("host session pagination", () => {
+  it("accepts and scopes only server-provided session presentations", () => {
+    const visible = session("visible");
+    visible.presentation = { role: "session", visibility: "session_list", control: { mode: "readonly", canPrompt: false, canSteer: false, canFollowUp: false, canAbort: false, canAnswerAsk: false }, revision: 3 };
+    const monitor = session("monitor");
+    monitor.presentation = { ...visible.presentation, role: "monitor", visibility: "monitor_tab" };
+    expect(isServerSessionPresentation(visible.presentation)).toBe(true);
+    expect(filterSessionsByVisibility([visible, monitor], "session_list").map((item) => item.id)).toEqual(["visible"]);
+    expect(filterSessionsByVisibility([visible, monitor], "monitor_tab").map((item) => item.id)).toEqual(["monitor"]);
+    expect(isServerSessionPresentation({ role: "session", visibility: "session_list" })).toBe(false);
+  });
+
+  it("keeps the newest server presentation when responses race", () => {
+    const current = session("s");
+    current.presentation = { role: "session", visibility: "session_list", control: { mode: "readonly", canPrompt: false, canSteer: false, canFollowUp: false, canAbort: false, canAnswerAsk: false }, revision: 4 };
+    const stale = { ...current, title: "stale", presentation: { ...current.presentation, revision: 3 } };
+    expect(mergeSessionPresentation(current, stale)).toBe(current);
+  });
+
+
   it("merges pages in order and deduplicates overlapping sessions", () => {
     const result = mergeHostSessionPage(
       [session("a"), session("b", "old")],

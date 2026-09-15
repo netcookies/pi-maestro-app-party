@@ -1,10 +1,47 @@
-import type { HostSessionList, HostSessionSummary } from "@maestro-mobile/shared";
+import type { HostSessionList, HostSessionSummary, SessionPresentation, SessionVisibility } from "@maestro-mobile/shared";
+
+export function isServerSessionPresentation(value: unknown): value is SessionPresentation {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const p = value as Record<string, unknown>;
+  const c = p.control;
+  if (!c || typeof c !== "object" || Array.isArray(c)) return false;
+  const control = c as Record<string, unknown>;
+  return (p.role === "session" || p.role === "monitor")
+    && (p.visibility === "session_list" || p.visibility === "monitor_tab" || p.visibility === "hidden")
+    && typeof p.revision === "number" && Number.isFinite(p.revision)
+    && (control.mode === "host" || control.mode === "desktop_plugin" || control.mode === "readonly")
+    && typeof control.canPrompt === "boolean" && typeof control.canSteer === "boolean"
+    && typeof control.canFollowUp === "boolean" && typeof control.canAbort === "boolean"
+    && typeof control.canAnswerAsk === "boolean";
+}
+
+export function filterSessionsByVisibility(
+  sessions: readonly HostSessionSummary[],
+  visibility: SessionVisibility,
+): HostSessionSummary[] {
+  return sessions.filter((session) => session.presentation?.visibility === visibility);
+}
 
 export interface HostSessionPageState {
   sessions: HostSessionSummary[];
   nextCursor?: string;
   hasMore: boolean;
   total?: number;
+  revision?: number;
+}
+
+export function mergeSessionPresentation<T extends { presentation?: SessionPresentation }>(
+  current: T | undefined,
+  incoming: T,
+): T {
+  const currentRevision = current?.presentation?.revision;
+  const incomingRevision = incoming.presentation?.revision;
+  if (current && currentRevision !== undefined && incomingRevision !== undefined && incomingRevision < currentRevision) {
+    return current;
+  }
+  return incoming.presentation && isServerSessionPresentation(incoming.presentation)
+    ? incoming
+    : current ? { ...incoming, presentation: current.presentation } : incoming;
 }
 
 export type TargetedCapability = "unknown" | "supported" | "unsupported";
@@ -80,6 +117,7 @@ export function mergeHostSessionPage(
     nextCursor,
     hasMore: Boolean(nextCursor),
     total: paginated ? response.total : undefined,
+    revision: merged.reduce((max, session) => Math.max(max, session.presentation?.revision ?? 0), 0) || undefined,
   };
 }
 

@@ -14,14 +14,21 @@ function createFakeWs(): WebSocketLike & {
   _message: (data: unknown) => void;
   _close: () => void;
   _sent: string[];
+  _frames: string[];
 } {
   let onopen: (() => void) | null = null;
   let onmessage: ((data: { data: unknown }) => void) | null = null;
   let onclose: (() => void) | null = null;
   const sent: string[] = [];
+  const frames: string[] = [];
   const ws = {
     readyState: WS_OPEN,
-    send: (data: string) => { sent.push(data); },
+    send: (data: string) => {
+      frames.push(data);
+      try {
+        if ((JSON.parse(data) as { type?: string }).type !== "protocol_hello") sent.push(data);
+      } catch { sent.push(data); }
+    },
     close: () => { onclose?.(); },
     get onopen() { return onopen; },
     set onopen(fn) { onopen = fn; },
@@ -30,10 +37,16 @@ function createFakeWs(): WebSocketLike & {
     get onclose() { return onclose; },
     set onclose(fn) { onclose = fn; },
     onerror: null,
-    _open: () => onopen?.(),
+    _open: () => {
+      onopen?.();
+      onmessage?.({ data: JSON.stringify({
+        type: "protocol_ready", protocolVersion: 2, hostVersion: "test", capabilities: [], revision: 1,
+      }) });
+    },
     _message: (data: unknown) => onmessage?.({ data }),
     _close: () => onclose?.(),
     _sent: sent,
+    _frames: frames,
   };
   return ws;
 }
@@ -57,13 +70,21 @@ describe("HostClient", () => {
     client.close();
   });
 
-  it("connects and transitions to connected state", () => {
+  it("connects and transitions to connected state only after protocol_ready", () => {
     expect(client.connectionState).toBe("disconnected");
     client.connect();
     expect(client.connectionState).toBe("connecting");
     fakeWs._open();
+    expect(JSON.parse(fakeWs._frames[0])).toMatchObject({ type: "protocol_hello", protocolVersion: 2 });
     expect(client.connectionState).toBe("connected");
+    expect(client.isProtocolReady).toBe(true);
     expect(client.isConnected).toBe(true);
+  });
+
+  it("rejects commands before the v2 handshake is ready", async () => {
+    client.connect();
+    await expect(client.sendCommand({ type: "ping" })).rejects.toMatchObject({ code: "protocol_not_ready" });
+    expect(fakeWs._frames).toHaveLength(0);
   });
 
   it("receives and dispatches host events", () => {
@@ -274,7 +295,7 @@ describe("HostClient 意外断连时 settle 在途命令（ISS-002）", () => {
     fakeWs._open();
     const a = client.sendCommand({ type: "abort", sessionId: "s1" });
     const b = client.sendCommand({ type: "list_models", sessionId: "s1" });
-    const c = client.sendCommand({ type: "get_monitor_state" });
+    const c = client.sendCommand({ type: "ping" });
     const errs: unknown[] = [];
     void a.catch((e: unknown) => errs.push(e));
     void b.catch((e: unknown) => errs.push(e));
@@ -286,8 +307,8 @@ describe("HostClient 意外断连时 settle 在途命令（ISS-002）", () => {
     // 每条错误带自己的命令类型，便于 UI/日志区分是哪条命令状态未知
     expect(errs.map((e) => (e as CommandConnectionLostError).message).sort()).toEqual([
       "Connection lost before response (abort)",
-      "Connection lost before response (get_monitor_state)",
       "Connection lost before response (list_models)",
+      "Connection lost before response (ping)",
     ]);
   });
 
