@@ -2,8 +2,6 @@
 
 将 [pi-maestro](https://github.com/pi什么人/pi-maestro) 的 maestro 命令行体验扩展到 iOS/Android 手机，随时随地监控 AI 工作状态、查看日志、发送指令。
 
-![Android Host 连接成功](docs/images/screenshots/android-host-connected.png)
-
 <div align="center">
 
 | 工作台概览 (Workbench) | 会话管理 (Sessions) | 流式交互与控制 (Chat) |
@@ -24,6 +22,9 @@
 |------|------|
 | 移动端监控 Pi 工作窗口（Maestro Schedule / Monitor） | ✅ |
 | 查看会话日志、发送 Prompt / Steer / Abort | ✅ |
+| 多题交互向导（Ask Wizard：多题连续作答、单选/多选/文本、无缝穿透桌面 TUI） | ✅ |
+| 系统级推送与应用内通知（OS Push / Local Notification、灵动岛顶部横幅、触觉反馈） | ✅ |
+| 全生命周期运行态感知（输入框停止/旋转进度环与终端端到端生命周期精准对齐） | ✅ |
 | Teammate Tab：查看 Agent 工作状态 | ✅ |
 | WS 实时推送（连接/断开自动重连） | ✅ |
 | HTTP API（健康检查、Maestro 设置、Usage） | ✅ |
