@@ -21,6 +21,83 @@ export type JsonValue =
   | JsonValue[]
   | { [key: string]: JsonValue };
 
+export const MOBILE_PROTOCOL_VERSION = 2 as const;
+export type MobileProtocolVersion = typeof MOBILE_PROTOCOL_VERSION;
+
+export type ProtocolCapability =
+  | "session_control"
+  | "desktop_plugin_control"
+  | "extension_ui"
+  | "monitor_read"
+  | "session_filter";
+
+export type OperationStatus = "requested" | "accepted" | "observed" | "failed" | "unknown";
+
+export interface OperationReceipt {
+  requestId: string;
+  operation: string;
+  status: OperationStatus;
+  revision: number;
+}
+
+export type SessionRole = "session" | "monitor";
+export type SessionVisibility = "session_list" | "monitor_tab" | "hidden";
+export type SessionControlMode = "host" | "desktop_plugin" | "readonly";
+
+export interface SessionControl {
+  mode: SessionControlMode;
+  canPrompt: boolean;
+  canSteer: boolean;
+  canFollowUp: boolean;
+  canAbort: boolean;
+  canAnswerAsk: boolean;
+}
+
+export interface SessionPresentation {
+  role: SessionRole;
+  visibility: SessionVisibility;
+  control: SessionControl;
+  revision: number;
+  monitorWindowCount?: number;
+}
+
+export interface ProtocolHello {
+  type: "protocol_hello";
+  protocolVersion: MobileProtocolVersion;
+  clientVersion: string;
+  capabilities: ProtocolCapability[];
+  requestId: string;
+}
+
+export interface ProtocolReady {
+  type: "protocol_ready";
+  protocolVersion: MobileProtocolVersion;
+  hostVersion: string;
+  capabilities: ProtocolCapability[];
+  revision: number;
+}
+
+export interface ProtocolErrorFrame {
+  type: "protocol_error";
+  code: "protocol_version_unsupported" | "protocol_hello_required" | "invalid_frame";
+  message: string;
+  supportedVersion: MobileProtocolVersion;
+}
+
+export interface CommandResult {
+  type: "command_result";
+  in_reply_to: string;
+  ok: boolean;
+  status: OperationStatus;
+  revision: number;
+  result?: JsonValue;
+  error?: { code: string; message?: string };
+}
+
+export type HostFrame = HostEvent | ProtocolReady | ProtocolErrorFrame | CommandResult;
+export type ClientFrame = ProtocolHello | ClientCommand;
+
+
 export interface TimelineItem {
   id: string;
   kind: "user" | "assistant" | "thinking" | "tool" | "system";
@@ -47,6 +124,7 @@ export interface SessionState {
   sessionFile?: string;
   model?: JsonValue;
   thinkingLevel?: string;
+  presentation?: SessionPresentation;
 }
 
 export interface SessionSnapshot {
@@ -77,6 +155,7 @@ export interface HostSessionSummary {
   cost?: number;
   /** 实时上下文用量（若处于活跃/已打开状态） */
   context?: { tokens: number | null; contextWindow: number; percent: number | null } | null;
+  presentation?: SessionPresentation;
 }
 
 export interface HostSessionList {
@@ -263,6 +342,7 @@ export interface MonitorWindowSummary {
   attention: MonitorAttentionSummary[];
   facets: MonitorFacet[];
   pendingAsk?: MonitorPendingAsk;
+  presentation?: SessionPresentation;
   lastSettle?: { at: number; lastResult: string };
 }
 
@@ -283,6 +363,7 @@ export interface MonitorAttentionSummary {
 export interface MonitorState {
   windows: MonitorWindowSummary[];
   observedAt: string;
+  revision?: number;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -363,7 +444,12 @@ export type HostEvent =
 // ClientCommand — 客户端发给 host 的命令
 // ─────────────────────────────────────────────────────────────────────────────
 
-export type ClientCommand =
+export interface ClientCommandMeta {
+  /** 命令幂等键与响应匹配键；Protocol v2 客户端必须使用字符串。 */
+  id?: string;
+}
+
+export type ClientCommandPayload =
   | { type: "open_session"; cwd: string; mode?: "create" | "continue"; sessionFile?: string }
   | { type: "list_host_sessions"; cwd?: string; limit?: number; cursor?: string; query?: string; sessionIds?: string[]; latestForCwds?: string[] }
   | { type: "list_live_sessions" }
@@ -391,6 +477,9 @@ export type ClientCommand =
   | { type: "get_maestro_state" }
   | { type: "get_monitor_state" }
   | { type: "ping" };
+
+export type ClientCommand = ClientCommandMeta & ClientCommandPayload;
+
 
 /** steer_window 结果（tookOver=true 表示窗口原先未打开，Host 已接管为受控会话） */
 export interface SteerWindowResult {
@@ -451,13 +540,165 @@ export class ProtocolError extends Error {
 }
 
 export function isHostEvent(value: unknown): value is HostEvent {
-  if (typeof value !== "object" || value === null) return false;
-  const v = value as Record<string, unknown>;
-  return typeof v.type === "string" && typeof v.seq === "number";
+  if (!isRecord(value) || !isFiniteNumber(value.seq) || typeof value.type !== "string") return false;
+  switch (value.type) {
+    case "host_status":
+      return isString(value.status);
+    case "host_info":
+      return isRecord(value.info);
+    case "session_updated":
+      return isRecord(value.session);
+    case "timeline_item":
+      return isString(value.sessionId) && isRecord(value.item);
+    case "timeline_delta":
+      return isString(value.sessionId) && isString(value.itemId) && isString(value.delta);
+    case "raw_event":
+      return isString(value.sessionId) && "event" in value;
+    case "command_error":
+      return isString(value.sessionId) && isString(value.command) && isString(value.message);
+    case "extension_ui_request":
+      return isString(value.sessionId) && isRecord(value.request);
+    case "extension_ui_cleared":
+      return isString(value.sessionId) && isString(value.requestId);
+    case "maestro_state":
+      return isRecord(value.state);
+    case "monitor_state":
+      return isRecord(value.state);
+    case "teammate_event":
+      return isString(value.scheduleId) && isString(value.status)
+        && (value.dispatchId === undefined || isString(value.dispatchId));
+    case "error":
+      return isString(value.code) && isString(value.message);
+    default:
+      return false;
+  }
 }
 
 export function isClientCommand(value: unknown): value is ClientCommand {
-  if (typeof value !== "object" || value === null) return false;
-  const v = value as Record<string, unknown>;
-  return typeof v.type === "string";
+  if (!isRecord(value) || typeof value.type !== "string") return false;
+  if (value.id !== undefined && !isString(value.id)) return false;
+  switch (value.type) {
+    case "open_session":
+      return isString(value.cwd) && optionalEnum(value.mode, "create", "continue") && optionalString(value.sessionFile);
+    case "list_host_sessions":
+      return optionalString(value.cwd) && optionalFiniteNumber(value.limit) && optionalString(value.cursor)
+        && optionalString(value.query) && optionalStringArray(value.sessionIds) && optionalStringArray(value.latestForCwds);
+    case "list_live_sessions":
+    case "get_maestro_settings":
+    case "get_maestro_state":
+    case "get_monitor_state":
+    case "ping":
+      return true;
+    case "load_more_history":
+      return isString(value.sessionId) && optionalFiniteNumber(value.count);
+    case "search_history":
+      return isString(value.sessionId) && isString(value.keyword)
+        && optionalFiniteNumber(value.maxResults) && optionalFiniteNumber(value.previewLength);
+    case "list_models":
+    case "list_skills":
+    case "set_model":
+    case "set_thinking":
+    case "compact":
+    case "rename_session":
+    case "close_session":
+    case "get_snapshot":
+    case "get_session_usage":
+    case "abort":
+      return isString(value.sessionId)
+        && (value.type !== "set_model" || isString(value.modelId))
+        && (value.type !== "set_thinking" || isString(value.level))
+        && (value.type !== "rename_session" || isString(value.name))
+        && (value.type !== "compact" || optionalString(value.customInstructions));
+    case "update_maestro_settings":
+      return isString(value.key) && isRecord(value.patch);
+    case "list_sessions":
+      return optionalString(value.cwd);
+    case "list_directories":
+      return isString(value.path);
+    case "prompt":
+      return isString(value.sessionId) && isString(value.message) && optionalImageArray(value.images);
+    case "steer":
+    case "follow_up":
+      return isString(value.sessionId) && isString(value.message);
+    case "steer_window":
+      return isString(value.endpointId) && isString(value.cwd) && isString(value.message);
+    case "extension_ui_response":
+      return isString(value.sessionId) && isString(value.requestId) && isRecord(value.response);
+    default:
+      return false;
+  }
+}
+
+export function isClientFrame(value: unknown): value is ClientFrame {
+  if (isProtocolHello(value)) return true;
+  return isClientCommand(value);
+}
+
+export function isHostFrame(value: unknown): value is HostFrame {
+  if (isHostEvent(value)) return true;
+  if (!isRecord(value) || typeof value.type !== "string") return false;
+  if (value.type === "protocol_ready") {
+    return value.protocolVersion === MOBILE_PROTOCOL_VERSION && isString(value.hostVersion)
+      && isStringArray(value.capabilities) && isFiniteNumber(value.revision);
+  }
+  if (value.type === "protocol_error") {
+    return isString(value.message) && value.supportedVersion === MOBILE_PROTOCOL_VERSION
+      && (value.code === "protocol_version_unsupported" || value.code === "protocol_hello_required" || value.code === "invalid_frame");
+  }
+  if (value.type === "command_result") {
+    return isString(value.in_reply_to) && typeof value.ok === "boolean"
+      && isOperationStatus(value.status) && isFiniteNumber(value.revision);
+  }
+  return false;
+}
+
+export function isProtocolHello(value: unknown): value is ProtocolHello {
+  if (!isRecord(value)) return false;
+  return value.type === "protocol_hello"
+    && value.protocolVersion === MOBILE_PROTOCOL_VERSION
+    && isString(value.clientVersion)
+    && isStringArray(value.capabilities)
+    && isString(value.requestId);
+}
+
+function isOperationStatus(value: unknown): value is OperationStatus {
+  return value === "requested" || value === "accepted" || value === "observed"
+    || value === "failed" || value === "unknown";
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function isString(value: unknown): value is string {
+  return typeof value === "string" && value.length > 0;
+}
+
+function isFiniteNumber(value: unknown): value is number {
+  return typeof value === "number" && Number.isFinite(value);
+}
+
+function optionalString(value: unknown): boolean {
+  return value === undefined || isString(value);
+}
+
+function optionalFiniteNumber(value: unknown): boolean {
+  return value === undefined || isFiniteNumber(value);
+}
+
+function optionalEnum<T extends string>(value: unknown, ...allowed: T[]): boolean {
+  return value === undefined || (typeof value === "string" && allowed.includes(value as T));
+}
+
+function isStringArray(value: unknown): value is string[] {
+  return Array.isArray(value) && value.every(isString);
+}
+
+function optionalStringArray(value: unknown): boolean {
+  return value === undefined || isStringArray(value);
+}
+
+function optionalImageArray(value: unknown): boolean {
+  return value === undefined || (Array.isArray(value) && value.every((item) =>
+    isRecord(item) && isString(item.data) && isString(item.mime)));
 }

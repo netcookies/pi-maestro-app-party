@@ -1,10 +1,22 @@
 import type { HostEvent, SessionSnapshot, ExtensionUiResponse } from "@maestro-mobile/shared";
+import type { DesktopPluginTarget } from "@maestro-mobile/shared";
 import type { RuntimeFactory, SessionRunner, OpenSessionRequest, HostEventListener } from "./types.js";
 import { SdkSessionRunner } from "./session-runner.js";
 import { MaestroStateReader } from "./maestro-state.js";
 import { LiveSessionsService } from "./live-sessions.js";
 import { WorkspaceTelemetryReader } from "./workspace-telemetry.js";
-import { projectMonitorState, telemetryStableKey, monitorStateEvent } from "./monitor-projection.js";
+import { monitorStateEvent } from "./monitor-projection.js";
+import { MonitorReadService } from "./application/monitor-read-service.js";
+import { isMonitorOwner } from "./application/session-visibility.js";
+import { SessionDirectory, type SessionTargetIdentity } from "./control/SessionDirectory.js";
+import { SessionCommandService } from "./application/session-command-service.js";
+import { SessionQueryService } from "./application/session-query-service.js";
+import { MonitorQueryService } from "./application/monitor-query-service.js";
+import { ApplicationCommandRouter, type SessionOperation } from "./application/application-command-router.js";
+import { DesktopPluginRegistry } from "./plugin/desktop-plugin-registry.js";
+import { DesktopControlGatewayService } from "./control/desktop-control-gateway.js";
+import { readSettingsOverview, updateSettingsJson } from "./maestro-settings.js";
+export { isMonitorOwner } from "./application/session-visibility.js";
 import { VersionDetector, type ComponentVersions } from "./version-detector.js";
 import { EventLog } from "./event-log.js";
 import { readFileSync } from "node:fs";
@@ -29,25 +41,6 @@ try {
  * - 调度 MaestroStateReader 定期读取
  * - 处理 client commands
  */
-/**
- * 判定一个 workspace owner 是否处于 Monitor / 监督控制模式（如 #control 窗口）。
- * 依据：
- * 1. sessionName 包含 control / monitor（例如 #control·<hash> 或 monitor）；
- * 2. mainLastSettle 中包含 monitor / agent-watch / <monitor_mode> 等巡检标志。
- */
-export function isMonitorOwner(owner: WorkspaceOwner): boolean {
-  if (owner.sessionName && /control|monitor/i.test(owner.sessionName)) {
-    return true;
-  }
-  if (owner.mainLastSettle && typeof owner.mainLastSettle === "object") {
-    const lastResult = String((owner.mainLastSettle as { lastResult?: unknown }).lastResult ?? "");
-    if (/peer\s+[a-f0-9]{8}|agent-watch|monitor\s+mode|<monitor_mode>/i.test(lastResult)) {
-      return true;
-    }
-  }
-  return false;
-}
-
 export class HostController {
   private readonly sessions = new Map<string, SessionRunner>();
   private readonly eventLog = new EventLog();
@@ -55,6 +48,14 @@ export class HostController {
   private readonly maestroReader: MaestroStateReader;
   private readonly liveSessions: LiveSessionsService;
   private readonly telemetryReader: WorkspaceTelemetryReader;
+  private readonly monitorReadService: MonitorReadService;
+  private readonly sessionDirectory = new SessionDirectory();
+  private readonly sessionTargets = new Map<string, SessionTargetIdentity>();
+  private readonly sessionCommandService: SessionCommandService;
+  private readonly desktopPluginRegistry = new DesktopPluginRegistry();
+  private readonly desktopControlGateway: DesktopControlGatewayService;
+  private readonly sessionQueryService: SessionQueryService;
+  private readonly applicationRouter: ApplicationCommandRouter;
   private telemetryCache: string | null = null;
   private telemetryInFlight = false;
   private readonly emitToListeners: (event: HostEvent) => void;
@@ -71,6 +72,28 @@ export class HostController {
     this.maestroReader = maestroReader ?? new MaestroStateReader();
     this.liveSessions = new LiveSessionsService();
     this.telemetryReader = new WorkspaceTelemetryReader();
+    this.monitorReadService = new MonitorReadService(() => this.telemetryReader.read());
+    this.desktopControlGateway = new DesktopControlGatewayService(this.desktopPluginRegistry);
+    this.sessionCommandService = new SessionCommandService(this.sessionDirectory, this.desktopControlGateway);
+    this.sessionQueryService = new SessionQueryService(
+      this.runtimeFactory,
+      this.sessionDirectory,
+      (sessionId) => this.sessionDirectory.list().find((target) => target.identity.sessionId === sessionId)?.presentation,
+    );
+    this.applicationRouter = new ApplicationCommandRouter(
+      this.sessionCommandService,
+      this.sessionQueryService,
+      new MonitorQueryService(this.monitorReadService),
+      {
+        openSession: (request) => this.openSession(request),
+        closeSession: (sessionId) => this.closeSession(sessionId),
+        respondToExtensionUi: (sessionId, requestId, response) => this.respondToExtensionUi(sessionId, requestId, response),
+        sessionOperation: (operation) => this.runSessionOperation(operation),
+        readMaestroState: () => this.readMaestroStateNow(),
+        readSettings: () => readSettingsOverview(),
+        updateSettings: (patch) => updateSettingsJson(patch),
+      },
+    );
     this.emitToListeners = (event: HostEvent) => {
       for (const listener of this.listeners) {
         try { listener(event); } catch { /* ignore */ }
@@ -86,7 +109,42 @@ export class HostController {
     return [...this.sessions.keys()];
   }
 
-  /** 读取活跃会话列表（只读，不 claim owner） */
+  get directory(): SessionDirectory {
+    return this.sessionDirectory;
+  }
+
+  get application(): ApplicationCommandRouter {
+    return this.applicationRouter;
+  }
+
+  get desktopPlugins(): DesktopPluginRegistry {
+    return this.desktopPluginRegistry;
+  }
+
+  get desktopGateway(): DesktopControlGatewayService {
+    return this.desktopControlGateway;
+  }
+
+  registerDesktopTarget(target: DesktopPluginTarget): void {
+    const registration = this.desktopPluginRegistry.resolve(target);
+    if (!registration) return;
+    this.sessionDirectory.registerDesktopTarget(target, registration.capabilities);
+  }
+
+  getSessionTarget(sessionId: string): SessionTargetIdentity | undefined {
+    const mapped = this.sessionTargets.get(sessionId);
+    if (mapped) return { ...mapped };
+    const matches = this.sessionDirectory.list().filter((target) => target.identity.sessionId === sessionId);
+    return matches.length === 1 ? { ...matches[0].identity } : undefined;
+  }
+
+  unregisterDesktopTarget(target: DesktopPluginTarget): void {
+    // A reconnect may replace the registration before the old socket closes.
+    if (this.desktopPluginRegistry.resolve(target)) return;
+    this.sessionDirectory.unregister(target);
+  }
+
+
   async listLiveSessions() {
     return this.liveSessions.list();
   }
@@ -94,6 +152,16 @@ export class HostController {
   /** 读取 workspace telemetry（owner 状态，Monitor/Teammate 合同） */
   async readTelemetry() {
     return this.telemetryReader.read();
+  }
+
+  /** 读取服务端统一 Monitor projection（查询与推送共用）。 */
+  async readMonitorState() {
+    return (await this.monitorReadService.read()).state;
+  }
+
+  /** 读取 Monitor projection 及稳定 revision，供 transport 适配层使用。 */
+  async readMonitorSnapshot() {
+    return this.monitorReadService.read();
   }
 
   /**
@@ -135,16 +203,15 @@ export class HostController {
     return this.findActiveOwnerForSession(cwd, sessionId, options);
   }
 
-  /** 轮询 telemetry，状态变化时推送 monitor_state 事件（single-flight + 稳定键变更检测） */
+  /** 轮询统一 Monitor Read Service，状态变化时推送同一份 projection */
   async pollTelemetry(): Promise<void> {
     if (this.telemetryInFlight) return;
     this.telemetryInFlight = true;
     try {
-      const t = await this.telemetryReader.read();
-      const key = telemetryStableKey(t);
-      if (key === this.telemetryCache) return;
-      this.telemetryCache = key;
-      this.emitToListeners(this.eventLog.record(monitorStateEvent(projectMonitorState(t))));
+      const snapshot = await this.monitorReadService.read();
+      if (snapshot.stableKey === this.telemetryCache) return;
+      this.telemetryCache = snapshot.stableKey;
+      this.emitToListeners(this.eventLog.record(monitorStateEvent(snapshot.state)));
     } catch {
       // 读取失败保留上次快照，不广播空窗口
     } finally {
@@ -210,9 +277,12 @@ export class HostController {
     // 先释放旧 runner（否则旧实例仍在订阅 SDK 事件并广播，且 runtime 常驻内存），再登记新实例。
     const existing = this.sessions.get(runner.id);
     if (existing && existing !== runner) {
+      const oldTarget = this.sessionTargets.get(runner.id);
+      if (oldTarget) this.sessionDirectory.unregister(oldTarget);
       await existing.dispose();
     }
     this.sessions.set(runner.id, runner);
+    this.sessionTargets.set(runner.id, this.sessionDirectory.registerHostRunner(runner));
     this.emitToListeners(this.eventLog.record({
       type: "host_status",
       status: `session ${runner.id} opened`,
@@ -225,11 +295,32 @@ export class HostController {
     return this.sessions.get(sessionId);
   }
 
+  private async runSessionOperation(operation: SessionOperation): Promise<unknown> {
+    const entry = this.sessionDirectory.resolve(operation.target);
+    const runner = entry?.runner;
+    if (!runner) throw new Error("target_unavailable");
+    switch (operation.kind) {
+      case "load_more_history": return runner.loadMoreHistory(operation.count);
+      case "search_history": return runner.searchHistory(operation.keyword, operation.maxResults, operation.previewLength);
+      case "list_models": return typeof runner.listModels === "function" ? runner.listModels() : { ok: false, error: "unsupported_command" };
+      case "list_skills": return typeof runner.listLoadedSkills === "function" ? runner.listLoadedSkills() : { ok: false, error: "unsupported_command" };
+      case "set_model": return typeof runner.setModel === "function" ? runner.setModel(operation.modelId) : { ok: false, error: "unsupported_command" };
+      case "set_thinking": return typeof runner.setThinking === "function" ? runner.setThinking(operation.level) : { ok: false, error: "unsupported_command" };
+      case "compact": return typeof runner.compact === "function" ? runner.compact(operation.customInstructions) : { ok: false, error: "unsupported_command" };
+      case "rename_session": return typeof runner.renameSession === "function" ? runner.renameSession(operation.name) : { ok: false, error: "unsupported_command" };
+    }
+  }
+
   /** 关闭会话 */
   async closeSession(sessionId: string): Promise<boolean> {
     const runner = this.sessions.get(sessionId);
     if (!runner) return false;
     this.sessions.delete(sessionId);
+    const target = this.sessionTargets.get(sessionId);
+    if (target) {
+      this.sessionDirectory.unregister(target);
+      this.sessionTargets.delete(sessionId);
+    }
     await runner.dispose();
     return true;
   }
@@ -268,6 +359,9 @@ export class HostController {
       await runner.dispose();
     }
     this.sessions.clear();
+    this.sessionTargets.clear();
+    for (const target of this.sessionDirectory.list()) this.sessionDirectory.unregister(target.identity);
+    this.desktopPluginRegistry.clear();
     this.listeners.clear();
   }
 }

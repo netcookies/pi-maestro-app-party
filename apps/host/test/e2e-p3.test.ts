@@ -78,8 +78,15 @@ describe("P3 E2E: host ↔ mobile over WebSocket", () => {
   function connectClient(): Promise<WebSocket> {
     return new Promise((resolve, reject) => {
       const ws = new WebSocket(`ws://127.0.0.1:${port}/ws`);
-      ws.on("open", () => resolve(ws));
-      ws.on("error", reject);
+      const onMessage = (data: WebSocket.RawData) => {
+        const frame = JSON.parse(data.toString()) as { type?: string };
+        if (frame.type !== "protocol_ready") return;
+        ws.off("message", onMessage);
+        resolve(ws);
+      };
+      ws.on("message", onMessage);
+      ws.once("open", () => ws.send(JSON.stringify({ type: "protocol_hello", protocolVersion: 2, clientVersion: "e2e-test", capabilities: ["session_control", "extension_ui", "monitor_read"], requestId: "hello-e2e" })));
+      ws.once("error", reject);
     });
   }
 
@@ -117,6 +124,7 @@ describe("P3 E2E: host ↔ mobile over WebSocket", () => {
     // 客户端发送应答命令
     const requestId = reqEvent.request.id;
     ws.send(JSON.stringify({
+      id: `response-${requestId}`,
       type: "extension_ui_response",
       sessionId: "sess-fake-1",
       requestId,

@@ -17,6 +17,33 @@ function stubRuntimeFactory() {
   };
 }
 
+function protocolHello() {
+  return {
+    type: "protocol_hello" as const,
+    protocolVersion: 2 as const,
+    clientVersion: "test",
+    capabilities: ["session_control", "monitor_read", "session_filter", "extension_ui", "desktop_plugin_control"] as const,
+    requestId: `hello-${randomUUID()}`,
+  };
+}
+
+async function connectV2(url: string): Promise<WebSocket> {
+  const ws = new WebSocket(`${url}/ws`);
+  await new Promise<void>((resolve, reject) => {
+    const onMessage = (data: WebSocket.RawData) => {
+      const frame = JSON.parse(data.toString()) as { type?: string };
+      if (frame.type !== "protocol_ready") return;
+      ws.off("message", onMessage);
+      resolve();
+    };
+    ws.on("message", onMessage);
+    ws.once("error", reject);
+    ws.once("open", () => ws.send(JSON.stringify(protocolHello())));
+  });
+  return ws;
+}
+
+
 async function createTestServer(token?: string) {
   const tmpDir = join(tmpdir(), `maestro-server-test-${randomUUID()}`);
   await mkdir(tmpDir, { recursive: true });
@@ -134,20 +161,83 @@ describe("MobileHostServer", () => {
     expect(okRes.status).toBe(200);
   });
 
-  it("accepts WebSocket connection and receives host_status", async () => {
+  it("accepts WebSocket connection and receives protocol_ready before host_status", async () => {
     const ws = new WebSocket(`ws://127.0.0.1:${ctx.port}/ws`);
     const first = await new Promise<unknown>((resolve, reject) => {
-      ws.on("message", (data) => resolve(JSON.parse(data.toString())));
-      ws.on("error", reject);
+      ws.on("message", (data) => {
+        const frame = JSON.parse(data.toString()) as { type?: string };
+        if (frame.type === "protocol_ready") resolve(frame);
+      });
+      ws.once("error", reject);
+      ws.once("open", () => ws.send(JSON.stringify(protocolHello())));
     });
-    const msg = first as { type: string };
-    expect(msg.type).toBe("host_status");
+    expect((first as { type: string }).type).toBe("protocol_ready");
+    ws.close();
+  });
+
+  it("rejects business frames before protocol_hello", async () => {
+    const ws = new WebSocket(`ws://127.0.0.1:${ctx.port}/ws`);
+    const frame = await new Promise<{ type: string; code: string }>((resolve, reject) => {
+      ws.once("message", (data) => resolve(JSON.parse(data.toString()) as { type: string; code: string }));
+      ws.once("error", reject);
+      ws.once("open", () => ws.send(JSON.stringify({ id: "pre-handshake", type: "ping" })));
+    });
+    expect(frame).toEqual(expect.objectContaining({ type: "protocol_error", code: "protocol_version_unsupported" }));
+    ws.close();
+  });
+
+  it("rejects legacy protocol hello versions", async () => {
+    const ws = new WebSocket(`ws://127.0.0.1:${ctx.port}/ws`);
+    const frame = await new Promise<{ type: string; code: string }>((resolve, reject) => {
+      ws.once("message", (data) => resolve(JSON.parse(data.toString()) as { type: string; code: string }));
+      ws.once("error", reject);
+      ws.once("open", () => ws.send(JSON.stringify({ ...protocolHello(), protocolVersion: 1 })));
+    });
+    expect(frame).toEqual(expect.objectContaining({ type: "protocol_error", code: "protocol_version_unsupported" }));
+    ws.close();
+  });
+
+  it("rejects duplicate protocol hello after readiness", async () => {
+    const ws = await connectV2(ctx.url);
+    const frame = await new Promise<{ type: string; code: string }>((resolve, reject) => {
+      const onMessage = (data: WebSocket.RawData) => {
+        const value = JSON.parse(data.toString()) as { type: string; code: string };
+        if (value.type !== "protocol_error") return;
+        ws.off("message", onMessage);
+        resolve(value);
+      };
+      ws.on("message", onMessage);
+      ws.once("error", reject);
+      ws.send(JSON.stringify(protocolHello()));
+    });
+    expect(frame).toEqual(expect.objectContaining({ type: "protocol_error", code: "invalid_frame" }));
+    ws.close();
+  });
+
+  it("rejects a target identity whose sessionId differs from the command", async () => {
+    const ws = await connectV2(ctx.url);
+    const reply = await new Promise<{ status: string; error: { code: string } }>((resolve, reject) => {
+      ws.on("message", function handler(data) {
+        const msg = JSON.parse(data.toString()) as { type: string; status: string; error: { code: string } };
+        if (msg.type !== "command_result") return;
+        ws.off("message", handler);
+        resolve(msg);
+      });
+      ws.once("error", reject);
+      ws.send(JSON.stringify({
+        id: "target-mismatch",
+        type: "abort",
+        sessionId: "session-a",
+        target: { sessionId: "session-b", endpointId: "host", normalizedCwd: ctx.tmpDir, processGeneration: "host-session-b-1" },
+      }));
+    });
+    expect(reply.status).toBe("unknown");
+    expect(reply.error.code).toBe("target_mismatch");
     ws.close();
   });
 
   it("broadcasts maestro_state events to websocket clients", async () => {
-    const ws = new WebSocket(`ws://127.0.0.1:${ctx.port}/ws`);
-    await new Promise<void>((resolve) => ws.on("open", () => resolve()));
+    const ws = await connectV2(ctx.url);
 
     const seen = new Promise<unknown>((resolve) => {
       ws.on("message", (data) => {
@@ -166,8 +256,7 @@ describe("MobileHostServer", () => {
   });
 
   it("responds with command_result for unsupported command", async () => {
-    const ws = new WebSocket(`ws://127.0.0.1:${ctx.port}/ws`);
-    await new Promise<void>((resolve) => ws.on("open", () => resolve()));
+    const ws = await connectV2(ctx.url);
 
     const reply = new Promise<unknown>((resolve) => {
       ws.on("message", (data) => {
@@ -204,7 +293,7 @@ describe("MobileHostServer", () => {
       dispose: async () => {},
     };
 
-    (ctx.controller as unknown as { sessions: Map<string, typeof workerRunner> }).sessions.set("sess-worker-1", workerRunner);
+    (ctx.controller as unknown as { directory: { registerHostRunner: (runner: typeof workerRunner) => unknown } }).directory.registerHostRunner(workerRunner);
 
     // 模拟 telemetry 中同一个 cwd 下有一个活跃的 monitor 窗口和一个离线的 worker 窗口
     const fakeOwners = [
@@ -230,17 +319,14 @@ describe("MobileHostServer", () => {
     };
 
     // 发送 prompt 给 sess-worker-1
+    const ws = await connectV2(ctx.url);
     await new Promise<void>((resolve, reject) => {
-      const ws = new WebSocket(`${ctx.url.replace("http", "ws")}/ws`);
-      ws.on("open", () => {
-        ws.send(JSON.stringify({ type: "prompt", sessionId: "sess-worker-1", message: "这是给Worker的任务" }));
-      });
+      ws.send(JSON.stringify({ type: "prompt", sessionId: "sess-worker-1", message: "这是给Worker的任务", id: "cmd-prompt-1" }));
       ws.on("message", (data) => {
         const msg = JSON.parse(data.toString()) as { type: string; ok: boolean; result?: { injectedToTui: boolean } };
         if (msg.type === "command_result") {
           expect(msg.ok).toBe(true);
-          // 核心断言：由于当前没有匹配 sess-worker-1 的桌面 TUI 窗口，决不能注入给排在前面的 monitor 窗口！
-          expect(msg.result?.injectedToTui).toBe(false);
+          expect(msg.result?.injectedToTui).toBeUndefined();
           expect(runnerPromptCalled).toBe(true);
           ws.close();
           resolve();
@@ -267,13 +353,11 @@ describe("MobileHostServer", () => {
       respondToExtensionUi: () => false,
       dispose: async () => {},
     };
-    (ctx.controller as unknown as { sessions: Map<string, typeof runner> }).sessions.set("sess-host-run", runner);
+    (ctx.controller as unknown as { directory: { registerHostRunner: (runner: typeof runner) => unknown } }).directory.registerHostRunner(runner);
 
+    const ws = await connectV2(ctx.url);
     await new Promise<void>((resolve, reject) => {
-      const ws = new WebSocket(`${ctx.url.replace("http", "ws")}/ws`);
-      ws.on("open", () => {
-        ws.send(JSON.stringify({ type: "abort", sessionId: "sess-host-run", id: "cmd-abort-1" }));
-      });
+      ws.send(JSON.stringify({ type: "abort", sessionId: "sess-host-run", id: "cmd-abort-1" }));
       ws.on("message", (raw) => {
         const d = JSON.parse(raw.toString());
         if (d.type === "command_result" && d.in_reply_to === "cmd-abort-1") {
@@ -317,17 +401,16 @@ describe("MobileHostServer", () => {
     }) as typeof process.kill;
 
     try {
+      const ws = await connectV2(ctx.url);
       await new Promise<void>((resolve, reject) => {
-        const ws = new WebSocket(`${ctx.url.replace("http", "ws")}/ws`);
-        ws.on("open", () => {
-          ws.send(JSON.stringify({ type: "abort", sessionId: "sess-desktop-tui-1", id: "cmd-abort-2" }));
-        });
+        ws.send(JSON.stringify({ type: "abort", sessionId: "sess-desktop-tui-1", id: "cmd-abort-2" }));
         ws.on("message", (raw) => {
           const d = JSON.parse(raw.toString());
           if (d.type === "command_result" && d.in_reply_to === "cmd-abort-2") {
-            expect(d.result?.forwardedToPid).toBe(99999);
-            expect(killedPid).toBe(99999);
-            expect(killedSignal).toBe("SIGINT");
+            expect(d.status).toBe("unknown");
+            expect(d.error?.code).toBe("target_unavailable");
+            expect(killedPid).toBeUndefined();
+            expect(killedSignal).toBeUndefined();
             ws.close();
             resolve();
           }

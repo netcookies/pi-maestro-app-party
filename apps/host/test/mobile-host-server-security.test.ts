@@ -112,15 +112,17 @@ describe("P2-1: 初始推送契约", () => {
     await rm(ctx.tmpDir, { recursive: true, force: true });
   });
 
-  it("首条 host_status.status 是字符串，HostStatus 对象走 host_info", async () => {
+  it("协议握手后推送 host_status 与 host_info", async () => {
     const ws = new WebSocket(`ws://127.0.0.1:${ctx.port}/ws`);
     const messages: { type: string; status?: unknown; info?: unknown }[] = [];
     await new Promise<void>((resolve, reject) => {
       ws.on("message", (data) => {
-        messages.push(JSON.parse(data.toString()));
+        const message = JSON.parse(data.toString()) as { type: string; status?: unknown; info?: unknown };
+        if (message.type === "host_status" || message.type === "host_info") messages.push(message);
         if (messages.length >= 2) resolve();
       });
       ws.on("error", reject);
+      ws.on("open", () => ws.send(JSON.stringify({ type: "protocol_hello", protocolVersion: 2, clientVersion: "security-test", capabilities: ["monitor_read"], requestId: "hello-security" })));
     });
     expect(messages[0].type).toBe("host_status");
     expect(typeof messages[0].status).toBe("string");
@@ -173,7 +175,8 @@ describe("P1-3: prompt images 校验", () => {
     const ws = new WebSocket(`ws://127.0.0.1:${ctx.port}/ws`);
     return new Promise((resolve, reject) => {
       ws.on("open", () => {
-        ws.send(JSON.stringify(payload));
+        ws.send(JSON.stringify({ type: "protocol_hello", protocolVersion: 2, clientVersion: "security-test", capabilities: ["session_control"], requestId: "hello-images" }));
+        setTimeout(() => ws.send(JSON.stringify(payload)), 0);
       });
       ws.on("message", (data) => {
         const msg = JSON.parse(data.toString()) as { type: string; ok?: boolean; error?: { code: string } };

@@ -154,6 +154,10 @@ describe("inspectWindowExecutionState & projectWindow", () => {
     const key2 = telemetryStableKey({ ...telemetry, observedAt: "2026-09-15T00:01:00.000Z" });
     expect(key1).toBe(key2);
 
+    // owner heartbeat 时间变化不影响 stable key
+    const heartbeatKey = telemetryStableKey({ ...telemetry, owners: [{ ...owner, publishedAt: owner.publishedAt + 1000, ageMs: 1500 }] });
+    expect(heartbeatKey).toBe(key1);
+
     // 状态从 settled 变为 turn_start 必改变 stable key
     const runningOwner = makeOwner({
       alive: true,
@@ -163,5 +167,13 @@ describe("inspectWindowExecutionState & projectWindow", () => {
     });
     const key3 = telemetryStableKey({ ...telemetry, owners: [runningOwner] });
     expect(key3).not.toBe(key1);
+  });
+
+  it("classifies #control as monitor_tab and regular owners as session_list", () => {
+    const control = projectWindow(makeOwner({ sessionName: "#control-abc123" }));
+    const regular = projectWindow(makeOwner({ sessionName: "work-session" }));
+    expect(control.presentation).toMatchObject({ role: "monitor", visibility: "monitor_tab" });
+    expect(control.presentation?.control.canAbort).toBe(false);
+    expect(regular.presentation).toMatchObject({ role: "session", visibility: "session_list" });
   });
 });

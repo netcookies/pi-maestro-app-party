@@ -96,7 +96,10 @@ describe("Dual-Sync Integration (方案A: TUI <-> Mobile 实时同步与生命�
     });
 
     const opened = new Promise<void>((resolve, reject) => {
-      ws.on("open", () => resolve());
+      ws.on("open", () => {
+        ws.send(JSON.stringify({ type: "protocol_hello", protocolVersion: 2, clientVersion: "dual-sync-test", capabilities: ["session_control", "monitor_read"], requestId: "hello-dual-sync" }));
+        resolve();
+      });
       ws.on("error", reject);
     });
 

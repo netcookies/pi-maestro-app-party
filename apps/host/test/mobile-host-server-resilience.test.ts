@@ -52,7 +52,16 @@ function connect(port: number) {
   });
   ws.on("error", (e: Error) => { error = e; });
   const opened = new Promise<void>((resolve, reject) => {
-    ws.on("open", () => resolve());
+    ws.on("open", () => {
+      ws.send(JSON.stringify({
+        type: "protocol_hello",
+        protocolVersion: 2,
+        clientVersion: "resilience-test",
+        capabilities: ["session_control", "monitor_read", "session_filter", "extension_ui", "desktop_plugin_control"],
+        requestId: `hello-${randomUUID()}`,
+      }));
+      resolve();
+    });
     ws.on("error", reject);
   });
   const nextType = (type: string): Promise<Record<string, unknown>> =>
@@ -416,7 +425,7 @@ describe("search_history 参数钳制", () => {
     const reply = conn.nextType("command_result");
     conn.ws.send(JSON.stringify({ id: "q1", type: "search_history", sessionId: "missing", keyword: "x", maxResults: 1e9, previewLength: 1e9 }));
     const msg = await reply;
-    expect((msg.error as { code: string }).code).toBe("session_not_found");
+    expect((msg.error as { code: string }).code).toBe("target_unavailable");
     conn.ws.close();
 
     // 直接钉生产函数本体（测试复制算式会假通过）

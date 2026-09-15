@@ -3,7 +3,7 @@ import type { Duplex } from "node:stream";
 import type { RawData } from "ws";
 import { URL } from "node:url";
 import { WebSocketServer, type WebSocket } from "ws";
-import { readFile, writeFile, open, stat } from "node:fs/promises";
+import { readFile, stat } from "node:fs/promises";
 import { realpath } from "node:fs/promises";
 import { isAbsolute, normalize, join } from "node:path";
 import { homedir, tmpdir } from "node:os";
@@ -11,19 +11,36 @@ import type {
   ClientCommand,
   HostEvent,
   HostSessionList,
-  HostSessionSummary,
   HostStatus,
-  SessionSnapshot,
+  ProtocolCapability,
+  ProtocolHello,
+  JsonValue,
 } from "@maestro-mobile/shared";
 import type { HostController } from "../host-controller.js";
-import { projectMonitorState } from "../monitor-projection.js";
-import { replayTailFromJsonl } from "../jsonl-pager.js";
-import type { RuntimeFactory } from "../types.js";
-import type { LiveSessionList } from "../live-sessions.js";
-import { readSettingsOverview, updateSettingsJson } from "../maestro-settings.js";
-import { validateClientCommand } from "@maestro-mobile/shared";
-import { HostSessionListService } from "./helpers.js";
-import { injectMessageToActiveTui } from "../workspace-peer-injector.js";
+import type { SessionTargetIdentity } from "../control/SessionDirectory.js";
+import type { CommandResult as ApplicationCommandResult } from "../application/session-command-service.js";
+import { validateClientCommand, validateProtocolHello } from "@maestro-mobile/shared";
+
+const HOST_PROTOCOL_CAPABILITIES: ProtocolCapability[] = [
+  "session_control",
+  "desktop_plugin_control",
+  "extension_ui",
+  "monitor_read",
+  "session_filter",
+];
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null;
+}
+
+function isTargetIdentity(value: unknown): value is SessionTargetIdentity {
+  if (typeof value !== "object" || value === null) return false;
+  const target = value as Record<string, unknown>;
+  return typeof target.sessionId === "string"
+    && typeof target.endpointId === "string"
+    && typeof target.normalizedCwd === "string"
+    && typeof target.processGeneration === "string";
+}
 
 export interface MobileHostServerOptions {
   token?: string;
@@ -56,6 +73,8 @@ interface ClientSocket {
   slowSince: number;
   /** 连续未应答心跳数：达上限才 terminate（单次漏答不得误杀活连接） */
   heartbeatMisses: number;
+  /** Protocol v2 hello 完成后才允许接收命令和发送业务事件。 */
+  handshaken: boolean;
 }
 
 /**
@@ -88,9 +107,6 @@ export class MobileHostServer {
   /** listen() 等待中的错误回调；非空表示正在绑定端口 */
   private listenError: ((error: Error) => void) | undefined;
   private boundHost = "0.0.0.0";
-  private readonly hostSessionList = new HostSessionListService({
-    indexPath: join(homedir(), ".pi", "agent", "mobile-session-index.json"),
-  });
   /** 背压参数（构造时从 options 解析，默认取静态常量） */
   private readonly highWaterMarkBytes: number;
   private readonly hardLimitBytes: number;
@@ -125,7 +141,7 @@ export class MobileHostServer {
         ws.close(1013, "too many connections");
         return;
       }
-      const client: ClientSocket = { id: crypto.randomUUID(), ws, inflight: 0, closing: false, droppedFrames: 0, lastDropLogAt: 0, slowSince: 0, heartbeatMisses: 0 };
+      const client: ClientSocket = { id: crypto.randomUUID(), ws, inflight: 0, closing: false, droppedFrames: 0, lastDropLogAt: 0, slowSince: 0, heartbeatMisses: 0, handshaken: false };
       this.clients.add(client);
       // 故障隔离到连接粒度（本 run 主根因）：此前无 error listener，超限/非法帧的 error 事件直接变
       // uncaughtException → cli fatal() → 整个 host 退出（单手机一帧崩掉所有客户端）。现在只断该连接，
@@ -175,9 +191,8 @@ export class MobileHostServer {
         }
         this.clients.delete(client);
       });
-      // P2-1：host_status 契约是 status: string；HostStatus 对象走独立的 host_info 事件
-      this.sendFrame(client, { type: "host_status", status: "connected", seq: 0 }, "required");
-      this.sendFrame(client, { type: "host_info", info: this.controller.getStatus(), seq: 0 }, "required");
+      // Protocol v2 要求 client hello 先于所有 HostEvent。
+
     });
 
     this.unsubscribeController = this.controller.onEvent((event) => {
@@ -232,6 +247,30 @@ export class MobileHostServer {
     this.heartbeatTimer.unref?.(); // 不阻止进程退出
   }
 
+  private sendProtocolError(client: ClientSocket, code: "protocol_version_unsupported" | "protocol_hello_required" | "invalid_frame", message: string): void {
+    this.sendFrame(client, {
+      type: "protocol_error",
+      code,
+      message,
+      supportedVersion: 2,
+    }, "required", "protocol_error");
+    setTimeout(() => this.closeClient(client, code), 0).unref?.();
+  }
+
+  private acceptProtocolHello(client: ClientSocket, hello: ProtocolHello): void {
+    client.handshaken = true;
+    this.sendFrame(client, {
+      type: "protocol_ready",
+      protocolVersion: 2,
+      hostVersion: this.controller.getStatus().version,
+      capabilities: HOST_PROTOCOL_CAPABILITIES,
+      revision: this.controller.directory.revision,
+    }, "required", "protocol_ready");
+    this.sendFrame(client, { type: "host_status", status: "connected", seq: 0 }, "required", "host_status");
+    this.sendFrame(client, { type: "host_info", info: this.controller.getStatus(), seq: 0 }, "required", "host_info");
+    void hello;
+  }
+
   /**
    * 单一发送出口（故障隔离 + 背压收口）：所有 WS 写出必须经此，不得直接 ws.send。
    * - required（command_result/握手/协议错误/timeline_item/session_updated/raw_event/…）：
@@ -241,6 +280,7 @@ export class MobileHostServer {
    */
   private sendFrame(client: ClientSocket, message: object | string, delivery: "required" | "best_effort", kind = "object"): boolean {
     if (client.closing || client.ws.readyState !== client.ws.OPEN) return false;
+    if (!client.handshaken && kind !== "protocol_ready" && kind !== "protocol_error") return false;
     let payload: string;
     try {
       payload = typeof message === "string" ? message : JSON.stringify(message);
@@ -426,32 +466,29 @@ export class MobileHostServer {
         const limit = limitRaw === null ? undefined : Number(limitRaw);
         const cursor = url.searchParams.get("cursor") ?? undefined;
         const query = url.searchParams.get("query") ?? undefined;
-        const sessionIds = url.searchParams.getAll("sessionIds").flatMap((value) => value.split(",")).filter(Boolean);
-        const latestForCwds = url.searchParams.getAll("latestForCwds").flatMap((value) => value.split(",")).filter(Boolean);
-        const listOptions = {
-          ...(cwd ? { cwd } : {}),
-          ...(limitRaw !== null ? { limit } : {}),
-          ...(cursor ? { cursor } : {}),
-          ...(query ? { query } : {}),
-          ...(sessionIds.length ? { sessionIds } : {}),
-          ...(latestForCwds.length ? { latestForCwds } : {}),
-        };
-        // Targeted/search requests need the shared service's complete index; cwd-only
-        // requests can retain the runtime's narrower listing behavior.
-        const loadCwd = sessionIds.length || latestForCwds.length || query ? undefined : cwd;
-        const list = await this.hostSessionList.list(() => this.controller.listSessions(loadCwd), listOptions);
+        const projectCwds = url.searchParams.getAll("projectCwds").flatMap((value) => value.split(",")).filter(Boolean);
+        const list = await this.controller.application.query({
+          kind: "session_list",
+          options: {
+            ...(cwd ? { cwd } : {}),
+            ...(projectCwds.length ? { projectCwds } : {}),
+            ...(limitRaw !== null ? { limit } : {}),
+            ...(cursor ? { cursor } : {}),
+            ...(query ? { query } : {}),
+          },
+        });
         writeJson(response, 200, list);
         return;
       }
 
       if (request.method === "GET" && url.pathname === "/api/maestro") {
-        const state = await this.controller.readMaestroStateNow();
+        const state = await this.controller.application.readMaestroState();
         writeJson(response, 200, state);
         return;
       }
 
       if (request.method === "GET" && url.pathname === "/api/maestro-settings") {
-        const overview = await readSettingsOverview();
+        const overview = await this.controller.application.readSettings();
         writeJson(response, 200, overview);
         return;
       }
@@ -475,14 +512,13 @@ export class MobileHostServer {
       }
 
       if (request.method === "GET" && url.pathname === "/api/workspace-telemetry") {
-        const telemetry = await this.controller.readTelemetry();
-        writeJson(response, 200, telemetry);
+        const monitor = await this.controller.application.query({ kind: "monitor" });
+        writeJson(response, 200, monitor);
         return;
       }
 
       if (request.method === "GET" && url.pathname === "/api/live-sessions") {
-        const list = await this.controller.listLiveSessions();
-        writeJson(response, 200, list satisfies LiveSessionList);
+        writeJson(response, 410, { error: "live session listing is not part of Protocol v2" });
         return;
       }
 
@@ -635,40 +671,101 @@ export class MobileHostServer {
     }
   }
 
-  // ── WS 命令 ───────────────────────────────────────────────────────────────
+  private targetForCommand(command: { sessionId: string; target?: unknown }): SessionTargetIdentity | undefined {
+    if (command.target !== undefined) return isTargetIdentity(command.target) ? command.target : undefined;
+    // Host-owned targets are exact directory entries; this does not infer a cwd/PID/owner.
+    return this.controller.getSessionTarget(command.sessionId);
+  }
 
+  private sendApplicationResult(client: ClientSocket, command: ClientCommand, result: ApplicationCommandResult): void {
+    this.sendFrame(client, {
+      type: "command_result",
+      in_reply_to: command.id ?? "",
+      ok: result.status !== "failed" && result.status !== "unknown",
+      status: result.status,
+      revision: result.revision,
+      ...(result.result !== undefined ? { result: result.result } : {}),
+      ...(result.error ? { error: result.error } : {}),
+    }, "required", "command_result");
+  }
+
+  private sendUnavailable(client: ClientSocket, command: ClientCommand, code: string): void {
+    this.sendFrame(client, {
+      type: "command_result",
+      in_reply_to: command.id ?? "",
+      ok: false,
+      status: "unknown",
+      revision: this.controller.directory.revision,
+      error: { code },
+    }, "required", "command_result");
+  }
+
+  private sendQueryResult(client: ClientSocket, command: ClientCommand, result: { ok: boolean; value?: unknown; status?: "unknown" | "failed"; error?: { code: string; message?: string }; revision: number }): void {
+    this.sendFrame(client, {
+      type: "command_result",
+      in_reply_to: command.id ?? "",
+      ok: result.ok,
+      status: result.status ?? (result.ok ? "observed" : "failed"),
+      revision: result.revision,
+      ...(result.ok && result.value !== undefined ? { result: result.value as JsonValue } : {}),
+      ...(!result.ok && result.error ? { error: result.error } : {}),
+    }, "required", "command_result");
+  }
   private async handleClientMessage(client: ClientSocket, data: RawData): Promise<void> {
-    let command: ClientCommand;
+    let parsed: unknown;
     try {
-      command = JSON.parse(data.toString()) as ClientCommand;
+      parsed = JSON.parse(data.toString());
     } catch {
-      // seq 是 HostEvent 必填字段（protocol.ts:336），且客户端 host-client.ts:255 只派发
-      // typeof seq === "number" 的帧——缺 seq 会使本错误帧被客户端丢弃。与 :173-174 握手帧同用 0
-      // （已核：全客户端域无任何 seq 数值比较，0 不干扰回放语义）。
-      // 不进 EventLog：那是跳连接增量回放日志，单连接协议层错误不应回放给其他客户端。
-      this.sendFrame(client, { type: "error", code: "invalid_json", message: "Invalid JSON", seq: 0 }, "required", "error");
+      if (!client.handshaken) {
+        this.sendProtocolError(client, "invalid_frame", "Protocol v2 hello must be valid JSON");
+      } else {
+        this.sendFrame(client, { type: "error", code: "invalid_json", message: "Invalid JSON", seq: 0 }, "required", "error");
+      }
       return;
     }
 
-    // P3-2：分发前真正走 shared 校验（激活 validation 模块，拦截缺 type 的任意载荷）
+    if (!client.handshaken) {
+      try {
+        const hello = validateProtocolHello(parsed);
+        this.acceptProtocolHello(client, hello);
+      } catch {
+        this.sendProtocolError(client, "protocol_version_unsupported", "Protocol v2 hello is required");
+      }
+      return;
+    }
+
+    if (typeof parsed === "object" && parsed !== null && (parsed as { type?: unknown }).type === "protocol_hello") {
+      this.sendProtocolError(client, "invalid_frame", "Protocol hello has already completed");
+      return;
+    }
+
+    let command: ClientCommand;
     try {
-      command = validateClientCommand(command);
+      command = validateClientCommand(parsed);
+      if (typeof command.id !== "string" || command.id.length === 0) {
+        throw new Error("Invalid ClientCommand: id must be a non-empty string");
+      }
     } catch (error) {
-      // JSON 已解析成功→可取 id：必须回 command_result 而非裸 error 事件，
-      // 否则客户端 pendingCommands 匹配不到，该命令挂满 30s 超时
-      const rawId = (command as unknown as { id?: unknown })?.id;
+      const rawId = (parsed as { id?: unknown } | null)?.id;
       const replyTo = typeof rawId === "string" ? rawId : "";
-      // 文案跟随实际拒因（缺 type / id 非 string），不再硬编码 “missing type” 误报
       const reason = error instanceof Error ? error.message : "Invalid ClientCommand";
+      const code = reason.includes("unknown type") ? "unsupported_command" : "invalid_command";
       this.sendFrame(client, {
         type: "command_result",
         in_reply_to: replyTo,
         ok: false,
-        error: { code: "invalid_command", message: reason },
+        status: "failed",
+        revision: this.controller.directory.revision,
+        error: { code, message: reason },
       }, "required", "command_result");
       return;
     }
 
+    const commandTarget = command as ClientCommand & { sessionId?: string; target?: unknown };
+    if (commandTarget.target !== undefined && (!isTargetIdentity(commandTarget.target) || commandTarget.target.sessionId !== commandTarget.sessionId)) {
+      this.sendUnavailable(client, command, "target_mismatch");
+      return;
+    }
     try {
       switch (command.type) {
         case "ping": {
@@ -676,343 +773,179 @@ export class MobileHostServer {
           break;
         }
         case "list_live_sessions": {
-          const list = await this.controller.listLiveSessions();
-          this.sendAck(client, command, list);
+          this.sendUnavailable(client, command, "unsupported_command");
           break;
         }
         case "load_more_history": {
-          const runner = this.controller.getSession(command.sessionId);
-          if (!runner) { this.sendError(client, "session_not_found", undefined, (command as { id?: string }).id ?? ""); break; }
-          const result = await runner.loadMoreHistory(command.count);
+          const target = this.targetForCommand(command);
+          if (!target) { this.sendUnavailable(client, command, "target_unavailable"); break; }
+          const result = await this.controller.application.sessionOperation({ kind: "load_more_history", target, count: command.count });
           this.sendAck(client, command, result);
           break;
         }
         case "search_history": {
-          const runner = this.controller.getSession(command.sessionId);
-          if (!runner) { this.sendError(client, "session_not_found", undefined, (command as { id?: string }).id ?? ""); break; }
-          // 服务端硬上限：客户端可传任意值（全扫 165MB 会话 + 无界结果集），不信任入参
+          const target = this.targetForCommand(command);
+          if (!target) { this.sendUnavailable(client, command, "target_unavailable"); break; }
           const maxResults = clampCommandInt(command.maxResults, 50, MAX_SEARCH_RESULTS);
           const previewLength = clampCommandInt(command.previewLength, 120, MAX_SEARCH_PREVIEW_LENGTH);
-          const result = await runner.searchHistory(command.keyword, maxResults, previewLength);
+          const result = await this.controller.application.sessionOperation({ kind: "search_history", target, keyword: command.keyword, maxResults, previewLength });
           this.sendAck(client, command, result);
           break;
         }
         case "list_models": {
-          const runner = this.controller.getSession(command.sessionId);
-          if (!runner) { this.sendError(client, "session_not_found", undefined, (command as { id?: string }).id ?? ""); break; }
-          const models = typeof runner.listModels === "function" ? runner.listModels() : [];
-          this.sendAck(client, command, models);
+          const target = this.targetForCommand(command);
+          if (!target) { this.sendUnavailable(client, command, "target_unavailable"); break; }
+          this.sendAck(client, command, await this.controller.application.sessionOperation({ kind: "list_models", target }));
           break;
         }
         case "list_skills": {
-          const runner = this.controller.getSession(command.sessionId);
-          if (!runner) { this.sendError(client, "session_not_found", undefined, (command as { id?: string }).id ?? ""); break; }
-          // 优先走 SDK resourceLoader（与 TUI 一致），回退到文件扫描
-          const loaded = typeof runner.listLoadedSkills === "function" ? runner.listLoadedSkills() : [];
-          const skills = loaded.length > 0 ? loaded : await listSkills(runner.state.cwd);
-          this.sendAck(client, command, skills);
+          const target = this.targetForCommand(command);
+          if (!target) { this.sendUnavailable(client, command, "target_unavailable"); break; }
+          this.sendAck(client, command, await this.controller.application.sessionOperation({ kind: "list_skills", target }));
           break;
         }
         case "get_maestro_settings": {
-          const overview = await readSettingsOverview();
-          this.sendAck(client, command, overview);
+          this.sendAck(client, command, await this.controller.application.readSettings());
           break;
         }
         case "update_maestro_settings": {
           if (command.key !== "settings") {
-            this.sendError(client, "unsupported_key", undefined, (command as { id?: string }).id ?? "");
+            this.sendError(client, "unsupported_key", undefined, command.id);
             break;
           }
-          const result = await updateSettingsJson(command.patch);
-          this.sendAck(client, command, result);
+          this.sendAck(client, command, await this.controller.application.updateSettings(command.patch));
           break;
         }
         case "set_model": {
-          const runner = this.controller.getSession(command.sessionId);
-          if (!runner) { this.sendError(client, "session_not_found", undefined, (command as { id?: string }).id ?? ""); break; }
-          if (typeof runner.setModel !== "function") { this.sendError(client, "unsupported_command", undefined, (command as { id?: string }).id ?? ""); break; }
-          const result = await runner.setModel(command.modelId);
-          this.sendAck(client, command, result);
+          const target = this.targetForCommand(command);
+          if (!target) { this.sendUnavailable(client, command, "target_unavailable"); break; }
+          this.sendAck(client, command, await this.controller.application.sessionOperation({ kind: "set_model", target, modelId: command.modelId }));
           break;
         }
         case "set_thinking": {
-          const runner = this.controller.getSession(command.sessionId);
-          if (!runner) { this.sendError(client, "session_not_found", undefined, (command as { id?: string }).id ?? ""); break; }
-          if (typeof runner.setThinking !== "function") { this.sendError(client, "unsupported_command", undefined, (command as { id?: string }).id ?? ""); break; }
-          const result = runner.setThinking(command.level);
-          this.sendAck(client, command, result);
+          const target = this.targetForCommand(command);
+          if (!target) { this.sendUnavailable(client, command, "target_unavailable"); break; }
+          this.sendAck(client, command, await this.controller.application.sessionOperation({ kind: "set_thinking", target, level: command.level }));
           break;
         }
         case "compact": {
-          const runner = this.controller.getSession(command.sessionId);
-          if (!runner) { this.sendError(client, "session_not_found", undefined, (command as { id?: string }).id ?? ""); break; }
-          if (typeof runner.compact !== "function") { this.sendError(client, "unsupported_command", undefined, (command as { id?: string }).id ?? ""); break; }
-          const result = await runner.compact(command.customInstructions);
-          this.sendAck(client, command, result);
+          const target = this.targetForCommand(command);
+          if (!target) { this.sendUnavailable(client, command, "target_unavailable"); break; }
+          this.sendAck(client, command, await this.controller.application.sessionOperation({ kind: "compact", target, customInstructions: command.customInstructions }));
           break;
         }
         case "rename_session": {
-          const runner = this.controller.getSession(command.sessionId);
-          if (!runner) { this.sendError(client, "session_not_found", undefined, (command as { id?: string }).id ?? ""); break; }
-          if (typeof runner.renameSession !== "function") { this.sendError(client, "unsupported_command", undefined, (command as { id?: string }).id ?? ""); break; }
-          const result = runner.renameSession(command.name);
-          this.sendAck(client, command, result);
+          const target = this.targetForCommand(command);
+          if (!target) { this.sendUnavailable(client, command, "target_unavailable"); break; }
+          this.sendAck(client, command, await this.controller.application.sessionOperation({ kind: "rename_session", target, name: command.name }));
           break;
         }
+
         case "list_host_sessions": {
-          const list = await this.hostSessionList.list(
-            () => this.controller.listSessions(command.cwd),
-            command,
-          );
+          const list = await this.controller.application.query({
+            kind: "session_list",
+            options: {
+              ...(command.cwd ? { cwd: command.cwd } : {}),
+              ...(command.query ? { query: command.query } : {}),
+              ...(command.limit !== undefined ? { limit: command.limit } : {}),
+              ...(command.cursor ? { cursor: command.cursor } : {}),
+            },
+          });
           this.sendAck(client, command, list);
           break;
         }
         case "open_session": {
-          const runner = await this.controller.openSession({
-            cwd: command.cwd,
-            mode: command.mode,
-            sessionFile: command.sessionFile,
-          });
-          this.sendAck(client, command, { sessionId: runner.id });
+          const opened = await this.controller.application.openSession({ cwd: command.cwd, mode: command.mode, sessionFile: command.sessionFile });
+          this.sendAck(client, command, { sessionId: opened.id });
           break;
         }
         case "close_session": {
-          await this.controller.closeSession(command.sessionId);
-          this.sendAck(client, command, { closed: true });
+          const closed = await this.controller.application.closeSession(command.sessionId);
+          if (!closed) this.sendUnavailable(client, command, "session_not_found");
+          else this.sendAck(client, command, { closed: true });
           break;
         }
         case "prompt": {
-          const runner = this.controller.getSession(command.sessionId);
-          if (!runner) { this.sendError(client, "session_not_found", undefined, (command as { id?: string }).id ?? ""); break; }
-          // P1-3：透传图片（此前被静默丢弃），非法元素显式报错而非静默丢失
-          const images = command.images?.map((img) => toSdkImageContent(img)).filter((x) => x !== undefined);
-          if (command.images && command.images.length > 0 && images?.length !== command.images.length) {
-            this.sendError(client, "invalid_image", "images 元素必须是 base64 data 与 mime 字段齐全的图片", (command as { id?: string }).id ?? "");
+          const target = this.targetForCommand(command);
+          if (!target) {
+            this.sendUnavailable(client, command, "target_unavailable");
             break;
           }
-          // 方案 A 双端实时协同：
-          // 1. 优先检查当前会话所在的 cwd 是否正是当前桌面活跃的 TUI 窗口（通过 workspace-telemetry），
-          //    必须严格匹配 sessionId，防止同 cwd 下存在多个窗口或 Monitor 控制窗口时发生错投！
-          // 2. 如果是当前活跃桌面窗口，通过 teammate 跨进程信箱直接注入 steer 到桌面终端！
-          //    桌面终端屏幕立刻打字动起来并回答，写盘后由 Watcher 实时推回手机，实现真正的同屏双向同步！
-          // 3. 如果当前没有活跃桌面窗口，或者会话已在流式生成中，走已有 runner 驱动逻辑。
-          const activeTuiOwner = await this.controller.findActiveOwnerForSession(runner.state.cwd, runner.id);
-          let injectedToTui = false;
-          if (activeTuiOwner && (!images || images.length === 0)) {
-            injectedToTui = await injectMessageToActiveTui(activeTuiOwner, command.message);
-          }
-
-          if (!injectedToTui) {
-            if (runner.state.runState === "streaming") {
-              await runner.steer(command.message);
-            } else {
-              await runner.prompt(command.message, undefined, images);
-            }
-          }
-          this.sendAck(client, command, { injectedToTui });
+          const result = await this.controller.application.command({
+            requestId: command.id,
+            target,
+            kind: "prompt",
+            message: command.message,
+            images: command.images,
+          });
+          this.sendApplicationResult(client, command, result);
           break;
         }
         case "steer": {
-          const runner = this.controller.getSession(command.sessionId);
-          if (!runner) { this.sendError(client, "session_not_found", undefined, (command as { id?: string }).id ?? ""); break; }
-          await runner.steer(command.message);
-          this.sendAck(client, command, {});
+          const target = this.targetForCommand(command);
+          if (!target) {
+            this.sendUnavailable(client, command, "target_unavailable");
+            break;
+          }
+          const result = await this.controller.application.command({ requestId: command.id, target, kind: "steer", message: command.message });
+          this.sendApplicationResult(client, command, result);
           break;
         }
         case "steer_window": {
-          // 监督会话跨窗口发送：已打开 → 直接 steer；未打开但有活跃 TUI → 信箱直接注入；均无 → 精确 sessionFile 接管后 steer。
-          // 接管语义：Host 打开的会话与原桌面 Pi 进程并行写同一 JSONL，移动端 UI 必须明示「接管并发送」。
-          const existing = this.controller.getSession(command.endpointId);
-          if (existing) {
-            await existing.steer(command.message);
-            this.sendAck(client, command, { ok: true, sessionId: command.endpointId, tookOver: false });
-            break;
-          }
-          // 优先检查桌面是否存在以该 endpointId (sessionId) 运行的活跃 TUI 窗口（允许针对 monitor 窗口进行专门的监督 steer）
-          let activeOwner = command.cwd ? await this.controller.findActiveOwnerForSession(command.cwd, command.endpointId, { allowMonitor: true }) : undefined;
-          if (!activeOwner) {
-            try {
-              const telemetry = await this.controller.readTelemetry();
-              activeOwner = telemetry.owners.find((o) => o.sessionId === command.endpointId);
-            } catch {}
-          }
-          // 尝试写入 /tmp/pi-ask-response 协助 TUI 正在运行的 showAskWizard 闭环
-          try {
-            const telemetry = await this.controller.readTelemetry();
-            const owner = telemetry.owners.find((o) => o.sessionId === command.endpointId);
-            const progressObj = owner?.mainProgress as Record<string, unknown> | undefined;
-            const events = Array.isArray(progressObj?.events) ? (progressObj?.events as Array<Record<string, unknown>>) : [];
-            const runningAsk = [...events].reverse().find(
-              (e) => e.kind === "tool" && typeof e.toolName === "string" && (e.toolName.includes("ask") || e.toolName.includes("question")) && e.status === "running"
-            );
-            let payload: Record<string, unknown>;
-            try {
-              payload = JSON.parse(command.message);
-            } catch {
-              payload = { selected: [command.message], value: command.message };
-            }
-            const payloadStr = JSON.stringify(payload);
-            await writeFile("/tmp/pi-ask-response-latest.json", payloadStr, "utf8").catch(() => {});
-            if (runningAsk && typeof runningAsk.toolCallId === "string") {
-              await writeFile(`/tmp/pi-ask-response-${runningAsk.toolCallId}.json`, payloadStr, "utf8").catch(() => {});
-            }
-          } catch {}
-
-          if (activeOwner) {
-            const injected = await injectMessageToActiveTui(activeOwner, command.message);
-            if (injected) {
-              this.sendAck(client, command, { ok: true, sessionId: command.endpointId, tookOver: false });
-              break;
-            }
-          }
-          try {
-            // 接管会话时必须精确解析 targetSessionFile，绝不使用盲目 continueRecent(cwd)
-            let targetSessionFile: string | undefined;
-            try {
-              const sessions = await this.controller.listSessions(command.cwd);
-              const matched = (sessions as Record<string, unknown>[]).find((s) => s.id === command.endpointId);
-              if (matched) {
-                targetSessionFile = (typeof matched.path === "string" ? matched.path : undefined)
-                  ?? (typeof matched.sessionFile === "string" ? matched.sessionFile : undefined);
-              }
-            } catch {
-              // listSessions 失败时保持 undefined
-            }
-
-            if (!targetSessionFile) {
-              this.sendAck(client, command, {
-                ok: false,
-                sessionId: command.endpointId,
-                tookOver: false,
-                error: `无法定位目标会话 (${command.endpointId}) 的会话文件，禁止盲目接管`,
-              });
-              break;
-            }
-
-            const runner = await this.controller.openSession({ cwd: command.cwd, sessionFile: targetSessionFile });
-            await runner.steer(command.message);
-            this.sendAck(client, command, { ok: true, sessionId: runner.id, tookOver: true });
-          } catch (error) {
-            const message = error instanceof Error ? error.message : String(error);
-            this.sendAck(client, command, { ok: false, sessionId: command.endpointId, tookOver: false, error: message });
-          }
+          this.sendUnavailable(client, command, "unsupported_command");
           break;
         }
         case "follow_up": {
-          const runner = this.controller.getSession(command.sessionId);
-          if (!runner) { this.sendError(client, "session_not_found", undefined, (command as { id?: string }).id ?? ""); break; }
-          await runner.followUp(command.message);
-          this.sendAck(client, command, {});
+          const target = this.targetForCommand(command);
+          if (!target) {
+            this.sendUnavailable(client, command, "target_unavailable");
+            break;
+          }
+          const result = await this.controller.application.command({ requestId: command.id, target, kind: "follow_up", message: command.message });
+          this.sendApplicationResult(client, command, result);
           break;
         }
         case "abort": {
-          const runner = this.controller.getSession(command.sessionId);
-          if (runner) {
-            await runner.abort();
-            this.sendAck(client, command, { ok: true });
+          const target = this.targetForCommand(command);
+          if (!target) {
+            this.sendUnavailable(client, command, "target_unavailable");
             break;
           }
-
-          // 桌面活跃 TUI 窗口支持：若 host 无内存 runner，向对应活跃终端进程转发 SIGINT 信号中断
-          try {
-            const telemetry = await this.controller.readTelemetry();
-            const owner = telemetry.owners.find(
-              (o) => o.sessionId === command.sessionId || o.ownerId === command.sessionId,
-            );
-            if (owner && owner.pid && owner.alive) {
-              try {
-                process.kill(owner.pid, "SIGINT");
-                this.sendAck(client, command, { ok: true, forwardedToPid: owner.pid });
-                break;
-              } catch (killError) {
-                console.warn(`[maestro-mobile] abort: 向桌面 TUI 进程 (PID ${owner.pid}) 发送 SIGINT 失败:`, killError);
-              }
-            }
-          } catch (err) {
-            console.warn(`[maestro-mobile] abort: 查询桌面 telemetry 异常:`, err);
-          }
-
-          this.sendError(client, "session_not_found", undefined, (command as { id?: string }).id ?? "");
+          const result = await this.controller.application.command({ requestId: command.id, target, kind: "abort" });
+          this.sendApplicationResult(client, command, result);
           break;
         }
         case "extension_ui_response": {
-          const ok = this.controller.respondToExtensionUi(
-            command.sessionId,
-            command.requestId,
-            command.response,
-          );
-          if (ok) {
-            this.sendAck(client, command, {});
-          } else {
-            this.sendError(client, "request_not_found", undefined, (command as { id?: string }).id ?? "");
-          }
+          const ok = this.controller.application.respondToExtensionUi(command.sessionId, command.requestId, command.response);
+          if (ok) this.sendAck(client, command, {});
+          else this.sendError(client, "request_not_found", undefined, command.id);
           break;
         }
         case "get_maestro_state": {
-          const state = await this.controller.readMaestroStateNow();
-          this.sendAck(client, command, state);
+          this.sendAck(client, command, await this.controller.application.readMaestroState());
           break;
         }
         case "get_monitor_state": {
-          // 与推送路径共用同一投影，避免双投影漂移
-          const telemetry = await this.controller.readTelemetry();
-          this.sendAck(client, command, projectMonitorState(telemetry));
+          const monitor = await this.controller.application.query({ kind: "monitor" });
+          this.sendAck(client, command, monitor);
           break;
         }
         case "get_snapshot": {
-          let runner = this.controller.getSession(command.sessionId);
-          if (!runner) {
-            try {
-              const telemetry = await this.controller.readTelemetry();
-              const owner = telemetry.owners.find((o) => o.sessionId === command.sessionId);
-              if (owner) {
-                const sessions = (await this.controller.listSessions(owner.normalizedCwd)) as HostSessionSummary[];
-                const target = sessions.find((s) => s.id === command.sessionId);
-                if (target) {
-                  const page = await replayTailFromJsonl(target.path, 100);
-                  const snapshot: SessionSnapshot = {
-                    session: {
-                      id: command.sessionId,
-                      cwd: target.cwd,
-                      title: target.cwdName || target.cwd.split("/").pop() || "",
-                      runState: "idle",
-                      messageCount: page.totalEntries,
-                      pendingMessageCount: 0,
-                      updatedAt: target.updatedAt,
-                      sessionFile: target.path,
-                      model: target.model,
-                    },
-                    timeline: page.items,
-                    nextSeq: page.totalEntries + 1,
-                  };
-                  this.sendFrame(client, {
-                    type: "command_result",
-                    in_reply_to: (command as { id?: string }).id ?? "",
-                    ok: true,
-                    result: snapshot,
-                  }, "required", "command_result");
-                  break;
-                }
-              }
-            } catch {}
-            this.sendError(client, "session_not_found", undefined, (command as { id?: string }).id ?? "");
+          const target = this.targetForCommand(command);
+          if (!target) {
+            this.sendUnavailable(client, command, "target_unavailable");
             break;
           }
-          const snapshot = runner.snapshot() satisfies SessionSnapshot;
-          this.sendFrame(client, {
-            type: "command_result",
-            in_reply_to: (command as { id?: string }).id ?? "",
-            ok: true,
-            result: snapshot,
-          }, "required", "command_result");
+          this.sendQueryResult(client, command, await this.controller.application.query({ kind: "session_snapshot", target }) as { ok: boolean; value?: unknown; status?: "unknown" | "failed"; error?: { code: string; message?: string }; revision: number });
           break;
         }
         case "get_session_usage": {
-          const runner = this.controller.getSession(command.sessionId);
-          if (!runner) { this.sendError(client, "session_not_found", undefined, (command as { id?: string }).id ?? ""); break; }
-          const usage = typeof runner.getUsage === "function" ? await runner.getUsage() : { entries: 0, input: 0, output: 0, cacheRead: 0, cacheWrite: 0, reasoning: 0, totalTokens: 0, cost: 0 };
-          const context = typeof runner.getContextUsage === "function" ? runner.getContextUsage() ?? null : null;
-          this.sendAck(client, command, { sessionId: command.sessionId, ...usage, context });
+          const target = this.targetForCommand(command);
+          if (!target) {
+            this.sendUnavailable(client, command, "target_unavailable");
+            break;
+          }
+          this.sendQueryResult(client, command, await this.controller.application.query({ kind: "session_usage", target }) as { ok: boolean; value?: unknown; status?: "unknown" | "failed"; error?: { code: string; message?: string }; revision: number });
           break;
         }
         default:
@@ -1021,16 +954,38 @@ export class MobileHostServer {
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       // 必须带 in_reply_to：客户端靠它匹配 pendingCommands，空值会让命令挂满 30s 超时
-      this.sendError(client, "command_failed", message, (command as { id?: string }).id ?? "");
+      const code = message === "session_not_found" ? "session_not_found" : "command_failed";
+      this.sendError(client, code, message, (command as { id?: string }).id ?? "");
     }
   }
 
   private sendAck(client: ClientSocket, command: ClientCommand, result: unknown): void {
+    if (isRecord(result) && result.ok === false) {
+      const rawError = result.error;
+      const code = typeof rawError === "string"
+        ? rawError
+        : isRecord(rawError) && typeof rawError.code === "string" ? rawError.code : "operation_failed";
+      this.sendFrame(client, {
+        type: "command_result",
+        in_reply_to: command.id ?? "",
+        ok: false,
+        status: "failed",
+        revision: this.controller.directory.revision,
+        error: { code },
+      }, "required", "command_result");
+      return;
+    }
+    const record = isRecord(result) ? result : undefined;
+    const status = record?.status === "unknown" || record?.status === "failed" || record?.status === "accepted"
+      ? record.status
+      : "observed";
     this.sendFrame(client, {
       type: "command_result",
-      in_reply_to: (command as { id?: string }).id ?? "",
-      ok: true,
-      result,
+      in_reply_to: command.id ?? "",
+      ok: status !== "failed" && status !== "unknown",
+      status,
+      revision: typeof record?.revision === "number" ? record.revision : this.controller.directory.revision,
+      result: result as JsonValue,
     }, "required", "command_result");
   }
 
@@ -1039,6 +994,8 @@ export class MobileHostServer {
       type: "command_result",
       in_reply_to: replyTo,
       ok: false,
+      status: "failed",
+      revision: this.controller.directory.revision,
       // 回传网络的唯一脉络：必须带上本实例 token 作为已知密串（底层错误文本可能回显含 ?token= 的 URL）
       error: { code, message: message ? sanitizeWsErrorMessage(message, [this.options.token ?? ""]) : code },
     }, "required", "command_result");
@@ -1105,86 +1062,6 @@ function applyCorsHeaders(response: ServerResponse, origin?: string): void {
   }
 }
 
-/**
- * 将 SessionManager 返回的完整 SessionInfo 裁剪为移动端友好的摘要。
- * 关键：不携带 allMessagesText 等大字段，避免移动端流量/内存浪费。
- */
-async function toSessionSummaryList(records: unknown[]): Promise<HostSessionList> {
-  const sessions: HostSessionSummary[] = [];
-  for (const raw of records) {
-    const r = raw as Record<string, unknown>;
-    const cwd = String(r.cwd ?? "");
-    const title = String(r.firstMessage ?? r.title ?? "");
-    const id = String(r.id ?? "");
-    const path = String(r.path ?? r.sessionFile ?? "");
-    sessions.push({
-      id,
-      cwd,
-      cwdName: cwd.split("/").filter(Boolean).pop() ?? cwd,
-      path,
-      title: title.length > 80 ? `${title.slice(0, 80)}…` : title,
-      name: typeof r.name === "string" && r.name ? r.name : undefined,
-      model: await latestModelFromJsonl(path),
-      messageCount: typeof r.messageCount === "number" ? r.messageCount : 0,
-      // 规范化为 ISO 字符串：Hermes（iOS）解析不了 "Thu Sep 03 2026 ..." 这种本地化格式
-      updatedAt: normalizeIso(String(r.modified ?? r.updatedAt ?? "")),
-      ...(r.created ? { createdAt: normalizeIso(String(r.created)) } : {}),
-    });
-  }
-  return { sessions, observedAt: new Date().toISOString() };
-}
-
-/** 从 jsonl 里找最近的 model_change，返回 provider/modelId 精简名 */
-async function latestModelFromJsonl(path: string): Promise<string | undefined> {
-  if (!path || !path.endsWith(".jsonl")) return undefined;
-  try {
-    // 只读尾部 256KB（model_change 通常在会话活跃期靠后出现），避免整文件扫描
-    const handle = await open(path, "r");
-    try {
-      const { size } = await handle.stat();
-      const readLen = Math.min(TRAIL_READ_BYTES, size);
-      const buf = Buffer.alloc(readLen);
-      await handle.read(buf, 0, readLen, size - readLen);
-      const tail = buf.toString("utf8");
-      const lines = tail.split("\n");
-      for (let i = lines.length - 1; i >= 0; i--) {
-        const line = lines[i];
-        if (!line.includes("model_change")) continue;
-        try {
-          const o = JSON.parse(line) as { provider?: string; modelId?: string };
-          if (o.modelId) {
-            const provider = o.provider ? `${o.provider}/` : "";
-            return `${provider}${o.modelId}`;
-          }
-        } catch {
-          // ignore malformed
-        }
-      }
-      return undefined;
-    } finally {
-      await handle.close();
-    }
-  } catch {
-    return undefined;
-  }
-}
-
-const TRAIL_READ_BYTES = 256 * 1024;
-
-/** 尝试解析为 ISO；无法解析时保留原字符串（App 端需兜底） */
-function normalizeIso(raw: string): string {
-  if (!raw) return "";
-  const t = Date.parse(raw);
-  return Number.isFinite(t) ? new Date(t).toISOString() : raw;
-}
-
-/** 协议 images 元素 → Pi SDK ImageContent（type/data/mimeType）；非法返回 undefined */
-function toSdkImageContent(img: { data: string; mime: string }): { type: "image"; data: string; mimeType: string } | undefined {
-  if (typeof img?.data !== "string" || img.data.length === 0) return undefined;
-  if (typeof img?.mime !== "string" || !img.mime.startsWith("image/")) return undefined;
-  return { type: "image", data: img.data, mimeType: img.mime };
-}
-
 const IMAGE_EXTENSIONS = new Set([".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp"]);
 const MAX_IMAGE_BYTES = 20 * 1024 * 1024; // 20MB
 
@@ -1239,25 +1116,4 @@ async function isUnderAllowedRoot(resolved: string): Promise<boolean> {
     }
   }
   return false;
-}
-/** 扫描可用的 skill 名录（agent 全局 + 项目本地） */
-async function listSkills(cwd: string): Promise<string[]> {
-  const { readdir } = await import("node:fs/promises");
-  const { join } = await import("node:path");
-  const { homedir } = await import("node:os");
-  const dirs: string[] = [];
-  try { dirs.push(join(homedir(), ".pi", "agent", "skills")); } catch { /* skip */ }
-  try { dirs.push(join(cwd, ".pi", "skills")); } catch { /* skip */ }
-  const names = new Set<string>();
-  for (const dir of dirs) {
-    try {
-      const entries = await readdir(dir, { withFileTypes: true });
-      for (const e of entries) {
-        if (e.isDirectory() && !e.name.startsWith(".")) names.add(e.name);
-      }
-    } catch {
-      // skip
-    }
-  }
-  return [...names].sort();
 }

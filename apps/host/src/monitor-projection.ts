@@ -14,6 +14,7 @@ import type {
   WorkspaceOwnerState,
   WorkspaceTelemetryState,
 } from "@maestro-mobile/shared";
+import { projectOwnerPresentation } from "./application/session-visibility.js";
 
 /** outputTail 广播上限：每 agent 最多 8 行、每行 200 字符 */
 const OUTPUT_TAIL_MAX_LINES = 8;
@@ -214,7 +215,7 @@ export function projectWindow(o: WorkspaceOwnerState): MonitorWindowSummary {
   const facet: TeammateAgentsFacet = {
     kind: "teammate-agents",
     target: { identity },
-    revision: String(o.publishedAt),
+    revision: `${o.ownerId}:${o.sessionId}`,
     data: {
       agents,
       backgroundJobs: Array.isArray(o.backgroundJobs) ? o.backgroundJobs.slice(0, 8) : [],
@@ -243,6 +244,7 @@ export function projectWindow(o: WorkspaceOwnerState): MonitorWindowSummary {
     attention,
     facets: [facet],
     ...(pendingAsk ? { pendingAsk } : {}),
+    presentation: projectOwnerPresentation(o),
     ...(o.mainLastSettle && typeof o.mainLastSettle === "object" && "at" in o.mainLastSettle ? { lastSettle: o.mainLastSettle as { at: number; lastResult: string } } : {}),
   };
 }

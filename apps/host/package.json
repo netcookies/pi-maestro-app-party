@@ -59,7 +59,8 @@
   ],
   "pi": {
     "extensions": [
-      "./dist/extension.js"
+      "./dist/extension.js",
+      "./dist/plugin/desktop-plugin-extension.js"
     ]
   }
 }

@@ -16,15 +16,33 @@ import { MobileHostServer } from "./server/mobile-host-server.js";
 import { MaestroStateReader } from "./maestro-state.js";
 import { PiSdkRuntimeFactory } from "./pi/pi-sdk-runtime.js";
 import { randomBytes } from "node:crypto";
-import { readFile, writeFile, unlink, mkdir } from "node:fs/promises";
+import { readFile, writeFile, unlink, mkdir, chmod } from "node:fs/promises";
 import { homedir } from "node:os";
 import { join } from "node:path";
+import { DesktopPluginIpcServer } from "./plugin/desktop-plugin-ipc.js";
 
 const TOKEN_FILE = join(homedir(), ".pi", "maestro-mobile-token");
 /** PID 文件（与 extension start/stop 共用同一语义：谁起的都能被 /maestro-mobile stop 停掉） */
 const PID_FILE = join(homedir(), ".pi", "maestro-mobile.pid");
+const IPC_SECRET_FILE = join(homedir(), ".pi", "maestro-mobile-ipc-secret");
+const IPC_SOCKET_PATH = join(homedir(), ".pi", "maestro-mobile", "ipc", "desktop-plugin.sock");
+const IPC_REGISTRY_FILE = join(homedir(), ".pi", "maestro-mobile", "ipc", "desktop-plugin-registry.json");
 
-/** 读取或创建持久化 token（重启不变号，手机连接配置不失效） */
+async function loadOrCreateIpcSecret(): Promise<string> {
+  try {
+    const saved = (await readFile(IPC_SECRET_FILE, "utf8")).trim();
+    if (saved.length >= 24) return saved;
+  } catch {
+    // 文件不存在 → 创建
+  }
+  const secret = randomBytes(24).toString("hex");
+  await mkdir(join(homedir(), ".pi"), { recursive: true });
+  await writeFile(IPC_SECRET_FILE, `${secret}\n`, { mode: 0o600 });
+  await chmod(IPC_SECRET_FILE, 0o600);
+  return secret;
+}
+
+
 async function loadOrCreateToken(): Promise<string> {
   try {
     const saved = (await readFile(TOKEN_FILE, "utf8")).trim();
@@ -105,13 +123,14 @@ async function main(): Promise<void> {
   // P0-3：进程级 handler 必须在任何 await 之前注册。原先它们挂在 listen() 之后，
   // 启动期（token 读写、listen、版本探测）的异常会绕过统一清理路径，以原生栈崩溃。
   // controller/server 此时尚未构造，用 late 绑定延后注入。
-  const late: { controller?: HostController; server?: MobileHostServer } = {};
+  const late: { controller?: HostController; server?: MobileHostServer; desktopIpc?: DesktopPluginIpcServer } = {};
   let shuttingDown = false;
   async function shutdown(reason: string, exitCode: number): Promise<void> {
     if (shuttingDown) return;
     shuttingDown = true;
     console.log(`[maestro-mobile] received ${reason}, shutting down...`);
     // 关闭失败不应阻断退出（例如 listen 未成功时 close 会抛 ERR_SERVER_NOT_RUNNING）
+    await late.desktopIpc?.close().catch(() => { });
     await late.controller?.dispose().catch(() => { });
     await late.server?.close().catch(() => { });
     // 只能删自己写的 PID：崩在 writeFile 之前时，文件属于另一个存活实例，误删会使 /maestro-mobile stop 失效
@@ -175,10 +194,26 @@ async function main(): Promise<void> {
   const runtimeFactory = new PiSdkRuntimeFactory();
   const maestroReader = new MaestroStateReader({ projectRoot: cli.projectRoot });
   const controller = new HostController(runtimeFactory, maestroReader);
+  const desktopSecret = await loadOrCreateIpcSecret();
+  const desktopIpc = new DesktopPluginIpcServer({
+    socketPath: IPC_SOCKET_PATH,
+    secret: desktopSecret,
+    registry: controller.desktopPlugins,
+    registryPath: IPC_REGISTRY_FILE,
+    onConnected: (target) => controller.registerDesktopTarget(target),
+    onDisconnected: (target) => controller.unregisterDesktopTarget(target),
+  });
   const server = new MobileHostServer(controller, { token });
 
   late.controller = controller;
+  late.desktopIpc = desktopIpc;
   late.server = server;
+  try {
+    await desktopIpc.start();
+  } catch (error) {
+    // Desktop Plugin is optional; keep mobile Host available without PID/mailbox fallback.
+    console.warn("[maestro-mobile] Desktop Plugin IPC unavailable:", error instanceof Error ? error.message : error);
+  }
   try {
     await server.listen(cli.port, cli.host);
   } catch (error) {
@@ -190,6 +225,7 @@ async function main(): Promise<void> {
     } else {
       console.error(`[maestro-mobile] 监听 ${cli.host}:${cli.port} 失败（${code ?? "unknown"}）:`, error);
     }
+    await desktopIpc.close().catch(() => { });
     await controller.dispose().catch(() => { });
     process.exit(1);
   }

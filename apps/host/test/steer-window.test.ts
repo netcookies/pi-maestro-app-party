@@ -7,30 +7,15 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { randomUUID } from "node:crypto";
 import WebSocket from "ws";
-import type { SessionRunner } from "../src/types.js";
 
-/** steer_window 接管语义测试：已打开会话直接 steer；未打开 → open_session 接管后 steer */
-function makeRunner(sessionId: string) {
-  const steered: string[] = [];
-  const runner: SessionRunner = {
-    id: sessionId,
-    state: {
-      id: sessionId, cwd: "/tmp", title: sessionId, runState: "idle",
-      messageCount: 0, pendingMessageCount: 0, updatedAt: "",
-    },
-    hasMoreHistory: false,
-    snapshot: () => ({ session: runner.state, timeline: [], nextSeq: 0, hasMoreHistory: false }),
-    eventsSince: () => [],
-    loadMoreHistory: async () => ({ items: [], hasMore: false, totalEntries: 0 }),
-    searchHistory: async () => ({ matches: [], totalEntries: 0 }),
-    prompt: async () => {},
-    steer: async (message: string) => { steered.push(message); },
-    followUp: async () => {},
-    abort: async () => {},
-    respondToExtensionUi: () => false,
-    dispose: async () => {},
-  };
-  return { runner, steered };
+function protocolHello() {
+  return JSON.stringify({
+    type: "protocol_hello",
+    protocolVersion: 2,
+    clientVersion: "boundary-test",
+    capabilities: ["session_control"],
+    requestId: `hello-${randomUUID()}`,
+  });
 }
 
 describe("steer_window", () => {
@@ -60,8 +45,15 @@ describe("steer_window", () => {
   function withWs(fn: (ws: WebSocket) => Promise<void>): Promise<void> {
     return new Promise((resolve, reject) => {
       const ws = new WebSocket(`ws://127.0.0.1:${port}/ws`);
-      ws.on("open", () => void fn(ws).then(resolve, reject));
+      const onMessage = (data: WebSocket.RawData) => {
+        const frame = JSON.parse(data.toString()) as { type?: string };
+        if (frame.type !== "protocol_ready") return;
+        ws.off("message", onMessage);
+        void fn(ws).then(resolve, reject);
+      };
+      ws.on("message", onMessage);
       ws.on("error", reject);
+      ws.on("open", () => ws.send(protocolHello()));
     });
   }
 
@@ -78,92 +70,35 @@ describe("steer_window", () => {
     });
   }
 
-  it("steers directly when the window session is already open (tookOver=false)", async () => {
-    const { runner, steered } = makeRunner("sess-open-1");
-    // 直接注册到 controller.sessions（绕过 openSession，避免依赖 runtime）
-    (controller as unknown as { sessions: Map<string, SessionRunner> }).sessions.set("sess-open-1", runner);
-
+  it("returns structured unsupported_command for legacy steer_window", async () => {
     await withWs(async (ws) => {
-      const reply = await request(ws, { type: "steer_window", endpointId: "sess-open-1", cwd: "/tmp/proj", message: "先跑测试" });
-      expect(reply.ok).toBe(true);
-      expect(reply.result).toEqual({ ok: true, sessionId: "sess-open-1", tookOver: false });
-      expect(steered).toEqual(["先跑测试"]);
+      const reply = await request(ws, { id: "legacy-window", type: "steer_window", endpointId: "sess-open-1", cwd: tmpDir, message: "先跑测试" });
+      expect(reply.ok).toBe(false);
+      expect((reply as { error?: { code: string } }).error?.code).toBe("unsupported_command");
     });
   });
 
-  it("reports error (not throw) when window is unknown and openSession fails", async () => {
+  it("does not use telemetry, mailbox, or takeover behavior for unknown legacy windows", async () => {
     await withWs(async (ws) => {
-      const reply = await request(ws, { type: "steer_window", endpointId: "sess-unknown", cwd: tmpDir, message: "hello" });
-      expect(reply.ok).toBe(true); // ack 包裹（错误在 result.ok=false 里，不抛协议错误）
-      const result = reply.result as { ok: boolean; tookOver: boolean; error?: string };
-      expect(result.ok).toBe(false);
-      expect(result.tookOver).toBe(false);
-      expect(typeof result.error).toBe("string");
+      const reply = await request(ws, { id: "legacy-unknown", type: "steer_window", endpointId: "sess-unknown", cwd: tmpDir, message: "hello" });
+      expect(reply.ok).toBe(false);
+      expect((reply as { error?: { code: string } }).error?.code).toBe("unsupported_command");
     });
   });
 
-  it("steer_window directly injects to matching active TUI owner mailbox when not opened in host", async () => {
-    const fakeOwner = {
-      workspaceId: "ws-test",
-      normalizedCwd: tmpDir,
-      ownerId: "owner-target-123",
-      ownerNonce: "nonce-123",
-      pid: 9999,
-      sessionId: "sess-tui-active",
-      publishedAt: Date.now(),
-      alive: true,
-      ageMs: 10,
-      contextPressure: 10,
-      agents: [],
-      settled: [],
-      backgroundJobs: [],
-    };
-
-    (controller as unknown as { telemetryReader: { read: () => Promise<{ owners: typeof fakeOwner[] }> } }).telemetryReader = {
-      read: async () => ({ owners: [fakeOwner] }),
-    };
-
+  it("rejects legacy takeover attempts without touching session files", async () => {
     await withWs(async (ws) => {
-      const reply = await request(ws, { type: "steer_window", endpointId: "sess-tui-active", cwd: tmpDir, message: "来自移动端监督" });
-      expect(reply.ok).toBe(true);
-      const result = reply.result as { ok: boolean; sessionId: string; tookOver: boolean };
-      expect(result.ok).toBe(true);
-      expect(result.sessionId).toBe("sess-tui-active");
-      expect(result.tookOver).toBe(false);
+      const reply = await request(ws, { id: "legacy-takeover", type: "steer_window", endpointId: "sess-tui-active", cwd: tmpDir, message: "来自移动端监督" });
+      expect(reply.ok).toBe(false);
+      expect((reply as { error?: { code: string } }).error?.code).toBe("unsupported_command");
     });
   });
 
-  it("steer_window takes over session with exact sessionFile matching endpointId and refuses takeover without exact file", async () => {
-    // 1. 当无法定位 exact sessionFile 时，报错拒绝盲目接管
+  it("rejects exact-session takeover legacy behavior", async () => {
     await withWs(async (ws) => {
-      const reply = await request(ws, { type: "steer_window", endpointId: "sess-no-file", cwd: tmpDir, message: "hello" });
-      expect(reply.ok).toBe(true);
-      const result = reply.result as { ok: boolean; tookOver: boolean; error?: string };
-      expect(result.ok).toBe(false);
-      expect(result.tookOver).toBe(false);
-      expect(result.error).toContain("无法定位目标会话");
-    });
-
-    // 2. 当 listSessions 能匹配到精确 sessionFile 时，以该 sessionFile 接管打开
-    let openedSessionFile: string | undefined;
-    const { runner, steered } = makeRunner("sess-matched-file");
-    controller.listSessions = async () => [
-      { id: "sess-matched-file", path: join(tmpDir, "target.jsonl"), cwd: tmpDir },
-    ];
-    controller.openSession = async (req: { cwd: string; sessionFile?: string }) => {
-      openedSessionFile = req.sessionFile;
-      (controller as unknown as { sessions: Map<string, SessionRunner> }).sessions.set("sess-matched-file", runner);
-      return runner;
-    };
-
-    await withWs(async (ws) => {
-      const reply = await request(ws, { type: "steer_window", endpointId: "sess-matched-file", cwd: tmpDir, message: "精准接管测试" });
-      expect(reply.ok).toBe(true);
-      const result = reply.result as { ok: boolean; tookOver: boolean };
-      expect(result.ok).toBe(true);
-      expect(result.tookOver).toBe(true);
-      expect(openedSessionFile).toBe(join(tmpDir, "target.jsonl"));
-      expect(steered).toEqual(["精准接管测试"]);
+      const reply = await request(ws, { id: "legacy-file", type: "steer_window", endpointId: "sess-matched-file", cwd: tmpDir, message: "精准接管测试" });
+      expect(reply.ok).toBe(false);
+      expect((reply as { error?: { code: string } }).error?.code).toBe("unsupported_command");
     });
   });
 });

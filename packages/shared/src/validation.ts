@@ -1,31 +1,83 @@
-import { isHostEvent, isClientCommand, type HostEvent, type ClientCommand } from "./protocol.js";
+import {
+  isClientCommand,
+  isClientFrame,
+  isHostEvent,
+  isHostFrame,
+  isProtocolHello,
+  type ClientCommand,
+  type ClientFrame,
+  type HostEvent,
+  type HostFrame,
+  type ProtocolHello,
+} from "./protocol.js";
+import {
+  isDesktopPluginClientFrame,
+  isDesktopPluginServerFrame,
+  type DesktopPluginClientFrame,
+  type DesktopPluginServerFrame,
+} from "./desktop-plugin-protocol.js";
 
 export function validateHostEvent(value: unknown): HostEvent {
   if (!isHostEvent(value)) {
-    throw new Error("Invalid HostEvent: missing type or seq");
+    throw new Error("Invalid HostEvent: unknown type or malformed fields");
   }
   return value;
 }
 
 export function validateClientCommand(value: unknown): ClientCommand {
-  if (!isClientCommand(value)) {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
     throw new Error("Invalid ClientCommand: missing type");
   }
-  // P3-2 收紧（向后兼容）：id 不在 ClientCommand 类型联合里声明（protocol.ts:342-368），
-  // 它是宿主侧可选的「回显定位符」：服务端把 command.id 原样写入 in_reply_to，
-  // 客户端靠它匹配 pendingCommands（host-client.ts:263）。
-  // 非字符串 id 会被服务端归一为空串 → 客户端匹配不到 → 该命令挂满 30s 超时，
-  // 所以下沉到这里拦住。现有客户端不受影响：mobile 自生成 id 恒为 `cmd-N` 字符串
-  // （host-client.ts:106），不带 id 的载荷也仍然合法。
-  const id = (value as { id?: unknown }).id;
-  if (id !== undefined && typeof id !== "string") {
+  const record = value as Record<string, unknown>;
+  if (typeof record.type !== "string") {
+    throw new Error("Invalid ClientCommand: missing type");
+  }
+  if (record.id !== undefined && typeof record.id !== "string") {
     throw new Error("Invalid ClientCommand: id must be a string when present");
+  }
+  if (!isClientCommand(value)) {
+    throw new Error("Invalid ClientCommand: unknown type or malformed fields");
+  }
+  return value;
+}
+
+export function validateClientFrame(value: unknown): ClientFrame {
+  if (!isClientFrame(value)) {
+    throw new Error("Invalid ClientFrame: protocol_hello or v2 command required");
+  }
+  return value;
+}
+
+export function validateProtocolHello(value: unknown): ProtocolHello {
+  if (!isProtocolHello(value)) {
+    throw new Error("Invalid protocol_hello: Protocol v2 handshake required");
+  }
+  return value;
+}
+
+export function validateHostFrame(value: unknown): HostFrame {
+  if (!isHostFrame(value)) {
+    throw new Error("Invalid HostFrame: unknown type or malformed fields");
+  }
+  return value;
+}
+
+export function validateDesktopPluginClientFrame(value: unknown): DesktopPluginClientFrame {
+  if (!isDesktopPluginClientFrame(value)) {
+    throw new Error("Invalid Desktop Plugin client frame");
+  }
+  return value;
+}
+
+export function validateDesktopPluginServerFrame(value: unknown): DesktopPluginServerFrame {
+  if (!isDesktopPluginServerFrame(value)) {
+    throw new Error("Invalid Desktop Plugin server frame");
   }
   return value;
 }
 
 /**
- * 验证 JSON 可序列化
+ * 验证 JSON 可序列化。
  */
 export function validateJsonSerializable(value: unknown): void {
   try {
