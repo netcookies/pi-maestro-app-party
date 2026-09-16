@@ -87,8 +87,7 @@ function RootNavigator() {
 function NotificationWatcher() {
   const { state, isConnected } = useHost();
 
-  // T7：monitor_state 由 Host 主动推送（不再有 fetchMonitorState 轮询命令）；
-  // Ask 待办通知与完成通知均由事件流投影 state 驱动。
+  // Ask 待办通知与完成通知均由 Host 事件流投影 state 驱动。
 
   // 监听 Ask 待办状态并触发系统通知（extension-ui 队列 pending 弹窗）
   useEffect(() => {

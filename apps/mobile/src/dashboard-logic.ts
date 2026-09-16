@@ -80,11 +80,6 @@ export function isSameLocalDay(a: Date, b: Date): boolean {
   );
 }
 
-/** 目标窗口是否可远程 steer：endpointId 非空且在 Host 已打开（可控）会话集合中 */
-export function isWindowSteerable(endpointId: string, controllableSessionIds: ReadonlySet<string>): boolean {
-  return endpointId.length > 0 && controllableSessionIds.has(endpointId);
-}
-
 /** 提取窗口 teammate-agents facet 的 agents 数组（结构异常时安全返回空） */
 function agentsOfWindow(w: MonitorWindowSummary): Array<{ status?: unknown }> {
   for (const f of w.facets ?? []) {

@@ -2,7 +2,6 @@ import { describe, expect, it } from "vitest";
 import {
   windowKey,
   isSameLocalDay,
-  isWindowSteerable,
   deriveDashboardMetrics,
   getWindowContextPressure,
 } from "../src/dashboard-logic.js";
@@ -88,18 +87,6 @@ describe("isSameLocalDay", () => {
   it("rejects invalid dates", () => {
     expect(isSameLocalDay(new Date(NaN), new Date())).toBe(false);
     expect(isSameLocalDay(new Date(), new Date("nope"))).toBe(false);
-  });
-});
-
-describe("isWindowSteerable", () => {
-  const controllable = new Set(["sess-1", "sess-2"]);
-  it("true when endpointId is an open host session", () => {
-    expect(isWindowSteerable("sess-1", controllable)).toBe(true);
-  });
-  it("false for unknown, empty or closed sessions", () => {
-    expect(isWindowSteerable("sess-9", controllable)).toBe(false);
-    expect(isWindowSteerable("", controllable)).toBe(false);
-    expect(isWindowSteerable("sess-1", new Set())).toBe(false);
   });
 });
 

@@ -2,10 +2,9 @@ import React from "react";
 import { View, Text, StyleSheet, FlatList } from "react-native";
 import { useHost } from "../src/store";
 import { useTheme, MIUIX_RADIUS, MIUIX_TYPE, MIUIX_SPACE } from "../src/theme";
-import type { MaestroScheduleSummary, MaestroStepSummary, MaestroDispatchSummary, MonitorWindowSummary, TeammateAgentState } from "@maestro-mobile/shared";
+import type { MaestroScheduleSummary, MaestroStepSummary, MaestroDispatchSummary } from "@maestro-mobile/shared";
 
 type Row =
-  | { type: "owner"; owner: MonitorWindowSummary }
   | { type: "schedule"; schedule: MaestroScheduleSummary }
   | { type: "step"; step: MaestroStepSummary; scheduleId: string }
   | { type: "dispatch"; dispatch: MaestroDispatchSummary };
@@ -15,15 +14,9 @@ export default function TeammateScreen() {
   const { theme } = useTheme();
   const styles = React.useMemo(() => makeStyles(theme), [theme]);
   const schedules = state.maestro?.schedules ?? [];
-  // T7：owner 行来自 monitor 投影的 monitor_tab 窗口（Host 推送，无 fetchMonitorState 轮询命令）
-  const ownerWindows = state.monitor?.windows ?? [];
 
   const rows = React.useMemo<Row[]>(() => {
     const out: Row[] = [];
-    // workspace owners（活的 Pi 会话 + 运行中 agents）
-    for (const w of ownerWindows) {
-      out.push({ type: "owner", owner: w });
-    }
     for (const schedule of schedules) {
       out.push({ type: "schedule", schedule });
       for (const step of schedule.steps) {
@@ -34,12 +27,10 @@ export default function TeammateScreen() {
       }
     }
     return out;
-    // P3-4：ownerWindows 必须列入依赖，否则 monitor 更新时 owner 列表不刷新
-  }, [schedules, ownerWindows]);
+  }, [schedules]);
 
   const keyExtractor = (item: Row) => {
     switch (item.type) {
-      case "owner": return `owner:${item.owner.identity.ownerId}`;
       case "schedule": return `schedule:${item.schedule.scheduleId}`;
       case "step": return `step:${item.scheduleId}:${item.step.stepId}`;
       case "dispatch": return `dispatch:${item.dispatch.dispatchId}`;
@@ -47,48 +38,6 @@ export default function TeammateScreen() {
   };
 
   const renderItem = ({ item }: { item: Row }) => {
-    if (item.type === "owner") {
-      const w = item.owner;
-      // 从 facets 取 agents 详情（host 投影 teammate-agents facet）
-      const facet = w.facets?.find((f) => f.kind === "teammate-agents");
-      const agents: TeammateAgentState[] = facet?.data?.agents ?? [];
-      // P3-4：host 投影里 facets 可能缺失；agent 总数以 workStatus 之外的语义展示，
-      // facets 有 agents 用 agents.length，否则显示 workStatus（active/idle）而不臆造数字
-      const agentCountLabel = agents.length > 0
-        ? `${agents.length} 个 teammate`
-        : w.workStatus === "active"
-          ? "teammate 运行中"
-          : "无活跃 teammate";
-      return (
-        <View style={styles.schedule}>
-          <View style={styles.scheduleHeader}>
-            <Text style={styles.scheduleTitle}>{w.name ?? "Pi 会话"}</Text>
-            <Text style={[styles.scheduleState, statusColor(w.status, theme)]}>
-              {w.status === "running" ? "运行中" : w.status === "sleeping" ? "睡眠" : w.status === "idle" ? "空闲" : w.status}
-            </Text>
-          </View>
-          <Text style={styles.progress}>
-            {w.identity.endpointId.slice(0, 8)} · {agentCountLabel}
-          </Text>
-          {agents.map((a, i) => (
-            <View key={i} style={[styles.dispatch, { borderLeftWidth: 3, borderLeftColor: a.status === "running" ? theme.success : theme.border, paddingLeft: 8, marginBottom: 4 }]}>
-              <View style={styles.scheduleHeader}>
-                <Text style={[styles.scheduleTitle, { color: theme.text, fontSize: 13, marginBottom: 0 }]} numberOfLines={1}>
-                  {a.name ?? a.agent ?? "teammate"}
-                </Text>
-                <Text style={[styles.scheduleState, statusColor(a.status ?? "", theme)]}>{a.status ?? "?"}</Text>
-              </View>
-              {a.phase ? <Text style={[styles.progress, { marginTop: 2 }]}>phase: {a.phase}</Text> : null}
-              {a.outputTail && Array.isArray(a.outputTail) && a.outputTail.length > 0 ? (
-                <Text numberOfLines={2} style={[styles.dispatchId, { marginTop: 2 }]}>
-                  {String(a.outputTail[a.outputTail.length - 1]).slice(0, 100)}
-                </Text>
-              ) : null}
-            </View>
-          ))}
-        </View>
-      );
-    }
     if (item.type === "schedule") {
       const s = item.schedule;
       return (
@@ -138,7 +87,7 @@ export default function TeammateScreen() {
 
   return (
     <View style={styles.container}>
-      {schedules.length === 0 && ownerWindows.length === 0 ? (
+      {schedules.length === 0 ? (
         <View style={styles.empty}>
           <Text style={styles.emptyText}>暂无 teammate 活动</Text>
           <Text style={styles.emptyDesc}>Pi 会话的 teammate/agents 会出现在这里</Text>

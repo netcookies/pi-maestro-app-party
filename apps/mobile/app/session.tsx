@@ -238,7 +238,7 @@ export default function SessionScreen() {
   const readOnly = !session || !canPrompt;
   const composerPlaceholder = readOnly ? t.readOnlyComposer : "Message...";
 
-  // 向导作答：通过可用的直接 dialog 通道转发（steer_window 命令已随 T7 移除）。
+  // 向导作答只通过会话的 extension-ui 直通通道转发。
   // 若同一会话存在 pending 的 extension-ui 直通弹窗，则把答案打包成 value 提交；
   // 否则仅记录已忽略状态（只读会话无法回传答案）。
   const handleAnswerWizard = async (answers: AskAnswer[]) => {
