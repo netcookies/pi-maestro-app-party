@@ -99,6 +99,22 @@ describe("DesktopPlugin IPC and gateway", () => {
     expect(server.registry.list()).toHaveLength(0);
   });
 
+  it("rejects a mismatched Plugin release before registry registration", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "maestro-plugin-release-"));
+    server = new DesktopPluginIpcServer({ socketPath: join(dir, "plugin.sock"), secret: "test-secret", releaseVersion: "0.4.0" });
+    await server.start();
+    client = new DesktopPluginIpcClient({
+      socketPath: join(dir, "plugin.sock"),
+      secret: "test-secret",
+      target,
+      releaseVersion: "0.5.0",
+      capabilities: ["abort"],
+      onRequest: async () => ({ type: "desktop_plugin_result", requestId: "r", operation: "abort", status: "observed" }),
+    });
+    await expect(client.connect()).rejects.toThrow();
+    expect(server.registry.list()).toHaveLength(0);
+  });
+
   it("returns unknown on disconnect and rejects stale generation or capability", async () => {
     const dir = await mkdtemp(join(tmpdir(), "maestro-plugin-disconnect-"));
     server = new DesktopPluginIpcServer({ socketPath: join(dir, "plugin.sock"), secret: "test-secret" });

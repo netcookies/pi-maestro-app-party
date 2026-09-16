@@ -107,6 +107,11 @@ class JsonLineConnection {
     this.socket.write(encodeFrame(frame, this.maxFrameBytes));
   }
 
+  closeAfterFlush(error?: Error): void {
+    if (this.closed) return;
+    this.socket.end(() => this.close(error));
+  }
+
   close(error?: Error): void {
     if (this.closed) return;
     this.closed = true;
@@ -331,7 +336,7 @@ export class DesktopPluginIpcServer {
     const expectedRelease = this.options.releaseVersion ?? MOBILE_RELEASE_VERSION;
     if (hello.releaseVersion !== undefined && !isCompatibleReleaseVersion(hello.releaseVersion, expectedRelease)) {
       this.sendError(connection, "release_version_unsupported", undefined);
-      connection.close(new Error("desktop plugin release unsupported"));
+      connection.closeAfterFlush(new Error("desktop plugin release unsupported"));
       return;
     }
     const target: DesktopPluginTarget = {
