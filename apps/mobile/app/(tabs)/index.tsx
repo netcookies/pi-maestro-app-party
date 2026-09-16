@@ -8,8 +8,8 @@
  * 数据全部来自 store（monitor windows / maestro schedules / extension-ui 队列），
  * 指标推导集中在 src/dashboard-logic.ts（纯函数，可单测）。
  */
-import React, { useCallback, useMemo, useState } from "react";
-import { View, Text, StyleSheet, FlatList, TouchableOpacity, ScrollView, ActivityIndicator, Animated } from "react-native";
+import React, { useMemo, useState } from "react";
+import { View, Text, StyleSheet, TouchableOpacity, ScrollView } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { useRouter } from "expo-router";
 import { useHost } from "../../src/store";
@@ -21,11 +21,9 @@ import { useTabSwipe } from "../../src/hooks/useTabSwipe";
 import { useI18n } from "../../src/i18n";
 import {
   deriveDashboardMetrics,
-  windowKey,
-  getWindowContextPressure,
   type PendingAskItem,
 } from "../../src/dashboard-logic";
-import type { MonitorWindowSummary, SessionUsageSummary } from "@maestro-mobile/shared";
+import type { SessionUsageSummary } from "@maestro-mobile/shared";
 
 /** 2x2 指标卡定义 */
 type MetricCard = { value: string; label: string };
@@ -40,30 +38,14 @@ function formatTokens(n: number): string {
 
 export default function DashboardScreen() {
   const router = useRouter();
-  const { state, isConnected, connectionState, fetchMonitorState, fetchSessionUsage, openSessionContinue, openExistingSession, loadSessionHistory, answerExtensionUi, cancelExtensionUi } = useHost();
+  const { state, isConnected, connectionState, fetchSessionUsage, loadSessionHistory, cancelDialog } = useHost();
   const { theme } = useTheme();
   const { t } = useI18n();
   const styles = React.useMemo(() => makeStyles(theme), [theme]);
   const [currentAskIndex, setCurrentAskIndex] = useState(0);
   const [openingAsk, setOpeningAsk] = useState(false);
 
-  const windows = state.monitor?.windows ?? [];
-
-  const [monitorStatus, setMonitorStatus] = React.useState<"loading" | "ready" | "error">("loading");
-
-  // 进入页面主动拉取一次（host 只在变化时推送，后连接会错过）；断开时不显示无限加载。
-  React.useEffect(() => {
-    if (!isConnected) {
-      setMonitorStatus("ready");
-      return;
-    }
-    let cancelled = false;
-    setMonitorStatus("loading");
-    void fetchMonitorState().then((ok) => {
-      if (!cancelled) setMonitorStatus(ok ? "ready" : "error");
-    });
-    return () => { cancelled = true; };
-  }, [fetchMonitorState, isConnected]);
+  // Dashboard deliberately contains overview, Ask, attention, and connection state only.
 
   // 已打开会话的 usage（仅第一个可控会话作为代表；usage 协议是会话级）
   const [usage, setUsage] = React.useState<SessionUsageSummary | null>(null);
@@ -98,24 +80,8 @@ export default function DashboardScreen() {
         message: d.request.message,
       }));
 
-    // 聚合桌面活跃窗口的 pendingAsk 或 ask_pending attention
-    const existingSessionIds = new Set(list.map((x) => x.sessionId));
-    for (const w of state.monitor?.windows ?? []) {
-      if (w.status === "running" && !existingSessionIds.has(w.identity.endpointId)) {
-        const askAttention = w.attention.find((a) => a.code === "ask_pending");
-        if (w.pendingAsk || askAttention) {
-          list.push({
-            requestId: w.pendingAsk?.toolCallId || w.identity.ownerId,
-            sessionId: w.identity.endpointId,
-            method: "confirm",
-            title: `${w.name ? `[${w.name}] ` : ""}问答确认`,
-            message: w.pendingAsk?.question || askAttention?.message || "当前窗口正在等待用户确认或作答",
-          });
-        }
-      }
-    }
     return list;
-  }, [state.dialogs, state.monitor?.windows]);
+  }, [state.dialogs]);
 
   const metrics = React.useMemo(
     () => deriveDashboardMetrics({ monitor: state.monitor, maestro: state.maestro, pendingAsks }, new Date()),
@@ -149,92 +115,14 @@ export default function DashboardScreen() {
     },
   ], [metrics, t]);
 
-  // 窗口行 key 提取（windowKey 与 dashboard-logic / monitor 共享）
-  const keyExtractor = useCallback((w: MonitorWindowSummary) => windowKey(w), []);
-
-  const renderWindowRow = useCallback(({ item }: { item: MonitorWindowSummary }) => {
-    const isRunning = item.status === "running";
-    const statusColor = isRunning ? theme.success : item.status === "idle" ? "#0A84FF" : item.status === "sleeping" ? theme.warning : theme.muted;
-    const openWindow = async () => {
-      if (!item.cwd) return;
-      try {
-        const sessionId = await openSessionContinue(item.cwd);
-        if (sessionId) {
-          void loadSessionHistory(sessionId).catch(() => {});
-          router.push({ pathname: "/session", params: { id: sessionId } });
-        }
-      } catch {}
-    };
-    const pressure = getWindowContextPressure(item);
-    const completedTodos = item.todos.filter((x) => x.status === "completed").length;
-    const trackPercent = item.todos.length > 0
-      ? Math.round((completedTodos / item.todos.length) * 100)
-      : pressure !== null
-      ? pressure
-      : 0;
-
-    return (
-      <SpringCard
-        style={styles.bentoCard}
-        onPress={() => void openWindow()}
-        disabled={!item.cwd}
-        accessibilityRole="button"
-        accessibilityLabel={`打开窗口 ${item.name ?? t.unnamedWindow} 的会话`}
-      >
-        <View style={styles.cardHeader}>
-          <View style={styles.cardHeaderLeft}>
-            <PulsingDot color={statusColor} size={8} active={isRunning} />
-            <Text style={styles.cardTitle} numberOfLines={1}>{item.name ?? t.unnamedWindow}</Text>
-          </View>
-          <View style={styles.modelBadge}>
-            <Text style={styles.modelBadgeText}>#{item.identity.endpointId.slice(0, 8)}</Text>
-          </View>
-        </View>
-
-        <View style={styles.pathRow}>
-          <LineIcon name="folder" size={13} color={theme.muted} />
-          <Text style={styles.pathText} numberOfLines={1}>{item.cwd ?? t.unknownPath}</Text>
-        </View>
-
-        {/* 单行 Info 左右分散对齐：左边上下文视窗，右边 Token 消耗 */}
-        <View style={styles.singleInfoRow}>
-          <View style={styles.singleInfoItem}>
-            <Text style={styles.singleInfoLabel}>{t.contextLabel}:</Text>
-            <Text style={[styles.singleInfoValue, { color: theme.accent }]}>
-              {pressure !== null ? `${pressure}%` : "--"}
-            </Text>
-          </View>
-          <View style={styles.singleInfoItem}>
-            <Text style={styles.singleInfoLabel}>{t.tokensLabel}:</Text>
-            <Text style={styles.singleInfoValue}>
-              {"--"}
-            </Text>
-          </View>
-        </View>
-
-        <View style={styles.contextTrack}>
-          <View
-            style={[
-              styles.contextFill,
-              {
-                width: `${trackPercent}%`,
-                backgroundColor: theme.accent,
-              },
-            ]}
-          />
-        </View>
-      </SpringCard>
-    );
-  }, [theme, styles, openSessionContinue, router, t]);
-
-  const renderAttentionGroup = useCallback(({ item }: { item: { key: string; windowName: string; items: { code: string; severity: string; message: string }[] } }) => (
+  const renderAttentionGroup = ({ item }: { item: { key: string; windowName: string; items: { code: string; severity: string; message: string }[] } }) => (
     <View style={styles.alert}>
       <Text style={styles.alertTitle}>{item.windowName} · {item.items.length} {t.alertCount}</Text>
       {item.items.slice(0, 3).map((a, i) => (
         <Text key={i} style={styles.alertMsg} numberOfLines={1}>· {a.message}</Text>
       ))}
     </View>
-  ), [styles, t]);
+  );
 
   return (
     <View style={[styles.container, { backgroundColor: theme.bg }]}>
@@ -394,9 +282,6 @@ export default function DashboardScreen() {
                   if (targetAsk) {
                     setOpeningAsk(true);
                     try {
-                      if (targetAsk.cwd) {
-                        await openExistingSession(targetAsk.sessionId, targetAsk.cwd);
-                      }
                       await loadSessionHistory(targetAsk.sessionId);
                       router.push({ pathname: "/session", params: { id: targetAsk.sessionId } });
                     } catch {
@@ -413,7 +298,7 @@ export default function DashboardScreen() {
                 style={[styles.askRejectBtn, { backgroundColor: theme.inputBg, borderColor: theme.border }]}
                 onPress={(e) => {
                   e.stopPropagation?.();
-                  void cancelExtensionUi(pendingAsks[currentAskIndex].sessionId, pendingAsks[currentAskIndex].requestId);
+                  void cancelDialog(pendingAsks[currentAskIndex].requestId);
                   if (currentAskIndex >= pendingAsks.length - 1 && currentAskIndex > 0) {
                     setCurrentAskIndex(currentAskIndex - 1);
                   }
@@ -423,37 +308,6 @@ export default function DashboardScreen() {
               </TouchableOpacity>
             </View>
           </TouchableOpacity>
-        )}
-
-        {/* 现在运行 */}
-        <View style={styles.sectionHeader}>
-          <Text style={styles.sectionTitle}>{t.nowRunningTitle}</Text>
-          <TouchableOpacity onPress={() => router.push("/monitor")} accessibilityRole="button">
-            <Text style={styles.linkText}>{t.allWindows}</Text>
-          </TouchableOpacity>
-        </View>
-        {monitorStatus === "loading" ? (
-          <View style={styles.row} accessibilityLabel="正在加载窗口数据">
-            <ActivityIndicator size="small" color={theme.accent} />
-            <Text style={styles.emptyText}>正在加载窗口数据…</Text>
-          </View>
-        ) : monitorStatus === "error" ? (
-          <View style={styles.row}>
-            <Text style={styles.emptyText}>{isConnected ? "窗口数据加载失败，请稍后重试" : pairingPrompt}</Text>
-          </View>
-        ) : windows.length === 0 ? (
-          <View style={styles.row}>
-            <Text style={styles.emptyText}>{isConnected ? `${t.noWindows} · ${t.waitingHostPush}` : pairingPrompt}</Text>
-          </View>
-        ) : (
-          <FlatList
-            data={windows}
-            keyExtractor={keyExtractor}
-            renderItem={renderWindowRow}
-            extraData={t}
-            scrollEnabled={false}
-            contentContainerStyle={styles.listGap}
-          />
         )}
 
         {/* 需要关注 */}
@@ -466,14 +320,7 @@ export default function DashboardScreen() {
             <Text style={styles.emptyText}>{t.noAlerts}</Text>
           </View>
         ) : (
-          <FlatList
-            data={metrics.attentionGroups}
-            keyExtractor={(g) => g.key}
-            renderItem={renderAttentionGroup}
-            extraData={t}
-            scrollEnabled={false}
-            contentContainerStyle={styles.listGap}
-          />
+          metrics.attentionGroups.map((group) => <View key={group.key}>{renderAttentionGroup({ item: group })}</View>)
         )}
       </ScrollView>
     </View>

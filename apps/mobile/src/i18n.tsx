@@ -138,6 +138,24 @@ export interface I18nDictionary {
   unknownPath: string;
   noWindowsDesc: string;
   modelWindow: string;
+  filterSessions: string;
+  clearSearch: string;
+  retry: string;
+  loadingSessions: string;
+  noMatchingSessions: string;
+  filterProjects: string;
+  allProjects: string;
+  canPrompt: string;
+  readOnly: string;
+  readOnlyComposer: string;
+  monitorReadOnly: string;
+  noMonitorSessions: string;
+  noMonitorSessionsDesc: string;
+  openSessionDetail: string;
+  promptCapability: string;
+  steerCapability: string;
+  followUpCapability: string;
+  abortCapability: string;
 }
 
 export const DICTIONARIES: Record<Language, I18nDictionary> = {
@@ -274,6 +292,24 @@ export const DICTIONARIES: Record<Language, I18nDictionary> = {
     unknownPath: "未知路径",
     noWindowsDesc: "等待 Host 推送 monitor 状态",
     modelWindow: "视窗上限",
+    filterSessions: "筛选会话",
+    clearSearch: "清除搜索",
+    retry: "重试",
+    loadingSessions: "加载会话列表中...",
+    noMatchingSessions: "没有匹配的会话",
+    filterProjects: "按项目筛选",
+    allProjects: "全部项目",
+    canPrompt: "可对话",
+    readOnly: "只读",
+    readOnlyComposer: "会话只读，Host 未授予输入权限",
+    monitorReadOnly: "只读监督视图",
+    noMonitorSessions: "暂无监督会话",
+    noMonitorSessionsDesc: "Host 标记为监督视图 (monitor_tab) 的会话会出现在这里",
+    openSessionDetail: "打开会话详情",
+    promptCapability: "对话",
+    steerCapability: "介入",
+    followUpCapability: "追问",
+    abortCapability: "中止",
   },
   en: {
     tabWorkbench: "Workbench",
@@ -408,6 +444,24 @@ export const DICTIONARIES: Record<Language, I18nDictionary> = {
     unknownPath: "Unknown path",
     noWindowsDesc: "Waiting for host monitor telemetry",
     modelWindow: "Max Window",
+    filterSessions: "Filter sessions",
+    clearSearch: "Clear search",
+    retry: "Retry",
+    loadingSessions: "Loading sessions...",
+    noMatchingSessions: "No matching sessions",
+    filterProjects: "Filter by project",
+    allProjects: "All projects",
+    canPrompt: "Can prompt",
+    readOnly: "Read-only",
+    readOnlyComposer: "Read-only session, input not granted by host",
+    monitorReadOnly: "Read-only supervision",
+    noMonitorSessions: "No monitored sessions",
+    noMonitorSessionsDesc: "Sessions the host marks monitor_tab appear here",
+    openSessionDetail: "Open session detail",
+    promptCapability: "Prompt",
+    steerCapability: "Steer",
+    followUpCapability: "Follow-up",
+    abortCapability: "Abort",
   },
 };
 

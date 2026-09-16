@@ -293,11 +293,14 @@ export function ChatComposer({ actions, currentModel, sending, isStreaming = fal
                 shadowOpacity: 0.25,
                 shadowRadius: 5,
                 elevation: 3,
+                // T7：无 abort 能力（只读会话）时隐藏停止按钮，不伪造成可点击
+                opacity: onAbort ?? actions.abort ? 1 : 0.45,
               },
             ]}
             hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
             accessibilityRole="button"
             accessibilityLabel="停止运行"
+            disabled={!(onAbort ?? actions.abort)}
             onPress={() => {
               void hapticImpactMedium();
               onAbort?.() ?? actions.abort?.();
@@ -458,11 +461,13 @@ export function ChatComposer({ actions, currentModel, sending, isStreaming = fal
                     backgroundColor: theme.cardBg,
                     borderColor: theme.border,
                     borderWidth: 1,
+                    opacity: onAbort ?? actions.abort ? 1 : 0.45,
                   },
                 ]}
                 hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
                 accessibilityRole="button"
                 accessibilityLabel="停止运行"
+                disabled={!(onAbort ?? actions.abort)}
                 onPress={() => {
                   void hapticImpactMedium();
                   onAbort?.() ?? actions.abort?.();

@@ -1,7 +1,7 @@
 import React, { useCallback, useEffect, useRef, useState, useMemo } from "react";
 import {
   View, Text, StyleSheet, FlatList, TextInput, TouchableOpacity, Pressable, KeyboardAvoidingView, Platform, ActivityIndicator,
-  Animated, AccessibilityInfo, LayoutAnimation, UIManager, PanResponder, Dimensions,
+  Animated, AccessibilityInfo, LayoutAnimation, UIManager, PanResponder, Dimensions, ScrollView,
 } from "react-native";
 import * as Clipboard from "expo-clipboard";
 import { useLocalSearchParams, useRouter } from "expo-router";
@@ -40,7 +40,7 @@ let cachedModelsList: { id: string; provider: string; name: string; reasoning: b
 export default function SessionScreen() {
   const { id } = useLocalSearchParams<{ id: string }>();
   const router = useRouter();
-  const { state, sendPrompt, sendAbort, sendSteerWindow, answerDialog, cancelDialog, loadSessionHistory, loadMoreHistory, searchHistory, listModels, setModel, setThinking, listSkills, compactSession, renameSession, isConnected, connectionState } = useHost();
+  const { state, sendPrompt, sendAbort, answerDialog, cancelDialog, loadSessionHistory, loadMoreHistory, searchHistory, listModels, setModel, setThinking, listSkills, compactSession, isConnected, connectionState } = useHost();
   const { theme } = useTheme();
   const { t } = useI18n();
   const cfg = getConfig();
@@ -82,7 +82,7 @@ export default function SessionScreen() {
   const [sending, setSending] = useState(false);
   const [loadingMore, setLoadingMore] = useState(false);
   const [hasMore, setHasMore] = useState(true);
-  const listRef = useRef<FlatList<TimelineItem>>(null);
+  const listRef = useRef<FlatList<ListRow>>(null);
   // 是否跟随底部（新消息到达时自动滚到底）。用户向上滚动后置 false。
   const stickToBottom = useRef(true);
   // 最近一次 onScroll 的 offset（懒加载 prepend 后恢复位置用）
@@ -103,8 +103,8 @@ export default function SessionScreen() {
   const [searchResults, setSearchResults] = useState<{ index: number; text: string; kind: string }[]>([]);
   const [searching, setSearching] = useState(false);
   const [searchTotal, setSearchTotal] = useState(0);
-  // ChatComposer 状态
-  const [availableSkills, setAvailableSkills] = useState<string[]>([]);
+  // ChatComposer 状态（store listSkills 返回 {name, description} 对象列表）
+  const [availableSkills, setAvailableSkills] = useState<{ name: string; description?: string }[]>([]);
   const [currentModelId, setCurrentModelId] = useState<string | undefined>(session?.model ? String((session.model as { id?: string })?.id ?? "") : undefined);
   // 复制反馈状态（记录被复制消息的 id）
   const [copiedId, setCopiedId] = useState<string | null>(null);
@@ -195,16 +195,11 @@ export default function SessionScreen() {
 
   // 识别 timeline 中正在运行的多题问答向导（ask-user-question）
   const activeAskWizard = useMemo(() => {
-    const curWin = state.monitor?.windows?.find((w) => w.sessionId === id);
-    const targetCallId = curWin?.pendingAsk?.toolCallId;
-
     for (let i = timeline.length - 1; i >= 0; i--) {
       const item = timeline[i];
       if (item.kind === "tool" && item.toolName && (item.toolName.includes("ask") || item.toolName.includes("question"))) {
         const callId = item.toolCallId || item.id;
         if (dismissedAskIds.has(callId)) continue;
-        // 若 monitor 提供了明确的 running targetCallId，则严格对齐该 callId
-        if (targetCallId && item.toolCallId !== targetCallId) continue;
         if (item.status === "completed") continue;
 
         const args = item.toolArgs as Record<string, unknown> | undefined;
@@ -218,7 +213,7 @@ export default function SessionScreen() {
       }
     }
     return null;
-  }, [timeline, dismissedAskIds, state.monitor?.windows, id]);
+  }, [timeline, dismissedAskIds]);
 
   // 待处理单项交互弹窗：优先本地直通 dialog
   const activeAskDialog = useMemo(() => {
@@ -236,8 +231,18 @@ export default function SessionScreen() {
     return null;
   }, [activeAskWizard, state.dialogs, id]);
 
+  // T7：composer/abort/edit 能力完全来自服务端 presentation.control（不再由 PID/name/window 推断）
+  const control = session?.presentation?.control;
+  const canPrompt = control?.canPrompt === true;
+  const canAbort = control?.canAbort === true;
+  const readOnly = !session || !canPrompt;
+  const composerPlaceholder = readOnly ? t.readOnlyComposer : "Message...";
+
+  // 向导作答：通过可用的直接 dialog 通道转发（steer_window 命令已随 T7 移除）。
+  // 若同一会话存在 pending 的 extension-ui 直通弹窗，则把答案打包成 value 提交；
+  // 否则仅记录已忽略状态（只读会话无法回传答案）。
   const handleAnswerWizard = async (answers: AskAnswer[]) => {
-    if (!activeAskWizard) return;
+    if (!activeAskWizard || !id) return;
     const callId = activeAskWizard.callId;
     markAskDismissed(callId);
 
@@ -246,14 +251,11 @@ export default function SessionScreen() {
       const extra = a.text ? ` (${a.text})` : "";
       return `${i + 1}. ${a.question} → ${chosen || "无"}${extra}`;
     });
-    const summaryText = answerSummaries.join("\n");
-    const payload = JSON.stringify({ answers, summary: summaryText });
+    const payload = JSON.stringify({ answers, summary: answerSummaries.join("\n") });
 
-    if (id) {
-      const curCwd = session?.cwd ?? "";
-      try {
-        await sendSteerWindow(id, curCwd, payload);
-      } catch {}
+    const directDialog = state.dialogs.find((d) => d.request.sessionId === id && d.status === "pending");
+    if (directDialog) {
+      answerDialog(directDialog.request.id, payload);
     }
   };
 
@@ -261,12 +263,8 @@ export default function SessionScreen() {
     if (!activeAskWizard) return;
     const callId = activeAskWizard.callId;
     markAskDismissed(callId);
-    if (id) {
-      const curCwd = session?.cwd ?? "";
-      try {
-        void sendSteerWindow(id, curCwd, JSON.stringify({ cancelled: true }));
-      } catch {}
-    }
+    const directDialog = state.dialogs.find((d) => d.request.sessionId === id && d.status === "pending");
+    if (directDialog) cancelDialog(directDialog.request.id);
   };
 
   const handleAnswerAsk = async (value: string | string[]) => {
@@ -285,30 +283,17 @@ export default function SessionScreen() {
 
   const fabBottom = insets.bottom + composerHeight + 16;
 
-  // 关联当前会话对应的桌面/后台窗口状态
-  const currentWindow = useMemo(() => {
-    if (!id) return null;
-    return state.monitor?.windows?.find(
-      (w) => w.identity.endpointId === id || w.identity.sessionId === id,
-    ) ?? null;
-  }, [state.monitor?.windows, id]);
-
-  const isWindowRunning = currentWindow?.status === "running";
-  const hasDesktopWindow = Boolean(
-    currentWindow && (
-      currentWindow.status === "running" ||
-      currentWindow.status === "idle" ||
-      currentWindow.status === "sleeping"
-    ),
-  );
+  // T7：运行态与可交互性完全来自会话状态与服务端 presentation.control，不再做窗口/PID/name 推断
+  const isSessionStreaming = session?.runState === "streaming";
+  const composerEnabled = canPrompt && isConnected;
 
   // 活跃工作态感知：从用户发送消息开始，贯穿思考（thinking）、工具执行（tool）、模型流式输出，直到完整任务终结
   const [isTurnWorking, setIsTurnWorking] = useState(false);
   const lastItem = timeline[timeline.length - 1];
 
   useEffect(() => {
-    // 1. 若 Host 明确广播进入 streaming，或者本地处于发送中，或者窗口处于 running，必须保持工作中
-    if (session?.runState === "streaming" || sending || isWindowRunning) {
+    // 1. 若 Host 明确广播进入 streaming，或者本地处于发送中，必须保持工作中
+    if (session?.runState === "streaming" || sending) {
       setIsTurnWorking(true);
       return;
     }
@@ -319,8 +304,8 @@ export default function SessionScreen() {
       return;
     }
 
-    // 3. 检查会话空闲终结态：若 Host 明确处于 idle 或未接管且窗口非 running，收敛为非工作中
-    if (session?.runState === "idle" || (!session && !isWindowRunning)) {
+    // 3. 检查会话空闲终结态：若 Host 明确处于 idle 或会话未知，收敛为非工作中
+    if (session?.runState === "idle" || !session) {
       setIsTurnWorking(false);
       return;
     }
@@ -343,7 +328,7 @@ export default function SessionScreen() {
 
     // 5. 其他情况下默认收敛为非工作中
     setIsTurnWorking(false);
-  }, [session?.runState, sending, isWindowRunning, lastItem?.id, lastItem?.kind, lastItem?.status]);
+  }, [session?.runState, sending, lastItem?.id, lastItem?.kind, lastItem?.status]);
 
   const handleAbort = useCallback(() => {
     setSending(false);
@@ -351,7 +336,7 @@ export default function SessionScreen() {
     if (id) void sendAbort(id);
   }, [id, sendAbort]);
 
-  const isStreaming = Boolean(isTurnWorking || session?.runState === "streaming" || sending || isWindowRunning);
+  const isStreaming = Boolean(isTurnWorking || isSessionStreaming || sending);
 
   // reduce-motion 时跳过布局动画，加 try/catch 避免 Fabric 新架构初次布局时崩溃
   const animateLayout = useCallback(() => {
@@ -468,15 +453,16 @@ export default function SessionScreen() {
         </View>
       ) : null;
     }
-    const isUser = item.kind === "user";
-    const isTool = item.kind === "tool";
-    const isThinking = item.kind === "thinking";
-    const isAssistant = item.kind === "assistant";
+    const timelineItem = item as TimelineItem;
+    const isUser = timelineItem.kind === "user";
+    const isTool = timelineItem.kind === "tool";
+    const isThinking = timelineItem.kind === "thinking";
+    const isAssistant = timelineItem.kind === "assistant";
     // 所有消息类型都做图片分段（tool 输出路径和历史图片引用）
-    const imagePaths = item.images ?? [];
+    const imagePaths = timelineItem.images ?? [];
     const displayText = imagePaths.length > 0
-      ? item.text.replace(/\n?\[🖼 \d+ 张图片\]$/, "")
-      : item.text;
+      ? timelineItem.text.replace(/\n?\[🖼 \d+ 张图片\]$/, "")
+      : timelineItem.text;
     const segments = splitImageSegments(displayText);
     const hasImages = imagePaths.length > 0 || segments.some((s) => s.type === "image");
 
@@ -485,13 +471,13 @@ export default function SessionScreen() {
       return (
         <View style={[styles.bubble, styles.bubbleTool]}>
           <CollapsibleTool
-            toolName={item.toolName ?? "tool"}
-            text={item.text}
-            isError={item.isError}
+            toolName={timelineItem.toolName ?? "tool"}
+            text={timelineItem.text}
+            isError={timelineItem.isError}
           />
           {hasImages && (
             <View style={styles.toolImages}>
-              {imagePaths.map((path, i) => (
+              {imagePaths.map((path: string, i: number) => (
                 <InlineImage key={`item-img-${i}`} path={path} />
               ))}
               {segments.filter((s) => s.type === "image").map((seg, i) => (
@@ -522,7 +508,7 @@ export default function SessionScreen() {
         {isThinking && <Text style={styles.thinkingLabel}>思考</Text>}
         {hasImages ? (
           <View style={{ width: "100%", minWidth: 0 }}>
-            {imagePaths.map((path, i) => (
+            {imagePaths.map((path: string, i: number) => (
               <InlineImage key={`item-img-${i}`} path={path} />
             ))}
             {segments.map((seg, i) =>
@@ -556,7 +542,7 @@ export default function SessionScreen() {
               style={styles.copyBtn}
               onPress={(e) => {
                 e.stopPropagation?.();
-                void handleCopyMessage(item.id, displayText);
+                void handleCopyMessage(timelineItem.id, displayText);
               }}
               hitSlop={{ top: 8, bottom: 8, left: 12, right: 8 }}
               accessibilityRole="button"
@@ -640,7 +626,7 @@ export default function SessionScreen() {
             onSubmitEditing={() => void handleSearch()}
           />
           <TouchableOpacity onPress={() => void handleSearch()} style={styles.searchGo}>
-            {searching ? <ActivityIndicator size="small" color={theme.accent} /> : <Text style={[styles.backText, { color: theme.accent }]}>搜索</Text>}
+            {searching ? <ActivityIndicator size="small" color={theme.accent} /> : <Text style={[styles.searchGoText, { color: theme.accent }]}>搜索</Text>}
           </TouchableOpacity>
         </View>
       )}
@@ -838,18 +824,18 @@ export default function SessionScreen() {
             return picked.length > 0 ? picked[0] : null;
           },
           compact: async () => (id ? compactSession(id) : { ok: false, error: "no session" }),
-          renameSession: async (name) => (id ? renameSession(id, name) : { ok: false, error: "no session" }),
-          abort: handleAbort,
+          // T7：abort 能力来自服务端 presentation.control.canAbort，只读会话不提供终止
+          abort: canAbort ? handleAbort : undefined,
         }}
         isStreaming={isStreaming}
-        onAbort={handleAbort}
+        onAbort={canAbort ? handleAbort : undefined}
         currentModel={currentModelId
           ? (session?.model as { name?: string } | undefined)?.name ?? currentModelId
           : (session?.model as { name?: string } | undefined)?.name}
         sending={sending || !isConnected}
         skills={availableSkills}
-        disabled={!hasDesktopWindow}
-        placeholder={hasDesktopWindow ? "Message..." : "桌面未打开此会话窗口（只读浏览）"}
+        disabled={!composerEnabled}
+        placeholder={composerPlaceholder}
       />
       </View>
 
@@ -1116,6 +1102,7 @@ function makeStyles(theme: ReturnType<typeof useTheme>["theme"]) {
       fontSize: MIUIX_TYPE.body2,
     },
     searchGo: { paddingHorizontal: 10, paddingVertical: 6 },
+    searchGoText: { fontSize: MIUIX_TYPE.body2, fontWeight: "600" },
     searchResults: {
       borderBottomWidth: 1,
       padding: 12,

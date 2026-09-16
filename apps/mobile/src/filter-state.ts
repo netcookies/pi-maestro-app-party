@@ -2,7 +2,8 @@ import type { HostSessionSummary, SessionVisibility } from "@maestro-mobile/shar
 
 export interface SessionFilter {
   query: string;
-  cwd?: string;
+  /** 项目 cwd 多选；空/undefined 表示不过滤 */
+  cwds?: string[];
   visibility: SessionVisibility;
 }
 
@@ -19,9 +20,10 @@ export interface FilterResponseToken {
 }
 
 export function normalizeSessionFilter(input: Partial<SessionFilter> = {}): SessionFilter {
+  const cwds = input.cwds?.filter((cwd) => typeof cwd === "string" && cwd.trim()).map((cwd) => cwd.trim());
   return {
     query: input.query?.trim() ?? "",
-    cwd: input.cwd?.trim() || undefined,
+    ...(cwds && cwds.length > 0 ? { cwds } : {}),
     visibility: input.visibility ?? "session_list",
   };
 }
@@ -40,19 +42,16 @@ export function beginFilterRequest(state: FilterState, cursor?: string): FilterR
 }
 
 export function isFilterResponseCurrent(state: FilterState, token: FilterResponseToken): boolean {
-  return state.generation === token.generation
-    && state.filter.query === token.filter.query
-    && state.filter.cwd === token.filter.cwd
-    && state.filter.visibility === token.filter.visibility
-    && token.cursor === undefined;
+  return state.generation === token.generation && sameFilter(state.filter, token.filter) && token.cursor === undefined;
 }
 
 export function isPageResponseCurrent(state: FilterState, token: FilterResponseToken, currentCursor?: string): boolean {
-  return state.generation === token.generation
-    && state.filter.query === token.filter.query
-    && state.filter.cwd === token.filter.cwd
-    && state.filter.visibility === token.filter.visibility
-    && token.cursor === currentCursor;
+  return state.generation === token.generation && sameFilter(state.filter, token.filter) && token.cursor === currentCursor;
+}
+
+function sameFilter(a: SessionFilter, b: SessionFilter): boolean {
+  return a.query === b.query && a.visibility === b.visibility
+    && (a.cwds ?? []).join("\u0000") === (b.cwds ?? []).join("\u0000");
 }
 
 /**
@@ -67,7 +66,7 @@ export function filterSessionSummaries(
   const query = normalized.query.toLocaleLowerCase();
   return sessions.filter((session) => {
     if (session.presentation?.visibility !== normalized.visibility) return false;
-    if (normalized.cwd && session.cwd !== normalized.cwd) return false;
+    if (normalized.cwds && !normalized.cwds.includes(session.cwd)) return false;
     if (!query) return true;
     return [session.id, session.cwd, session.cwdName, session.title, session.name, session.model]
       .some((value) => value?.toLocaleLowerCase().includes(query));

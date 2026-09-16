@@ -85,55 +85,44 @@ function RootNavigator() {
 }
 
 function NotificationWatcher() {
-  const { state, fetchMonitorState, isConnected } = useHost();
+  const { state, isConnected } = useHost();
 
-  // 全局定时同步 monitor 状态，确保在任何页面都能及时捕获未决 ask 与完成事件
-  useEffect(() => {
-    if (!isConnected) return;
-    void fetchMonitorState();
-    const timer = setInterval(() => {
-      void fetchMonitorState();
-    }, 2500);
-    return () => clearInterval(timer);
-  }, [isConnected, fetchMonitorState]);
+  // T7：monitor_state 由 Host 主动推送（不再有 fetchMonitorState 轮询命令）；
+  // Ask 待办通知与完成通知均由事件流投影 state 驱动。
 
-  // 监听 Ask 待办状态并触发系统通知
+  // 监听 Ask 待办状态并触发系统通知（extension-ui 队列 pending 弹窗）
   useEffect(() => {
-    const windows = state.monitor?.windows ?? [];
-    for (const w of windows) {
-      if (w.pendingAsk && w.pendingAsk.toolCallId) {
-        void notifyPendingAsk(
-          w.identity.endpointId,
-          w.pendingAsk.toolCallId,
-          w.name ?? "桌面会话",
-          w.pendingAsk.question ?? "需要您的操作确认",
-          w.name,
-        );
-      }
+    for (const dialog of state.dialogs) {
+      if (dialog.status !== "pending") continue;
+      void notifyPendingAsk(
+        dialog.request.sessionId,
+        dialog.request.id,
+        dialog.request.title ?? "桌面会话",
+        dialog.request.message ?? "需要您的操作确认",
+      );
     }
-  }, [state.monitor?.windows]);
+  }, [state.dialogs]);
 
-  // 监听 Agent 完成结算状态并触发完成通知
-  const prevSettledTimes = useRef<Map<string, number>>(new Map());
+  // 监听 Agent 完成结算状态并触发完成通知（streaming → idle 收敛即一轮完成）
+  const prevStreaming = useRef<Set<string>>(new Set());
   useEffect(() => {
-    const windows = state.monitor?.windows ?? [];
-    for (const w of windows) {
-      if (w.lastSettle && typeof w.lastSettle.at === "number") {
-        const prev = prevSettledTimes.current.get(w.identity.endpointId);
-        if (prev === undefined) {
-          // 首次加载初始化记录，不补弹历史完成通知
-          prevSettledTimes.current.set(w.identity.endpointId, w.lastSettle.at);
-        } else if (w.lastSettle.at > prev) {
-          prevSettledTimes.current.set(w.identity.endpointId, w.lastSettle.at);
-          void notifyAgentSettled(
-            w.identity.endpointId,
-            w.name ?? "桌面会话",
-            w.lastSettle.lastResult,
-          );
-        }
-      }
+    const nowStreaming = new Set<string>();
+    for (const session of state.sessions.values()) {
+      if (session.runState === "streaming") nowStreaming.add(session.id);
     }
-  }, [state.monitor?.windows]);
+    for (const id of prevStreaming.current) {
+      if (nowStreaming.has(id)) continue;
+      const session = state.sessions.get(id);
+      if (!session || session.runState === "error" || session.runState === "aborting") continue;
+      void notifyAgentSettled(id, session.title || "桌面会话");
+    }
+    prevStreaming.current = nowStreaming;
+  }, [state.sessions]);
+
+  // 断线时清空记录（防重连后误判「刚完成」重复弹通知）
+  useEffect(() => {
+    if (!isConnected) prevStreaming.current = new Set();
+  }, [isConnected]);
 
   return null;
 }
@@ -164,7 +153,7 @@ export default function RootLayout() {
     if (permissionsRequested.current) return;
     permissionsRequested.current = true;
     void (async () => {
-      try { await Camera.requestCameraPermissionsAsync(); } catch { /* permission prompt unavailable */ }
+      try { await Camera.useCameraPermissions()[1](); } catch { /* permission prompt unavailable */ }
       try { await ImagePicker.requestMediaLibraryPermissionsAsync(); } catch { /* permission prompt unavailable */ }
       try { await initNotificationService(); } catch { /* notification unavailable */ }
     })();

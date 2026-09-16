@@ -43,6 +43,24 @@ describe("filter state", () => {
     const request = beginFilterRequest(state, "cursor-1");
     expect(isPageResponseCurrent(state, request, "cursor-1")).toBe(true);
     expect(isPageResponseCurrent(state, request, "cursor-2")).toBe(false);
-    expect(isPageResponseCurrent(updateFilterState(state, { cwd: "/other" }), request, "cursor-1")).toBe(false);
+    expect(isPageResponseCurrent(updateFilterState(state, { cwds: ["/other"] }), request, "cursor-1")).toBe(false);
+  });
+
+  it("supports project cwd multi-select and normalizes drafts", () => {
+    const sessions = [
+      session("a", "session_list", "Alpha"),
+      { ...session("b", "session_list", "Beta"), cwd: "/other" },
+      { ...session("c", "session_list", "Gamma"), cwd: "/third" },
+    ];
+    expect(filterSessionSummaries(sessions, { cwds: ["/project", "/third"] }).map((s) => s.id)).toEqual(["a", "c"]);
+    // 空 cwd 数组语义等同不过滤
+    expect(filterSessionSummaries(sessions, { cwds: [] }).length).toBe(3);
+    // 空白项剔除后仍可匹配
+    expect(filterSessionSummaries(sessions, { cwds: [" /third "] }).map((s) => s.id)).toEqual(["c"]);
+    // cwds 变化使在途响应失效（race-safe）
+    const st = createFilterState();
+    const req = beginFilterRequest(st);
+    expect(isFilterResponseCurrent(updateFilterState(st, { cwds: ["/project"] }), req)).toBe(false);
+    expect(isFilterResponseCurrent(updateFilterState(st, { cwds: [] }), req)).toBe(false);
   });
 });

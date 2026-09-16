@@ -1,511 +1,72 @@
-/**
- * Monitor 监督会话（方向 A）
- *
- * 语义升级：不再是纯只读窗口卡片列表 —— 窗口列表同时是消息目标选择器。
- * 点击窗口即选中为 steer 消息目标（选中态高亮）；
- * 底部固定 steer 输入框，目标窗口不可控（telemetry 可见但 Host 未打开该会话）
- * 时禁用并提示，不伪造发送成功。
- *
- * 数据推导复用 src/dashboard-logic.ts 的 windowKey / isWindowSteerable。
- */
-import React, { useState, useCallback, useMemo, useRef } from "react";
-import { View, Text, StyleSheet, FlatList, TouchableOpacity, TextInput, Animated } from "react-native";
+import React, { useMemo } from "react";
+import { FlatList, StyleSheet, Text, TouchableOpacity, View } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
+import { useRouter } from "expo-router";
 import { useHost } from "../../src/store";
-import { useTheme, MIUIX_RADIUS, MIUIX_TYPE, MIUIX_SPACE, hexToRgba } from "../../src/theme";
+import { useTheme, MIUIX_RADIUS, MIUIX_SPACE, MIUIX_TYPE } from "../../src/theme";
 import { LineIcon } from "../../src/components/LineIcon";
-import { useI18n } from "../../src/i18n";
-import { windowKey, isWindowSteerable, getWindowContextPressure } from "../../src/dashboard-logic";
-import { hapticImpactMedium } from "../../src/utils/haptics";
-import { SpringCard } from "../../src/components/SpringCard";
 import { PulsingDot } from "../../src/components/PulsingDot";
-import { SpringBottomSheet } from "../../src/components/SpringBottomSheet";
-import { useTabSwipe } from "../../src/hooks/useTabSwipe";
-import type { MonitorWindowSummary, MonitorAttentionSummary } from "@maestro-mobile/shared";
+import { SpringCard } from "../../src/components/SpringCard";
+import { useI18n } from "../../src/i18n";
+import type { SessionState } from "@maestro-mobile/shared";
 
 export default function MonitorScreen() {
-  const { state, isConnected, fetchMonitorState, sendSteerWindow } = useHost();
+  const router = useRouter();
+  const { state, isConnected } = useHost();
   const { theme } = useTheme();
   const { t } = useI18n();
-  const styles = React.useMemo(() => makeStyles(theme), [theme]);
-  const windows = state.monitor?.windows ?? [];
-  const [expanded, setExpanded] = useState<Set<string>>(new Set());
-  // 监督消息目标（窗口 key → 窗口）；单窗口语义，多选待协议支持后扩展
-  const [target, setTarget] = useState<string | null>(null);
-  const [draft, setDraft] = useState("");
-  const [sending, setSending] = useState(false);
-  const flyAnim = useRef(new Animated.Value(0)).current;
-
-  // 进入页面主动拉取（host 只在变化时推送，后连接会错过）
-  React.useEffect(() => {
-    void fetchMonitorState();
-  }, [fetchMonitorState]);
-
-  // 可控会话集合：Host 已打开（有 SessionRunner）的会话 id
-  const controllableSessionIds = useMemo(() => state.sessions, [state.sessions]);
-
-  // 目标解析：仅在用户显式点击卡片选择时生效，绝不自动隐式选中任何窗口
-  const resolvedTarget = useMemo(() => {
-    if (!target) return null;
-    const w = windows.find((x) => windowKey(x) === target);
-    return w ? { key: target, window: w } : null;
-  }, [target, windows]);
-
-  const endpointId = resolvedTarget?.window.identity.endpointId ?? "";
-  const alreadyOpen = controllableSessionIds.has(endpointId);
-  // steer_window 统一发送路径：已打开直接 steer；未打开由 Host 接管后 steer（UI 明示接管语义）
-  const canSend = isConnected && resolvedTarget !== null && endpointId.length > 0 && draft.trim().length > 0 && !sending;
-
-  const handleSend = useCallback(async () => {
-    if (!resolvedTarget || !canSend) return;
-    void hapticImpactMedium();
-
-    Animated.sequence([
-      Animated.timing(flyAnim, {
-        toValue: 1,
-        duration: 200,
-        useNativeDriver: false,
-      }),
-      Animated.timing(flyAnim, {
-        toValue: 0,
-        duration: 180,
-        useNativeDriver: false,
-      }),
-    ]).start();
-
-    setSending(true);
-    try {
-      const result = await sendSteerWindow(
-        endpointId,
-        resolvedTarget.window.cwd ?? "",
-        draft.trim(),
-      );
-      if (result.ok) setDraft("");
-    } finally {
-      setSending(false);
-    }
-  }, [resolvedTarget, canSend, draft, endpointId, sendSteerWindow]);
-
-  const LIMIT = 5;
-  const toggleExpanded = (key: string) => {
-    setExpanded((prev) => {
-      const next = new Set(prev);
-      if (next.has(key)) next.delete(key);
-      else next.add(key);
-      return next;
-    });
-  };
-
-  // 顶部 Attention 汇总告警条（设计稿 attention-bar：errorContainer + 脉冲点）
-  const attentionWindows = windows.filter((w) => w.attention.length > 0);
-  const totalAttention = windows.reduce((n, w) => n + w.attention.length, 0);
-
-  const renderWindow = useCallback(({ item }: { item: MonitorWindowSummary }) => {
-    const key = windowKey(item);
-    const selected = resolvedTarget?.key === key;
-    const attentionExpanded = expanded.has(`${key}-attention`);
-    const todosExpanded = expanded.has(`${key}-todos`);
-    const shownAttention = attentionExpanded ? item.attention : item.attention.slice(0, LIMIT);
-    const shownTodos = todosExpanded ? item.todos : item.todos.slice(0, LIMIT);
-    const isRunning = item.status === "running";
-    const statusClr = statusColor(item.status, theme);
-    const completedTodos = item.todos.filter((x) => x.status === "completed").length;
-    const pressure = getWindowContextPressure(item);
-    const trackPercent = item.todos.length > 0
-      ? Math.round((completedTodos / item.todos.length) * 100)
-      : pressure !== null
-      ? pressure
-      : 0;
-
-    return (
-      <SpringCard
-        style={[
-          styles.bentoCard,
-          selected && { borderColor: theme.accent, borderWidth: 1.5 },
-        ]}
-        onPress={() => setTarget((prev) => (prev === key ? null : key))}
-        accessibilityRole="button"
-        accessibilityState={{ selected }}
-      >
-        {/* 卡片顶行：状态指示点 + 项目名称 + 目标标识徽标 */}
-        <View style={styles.cardHeader}>
-          <View style={styles.cardHeaderLeft}>
-            <PulsingDot color={statusClr} size={8} active={isRunning} />
-            <Text style={styles.cardTitle} numberOfLines={1}>{item.name ?? t.unnamedWindow}</Text>
-          </View>
-          <View
-            style={[
-              styles.modelBadge,
-              {
-                backgroundColor: hexToRgba(theme.accent, 0.14),
-                borderColor: hexToRgba(theme.accent, 0.35),
-              },
-            ]}
-          >
-            <Text style={[styles.modelBadgeText, { color: theme.accent }]}>
-              #{item.identity.endpointId.slice(0, 8)}
-            </Text>
-          </View>
-        </View>
-
-        {/* 路径行 */}
-        <View style={styles.pathRow}>
-          <LineIcon name="folder" size={13} color={theme.muted} />
-          <Text style={styles.pathText} numberOfLines={1}>{item.cwd ?? t.unknownPath}</Text>
-        </View>
-
-        {/* 单行 Info 左右分散对齐：左边上下文视窗，右边 Token 消耗 */}
-        <View style={styles.singleInfoRow}>
-          <View style={styles.singleInfoItem}>
-            <Text style={styles.singleInfoLabel}>{t.contextLabel}:</Text>
-            <Text style={[styles.singleInfoValue, { color: theme.accent }]}>
-              {pressure !== null ? `${pressure}%` : "--"}
-            </Text>
-          </View>
-          <View style={styles.singleInfoItem}>
-            <Text style={styles.singleInfoLabel}>{t.tokensLabel}:</Text>
-            <Text style={styles.singleInfoValue}>
-              {"--"}
-            </Text>
-          </View>
-        </View>
-
-        {/* 待办进度细条 */}
-        <View style={styles.contextTrack}>
-          <View
-            style={[
-              styles.contextFill,
-              {
-                width: `${trackPercent}%`,
-                backgroundColor: theme.accent,
-              },
-            ]}
-          />
-        </View>
-
-        {/* 告警展开条（若有） */}
-        {item.attention.length > 0 && (
-          <View style={styles.attentionSection}>
-            <Text style={styles.sectionTitle}>Attention · {item.attention.length} {t.alertCount}</Text>
-            {shownAttention.map((a, i) => (
-              <View key={i} style={styles.attentionItem}>
-                <Text style={[styles.attentionCode, { color: sevColor(a.severity, theme) }]}>{a.code}</Text>
-                <Text style={styles.attentionMsg}>{a.message}</Text>
-              </View>
-            ))}
-            {item.attention.length > LIMIT && (
-              <TouchableOpacity
-                style={styles.showAllButton}
-                accessibilityRole="button"
-                onPress={() => toggleExpanded(`${key}-attention`)}
-              >
-                <Text style={styles.showAllText}>
-                  {attentionExpanded
-                    ? (t.tabMonitor === "监控" ? "收起" : "Collapse")
-                    : (t.tabMonitor === "监控" ? `查看全部 ${item.attention.length} 条` : `View all ${item.attention.length}`)}
-                </Text>
-              </TouchableOpacity>
-            )}
-          </View>
-        )}
-      </SpringCard>
-    );
-  }, [resolvedTarget, expanded, theme, styles, t]);
+  const styles = useMemo(() => makeStyles(theme), [theme]);
+  const sessions = useMemo(() => Array.from(state.sessions.values()).filter((session) => session.presentation?.visibility === "monitor_tab"), [state.sessions]);
 
   return (
     <View style={[styles.container, { backgroundColor: theme.bg }]}>
-      {/* 统一定制顶栏：顶部状态栏背景与 Header 融为一体，只有下方微阴影 */}
       <View style={[styles.headerContainer, { backgroundColor: theme.headerBg, borderBottomColor: theme.border }]}>
         <SafeAreaView edges={["top"]} style={{ backgroundColor: theme.headerBg }}>
           <View style={styles.topHeader}>
-            <View>
-              <Text style={[styles.topHeaderTitle, { color: theme.text }]}>{t.tabMonitor}</Text>
-              <Text style={[styles.topHeaderSub, { color: theme.muted }]}>
-                {t.tabMonitor === "监控" ? "多窗口协同监督中枢" : "Multi-window supervisor"}
-              </Text>
-            </View>
-            <View
-              style={[
-                styles.topHeaderOnlineBadge,
-                {
-                  borderColor: isConnected ? "rgba(16, 185, 129, 0.4)" : "rgba(239, 68, 68, 0.4)",
-                  backgroundColor: isConnected ? "rgba(16, 185, 129, 0.15)" : "rgba(239, 68, 68, 0.15)",
-                },
-              ]}
-            >
-              <PulsingDot color={isConnected ? theme.success : theme.error} size={6} active={isConnected} />
-              <Text style={[styles.topHeaderOnlineText, { color: isConnected ? theme.success : theme.error }]}>
-                {isConnected ? t.onlineBadge : t.offlineBadge}
-              </Text>
-            </View>
+            <View><Text style={[styles.title, { color: theme.text }]}>{t.tabMonitor}</Text><Text style={[styles.subtitle, { color: theme.muted }]}>{t.monitorReadOnly}</Text></View>
+            <View style={styles.connection}><PulsingDot color={isConnected ? theme.success : theme.error} size={6} active={isConnected} /><Text style={{ color: isConnected ? theme.success : theme.error, fontSize: 11 }}>{isConnected ? t.onlineBadge : t.offlineBadge}</Text></View>
           </View>
         </SafeAreaView>
       </View>
-
-      {/* 顶部 Attention 汇总告警条 */}
-      {totalAttention > 0 && (
-        <View style={[styles.attentionBar, { backgroundColor: theme.secondaryContainer ?? theme.cardBg }]}>
-          <View style={[styles.sevDot, { backgroundColor: theme.error }]} />
-          <Text style={[styles.attentionText, { color: theme.error }]} numberOfLines={2}>
-            <Text style={styles.attentionBold}>{t.attentionTitle}</Text> · {totalAttention} {t.alertCount}
-          </Text>
-        </View>
-      )}
-      {windows.length === 0 ? (
-        <View style={styles.empty}>
-          <Text style={styles.emptyText}>{t.noWindows}</Text>
-          <Text style={styles.emptyDesc}>{t.noWindowsDesc}</Text>
-        </View>
-      ) : (
-        <FlatList
-          data={windows}
-          keyExtractor={windowKey}
-          renderItem={renderWindow}
-          extraData={t}
-          contentContainerStyle={[styles.list, resolvedTarget ? { paddingBottom: 100 } : null]}
-          keyboardShouldPersistTaps="handled"
-        />
-      )}
-      {/* 选中窗口时弹出手势 Bottom Sheet，支持手势下滑阻尼关闭与输入法避让 */}
-      <SpringBottomSheet
-        visible={Boolean(resolvedTarget)}
-        onClose={() => setTarget(null)}
-        contentHeight={140}
-        containerStyle={{ paddingBottom: 10 }}
-        keyboardVerticalOffset={Platform.OS === "ios" ? 20 : 0}
-      >
-        <View style={[styles.floatingComposer, { backgroundColor: theme.cardBg, borderColor: theme.accent, marginBottom: 0 }]}>
-          <TextInput
-            style={[styles.floatingInput, { color: theme.text }]}
-            value={draft}
-            onChangeText={setDraft}
-            placeholder={`${t.sendTo} #${endpointId.slice(0, 8)}…`}
-            placeholderTextColor={theme.dim}
-            editable={!sending}
-            multiline={false}
-            autoFocus
-            accessibilityLabel={t.sendSupervisionMsg}
-          />
-          <TouchableOpacity
-            style={[
-              styles.floatingSendBtn,
-              {
-                backgroundColor: theme.accent,
-                opacity: canSend ? 1 : 0.45,
-                shadowColor: theme.accent,
-                shadowOpacity: canSend ? 0.35 : 0,
-                shadowRadius: 6,
-                elevation: canSend ? 4 : 0,
-              },
-            ]}
-            onPress={() => void handleSend()}
-            disabled={!canSend}
-            accessibilityRole="button"
-            accessibilityLabel={t.sendSupervisionMsg}
-          >
-            <Animated.View
-              style={{
-                transform: [
-                  {
-                    translateX: flyAnim.interpolate({
-                      inputRange: [0, 0.6, 1],
-                      outputRange: [0, 10, 0],
-                    }),
-                  },
-                  {
-                    translateY: flyAnim.interpolate({
-                      inputRange: [0, 0.6, 1],
-                      outputRange: [0, -10, 0],
-                    }),
-                  },
-                  {
-                    scale: flyAnim.interpolate({
-                      inputRange: [0, 0.6, 1],
-                      outputRange: [1, 0.6, 1],
-                    }),
-                  },
-                ],
-                opacity: flyAnim.interpolate({
-                  inputRange: [0, 0.5, 0.7, 1],
-                  outputRange: [1, 0, 0, 1],
-                }),
-              }}
-            >
-              <LineIcon name="send" size={15} color="#fff" strokeWidth={2.2} />
-            </Animated.View>
-          </TouchableOpacity>
-          <TouchableOpacity
-            onPress={() => setTarget(null)}
-            style={styles.closeTargetBtn}
-            accessibilityLabel="取消选择目标窗口"
-          >
-            <Text style={[styles.closeTargetText, { color: theme.muted }]}>✕</Text>
-          </TouchableOpacity>
-        </View>
-      </SpringBottomSheet>
+      {sessions.length === 0 ? <View style={styles.empty}><LineIcon name="eye" size={26} color={theme.dim} /><Text style={[styles.emptyTitle, { color: theme.muted }]}>{t.noMonitorSessions}</Text><Text style={[styles.emptyText, { color: theme.dim }]}>{t.noMonitorSessionsDesc}</Text></View> : <FlatList data={sessions} keyExtractor={(session) => session.id} renderItem={({ item }) => <MonitorCard session={item} theme={theme} styles={styles} t={t} onPress={() => router.push({ pathname: "/session", params: { id: item.id } })} />} contentContainerStyle={styles.list} />}
     </View>
   );
 }
 
-function statusColor(s: string, theme: ReturnType<typeof useTheme>["theme"]) {
-  switch (s) {
-    case "running": case "active": return theme.success;
-    case "idle": return "#0A84FF";
-    case "sleeping": return theme.warning;
-    case "failed": case "disconnected": return theme.error;
-    default: return theme.muted;
-  }
+function MonitorCard({ session, theme, styles, t, onPress }: { session: SessionState; theme: ReturnType<typeof useTheme>["theme"]; styles: ReturnType<typeof makeStyles>; t: ReturnType<typeof useI18n>["t"]; onPress: () => void }) {
+  const presentation = session.presentation;
+  const control = presentation?.control;
+  const running = session.runState === "streaming";
+  return <SpringCard style={styles.card} onPress={onPress} accessibilityRole="button" accessibilityLabel={`${session.title} ${t.openSessionDetail}`}>
+    <View style={styles.cardHeader}><View style={styles.cardTitleWrap}><PulsingDot color={running ? theme.success : theme.muted} active={running} size={8} /><Text style={[styles.cardTitle, { color: theme.text }]} numberOfLines={1}>{session.title || session.id}</Text></View><LineIcon name="chevronRight" size={16} color={theme.muted} /></View>
+    <View style={styles.pathRow}><LineIcon name="folder" size={13} color={theme.muted} /><Text style={[styles.path, { color: theme.muted }]} numberOfLines={1}>{session.cwd}</Text></View>
+    <View style={[styles.detail, { backgroundColor: theme.inputBg, borderColor: theme.border }]}><Text style={[styles.detailText, { color: theme.muted }]}>{session.runState}</Text><Text style={[styles.detailText, { color: theme.muted }]}>{presentation?.role ?? "monitor"}</Text><Text style={[styles.detailText, { color: theme.accent }]}>{control?.mode ?? "readonly"}</Text></View>
+    <View style={styles.capabilities}><Capability label={t.promptCapability} enabled={control?.canPrompt === true} theme={theme} /><Capability label={t.steerCapability} enabled={control?.canSteer === true} theme={theme} /><Capability label={t.followUpCapability} enabled={control?.canFollowUp === true} theme={theme} /><Capability label={t.abortCapability} enabled={control?.canAbort === true} theme={theme} /></View>
+  </SpringCard>;
 }
 
-function sevColor(s: MonitorAttentionSummary["severity"], theme: ReturnType<typeof useTheme>["theme"]) {
-  switch (s) {
-    case "error": return theme.error;
-    case "warning": return theme.warning;
-    default: return theme.accent;
-  }
-}
+function Capability({ label, enabled, theme }: { label: string; enabled: boolean; theme: ReturnType<typeof useTheme>["theme"] }) { return <View style={[{ borderWidth: 1, borderColor: theme.border, borderRadius: 9, paddingHorizontal: 8, paddingVertical: 3 }, enabled && { borderColor: theme.accent, backgroundColor: theme.secondaryContainer ?? theme.inputBg }]}><Text style={{ color: enabled ? theme.accent : theme.dim, fontSize: 9, fontWeight: "600" }}>{label}</Text></View>; }
 
 function makeStyles(theme: ReturnType<typeof useTheme>["theme"]) {
   return StyleSheet.create({
-  container: { flex: 1, backgroundColor: theme.bg },
-  headerContainer: {
-    backgroundColor: theme.headerBg,
-    borderBottomWidth: StyleSheet.hairlineWidth,
-    borderBottomColor: theme.border,
-    shadowColor: "#000",
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.06,
-    shadowRadius: 3,
-    elevation: 3,
-    zIndex: 20,
-  },
-  topHeader: {
-    flexDirection: "row",
-    justifyContent: "space-between",
-    alignItems: "center",
-    paddingHorizontal: 20,
-    paddingVertical: 12,
-  },
-  topHeaderTitle: { fontSize: 20, fontWeight: "700" },
-  topHeaderSub: { fontSize: 11, fontFamily: "monospace", marginTop: 2 },
-  topHeaderOnlineBadge: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 6,
-    borderWidth: 1,
-    paddingHorizontal: 10,
-    paddingVertical: 4,
-    borderRadius: 14,
-  },
-  topHeaderGreenDot: { width: 6, height: 6, borderRadius: 3 },
-  topHeaderOnlineText: { fontSize: 11, fontWeight: "600" },
-  list: { padding: MIUIX_SPACE.lg, paddingBottom: 24 },
-  empty: { flex: 1, justifyContent: "center", alignItems: "center", padding: MIUIX_SPACE.xxl },
-  emptyText: { fontSize: MIUIX_TYPE.body1, color: theme.muted, fontWeight: "600" },
-  emptyDesc: { fontSize: MIUIX_TYPE.footnote1, color: theme.dim, marginTop: MIUIX_SPACE.sm },
-  bentoCard: {
-    backgroundColor: theme.cardBg,
-    borderWidth: 1,
-    borderColor: theme.border,
-    borderRadius: MIUIX_RADIUS.lg,
-    padding: MIUIX_SPACE.md,
-    marginBottom: MIUIX_SPACE.sm,
-  },
-  cardHeader: { flexDirection: "row", justifyContent: "space-between", alignItems: "center" },
-  cardHeaderLeft: { flexDirection: "row", alignItems: "center", gap: 8, flex: 1, minWidth: 0 },
-  cardTitle: { fontSize: 13, fontWeight: "700", color: theme.text },
-  dot: { width: 8, height: 8, borderRadius: 4 },
-  modelBadge: {
-    paddingHorizontal: 8,
-    paddingVertical: 2,
-    borderRadius: 10,
-    borderWidth: 1,
-  },
-  modelBadgeText: { fontSize: 9, fontFamily: "monospace", fontWeight: "600" },
-  pathRow: { flexDirection: "row", alignItems: "center", gap: 5, marginTop: 4, marginBottom: 8 },
-  pathText: { fontSize: 11, fontFamily: "monospace", color: theme.muted, flex: 1 },
-  singleInfoRow: {
-    flexDirection: "row",
-    justifyContent: "space-between",
-    alignItems: "center",
-    backgroundColor: theme.cardInner ?? theme.secondaryContainer ?? theme.inputBg,
-    borderRadius: MIUIX_RADIUS.sm,
-    paddingHorizontal: 12,
-    paddingVertical: 7,
-    borderWidth: 1,
-    borderColor: theme.border,
-    marginBottom: 6,
-  },
-  singleInfoItem: { flexDirection: "row", alignItems: "center", gap: 6 },
-  singleInfoLabel: { fontSize: 11, color: theme.dim, fontFamily: "monospace" },
-  singleInfoValue: { fontSize: 11, fontFamily: "monospace", color: theme.text, fontWeight: "700" },
-  contextTrack: { width: "100%", height: 3, backgroundColor: theme.border, borderRadius: 2, overflow: "hidden", marginTop: 4 },
-  contextFill: { height: "100%", borderRadius: 2 },
-  // Attention 告警条（设计稿 attention-bar）
-  attentionBar: { flexDirection: "row", alignItems: "center", gap: MIUIX_SPACE.sm, marginHorizontal: MIUIX_SPACE.lg, marginBottom: MIUIX_SPACE.md, borderRadius: MIUIX_RADIUS.lg, padding: MIUIX_SPACE.md, borderWidth: 1, borderColor: theme.error },
-  sevDot: { width: 10, height: 10, borderRadius: 5 },
-  attentionText: { flex: 1, fontSize: MIUIX_TYPE.footnote1, lineHeight: 18 },
-  attentionBold: { fontWeight: "700" },
-  objective: { fontSize: MIUIX_TYPE.body2, color: theme.muted, marginBottom: MIUIX_SPACE.xs },
-  meta: { fontSize: MIUIX_TYPE.footnote2, color: theme.dim, marginBottom: MIUIX_SPACE.sm },
-  sectionTitle: { fontSize: MIUIX_TYPE.footnote1, fontWeight: "700", color: theme.text, marginBottom: MIUIX_SPACE.sm, marginTop: MIUIX_SPACE.xs },
-  attentionSection: { marginBottom: MIUIX_SPACE.sm },
-  attentionItem: { flexDirection: "row", gap: MIUIX_SPACE.sm, marginBottom: MIUIX_SPACE.xs },
-  attentionCode: { fontSize: MIUIX_TYPE.footnote2, fontWeight: "600" },
-  attentionMsg: { fontSize: MIUIX_TYPE.footnote2, color: theme.muted, flex: 1 },
-  todoSection: { marginTop: MIUIX_SPACE.sm },
-  // Todo checkbox 细线轨道行（设计稿 todo-line）
-  todoLine: { flexDirection: "row", alignItems: "center", gap: MIUIX_SPACE.sm + 3, paddingVertical: 6 },
-  todoCheck: { width: 18, height: 18, borderRadius: 5, borderWidth: 1.5, borderColor: theme.outline ?? theme.border, alignItems: "center", justifyContent: "center" },
-  todoCheckInner: { width: 8, height: 8, borderRadius: 2, backgroundColor: "#fff" },
-  todoDoneText: { color: theme.muted, textDecorationLine: "line-through" },
-  // 进度条（设计稿 progress-wrap）
-  progressWrap: { flexDirection: "row", justifyContent: "space-between", marginTop: MIUIX_SPACE.sm, marginBottom: MIUIX_SPACE.xs },
-  progressMeta: { fontSize: MIUIX_TYPE.footnote2, color: theme.muted, fontVariant: ["tabular-nums"] },
-  progressTrack: { height: 5, borderRadius: 2.5, overflow: "hidden" },
-  progressFill: { height: 5, borderRadius: 2.5 },
-  showAllButton: { marginTop: MIUIX_SPACE.xs, alignSelf: "flex-start" },
-  showAllText: { fontSize: MIUIX_TYPE.footnote1, color: theme.accent },
-  floatingComposerWrap: {
-    position: "absolute",
-    bottom: 16,
-    left: 16,
-    right: 16,
-    zIndex: 50,
-  },
-  floatingComposer: {
-    flexDirection: "row",
-    alignItems: "center",
-    borderRadius: MIUIX_RADIUS.lg,
-    borderWidth: 1.5,
-    paddingHorizontal: 10,
-    paddingVertical: 4,
-    gap: 8,
-    shadowColor: "#000",
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.25,
-    shadowRadius: 10,
-    elevation: 8,
-  },
-  floatingInput: {
-    flex: 1,
-    fontSize: MIUIX_TYPE.body2,
-    fontFamily: "monospace",
-    paddingVertical: 6,
-  },
-  floatingSendBtn: {
-    width: 32,
-    height: 32,
-    borderRadius: 16,
-    alignItems: "center",
-    justifyContent: "center",
-  },
-  closeTargetBtn: {
-    padding: 6,
-  },
-  closeTargetText: {
-    fontSize: 14,
-    fontWeight: "600",
-  },
-});
+    container: { flex: 1 },
+    headerContainer: { borderBottomWidth: StyleSheet.hairlineWidth, shadowColor: "#000", shadowOpacity: 0.06, shadowRadius: 3, elevation: 3 },
+    topHeader: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", paddingHorizontal: 20, paddingVertical: 12 },
+    title: { fontSize: 20, fontWeight: "700" },
+    subtitle: { fontSize: 11, fontFamily: "monospace", marginTop: 2 },
+    connection: { flexDirection: "row", alignItems: "center", gap: 6, borderWidth: 1, borderColor: theme.border, borderRadius: 14, paddingHorizontal: 10, paddingVertical: 4 },
+    list: { padding: MIUIX_SPACE.lg, paddingBottom: 32 },
+    card: { backgroundColor: theme.cardBg, borderWidth: 1, borderColor: theme.border, borderRadius: MIUIX_RADIUS.lg, padding: MIUIX_SPACE.md, marginBottom: MIUIX_SPACE.sm },
+    cardHeader: { flexDirection: "row", alignItems: "center", justifyContent: "space-between" },
+    cardTitleWrap: { flex: 1, minWidth: 0, flexDirection: "row", alignItems: "center", gap: 8 },
+    cardTitle: { fontSize: 14, fontWeight: "700", flex: 1 },
+    pathRow: { flexDirection: "row", alignItems: "center", gap: 5, marginTop: 7, marginBottom: 9 },
+    path: { flex: 1, fontSize: 11, fontFamily: "monospace" },
+    detail: { flexDirection: "row", justifyContent: "space-between", borderWidth: 1, borderRadius: MIUIX_RADIUS.md, padding: 9 },
+    detailText: { fontSize: 10, fontFamily: "monospace" },
+    capabilities: { flexDirection: "row", gap: 6, marginTop: 9 },
+    empty: { flex: 1, alignItems: "center", justifyContent: "center", padding: 32, gap: 8 },
+    emptyTitle: { fontSize: MIUIX_TYPE.body1, fontWeight: "700", marginTop: 8 },
+    emptyText: { fontSize: MIUIX_TYPE.footnote1, textAlign: "center" },
+  });
 }

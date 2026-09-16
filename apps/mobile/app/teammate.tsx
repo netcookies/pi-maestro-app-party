@@ -2,7 +2,7 @@ import React from "react";
 import { View, Text, StyleSheet, FlatList } from "react-native";
 import { useHost } from "../src/store";
 import { useTheme, MIUIX_RADIUS, MIUIX_TYPE, MIUIX_SPACE } from "../src/theme";
-import type { MaestroScheduleSummary, MaestroStepSummary, MaestroDispatchSummary, MonitorWindowSummary } from "@maestro-mobile/shared";
+import type { MaestroScheduleSummary, MaestroStepSummary, MaestroDispatchSummary, MonitorWindowSummary, TeammateAgentState } from "@maestro-mobile/shared";
 
 type Row =
   | { type: "owner"; owner: MonitorWindowSummary }
@@ -11,16 +11,12 @@ type Row =
   | { type: "dispatch"; dispatch: MaestroDispatchSummary };
 
 export default function TeammateScreen() {
-  const { state, fetchMonitorState } = useHost();
+  const { state } = useHost();
   const { theme } = useTheme();
   const styles = React.useMemo(() => makeStyles(theme), [theme]);
   const schedules = state.maestro?.schedules ?? [];
+  // T7：owner 行来自 monitor 投影的 monitor_tab 窗口（Host 推送，无 fetchMonitorState 轮询命令）
   const ownerWindows = state.monitor?.windows ?? [];
-
-  // 进入页面主动拉取（host 只在变化时推送，后连接会错过）
-  React.useEffect(() => {
-    void fetchMonitorState();
-  }, [fetchMonitorState]);
 
   const rows = React.useMemo<Row[]>(() => {
     const out: Row[] = [];
@@ -55,7 +51,7 @@ export default function TeammateScreen() {
       const w = item.owner;
       // 从 facets 取 agents 详情（host 投影 teammate-agents facet）
       const facet = w.facets?.find((f) => f.kind === "teammate-agents");
-      const agents = (facet?.data as { agents?: { name?: string; agent?: string; status?: string; phase?: string }[] } | undefined)?.agents ?? [];
+      const agents: TeammateAgentState[] = facet?.data?.agents ?? [];
       // P3-4：host 投影里 facets 可能缺失；agent 总数以 workStatus 之外的语义展示，
       // facets 有 agents 用 agents.length，否则显示 workStatus（active/idle）而不臆造数字
       const agentCountLabel = agents.length > 0
@@ -77,7 +73,7 @@ export default function TeammateScreen() {
           {agents.map((a, i) => (
             <View key={i} style={[styles.dispatch, { borderLeftWidth: 3, borderLeftColor: a.status === "running" ? theme.success : theme.border, paddingLeft: 8, marginBottom: 4 }]}>
               <View style={styles.scheduleHeader}>
-                <Text style={[styles.sessionTitle, { color: theme.text, fontSize: 13 }]} numberOfLines={1}>
+                <Text style={[styles.scheduleTitle, { color: theme.text, fontSize: 13, marginBottom: 0 }]} numberOfLines={1}>
                   {a.name ?? a.agent ?? "teammate"}
                 </Text>
                 <Text style={[styles.scheduleState, statusColor(a.status ?? "", theme)]}>{a.status ?? "?"}</Text>
@@ -175,12 +171,13 @@ function StateBadge({ state, theme }: { state: string; theme: ReturnType<typeof 
   const cfg: Record<string, { bg: string; fg: string; label: string }> = {
     active: { bg: theme.tertiaryContainer ?? theme.accent, fg: theme.onTertiaryContainer ?? theme.accent, label: "RUNNING" },
     completed: { bg: theme.success, fg: "#fff", label: "DONE" },
-    failed: { bg: theme.errorContainer ?? theme.error, fg: theme.error, label: "FAILED" },
+    failed: { bg: theme.error, fg: "#fff", label: "FAILED" },
   };
   const c = cfg[state] ?? { bg: theme.secondaryContainer ?? theme.border, fg: theme.muted, label: state.toUpperCase() };
+  const badgeStyles = makeStyles(theme);
   return (
-    <View style={[styles.badge, { backgroundColor: c.bg }]}>
-      <Text style={[styles.badgeText, { color: c.fg }]}>{c.label}</Text>
+    <View style={[badgeStyles.badge, { backgroundColor: c.bg }]}>
+      <Text style={[badgeStyles.badgeText, { color: c.fg }]}>{c.label}</Text>
     </View>
   );
 }

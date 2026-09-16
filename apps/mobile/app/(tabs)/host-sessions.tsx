@@ -1,968 +1,350 @@
-import React, { useEffect, useState, useCallback, useMemo, useRef } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
-  View, Text, StyleSheet, FlatList, TouchableOpacity, ActivityIndicator, Alert, TextInput,
-  KeyboardAvoidingView, Platform, Animated,
+  ActivityIndicator,
+  FlatList,
+  KeyboardAvoidingView,
+  Modal,
+  Platform,
+  StyleSheet,
+  Text,
+  TextInput,
+  TouchableOpacity,
+  View,
 } from "react-native";
-import { useFocusEffect, useRouter } from "expo-router";
-import { useHost } from "../../src/store";
-import { useTheme, MIUIX_RADIUS, MIUIX_TYPE, MIUIX_SPACE, hexToRgba } from "../../src/theme";
-import { getConfig, loadConfig } from "../../src/config";
-import AsyncStorage from "@react-native-async-storage/async-storage";
+import { useRouter } from "expo-router";
 import { SafeAreaView } from "react-native-safe-area-context";
+import { useHost } from "../../src/store";
+import { useTheme, MIUIX_RADIUS, MIUIX_SPACE, MIUIX_TYPE } from "../../src/theme";
 import { LineIcon } from "../../src/components/LineIcon";
-import { SpringCard } from "../../src/components/SpringCard";
 import { PulsingDot } from "../../src/components/PulsingDot";
-import { useTabSwipe } from "../../src/hooks/useTabSwipe";
+import { SpringCard } from "../../src/components/SpringCard";
 import { useI18n, formatRelativeTime } from "../../src/i18n";
-import type { HostSessionSummary, LiveSessionInfo } from "@maestro-mobile/shared";
-import { canLoadMoreSessions, isLoadMoreResponseCurrent, isTargetedResponseCurrent, mergeHostSessionPage, mergeTargetedHostSessions, shouldBlockSessionListError, shouldRequestTargetedSummaries, type TargetedCapability } from "../../src/host-session-pagination";
+import type { HostSessionSummary } from "@maestro-mobile/shared";
+import {
+  beginFilterRequest,
+  createFilterState,
+  filterSessionSummaries,
+  isFilterResponseCurrent,
+  isPageResponseCurrent,
+  updateFilterState,
+  type FilterState,
+} from "../../src/filter-state";
+import { canLoadMoreSessions, mergeHostSessionPage } from "../../src/host-session-pagination";
 
 const PAGE_SIZE = 30;
 
-type TabKey = "active" | "all";
-
-// 扁平行模型：分组头与会话均为 FlatList 顶层行，保持列表虚拟化
-type Row =
-  | { type: "group"; key: string; cwd: string; count: number }
-  | { type: "session"; key: string; session: HostSessionSummary; live: boolean; opening: boolean };
-
-function StaggerCard({ index, tabKey, children }: { index: number; tabKey: string; children: React.ReactNode }) {
-  const anim = useRef(new Animated.Value(0)).current;
-
-  useEffect(() => {
-    anim.setValue(0);
-    const timer = setTimeout(() => {
-      Animated.spring(anim, {
-        toValue: 1,
-        friction: 7,
-        tension: 90,
-        useNativeDriver: true,
-      }).start();
-    }, Math.min(index, 6) * 30);
-    return () => clearTimeout(timer);
-  }, [tabKey, index]);
-
-  return (
-    <Animated.View
-      style={{
-        opacity: anim,
-        transform: [
-          {
-            translateY: anim.interpolate({
-              inputRange: [0, 1],
-              outputRange: [20, 0],
-            }),
-          },
-          {
-            scale: anim.interpolate({
-              inputRange: [0, 1],
-              outputRange: [0.96, 1],
-            }),
-          },
-        ],
-      }}
-    >
-      {children}
-    </Animated.View>
-  );
-}
+type Row = { type: "group"; key: string; cwd: string; count: number } | { type: "session"; key: string; session: HostSessionSummary };
 
 export default function HostSessionsScreen() {
   const router = useRouter();
   const { theme } = useTheme();
   const { t } = useI18n();
   const styles = useMemo(() => makeStyles(theme), [theme]);
-  const { listHostSessions, listLiveSessions, openExistingSession, closeSession, loadSessionHistory, fetchSessionUsage, isConnected, connectionState, lastError, hostUrl: connectedHostUrl, state: hostState } = useHost();
-  // 当前已打开的会话（P2-4：open 新会话前先 close 旧的，避免 host 端旧 runner 泄漏）
-  const openedSessionRef = useRef<string | null>(null);
-  const cfg = getConfig();
-
-  // 确保配置加载（冷启动直接进本页时）
-  useEffect(() => {
-    void loadConfig();
-  }, []);
+  const { listHostSessions, openExistingSession, loadSessionHistory, isConnected, connectionState, hostUrl } = useHost();
+  const [filterState, setFilterState] = useState<FilterState>(() => createFilterState());
+  const filterStateRef = useRef(filterState);
+  const [queryInput, setQueryInput] = useState("");
+  const [searchOpen, setSearchOpen] = useState(false);
+  const [filterOpen, setFilterOpen] = useState(false);
+  // 草稿多选：底部抽屉中勾选，点应用才提交（避免每次勾选都触发一次请求）
+  const [cwdDraft, setCwdDraft] = useState<string[]>([]);
   const [sessions, setSessions] = useState<HostSessionSummary[]>([]);
   const sessionsRef = useRef<HostSessionSummary[]>([]);
-  const [liveSessions, setLiveSessions] = useState<Map<string, LiveSessionInfo>>(new Map());
-  const [usageMap, setUsageMap] = useState<Record<string, SessionUsageSummary>>({});
+  const [nextCursor, setNextCursor] = useState<string | undefined>();
+  const nextCursorRef = useRef<string | undefined>(undefined);
+  const [hasMore, setHasMore] = useState(false);
+  const [total, setTotal] = useState<number | undefined>();
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [loadingMore, setLoadingMore] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const [refreshError, setRefreshError] = useState<string | null>(null);
-  const [loadMoreError, setLoadMoreError] = useState<string | null>(null);
-  const [nextCursor, setNextCursor] = useState<string | undefined>();
-  const [hasMore, setHasMore] = useState(false);
-  const [total, setTotal] = useState<number | undefined>();
-  const requestGenerationRef = useRef(0);
-  const connectionEpochRef = useRef(0);
-  const hostIdentityRef = useRef("");
-  const targetedCapabilityRef = useRef<TargetedCapability>("unknown");
-  const targetedInFlightRef = useRef(false);
-  const targetedFailureCountRef = useRef(0);
-  const targetedRetryAtRef = useRef(0);
-  const firstPageInFlightRef = useRef(false);
   const loadingMoreRef = useRef(false);
-  const currentQueryRef = useRef("");
-  const currentCursorRef = useRef<string | undefined>();
-  const lastRequestedCursorRef = useRef<string | undefined>();
+  const firstPageInFlightRef = useRef(false);
+  const lastRequestedCursorRef = useRef<string | undefined>(undefined);
+  const [error, setError] = useState<string | null>(null);
   const [opening, setOpening] = useState<string | null>(null);
-  const [tab, setTab] = useState<TabKey>("active");
-  const [query, setQuery] = useState("");
-  const [debouncedQuery, setDebouncedQuery] = useState("");
-  const [searchBarOpen, setSearchBarOpen] = useState(false);
-  // 连接参数（原 index 页迁移；独立 AsyncStorage 键持久化）
-  const [hostUrl, setHostUrl] = useState("ws://127.0.0.1:4739/ws");
-  const [token, setToken] = useState("");
+
+  const setFilter = useCallback((patch: Partial<FilterState["filter"]>) => {
+    const next = updateFilterState(filterStateRef.current, patch);
+    filterStateRef.current = next;
+    setFilterState(next);
+  }, []);
 
   useEffect(() => {
-    connectionEpochRef.current += 1;
-    hostIdentityRef.current = `${connectedHostUrl}|${connectionEpochRef.current}`;
-    targetedCapabilityRef.current = "unknown";
-    targetedInFlightRef.current = false;
-    targetedFailureCountRef.current = 0;
-    targetedRetryAtRef.current = 0;
-    requestGenerationRef.current += 1;
-  }, [connectedHostUrl, connectionState]);
-
-  // 首次进入及从配对页返回时读回当前连接；Tab 页面不会保证 remount。
-  useFocusEffect(useCallback(() => {
-    let active = true;
-    void (async () => {
-      await importLegacyConnection();
-      const raw = await AsyncStorage.getItem(HOST_CONN_KEY);
-      if (!raw || !active) return;
-      try {
-        const saved = JSON.parse(raw) as { hostUrl?: string; token?: string };
-        if (saved.hostUrl) setHostUrl(saved.hostUrl);
-        setToken(saved.token ?? "");
-      } catch {}
-    })();
-    return () => { active = false; };
-  }, []));
-
-  const handleHostUrlChange = (v: string) => {
-    setHostUrl(v);
-    void AsyncStorage.setItem(HOST_CONN_KEY, JSON.stringify({ hostUrl: v, token })).catch(() => {});
-  };
-  const handleTokenChange = (v: string) => {
-    setToken(v);
-    void AsyncStorage.setItem(HOST_CONN_KEY, JSON.stringify({ hostUrl, token: v })).catch(() => {});
-  };
-
-  useEffect(() => {
-    const timer = setTimeout(() => setDebouncedQuery(query.trim()), 300);
+    const timer = setTimeout(() => setFilter({ query: queryInput }), 250);
     return () => clearTimeout(timer);
-  }, [query]);
+  }, [queryInput, setFilter]);
 
-  const loadFirstPage = useCallback(async (searchQuery: string, showRefresh = false) => {
+  const loadFirstPage = useCallback(async (refresh = false) => {
     if (!isConnected) {
       setLoading(false);
-      setRefreshing(false);
       return;
     }
-    const generation = ++requestGenerationRef.current;
-    currentQueryRef.current = searchQuery;
-    currentCursorRef.current = undefined;
+    const current = filterStateRef.current;
+    const token = beginFilterRequest(current);
     firstPageInFlightRef.current = true;
     lastRequestedCursorRef.current = undefined;
-    loadingMoreRef.current = false;
-    setNextCursor(undefined);
-    setHasMore(false);
     setLoadingMore(false);
-    setLoadMoreError(null);
     setError(null);
-    setRefreshError(null);
-    if (showRefresh || sessionsRef.current.length > 0) setRefreshing(true);
+    if (refresh || sessionsRef.current.length > 0) setRefreshing(true);
     else setLoading(true);
     try {
-      const list = await listHostSessions({ limit: PAGE_SIZE, ...(searchQuery ? { query: searchQuery } : {}) });
-      if (generation !== requestGenerationRef.current || searchQuery !== currentQueryRef.current) return;
+      const list = await listHostSessions({
+        limit: PAGE_SIZE,
+        ...(current.filter.query ? { query: current.filter.query } : {}),
+        // 单选语义映射到服务端 cwd 过滤；多选时本地再 scope（race-safe 由 generation token 保证）
+        ...(current.filter.cwds?.length === 1 ? { cwd: current.filter.cwds[0] } : {}),
+      });
+      if (!isFilterResponseCurrent(filterStateRef.current, token)) return;
       const page = mergeHostSessionPage([], list, true);
-      sessionsRef.current = page.sessions;
-      setSessions(page.sessions);
+      const scoped = filterSessionSummaries(page.sessions, current.filter);
+      sessionsRef.current = scoped;
+      setSessions(scoped);
+      nextCursorRef.current = page.nextCursor;
       setNextCursor(page.nextCursor);
-      currentCursorRef.current = page.nextCursor;
       setHasMore(page.hasMore);
       setTotal(page.total);
     } catch (e) {
-      if (generation === requestGenerationRef.current) {
-        const message = e instanceof Error ? e.message : "加载失败";
-        if (shouldBlockSessionListError(sessionsRef.current.length)) setError(message);
-        else setRefreshError(message);
-      }
+      if (isFilterResponseCurrent(filterStateRef.current, token)) setError(e instanceof Error ? e.message : "加载会话失败");
     } finally {
-      if (generation === requestGenerationRef.current) {
+      if (isFilterResponseCurrent(filterStateRef.current, token)) {
         firstPageInFlightRef.current = false;
         setLoading(false);
         setRefreshing(false);
       }
     }
-  }, [listHostSessions, isConnected]);
+  }, [isConnected, listHostSessions]);
+
+  useEffect(() => {
+    void loadFirstPage();
+  }, [loadFirstPage, filterState.generation]);
 
   const loadMore = useCallback(async () => {
+    const current = filterStateRef.current;
+    const cursor = nextCursorRef.current;
     if (!canLoadMoreSessions({
       connected: isConnected,
       hasMore,
-      nextCursor,
+      nextCursor: cursor,
       loading: loadingMoreRef.current,
       lastRequestedCursor: lastRequestedCursorRef.current,
       firstPageInFlight: firstPageInFlightRef.current,
     })) return;
-    const generation = requestGenerationRef.current;
-    const queryAtRequest = currentQueryRef.current;
-    const cursor = nextCursor!;
+    const token = beginFilterRequest(current, cursor);
     loadingMoreRef.current = true;
     lastRequestedCursorRef.current = cursor;
     setLoadingMore(true);
-    setLoadMoreError(null);
     try {
       const list = await listHostSessions({
         limit: PAGE_SIZE,
         cursor,
-        ...(queryAtRequest ? { query: queryAtRequest } : {}),
+        ...(current.filter.query ? { query: current.filter.query } : {}),
+        ...(current.filter.cwds?.length === 1 ? { cwd: current.filter.cwds[0] } : {}),
       });
-      if (!isLoadMoreResponseCurrent({
-        expectedGeneration: generation,
-        currentGeneration: requestGenerationRef.current,
-        expectedQuery: queryAtRequest,
-        currentQuery: currentQueryRef.current,
-        expectedCursor: cursor,
-        currentCursor: currentCursorRef.current,
-      })) return;
+      if (!isPageResponseCurrent(filterStateRef.current, token, nextCursorRef.current)) return;
       const page = mergeHostSessionPage(sessionsRef.current, list, false);
-      sessionsRef.current = page.sessions;
-      setSessions(page.sessions);
+      const scoped = filterSessionSummaries(page.sessions, current.filter);
+      sessionsRef.current = scoped;
+      setSessions(scoped);
+      nextCursorRef.current = page.nextCursor;
       setNextCursor(page.nextCursor);
-      currentCursorRef.current = page.nextCursor;
       setHasMore(page.hasMore);
       setTotal(page.total);
     } catch (e) {
-      if (generation === requestGenerationRef.current) {
-        setLoadMoreError(e instanceof Error ? e.message : "加载更多失败");
-        // A manual retry may issue the same cursor again.
-        lastRequestedCursorRef.current = undefined;
-      }
+      if (isPageResponseCurrent(filterStateRef.current, token, nextCursorRef.current)) setError(e instanceof Error ? e.message : "加载更多失败");
+      lastRequestedCursorRef.current = undefined;
     } finally {
-      if (generation === requestGenerationRef.current) {
-        loadingMoreRef.current = false;
-        setLoadingMore(false);
-      }
+      loadingMoreRef.current = false;
+      setLoadingMore(false);
     }
-  }, [isConnected, hasMore, nextCursor, listHostSessions]);
+  }, [hasMore, isConnected, listHostSessions]);
 
-  const hydrateActiveSummaries = useCallback(async (sessionIds: string[], latestForCwds: string[]) => {
-    const missingIds = sessionIds.filter((id) => !sessionsRef.current.some((session) => session.id === id)).slice(0, 100);
-    const requestedCwds = latestForCwds.slice(0, 100);
-    if (missingIds.length === 0 && requestedCwds.length === 0) return;
-    if (!shouldRequestTargetedSummaries({
-      capability: targetedCapabilityRef.current,
-      inFlight: targetedInFlightRef.current,
-      failureCount: targetedFailureCountRef.current,
-      maxFailures: 2,
-      retryAt: targetedRetryAtRef.current,
-      now: Date.now(),
-    })) return;
-    const generation = requestGenerationRef.current;
-    const hostIdentity = hostIdentityRef.current;
-    targetedInFlightRef.current = true;
-    try {
-      const response = await listHostSessions({ sessionIds: missingIds, latestForCwds: requestedCwds });
-      if (!isTargetedResponseCurrent({
-        expectedGeneration: generation,
-        currentGeneration: requestGenerationRef.current,
-        expectedHostIdentity: hostIdentity,
-        currentHostIdentity: hostIdentityRef.current,
-        connected: isConnected,
-      })) return;
-      targetedCapabilityRef.current = response.targeted === true ? "supported" : "unsupported";
-      if (response.targeted !== true) return;
-      targetedFailureCountRef.current = 0;
-      targetedRetryAtRef.current = 0;
-      const queryAtResponse = currentQueryRef.current.toLocaleLowerCase();
-      const targeted = queryAtResponse
-        ? { ...response, sessions: response.sessions.filter((session) => [session.title, session.id, session.cwd, session.model, session.name].some((value) => value?.toLocaleLowerCase().includes(queryAtResponse))) }
-        : response;
-      const merged = mergeTargetedHostSessions({ sessions: sessionsRef.current, nextCursor: currentCursorRef.current, hasMore, total }, targeted);
-      if (merged.sessions !== sessionsRef.current) {
-        sessionsRef.current = merged.sessions;
-        setSessions(merged.sessions);
-      }
-    } catch {
-      if (hostIdentity === hostIdentityRef.current) {
-        targetedFailureCountRef.current += 1;
-        targetedRetryAtRef.current = Date.now() + 5_000 * (2 ** (targetedFailureCountRef.current - 1));
-      }
-      // 网络失败不代表 Host 不支持；仅做两次带退避的有限重试。
-    } finally {
-      if (hostIdentity === hostIdentityRef.current) targetedInFlightRef.current = false;
-    }
-  }, [hasMore, isConnected, listHostSessions, total]);
-
-  const loadLive = useCallback(async () => {
-    try {
-      const list = await listLiveSessions();
-      const m = new Map<string, LiveSessionInfo>();
-      for (const s of list.sessions) {
-        if (s.live) m.set(s.sessionId, s);
-      }
-      setLiveSessions(m);
-      const runningCwds = (hostState.monitor?.windows ?? [])
-        .filter((window) => window.status === "running" && window.cwd)
-        .map((window) => window.cwd);
-      await hydrateActiveSummaries([...m.keys()], runningCwds);
-    } catch {
-      // 轮询失败静默
-    }
-  }, [hydrateActiveSummaries, hostState.monitor, listLiveSessions]);
-
-  useEffect(() => {
-    void loadFirstPage(debouncedQuery);
-  }, [loadFirstPage, debouncedQuery]);
-
-  useEffect(() => {
-    void loadLive();
-    // 活跃状态独立轻量轮询，不重新请求历史页。
-    const timer = setInterval(() => { if (isConnected) void loadLive(); }, cfg.livePollIntervalMs);
-    return () => clearInterval(timer);
-  }, [loadLive, isConnected, cfg.livePollIntervalMs]);
-
-  const handleOpen = async (s: HostSessionSummary) => {
+  const handleOpen = useCallback(async (session: HostSessionSummary) => {
     if (opening) return;
-    setOpening(s.id);
+    setOpening(session.id);
     try {
-      // 增加 6 秒超时防卡死保护，网络慢时友好提示而非永远卡住
-      const sessionId = await Promise.race([
-        openExistingSession(s.path, s.cwd),
-        new Promise<string>((_, reject) =>
-          setTimeout(() => reject(new Error("打开会话连接超时，请检查 Host 运行状态")), 6000)
-        ),
-      ]);
-      const previous = openedSessionRef.current;
-      if (previous && previous !== sessionId) {
-        void closeSession(previous);
-      }
-      openedSessionRef.current = sessionId;
-      // 历史记录异步拉取，不阻塞界面立刻推入路由
+      const sessionId = await openExistingSession(session.path, session.cwd);
       void loadSessionHistory(sessionId).catch(() => {});
       router.push({ pathname: "/session", params: { id: sessionId } });
-    } catch (e) {
-      Alert.alert("打开失败", e instanceof Error ? e.message : "未知错误");
+    } catch {
+      router.push({ pathname: "/session", params: { id: session.id } });
     } finally {
       setOpening(null);
     }
-  };
+  }, [loadSessionHistory, opening, openExistingSession, router]);
 
-  // Monitor 桌面打开窗口（running 运行中 / idle 待命中 / sleeping 休眠待命）按 cwd 归并
-  const activeWindowCwds = useMemo(() => {
-    const set = new Set<string>();
-    for (const w of hostState.monitor?.windows ?? []) {
-      if ((w.status === "running" || w.status === "idle" || w.status === "sleeping") && w.cwd) {
-        set.add(w.cwd);
-      }
-    }
-    return set;
-  }, [hostState.monitor]);
+  const cwdOptions = useMemo(() => Array.from(new Set(sessions.map((session) => session.cwd))).sort(), [sessions]);
+  const scopedSessions = useMemo(() => filterSessionSummaries(sessions, filterState.filter), [filterState.filter, sessions]);  const rows = useMemo<Row[]>(() => {
+    const groups = new Map<string, HostSessionSummary[]>();
+    for (const session of scopedSessions) groups.set(session.cwd, [...(groups.get(session.cwd) ?? []), session]);
+    return Array.from(groups.entries()).flatMap(([cwd, group]) => [
+      { type: "group", key: `g:${cwd}`, cwd, count: group.length } as Row,
+      ...group.map((session) => ({ type: "session", key: `s:${session.id}`, session } as Row)),
+    ]);
+  }, [scopedSessions]);
 
-  /** 桌面打开窗口（running / idle / sleeping）绑定的 sessionId 映射，用于精准指示灯与活跃过滤 */
-  const windowStatusMap = useMemo(() => {
-    const map = new Map<string, "running" | "idle" | "sleeping">();
-    for (const w of hostState.monitor?.windows ?? []) {
-      if (w.identity?.endpointId && (w.status === "running" || w.status === "idle" || w.status === "sleeping")) {
-        map.set(w.identity.endpointId, w.status as "running" | "idle" | "sleeping");
-      }
-    }
-    return map;
-  }, [hostState.monitor?.windows]);
-
-  // 针对当前活跃会话异步拉取最新详细 usage
-  useEffect(() => {
-    if (!isConnected) return;
-    const activeItems = sessions.filter(isSessionActive);
-    for (const item of activeItems.slice(0, 5)) {
-      if (!usageMap[item.id]) {
-        void fetchSessionUsage(item.id).then((u) => {
-          if (u) setUsageMap((prev) => ({ ...prev, [item.id]: u }));
-        });
-      }
-    }
-  }, [sessions, isConnected, fetchSessionUsage, isSessionActive, usageMap]);
-
-  /** 每个 cwd 的最新会话 id（sessions 无全局排序保证，这里自行推导） */
-  const latestPerCwd = useMemo(() => {
-    const m = new Map<string, HostSessionSummary>();
-    for (const s of sessions) {
-      const cur = m.get(s.cwd);
-      if (!cur || new Date(s.updatedAt).getTime() > new Date(cur.updatedAt).getTime()) m.set(s.cwd, s);
-    }
-    return m;
-  }, [sessions]);
-
-  const isSessionActive = useCallback((s: HostSessionSummary) =>
-    liveSessions.has(s.id)
-    || windowStatusMap.has(s.id)
-    || (activeWindowCwds.has(s.cwd) && latestPerCwd.get(s.cwd)?.id === s.id),
-  [liveSessions, windowStatusMap, activeWindowCwds, latestPerCwd]);
-
-  // Tab 只过滤已加载数据；文本搜索由 Host 对全库执行。
-  const filtered = useMemo(() => {
-    return sessions.filter((s) => {
-      if (tab === "active" && !isSessionActive(s)) return false;
-      if (tab === "history" && isSessionActive(s)) return false;
-      return true;
-    });
-  }, [sessions, tab, isSessionActive]);
-
-  // 按项目分组并扁平化为一维行：分组头按最新会话时间排序，组内保持原序
-  const flatRows = useMemo<Row[]>(() => {
-    const grouped = filtered.reduce<Record<string, HostSessionSummary[]>>((acc, s) => {
-      (acc[s.cwd] ??= []).push(s);
-      return acc;
-    }, {});
-    const entries = Object.entries(grouped).sort((a, b) => {
-      const tA = Math.max(...a[1].map((s) => new Date(s.updatedAt).getTime()));
-      const tB = Math.max(...b[1].map((s) => new Date(s.updatedAt).getTime()));
-      return tB - tA;
-    });
-    const rows: Row[] = [];
-    for (const [cwd, group] of entries) {
-      rows.push({
-        type: "group",
-        key: `g:${cwd}`,
-        cwd,
-        count: group.length,
-      });
-      for (const s of group) {
-        rows.push({
-          type: "session",
-          key: `s:${s.id}`,
-          session: s,
-          live: isSessionActive(s),
-          opening: opening === s.id,
-        });
-      }
-    }
-    return rows;
-  }, [filtered, liveSessions, opening]);
-
-  const renderItem = ({ item, index }: { item: Row; index: number }) => {
-    if (item.type === "group") {
-      return (
-        <View style={styles.group}>
-          <Text style={styles.groupTitle}>
-            {cwdName(item.cwd)} · {item.count}
-          </Text>
-          <Text style={styles.groupPath} numberOfLines={1}>{item.cwd}</Text>
-        </View>
-      );
-    }
-    const s = item.session;
-    return (
-      <StaggerCard index={index} tabKey={tab}>
-        <SpringCard
-          style={[styles.sessionItem, item.live && styles.sessionItemLive]}
-          onPress={() => void handleOpen(s)}
-          disabled={item.opening}
-          accessibilityRole="button"
-        >
-        {/* 卡片顶行：状态指示点 + 标题 (主标题为文件夹名称) + 高光色 ID 徽标 */}
-        <View style={styles.sessionHeader}>
-          <View style={styles.sessionHeaderLeft}>
-            {(() => {
-              const winStatus = windowStatusMap.get(s.id);
-              const dotColor = winStatus === "running"
-                ? theme.success
-                : winStatus === "idle"
-                ? "#0A84FF"
-                : winStatus === "sleeping"
-                ? theme.warning
-                : item.live
-                ? theme.success
-                : theme.dim;
-              return (
-                <PulsingDot
-                  color={dotColor}
-                  size={8}
-                  active={winStatus === "running" || (winStatus === undefined && item.live)}
-                />
-              );
-            })()}
-            <Text style={styles.sessionTitle} numberOfLines={1}>
-              {s.cwdName || (s.cwd ? s.cwd.replace(/\/$/, "").split("/").pop() : null) || s.name || s.title || "(未命名项目)"}
-            </Text>
-          </View>
-          <View style={styles.modelBadge}>
-            <Text style={styles.modelBadgeText}>#{s.id.slice(0, 8)}</Text>
-          </View>
-          {item.opening && <ActivityIndicator size="small" color={theme.accent} style={{ marginLeft: 6 }} />}
-        </View>
-
-        {/* 路径行 */}
-        <View style={styles.pathRow}>
-          <LineIcon name="folder" size={13} color={theme.muted} />
-          <Text style={styles.pathText} numberOfLines={1}>{s.cwd || s.path}</Text>
-        </View>
-
-        {/* 2x2 Bento 便当盒仪表盘核心网格 */}
-        <View style={styles.bentoGrid}>
-          {/* 格 1：上下文视窗 (优先真实实时上下文，否则显示模型视窗上限) */}
-          <View style={styles.bentoCell}>
-            <Text style={styles.bentoCellLabel}>{t.contextLabel}</Text>
-            {(() => {
-              const liveUsage = usageMap[s.id];
-              const context = s.context ?? liveUsage?.context;
-              return (
-                <Text style={[styles.bentoCellValue, context?.percent != null && { color: theme.accent }]}>
-                  {(() => {
-                    if (context) {
-                      const pct = typeof context.percent === "number" ? Math.round(context.percent) : null;
-                      const winK = context.contextWindow ? Math.round(context.contextWindow / 1000) : 200;
-                      if (context.tokens != null && pct != null) {
-                        const usedK = Math.round(context.tokens / 1000);
-                        return `${usedK}k / ${winK}k (${pct}%)`;
-                      }
-                      if (pct != null) {
-                        return `${pct}% (${winK}k)`;
-                      }
-                    }
-                    if (!s.model) return "--";
-                    const maxWindow = s.model.includes("gemini") ? "1000k" : s.model.includes("deepseek") ? "128k" : "200k";
-                    return `${maxWindow} ${t.modelWindow}`;
-                  })()}
-                </Text>
-              );
-            })()}
-          </View>
-
-          {/* 格 2：Token 消耗 (有聚合数据时展示，否则安全展示 --) */}
-          <View style={styles.bentoCell}>
-            <Text style={styles.bentoCellLabel}>{t.tokensLabel}</Text>
-            {(() => {
-              const liveUsage = usageMap[s.id];
-              const totalTokens = s.totalTokens ?? liveUsage?.totalTokens;
-              const cost = s.cost ?? liveUsage?.cost;
-              return (
-                <Text style={styles.bentoCellValue}>
-                  {typeof totalTokens === "number" && totalTokens > 0
-                    ? `${(totalTokens / 1000).toFixed(1)}k ($${(cost ?? 0).toFixed(2)})`
-                    : "--"}
-                </Text>
-              );
-            })()}
-          </View>
-
-          {/* 格 3：缓存命中 (Prompt Cache 命中率) */}
-          <View style={styles.bentoCell}>
-            <Text style={styles.bentoCellLabel}>{t.cacheLabel}</Text>
-            {(() => {
-              const liveUsage = usageMap[s.id];
-              const cacheRead = (s as { cacheRead?: number }).cacheRead ?? liveUsage?.cacheRead;
-              const input = liveUsage?.input;
-              const totalInput = (typeof input === "number" ? input : 0) + (typeof cacheRead === "number" ? cacheRead : 0);
-              const cacheRate = totalInput > 0 && typeof cacheRead === "number"
-                ? Math.round((cacheRead / totalInput) * 100)
-                : null;
-              return (
-                <Text style={[styles.bentoCellValue, cacheRate !== null && cacheRate > 0 && { color: theme.success }]}>
-                  {cacheRate !== null ? `${cacheRate}%` : "--"}
-                </Text>
-              );
-            })()}
-          </View>
-
-          {/* 格 4：对话与时间 (条数与更新时间整合，100% 双语) */}
-          <View style={styles.bentoCell}>
-            <Text style={styles.bentoCellLabel}>{t.messagesAndTime}</Text>
-            <Text style={styles.bentoCellValue}>
-              {s.messageCount} {t.msgCount} · {formatRelativeTime(s.updatedAt, t)}
-            </Text>
-          </View>
-        </View>
-
-        {/* 上下文健康细条：100% 关联真实 context 消耗百分比 */}
-        <View style={styles.contextTrack}>
-          {(() => {
-            const liveUsage = usageMap[s.id];
-            const context = s.context ?? liveUsage?.context;
-            const pct = typeof context?.percent === "number" ? Math.max(0, Math.min(100, Math.round(context.percent))) : 0;
-            const barColor = pct > 90 ? theme.error : pct > 75 ? theme.warning : theme.accent;
-            return (
-              <View style={[styles.contextFill, { width: `${pct}%`, backgroundColor: barColor }]} />
-            );
-          })()}
-        </View>
-        </SpringCard>
-      </StaggerCard>
-    );
-  };
-
-  const liveCount = filtered.filter(isSessionActive).length;
-  const loadedLabel = typeof total === "number"
-    ? (t.tabSessions === "会话" ? `已加载 ${sessions.length}/${total}` : `Loaded ${sessions.length}/${total}`)
-    : (t.tabSessions === "会话" ? `已加载 ${sessions.length}` : `Loaded ${sessions.length}`);
-
-  const listFooter = (
-    <View style={styles.listFooter}>
-      {loadingMore ? <ActivityIndicator size="small" color={theme.success} /> : null}
-      {loadMoreError ? (
-        <>
-          <Text style={styles.loadMoreError}>{loadMoreError}</Text>
-          <TouchableOpacity style={styles.loadMoreRetry} onPress={() => void loadMore()} accessibilityRole="button">
-            <Text style={[styles.refreshText, { color: theme.accent }]}>重试加载更多</Text>
-          </TouchableOpacity>
-        </>
-      ) : null}
-      {!loadingMore && !loadMoreError ? <Text style={styles.loadedText}>{loadedLabel}</Text> : null}
-    </View>
-  );
+  const selectedCount = (filterState.filter.cwds?.length ?? 0) + (filterState.filter.query ? 1 : 0);
+  const loadedLabel = typeof total === "number" ? `${sessions.length}/${total}` : String(sessions.length);
 
   return (
     <View style={[styles.container, { backgroundColor: theme.bg }]}>
-      {/* 统一定制顶栏：顶部状态栏背景与 Header 融为一体，只有下方微阴影 */}
       <View style={[styles.headerContainer, { backgroundColor: theme.headerBg, borderBottomColor: theme.border }]}>
         <SafeAreaView edges={["top"]} style={{ backgroundColor: theme.headerBg }}>
           <View style={styles.topHeader}>
-            <View>
+            <View style={styles.headerTitleWrap}>
               <Text style={[styles.topHeaderTitle, { color: theme.text }]}>{t.tabSessions}</Text>
-              <Text style={[styles.topHeaderSub, { color: theme.muted }]}>
-                {connectedHostUrl ? (connectedHostUrl.replace(/^wss?:\/\//, "").replace(/\/ws$/, "").split(":")[0]) : "100.98.197.10"} ({tab === "active" ? t.filterActive : t.filterAll})
+              <Text style={[styles.topHeaderSub, { color: theme.muted }]} numberOfLines={1}>
+                {hostUrl ? hostUrl.replace(/^wss?:\/\//, "").replace(/\/ws$/, "") : connectionState}
               </Text>
             </View>
-            <View
-              style={[
-                styles.topHeaderOnlineBadge,
-                {
-                  borderColor: isConnected ? "rgba(16, 185, 129, 0.4)" : "rgba(239, 68, 68, 0.4)",
-                  backgroundColor: isConnected ? "rgba(16, 185, 129, 0.15)" : "rgba(239, 68, 68, 0.15)",
-                },
-              ]}
-            >
-              <PulsingDot color={isConnected ? theme.success : theme.error} size={6} active={isConnected} />
-              <Text style={[styles.topHeaderOnlineText, { color: isConnected ? theme.success : theme.error }]}>
-                {isConnected ? t.onlineBadge : t.offlineBadge}
-              </Text>
+            <View style={styles.headerActions}>
+              <TouchableOpacity onPress={() => setSearchOpen((value) => !value)} accessibilityRole="button" accessibilityLabel={t.searchPlaceholder} style={styles.iconButton}>
+                <LineIcon name="search" size={18} color={theme.text} />
+              </TouchableOpacity>
+              <TouchableOpacity
+                onPress={() => {
+                  setCwdDraft(filterState.filter.cwds ?? []);
+                  setFilterOpen(true);
+                }}
+                accessibilityRole="button"
+                accessibilityLabel={t.filterSessions}
+                style={[styles.iconButton, selectedCount > 0 && { backgroundColor: theme.accent }]}
+              >
+                <LineIcon name="filter" size={18} color={selectedCount > 0 ? "#fff" : theme.text} />
+                {selectedCount > 0 && <Text style={styles.filterCount}>{selectedCount}</Text>}
+              </TouchableOpacity>
             </View>
           </View>
+          {searchOpen && (
+            <View style={styles.searchRow}>
+              <LineIcon name="search" size={16} color={theme.muted} />
+              <TextInput autoFocus value={queryInput} onChangeText={setQueryInput} placeholder={t.searchPlaceholder} placeholderTextColor={theme.dim} style={[styles.searchInput, { color: theme.text }]} />
+              {queryInput.length > 0 && <TouchableOpacity onPress={() => setQueryInput("")} accessibilityRole="button" accessibilityLabel={t.clearSearch}><LineIcon name="x" size={15} color={theme.muted} /></TouchableOpacity>}
+            </View>
+          )}
         </SafeAreaView>
       </View>
 
-      {refreshError && sessions.length > 0 ? (
-        <View style={styles.inlineError}>
-          <Text style={styles.errorText}>{refreshError}</Text>
-        </View>
-      ) : null}
-
-      {error && sessions.length === 0 ? (
-        <View style={styles.errorPanel}>
-          <Text style={styles.errorText}>{error}</Text>
-          <TouchableOpacity style={styles.retryButton} onPress={() => void loadFirstPage(debouncedQuery)}>
-            <Text style={styles.retryText}>重试</Text>
-          </TouchableOpacity>
-        </View>
-      ) : loading && sessions.length === 0 ? (
-        <View style={styles.center}>
-          <ActivityIndicator size="large" color={theme.accent} />
-          <Text style={styles.centerText}>加载会话列表中...</Text>
-        </View>
-      ) : (
+      {error && sessions.length === 0 ? <View style={styles.errorPanel}><Text style={styles.errorText}>{error}</Text><TouchableOpacity onPress={() => void loadFirstPage()}><Text style={[styles.retryText, { color: theme.accent }]}>{t.retry}</Text></TouchableOpacity></View> : loading && sessions.length === 0 ? <View style={styles.center}><ActivityIndicator color={theme.accent} /><Text style={styles.centerText}>{t.loadingSessions}</Text></View> : (
         <FlatList
-          data={flatRows}
-          keyExtractor={(r) => r.key}
-          renderItem={renderItem}
-          extraData={t}
-          contentContainerStyle={[styles.list, { paddingBottom: 80 }]}
+          data={rows}
+          keyExtractor={(row) => row.key}
+          renderItem={({ item }) => item.type === "group" ? <View style={styles.group}><Text style={styles.groupTitle}>{cwdName(item.cwd)} · {item.count}</Text><Text style={styles.groupPath} numberOfLines={1}>{item.cwd}</Text></View> : <SessionCard session={item.session} opening={opening === item.session.id} theme={theme} styles={styles} t={t} onPress={() => void handleOpen(item.session)} />}
+          contentContainerStyle={styles.list}
           keyboardShouldPersistTaps="handled"
           refreshing={refreshing}
-          onRefresh={() => void loadFirstPage(debouncedQuery, true)}
+          onRefresh={() => void loadFirstPage(true)}
           onEndReached={() => void loadMore()}
           onEndReachedThreshold={0.35}
-          ListEmptyComponent={<View style={styles.center}><Text style={styles.centerText}>{t.tabSessions === "会话" ? "没有匹配的会话" : "No matching sessions"}</Text></View>}
-          ListFooterComponent={sessions.length > 0 ? listFooter : null}
+          ListEmptyComponent={<View style={styles.center}><Text style={styles.centerText}>{t.noMatchingSessions}</Text></View>}
+          ListFooterComponent={rows.length > 0 ? <View style={styles.footer}>{loadingMore && <ActivityIndicator color={theme.accent} />}<Text style={styles.footerText}>{loadedLabel}</Text></View> : null}
         />
       )}
 
-      {/* 底部悬浮 Floating Toolbar：绿色微光小圆点 [活跃中 | 全部] 切换 */}
-      {!searchBarOpen && (
-        <View style={styles.floatingBarContainer} pointerEvents="box-none">
-          <View style={[styles.floatingPill, { backgroundColor: theme.cardBg, borderColor: theme.border }]}>
-            <TouchableOpacity
-              style={[styles.floatingTabBtn, tab === "active" && { backgroundColor: theme.accent }]}
-              onPress={() => setTab("active")}
-            >
-              <View style={[styles.greenDot, tab === "active" && { backgroundColor: "#fff" }]} />
-              <Text style={[styles.floatingTabText, { color: tab === "active" ? "#fff" : theme.muted }]}>
-                {t.filterActive}
-              </Text>
-            </TouchableOpacity>
-
-            <TouchableOpacity
-              style={[styles.floatingTabBtn, tab === "all" && { backgroundColor: theme.accent }]}
-              onPress={() => setTab("all")}
-            >
-              <Text style={[styles.floatingTabText, { color: tab === "all" ? "#fff" : theme.muted }]}>
-                {t.filterAll}
-              </Text>
-            </TouchableOpacity>
-          </View>
-
-          {/* 右下角独立搜索 FAB */}
-          <TouchableOpacity
-            style={[styles.searchFab, { backgroundColor: theme.accent }]}
-            onPress={() => setSearchBarOpen(true)}
-            accessibilityRole="button"
-            accessibilityLabel="搜索会话"
-          >
-            <LineIcon name="search" size={18} color="#fff" />
-          </TouchableOpacity>
-        </View>
-      )}
-
-      {/* 底部原位弹出的整行全宽搜索框（增加键盘避让，键盘弹起时始终悬浮在键盘上方） */}
-      {searchBarOpen && (
-        <KeyboardAvoidingView
-          behavior={Platform.OS === "ios" ? "padding" : "height"}
-          style={styles.searchBarPopupWrap}
-          keyboardVerticalOffset={Platform.OS === "ios" ? 16 : 0}
-        >
-          <View style={[styles.searchBarPopup, { backgroundColor: theme.cardBg, borderColor: theme.accent }]}>
-            <LineIcon name="search" size={16} color={theme.muted} style={{ marginLeft: 6 }} />
-            <TextInput
-              style={[styles.searchPopupInput, { color: theme.text }]}
-              value={query}
-              onChangeText={setQuery}
-              placeholder={t.searchPlaceholder}
-              placeholderTextColor={theme.dim}
-              autoFocus
-            />
-            {query.length > 0 && (
-              <TouchableOpacity onPress={() => setQuery("")} style={{ padding: 4 }}>
-                <LineIcon name="x" size={14} color={theme.muted} />
+      <Modal visible={filterOpen} transparent animationType="slide" onRequestClose={() => setFilterOpen(false)}>
+        <KeyboardAvoidingView behavior={Platform.OS === "ios" ? "padding" : undefined} style={styles.modalBackdrop}>
+          <View style={[styles.filterSheet, { backgroundColor: theme.cardBg }]}>
+            <View style={styles.sheetHeader}>
+              <Text style={[styles.sheetTitle, { color: theme.text }]}>{t.filterProjects}</Text>
+              <TouchableOpacity onPress={() => setFilterOpen(false)} accessibilityRole="button" accessibilityLabel={t.close}>
+                <LineIcon name="x" size={18} color={theme.muted} />
               </TouchableOpacity>
-            )}
+            </View>
             <TouchableOpacity
-              style={[styles.searchDoneBtn, { backgroundColor: theme.accent }]}
-              onPress={() => setSearchBarOpen(false)}
+              style={[styles.filterOption, (cwdDraft.length === 0) && { borderColor: theme.accent }]}
+              onPress={() => setCwdDraft([])}
             >
-              <Text style={styles.searchDoneText}>{t.tabSessions === "会话" ? "完成" : "Done"}</Text>
+              <Text style={[styles.filterOptionText, { color: theme.text }]}>{t.allProjects}</Text>
+              {cwdDraft.length === 0 && <LineIcon name="check" size={16} color={theme.accent} />}
+            </TouchableOpacity>
+            {cwdOptions.map((cwd) => {
+              const selected = cwdDraft.includes(cwd);
+              return (
+                <TouchableOpacity
+                  key={cwd}
+                  style={[styles.filterOption, selected && { borderColor: theme.accent }]}
+                  onPress={() => setCwdDraft((prev) => (prev.includes(cwd) ? prev.filter((c) => c !== cwd) : [...prev, cwd]))}
+                >
+                  <Text style={[styles.filterOptionText, { color: theme.text }]} numberOfLines={1}>{cwd}</Text>
+                  {selected && <LineIcon name="check" size={16} color={theme.accent} />}
+                </TouchableOpacity>
+              );
+            })}
+            <TouchableOpacity
+              style={[styles.filterApplyBtn, { backgroundColor: theme.buttonPrimary }]}
+              onPress={() => {
+                setFilter({ cwds: cwdDraft.length > 0 ? cwdDraft : undefined });
+                setFilterOpen(false);
+              }}
+              accessibilityRole="button"
+              accessibilityLabel={t.apply}
+            >
+              <Text style={styles.filterApplyText}>{t.apply}</Text>
             </TouchableOpacity>
           </View>
         </KeyboardAvoidingView>
-      )}
+      </Modal>
     </View>
   );
 }
 
-function tabsuffix(tab: TabKey): string {
-  return tab === "all" ? "" : tab === "active" ? "活跃会话" : "历史会话";
+function SessionCard({ session, opening, theme, styles, t, onPress }: { session: HostSessionSummary; opening: boolean; theme: ReturnType<typeof useTheme>["theme"]; styles: ReturnType<typeof makeStyles>; t: ReturnType<typeof useI18n>["t"]; onPress: () => void }) {
+  const control = session.presentation?.control;
+  const active = session.presentation?.visibility === "session_list" && session.presentation.control.mode !== "readonly";
+  const context = session.context;
+  const title = session.name || session.cwdName || session.title || session.id;
+  return <SpringCard style={[styles.sessionCard, active && { borderColor: theme.accent }]} onPress={onPress} accessibilityRole="button" accessibilityLabel={title}>
+    <View style={styles.sessionHeader}><View style={styles.sessionHeaderLeft}><PulsingDot color={active ? theme.success : theme.dim} active={active} size={8} /><Text style={styles.sessionTitle} numberOfLines={1}>{title}</Text></View><View style={styles.badge}><Text style={styles.badgeText}>#{session.id.slice(0, 8)}</Text></View>{opening && <ActivityIndicator size="small" color={theme.accent} />}</View>
+    <View style={styles.pathRow}><LineIcon name="folder" size={13} color={theme.muted} /><Text style={styles.pathText} numberOfLines={1}>{session.cwd || session.path}</Text></View>
+    <View style={styles.stats}><Stat label={t.contextLabel} value={context?.percent != null ? `${Math.round(context.percent)}%` : "--"} theme={theme} /><Stat label={t.tokensLabel} value={session.totalTokens ? `${Math.round(session.totalTokens / 1000)}k` : "--"} theme={theme} /><Stat label={t.messagesAndTime} value={`${session.messageCount} · ${formatRelativeTime(session.updatedAt, t)}`} theme={theme} /></View>
+    <View style={styles.controlRow}><Text style={styles.controlText}>{control?.mode ?? "readonly"}</Text><Text style={styles.controlText}>{control?.canPrompt ? t.canPrompt : t.readOnly}</Text></View>
+  </SpringCard>;
 }
 
-function cwdName(cwd: string): string {
-  const parts = cwd.split("/").filter(Boolean);
-  return parts.pop() ?? cwd;
-}
-
-function formatTime(iso: string): string {
-  try {
-    const d = new Date(iso);
-    const t = d.getTime();
-    if (!Number.isFinite(t)) return "时间未知";
-    const now = new Date();
-    const diff = now.getTime() - t;
-    if (diff < 0) return d.toLocaleString();
-    if (diff < 60_000) return "刚刚";
-    if (diff < 3_600_000) return `${Math.floor(diff / 60_000)} 分钟前`;
-    if (diff < 86_400_000) return `${Math.floor(diff / 3_600_000)} 小时前`;
-    return d.toLocaleDateString();
-  } catch {
-    return "时间未知";
-  }
-}
+function Stat({ label, value, theme }: { label: string; value: string; theme: ReturnType<typeof useTheme>["theme"] }) { return <View style={{ flex: 1 }}><Text style={{ color: theme.dim, fontSize: 9 }}>{label}</Text><Text style={{ color: theme.text, fontSize: 11, fontFamily: "monospace", fontWeight: "600", marginTop: 2 }}>{value}</Text></View>; }
+function cwdName(cwd: string): string { return cwd.split("/").filter(Boolean).pop() ?? cwd; }
 
 function makeStyles(theme: ReturnType<typeof useTheme>["theme"]) {
   return StyleSheet.create({
-    container: { flex: 1, backgroundColor: theme.bg },
-    headerContainer: {
-      backgroundColor: theme.headerBg,
-      borderBottomWidth: StyleSheet.hairlineWidth,
-      borderBottomColor: theme.border,
-      shadowColor: "#000",
-      shadowOffset: { width: 0, height: 2 },
-      shadowOpacity: 0.06,
-      shadowRadius: 3,
-      elevation: 3,
-      zIndex: 20,
-    },
-    topHeader: {
-      flexDirection: "row",
-      justifyContent: "space-between",
-      alignItems: "center",
-      paddingHorizontal: 20,
-      paddingVertical: 12,
-    },
+    container: { flex: 1 },
+    headerContainer: { borderBottomWidth: StyleSheet.hairlineWidth, shadowColor: "#000", shadowOpacity: 0.06, shadowRadius: 3, elevation: 3, zIndex: 2 },
+    topHeader: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", paddingHorizontal: 20, paddingVertical: 12 },
+    headerTitleWrap: { flex: 1, minWidth: 0 },
     topHeaderTitle: { fontSize: 20, fontWeight: "700" },
     topHeaderSub: { fontSize: 11, fontFamily: "monospace", marginTop: 2 },
-    topHeaderOnlineBadge: {
-      flexDirection: "row",
-      alignItems: "center",
-      gap: 6,
-      borderWidth: 1,
-      paddingHorizontal: 10,
-      paddingVertical: 4,
-      borderRadius: 14,
-    },
-    topHeaderGreenDot: { width: 6, height: 6, borderRadius: 3 },
-    topHeaderOnlineText: { fontSize: 11, fontWeight: "600" },
-    center: { flex: 1, justifyContent: "center", alignItems: "center", padding: MIUIX_SPACE.xxl },
-    centerText: { color: theme.muted, fontSize: MIUIX_TYPE.body2, marginTop: MIUIX_SPACE.md },
-    inlineError: { paddingHorizontal: MIUIX_SPACE.md, paddingVertical: MIUIX_SPACE.xs },
-    errorPanel: { alignItems: "center", padding: MIUIX_SPACE.xxl },
-    errorText: { color: theme.error, fontSize: MIUIX_TYPE.body2, textAlign: "center" },
-    retryButton: {
-      marginTop: MIUIX_SPACE.md,
-      backgroundColor: theme.buttonPrimary,
-      paddingHorizontal: MIUIX_SPACE.xxl,
-      paddingVertical: MIUIX_SPACE.sm,
-      borderRadius: MIUIX_RADIUS.md,
-    },
-    retryText: { color: "#fff", fontWeight: "600" },
-    tabBar: { flexDirection: "row", alignItems: "center", paddingHorizontal: MIUIX_SPACE.md },
-    tabItem: { paddingVertical: 10, paddingHorizontal: 14, borderBottomWidth: 2, borderBottomColor: "transparent" },
-    tabText: { fontSize: MIUIX_TYPE.body1, fontWeight: "600" },
-    tabRight: { flex: 1, alignItems: "flex-end", paddingRight: MIUIX_SPACE.xs },
-    toolbarText: { color: theme.muted, fontSize: MIUIX_TYPE.footnote2 },
-    searchRow: { flexDirection: "row", alignItems: "center", paddingHorizontal: MIUIX_SPACE.md, paddingVertical: MIUIX_SPACE.sm, gap: MIUIX_SPACE.sm },
-    sessionHeaderLeft: { flexDirection: "row", alignItems: "center", gap: 8, flex: 1, minWidth: 0 },
-    liveDotBase: { width: 8, height: 8, borderRadius: 4 },
-    liveDotActive: { backgroundColor: theme.success },
-    liveDotIdle: { backgroundColor: theme.muted },
-    modelBadge: {
-      paddingHorizontal: 8,
-      paddingVertical: 2,
-      borderRadius: 10,
-      backgroundColor: hexToRgba(theme.accent, 0.14),
-      borderWidth: 1,
-      borderColor: hexToRgba(theme.accent, 0.35),
-    },
-    modelBadgeText: { fontSize: 9, fontFamily: "monospace", color: theme.accent, fontWeight: "600" },
-    pathRow: { flexDirection: "row", alignItems: "center", gap: 5, marginTop: 4, marginBottom: 8 },
-    pathText: { fontSize: 11, fontFamily: "monospace", color: theme.muted, flex: 1 },
-    bentoGrid: {
-      flexDirection: "row",
-      flexWrap: "wrap",
-      backgroundColor: theme.secondaryContainer ?? theme.inputBg,
-      borderRadius: MIUIX_RADIUS.md,
-      padding: 8,
-      gap: 6,
-      borderWidth: 1,
-      borderColor: theme.border,
-      marginBottom: 6,
-    },
-    bentoCell: { width: "48%" },
-    bentoCellLabel: { fontSize: 9, color: theme.dim, marginBottom: 1 },
-    bentoCellValue: { fontSize: 11, fontFamily: "monospace", color: theme.text, fontWeight: "600" },
-    contextTrack: { width: "100%", height: 3, backgroundColor: theme.border, borderRadius: 2, overflow: "hidden" },
-    contextFill: { height: "100%", borderRadius: 2 },
-    floatingBarContainer: {
-      position: "absolute",
-      bottom: 16,
-      left: 16,
-      right: 16,
-      flexDirection: "row",
-      justifyContent: "space-between",
-      alignItems: "center",
-      zIndex: 50,
-    },
-    floatingPill: {
-      flexDirection: "row",
-      alignItems: "center",
-      borderRadius: 20,
-      padding: 3,
-      borderWidth: 1,
-      shadowColor: "#000",
-      shadowOffset: { width: 0, height: 4 },
-      shadowOpacity: 0.15,
-      shadowRadius: 10,
-      elevation: 6,
-      gap: 4,
-    },
-    floatingTabBtn: {
-      flexDirection: "row",
-      alignItems: "center",
-      gap: 6,
-      paddingHorizontal: 12,
-      paddingVertical: 6,
-      borderRadius: 16,
-    },
-    floatingTabText: { fontSize: 12, fontWeight: "600" },
-    greenDot: { width: 6, height: 6, borderRadius: 3, backgroundColor: theme.success },
-    searchFab: {
-      width: 42,
-      height: 42,
-      borderRadius: 21,
-      alignItems: "center",
-      justifyContent: "center",
-      shadowColor: "#000",
-      shadowOffset: { width: 0, height: 4 },
-      shadowOpacity: 0.2,
-      shadowRadius: 8,
-      elevation: 8,
-    },
-    searchBarPopupWrap: {
-      position: "absolute",
-      bottom: 16,
-      left: 16,
-      right: 16,
-      zIndex: 60,
-    },
-    searchBarPopup: {
-      flexDirection: "row",
-      alignItems: "center",
-      borderRadius: MIUIX_RADIUS.lg,
-      borderWidth: 1.5,
-      paddingHorizontal: 8,
-      paddingVertical: 4,
-      gap: 6,
-      shadowColor: "#000",
-      shadowOffset: { width: 0, height: 6 },
-      shadowOpacity: 0.25,
-      shadowRadius: 12,
-      elevation: 10,
-    },
-    searchPopupInput: { flex: 1, fontSize: 13, paddingVertical: 6, paddingHorizontal: 4 },
-    searchDoneBtn: { paddingHorizontal: 12, paddingVertical: 6, borderRadius: MIUIX_RADIUS.md },
-    searchDoneText: { color: "#fff", fontSize: 12, fontWeight: "700" },
-    searchInput: {
-      flex: 1,
-      borderRadius: MIUIX_RADIUS.sm,
-      paddingHorizontal: MIUIX_SPACE.md,
-      paddingVertical: MIUIX_SPACE.sm,
-      borderWidth: 1,
-      fontSize: MIUIX_TYPE.body2,
-    },
-    refreshBtn: { paddingHorizontal: MIUIX_SPACE.sm, paddingVertical: 6 },
-    refreshText: { fontSize: MIUIX_TYPE.body2, fontWeight: "600" },
-    list: { padding: MIUIX_SPACE.md },
-    listFooter: { minHeight: 56, alignItems: "center", justifyContent: "center", paddingVertical: MIUIX_SPACE.md },
-    loadedText: { color: theme.dim, fontSize: MIUIX_TYPE.footnote2 },
-    loadMoreError: { color: theme.error, fontSize: MIUIX_TYPE.footnote1, textAlign: "center" },
-    loadMoreRetry: { paddingHorizontal: MIUIX_SPACE.md, paddingVertical: MIUIX_SPACE.sm },
-    group: { marginBottom: MIUIX_SPACE.lg },
-    groupTitle: { color: theme.text, fontSize: MIUIX_TYPE.main, fontWeight: "700" },
-    groupPath: { color: theme.dim, fontSize: MIUIX_TYPE.footnote2, marginBottom: MIUIX_SPACE.sm },
-    sessionItem: {
-      backgroundColor: theme.cardBg,
-      borderRadius: MIUIX_RADIUS.lg,
-      padding: MIUIX_SPACE.md,
-      marginBottom: MIUIX_SPACE.sm,
-      borderWidth: 1,
-      borderColor: theme.border,
-    },
-    sessionItemLive: { borderColor: theme.success, backgroundColor: theme.mdCodeBlockBg },
-    sessionHeader: { flexDirection: "row", alignItems: "center" },
-    liveDot: { width: 8, height: 8, borderRadius: MIUIX_RADIUS.xs, backgroundColor: theme.success, marginRight: 6 },
-    sessionTitle: { color: theme.text, fontSize: MIUIX_TYPE.body2, fontWeight: "600", flex: 1, marginRight: MIUIX_SPACE.sm },
-    detailRow: { flexDirection: "row", flexWrap: "wrap", gap: 10, marginTop: 6 },
-    detailItem: { color: theme.muted, fontSize: MIUIX_TYPE.footnote1 },
-    sessionId: { color: theme.dim, fontSize: MIUIX_TYPE.footnote2, marginTop: MIUIX_SPACE.xs },
+    headerActions: { flexDirection: "row", gap: 8, marginLeft: 12 },
+    iconButton: { width: 36, height: 36, borderRadius: 18, alignItems: "center", justifyContent: "center", borderWidth: 1, borderColor: theme.border },
+    filterCount: { position: "absolute", right: -3, top: -4, color: "#fff", backgroundColor: theme.warning, fontSize: 9, minWidth: 14, height: 14, borderRadius: 7, textAlign: "center", overflow: "hidden" },
+    searchRow: { flexDirection: "row", alignItems: "center", gap: 8, marginHorizontal: 16, marginBottom: 10, paddingHorizontal: 10, height: 40, borderRadius: MIUIX_RADIUS.md, backgroundColor: theme.inputBg },
+    searchInput: { flex: 1, fontSize: 13 },
+    list: { padding: MIUIX_SPACE.lg, paddingBottom: 90 },
+    group: { marginTop: 6, marginBottom: 8 },
+    groupTitle: { color: theme.text, fontSize: MIUIX_TYPE.footnote1, fontWeight: "700" },
+    groupPath: { color: theme.dim, fontSize: 10, fontFamily: "monospace", marginTop: 2 },
+    sessionCard: { backgroundColor: theme.cardBg, borderWidth: 1, borderColor: theme.border, borderRadius: MIUIX_RADIUS.lg, padding: MIUIX_SPACE.md, marginBottom: MIUIX_SPACE.sm },
+    sessionHeader: { flexDirection: "row", alignItems: "center", gap: 8 },
+    sessionHeaderLeft: { flex: 1, minWidth: 0, flexDirection: "row", alignItems: "center", gap: 8 },
+    sessionTitle: { color: theme.text, fontSize: 13, fontWeight: "700", flex: 1 },
+    badge: { paddingHorizontal: 8, paddingVertical: 2, borderRadius: 10, backgroundColor: theme.secondaryContainer ?? theme.inputBg, borderWidth: 1, borderColor: theme.border },
+    badgeText: { color: theme.accent, fontSize: 9, fontFamily: "monospace", fontWeight: "600" },
+    pathRow: { flexDirection: "row", alignItems: "center", gap: 5, marginTop: 8, marginBottom: 8 },
+    pathText: { color: theme.muted, fontSize: 11, fontFamily: "monospace", flex: 1 },
+    stats: { flexDirection: "row", gap: 8, backgroundColor: theme.inputBg, borderRadius: MIUIX_RADIUS.md, padding: 9, borderWidth: 1, borderColor: theme.border },
+    controlRow: { flexDirection: "row", justifyContent: "space-between", marginTop: 8 },
+    controlText: { color: theme.dim, fontSize: 10, fontFamily: "monospace" },
+    center: { flex: 1, alignItems: "center", justifyContent: "center", padding: 40 },
+    centerText: { color: theme.muted, marginTop: 10 },
+    errorPanel: { alignItems: "center", padding: 24, gap: 10 },
+    errorText: { color: theme.error, textAlign: "center" },
+    retryText: { fontWeight: "700" },
+    footer: { alignItems: "center", gap: 6, paddingVertical: 18 },
+    footerText: { color: theme.dim, fontSize: 10, fontFamily: "monospace" },
+    modalBackdrop: { flex: 1, justifyContent: "flex-end", backgroundColor: "rgba(0,0,0,0.35)" },
+    filterSheet: { borderTopLeftRadius: 18, borderTopRightRadius: 18, padding: 20, maxHeight: "75%" },
+    sheetHeader: { flexDirection: "row", justifyContent: "space-between", alignItems: "center", marginBottom: 14 },
+    sheetTitle: { fontSize: 17, fontWeight: "700" },
+    filterOption: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", gap: 8, borderWidth: 1, borderColor: theme.border, borderRadius: MIUIX_RADIUS.md, padding: 12, marginBottom: 8 },
+    filterOptionText: { fontSize: 13, flex: 1 },
+    filterApplyBtn: { borderRadius: MIUIX_RADIUS.md, padding: 12, alignItems: "center", marginTop: 4 },
+    filterApplyText: { color: "#fff", fontWeight: "700", fontSize: 13 },
   });
 }

@@ -28,6 +28,8 @@ export type LineIconName =
   | "planClipboard"
   | "compactSqueeze"
   | "chevronDown"
+  | "chevronRight"
+  | "filter"
   | "check"
   | "radio"
   | "key"
@@ -135,6 +137,12 @@ const PATHS: Record<LineIconName, React.ReactNode> = {
   ),
   chevronDown: (
     <Path d="M6 9l6 6 6-6" />
+  ),
+  chevronRight: (
+    <Path d="M9 6l6 6-6 6" />
+  ),
+  filter: (
+    <Path d="M3 5h18M6 12h12M10 19h4" />
   ),
   check: (
     <Path d="M20 6L9 17l-5-5" />
