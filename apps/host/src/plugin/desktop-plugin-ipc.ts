@@ -16,6 +16,8 @@ import type {
 } from "@maestro-mobile/shared";
 import {
   DESKTOP_PLUGIN_PROTOCOL_VERSION,
+  isCompatibleReleaseVersion,
+  MOBILE_RELEASE_VERSION,
   isDesktopPluginClientFrame,
   isDesktopPluginServerFrame,
   validateDesktopPluginClientFrame,
@@ -35,6 +37,7 @@ export interface DesktopPluginIpcServerOptions {
   maxFrameBytes?: number;
   handshakeTimeoutMs?: number;
   requestTimeoutMs?: number;
+  releaseVersion?: string;
   onConnected?: (target: DesktopPluginTarget) => void;
   onAskRequest?: (target: DesktopPluginTarget, request: DesktopAskRequest) => void;
   onDisconnected?: (target: DesktopPluginTarget) => void;
@@ -47,6 +50,7 @@ export interface DesktopPluginIpcClientOptions {
   capabilities: DesktopPluginCapability[];
   maxFrameBytes?: number;
   handshakeTimeoutMs?: number;
+  releaseVersion?: string;
   onRequest: (request: DesktopPluginRequest) => Promise<DesktopPluginResult>;
   onAskResponse?: (response: DesktopAskResponse) => Promise<void>;
 }
@@ -324,6 +328,12 @@ export class DesktopPluginIpcServer {
       connection.close(new Error("desktop plugin authentication failed"));
       return;
     }
+    const expectedRelease = this.options.releaseVersion ?? MOBILE_RELEASE_VERSION;
+    if (hello.releaseVersion !== undefined && !isCompatibleReleaseVersion(hello.releaseVersion, expectedRelease)) {
+      this.sendError(connection, "release_version_unsupported", undefined);
+      connection.close(new Error("desktop plugin release unsupported"));
+      return;
+    }
     const target: DesktopPluginTarget = {
       sessionId: hello.sessionId,
       endpointId: hello.endpointId,
@@ -335,7 +345,7 @@ export class DesktopPluginIpcServer {
       this.options.requestTimeoutMs ?? DEFAULT_DESKTOP_PLUGIN_REQUEST_TIMEOUT_MS,
     );
     connection.send({ type: "desktop_plugin_challenge", protocolVersion: DESKTOP_PLUGIN_PROTOCOL_VERSION, nonce: randomBytes(16).toString("hex") });
-    connection.send({ type: "desktop_plugin_ready", protocolVersion: DESKTOP_PLUGIN_PROTOCOL_VERSION, endpointId: hello.endpointId, capabilities: hello.capabilities });
+    connection.send({ type: "desktop_plugin_ready", protocolVersion: DESKTOP_PLUGIN_PROTOCOL_VERSION, endpointId: hello.endpointId, capabilities: hello.capabilities, releaseVersion: expectedRelease });
     this.registry.register({ target, capabilities: hello.capabilities, transport });
     void this.registry.flush().catch(() => undefined);
     onAuthenticated(target, transport);
@@ -370,6 +380,10 @@ export class DesktopPluginIpcClient {
           if (!isDesktopPluginServerFrame(raw)) return finishError(new Error("invalid desktop plugin server frame"));
           const frame = validateDesktopPluginServerFrame(raw);
           if (frame.type === "desktop_plugin_ready") {
+            const expectedRelease = this.options.releaseVersion ?? MOBILE_RELEASE_VERSION;
+            if (frame.releaseVersion !== undefined && !isCompatibleReleaseVersion(frame.releaseVersion, expectedRelease)) {
+              return finishError(new Error("desktop plugin release unsupported"));
+            }
             authenticated = true;
             if (timer) clearTimeout(timer);
             resolve();
@@ -443,6 +457,7 @@ export class DesktopPluginIpcClient {
             capabilities: this.options.capabilities,
             clientNonce: randomBytes(16).toString("hex"),
             secret: this.options.secret,
+            releaseVersion: this.options.releaseVersion ?? MOBILE_RELEASE_VERSION,
           });
         } catch (error) {
           finishError(error instanceof Error ? error : new Error("desktop plugin hello failed"));

@@ -44,12 +44,12 @@ async function connectV2(url: string): Promise<WebSocket> {
 }
 
 
-async function createTestServer(token?: string) {
+async function createTestServer(token?: string, options: ConstructorParameters<typeof MobileHostServer>[1] = {}) {
   const tmpDir = join(tmpdir(), `maestro-server-test-${randomUUID()}`);
   await mkdir(tmpDir, { recursive: true });
   const reader = new MaestroStateReader({ projectRoot: tmpDir });
   const controller = new HostController(stubRuntimeFactory(), reader);
-  const server = new MobileHostServer(controller, token ? { token } : {});
+  const server = new MobileHostServer(controller, { ...(token ? { token } : {}), ...options });
   await server.listen(0, "127.0.0.1");
   const port = server.address().port;
   return { tmpDir, controller, server, port, url: `http://127.0.0.1:${port}` };
@@ -252,6 +252,58 @@ describe("MobileHostServer", () => {
     expect(Array.isArray(msg.state.schedules)).toBe(true);
 
     ctx.controller.stopMaestroPoll();
+    ws.close();
+  });
+
+  it("returns an unavailable result when rollout is disabled", async () => {
+    const disabled = await createTestServer(undefined, { rolloutMode: "disabled" });
+    try {
+      const ws = await connectV2(disabled.url);
+      const reply = new Promise<{ ok: boolean; error: { code: string } }>((resolve) => {
+        ws.on("message", (data) => {
+          const msg = JSON.parse(data.toString()) as { type: string; ok: boolean; error: { code: string } };
+          if (msg.type === "command_result") resolve(msg);
+        });
+      });
+      ws.send(JSON.stringify({ id: "disabled-list", type: "list_sessions" }));
+      await expect(reply).resolves.toEqual(expect.objectContaining({ ok: false, error: { code: "rollout_disabled" } }));
+      expect(disabled.server.getReleaseContract()).toEqual({ releaseVersion: "0.4.0", protocolVersion: 2, rolloutMode: "disabled" });
+      ws.close();
+    } finally {
+      await disabled.server.close();
+      await disabled.controller.dispose();
+      await rm(disabled.tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  it("observes mutating commands without executing them in shadow rollout", async () => {
+    const shadow = await createTestServer(undefined, { rolloutMode: "shadow" });
+    try {
+      const ws = await connectV2(shadow.url);
+      const reply = new Promise<{ ok: boolean; status: string; result: { rolloutMode: string } }>((resolve) => {
+        ws.on("message", (data) => {
+          const msg = JSON.parse(data.toString()) as { type: string; ok: boolean; status: string; result: { rolloutMode: string } };
+          if (msg.type === "command_result") resolve(msg);
+        });
+      });
+      ws.send(JSON.stringify({ id: "shadow-prompt", type: "prompt", sessionId: "missing", message: "no-op" }));
+      await expect(reply).resolves.toEqual(expect.objectContaining({ ok: true, status: "observed", result: { rolloutMode: "shadow", operation: "prompt" } }));
+      ws.close();
+    } finally {
+      await shadow.server.close();
+      await shadow.controller.dispose();
+      await rm(shadow.tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects a semver release mismatch during the v2 handshake", async () => {
+    const ws = new WebSocket(`ws://127.0.0.1:${ctx.port}/ws`);
+    const frame = await new Promise<{ type: string; code: string }>((resolve, reject) => {
+      ws.once("message", (data) => resolve(JSON.parse(data.toString()) as { type: string; code: string }));
+      ws.once("error", reject);
+      ws.once("open", () => ws.send(JSON.stringify({ ...protocolHello(), releaseVersion: "0.5.0" })));
+    });
+    expect(frame).toEqual(expect.objectContaining({ type: "protocol_error", code: "release_version_unsupported" }));
     ws.close();
   });
 

@@ -1,3 +1,5 @@
+import type { MobileRolloutMode } from "./release.js";
+
 /**
  * Maestro Mobile 共享协议类型
  *
@@ -67,6 +69,8 @@ export interface ProtocolHello {
   clientVersion: string;
   capabilities: ProtocolCapability[];
   requestId: string;
+  /** Optional during the transition; current Mobile clients always send it. */
+  releaseVersion?: string;
 }
 
 export interface ProtocolReady {
@@ -75,11 +79,14 @@ export interface ProtocolReady {
   hostVersion: string;
   capabilities: ProtocolCapability[];
   revision: number;
+  /** Release coupling and rollout state are server-authoritative. */
+  releaseVersion?: string;
+  rolloutMode?: MobileRolloutMode;
 }
 
 export interface ProtocolErrorFrame {
   type: "protocol_error";
-  code: "protocol_version_unsupported" | "protocol_hello_required" | "invalid_frame";
+  code: "protocol_version_unsupported" | "protocol_hello_required" | "release_version_unsupported" | "invalid_frame";
   message: string;
   supportedVersion: MobileProtocolVersion;
 }
@@ -639,11 +646,13 @@ export function isHostFrame(value: unknown): value is HostFrame {
   if (!isRecord(value) || typeof value.type !== "string") return false;
   if (value.type === "protocol_ready") {
     return value.protocolVersion === MOBILE_PROTOCOL_VERSION && isString(value.hostVersion)
-      && isStringArray(value.capabilities) && isFiniteNumber(value.revision);
+      && isStringArray(value.capabilities) && isFiniteNumber(value.revision)
+      && optionalString(value.releaseVersion)
+      && optionalRolloutMode(value.rolloutMode);
   }
   if (value.type === "protocol_error") {
     return isString(value.message) && value.supportedVersion === MOBILE_PROTOCOL_VERSION
-      && (value.code === "protocol_version_unsupported" || value.code === "protocol_hello_required" || value.code === "invalid_frame");
+      && (value.code === "protocol_version_unsupported" || value.code === "protocol_hello_required" || value.code === "release_version_unsupported" || value.code === "invalid_frame");
   }
   if (value.type === "command_result") {
     return isString(value.in_reply_to) && typeof value.ok === "boolean"
@@ -658,7 +667,8 @@ export function isProtocolHello(value: unknown): value is ProtocolHello {
     && value.protocolVersion === MOBILE_PROTOCOL_VERSION
     && isString(value.clientVersion)
     && isStringArray(value.capabilities)
-    && isString(value.requestId);
+    && isString(value.requestId)
+    && optionalString(value.releaseVersion);
 }
 
 function isOperationStatus(value: unknown): value is OperationStatus {
@@ -688,6 +698,10 @@ function optionalFiniteNumber(value: unknown): boolean {
 
 function optionalEnum<T extends string>(value: unknown, ...allowed: T[]): boolean {
   return value === undefined || (typeof value === "string" && allowed.includes(value as T));
+}
+
+function optionalRolloutMode(value: unknown): boolean {
+  return value === undefined || value === "disabled" || value === "shadow" || value === "enabled";
 }
 
 function isStringArray(value: unknown): value is string[] {

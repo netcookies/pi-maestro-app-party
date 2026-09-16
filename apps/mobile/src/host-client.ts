@@ -14,7 +14,7 @@ import type {
   ExtensionUiResponse,
   ProtocolCapability,
 } from "@maestro-mobile/shared";
-import { MOBILE_PROTOCOL_VERSION } from "@maestro-mobile/shared";
+import { isCompatibleReleaseVersion, MOBILE_PROTOCOL_VERSION, MOBILE_RELEASE_VERSION } from "@maestro-mobile/shared";
 
 export type ConnectionState = "connecting" | "connected" | "disconnected" | "reconnecting";
 
@@ -31,6 +31,8 @@ export interface HostClientOptions {
   random?: () => number;
   /** 客户端版本会随 hello 发送，供 Host 诊断协商。 */
   clientVersion?: string;
+  /** Release version used for the Protocol v2 coupling check. */
+  releaseVersion?: string;
   /** 未指定时声明 Mobile 当前支持的会话/监控读取能力。 */
   capabilities?: ProtocolCapability[];
   onEvent?: (event: HostEvent) => void;
@@ -348,7 +350,8 @@ export class HostClient {
     const hello = {
       type: "protocol_hello" as const,
       protocolVersion: MOBILE_PROTOCOL_VERSION,
-      clientVersion: this.options.clientVersion ?? "0.4.0",
+      clientVersion: this.options.clientVersion ?? MOBILE_RELEASE_VERSION,
+      releaseVersion: this.options.releaseVersion ?? MOBILE_RELEASE_VERSION,
       capabilities: this.options.capabilities ?? ["session_control", "extension_ui", "monitor_read", "session_filter"],
       requestId: `hello-${++this.helloSeq}`,
     };
@@ -368,8 +371,9 @@ export class HostClient {
       if (m.type === "protocol_ready") {
         if (m.protocolVersion !== MOBILE_PROTOCOL_VERSION || typeof m.hostVersion !== "string"
           || !Array.isArray(m.capabilities) || !m.capabilities.every((cap) => typeof cap === "string")
-          || typeof m.revision !== "number" || !Number.isFinite(m.revision)) {
-          this.options.onConnectionError?.("invalid protocol_ready frame");
+          || typeof m.revision !== "number" || !Number.isFinite(m.revision)
+          || (m.releaseVersion !== undefined && !isCompatibleReleaseVersion(m.releaseVersion, this.options.releaseVersion ?? MOBILE_RELEASE_VERSION))) {
+          this.options.onConnectionError?.("invalid or incompatible protocol_ready frame");
           return;
         }
         this.protocolReady = true;

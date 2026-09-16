@@ -37,6 +37,8 @@ export interface DesktopPluginHello {
   capabilities: DesktopPluginCapability[];
   clientNonce: string;
   secret: string;
+  /** Release coupling is optional for older development plugins. */
+  releaseVersion?: string;
 }
 
 export interface DesktopPluginRequest {
@@ -86,6 +88,7 @@ export interface DesktopPluginReady {
   protocolVersion: DesktopPluginProtocolVersion;
   endpointId: string;
   capabilities: DesktopPluginCapability[];
+  releaseVersion?: string;
 }
 
 export interface DesktopPluginReceipt {
@@ -110,6 +113,7 @@ export interface DesktopPluginError {
   code:
     | "authentication_failed"
     | "protocol_version_unsupported"
+    | "release_version_unsupported"
     | "invalid_frame"
     | "deadline_exceeded"
     | "capability_mismatch"
@@ -133,7 +137,8 @@ export function isDesktopPluginClientFrame(value: unknown): value is DesktopPlug
     case "desktop_plugin_hello":
       return value.protocolVersion === DESKTOP_PLUGIN_PROTOCOL_VERSION
         && stringFields(value, "endpointId", "sessionId", "normalizedCwd", "processGeneration", "clientNonce", "secret")
-        && stringArray(value.capabilities);
+        && stringArray(value.capabilities)
+        && (value.releaseVersion === undefined || stringFields(value, "releaseVersion"));
     case "desktop_plugin_request":
       return stringFields(value, "requestId", "commandId")
         && finiteNumber(value.deadlineAt)
@@ -160,7 +165,8 @@ export function isDesktopPluginServerFrame(value: unknown): value is DesktopPlug
     case "desktop_plugin_ready":
       return value.protocolVersion === DESKTOP_PLUGIN_PROTOCOL_VERSION
         && stringFields(value, "endpointId")
-        && stringArray(value.capabilities);
+        && stringArray(value.capabilities)
+        && (value.releaseVersion === undefined || stringFields(value, "releaseVersion"));
     case "desktop_plugin_receipt":
       return stringFields(value, "requestId", "operation")
         && (value.status === "requested" || value.status === "accepted" || value.status === "unknown");

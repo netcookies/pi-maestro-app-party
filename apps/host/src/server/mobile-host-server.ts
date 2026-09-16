@@ -15,11 +15,12 @@ import type {
   ProtocolCapability,
   ProtocolHello,
   JsonValue,
+  MobileRolloutMode,
 } from "@maestro-mobile/shared";
 import type { HostController } from "../host-controller.js";
 import type { SessionTargetIdentity } from "../control/SessionDirectory.js";
 import type { CommandResult as ApplicationCommandResult } from "../application/session-command-service.js";
-import { validateClientCommand, validateProtocolHello } from "@maestro-mobile/shared";
+import { validateClientCommand, validateProtocolHello, isCompatibleReleaseVersion, isReleaseVersion, MOBILE_RELEASE_VERSION, parseRolloutMode } from "@maestro-mobile/shared";
 
 const HOST_PROTOCOL_CAPABILITIES: ProtocolCapability[] = [
   "session_control",
@@ -42,6 +43,26 @@ function isTargetIdentity(value: unknown): value is SessionTargetIdentity {
     && typeof target.processGeneration === "string";
 }
 
+const ROLLOUT_MUTATING_COMMANDS = new Set([
+  "open_session",
+  "update_maestro_settings",
+  "set_model",
+  "set_thinking",
+  "compact",
+  "rename_session",
+  "close_session",
+  "prompt",
+  "steer",
+  "steer_window",
+  "follow_up",
+  "abort",
+  "extension_ui_response",
+]);
+
+function isMutatingCommand(command: ClientCommand): boolean {
+  return ROLLOUT_MUTATING_COMMANDS.has(command.type);
+}
+
 export interface MobileHostServerOptions {
   token?: string;
   corsOrigin?: string;
@@ -57,6 +78,10 @@ export interface MobileHostServerOptions {
   slowGraceMs?: number;
   /** 心跳周期（ms）：每周期 ping，下周期仍无 pong 则 terminate。默认 30s；测试可注入小值 */
   heartbeatIntervalMs?: number;
+  /** Mobile Protocol v2 release rollout. Defaults to enabled for the current release. */
+  rolloutMode?: MobileRolloutMode;
+  /** Expected Mobile/Host release version. Defaults to the shared package version. */
+  releaseVersion?: string;
 }
 
 interface ClientSocket {
@@ -111,6 +136,8 @@ export class MobileHostServer {
   private readonly highWaterMarkBytes: number;
   private readonly hardLimitBytes: number;
   private readonly slowGraceMs: number;
+  private readonly rolloutMode: MobileRolloutMode;
+  private readonly releaseVersion: string;
 
   constructor(
     private readonly controller: HostController,
@@ -120,6 +147,8 @@ export class MobileHostServer {
     this.highWaterMarkBytes = this.options.highWaterMarkBytes ?? MobileHostServer.HIGH_WATER_MARK_BYTES;
     this.hardLimitBytes = this.options.hardLimitBytes ?? MobileHostServer.HARD_LIMIT_BYTES;
     this.slowGraceMs = this.options.slowGraceMs ?? MobileHostServer.SLOW_GRACE_MS;
+    this.rolloutMode = parseRolloutMode(this.options.rolloutMode ?? process.env.MAESTRO_MOBILE_ROLLOUT);
+    this.releaseVersion = this.options.releaseVersion ?? MOBILE_RELEASE_VERSION;
     this.server = createServer((request, response) => {
       void this.handleHttp(request, response);
     });
@@ -247,7 +276,7 @@ export class MobileHostServer {
     this.heartbeatTimer.unref?.(); // 不阻止进程退出
   }
 
-  private sendProtocolError(client: ClientSocket, code: "protocol_version_unsupported" | "protocol_hello_required" | "invalid_frame", message: string): void {
+  private sendProtocolError(client: ClientSocket, code: "protocol_version_unsupported" | "protocol_hello_required" | "release_version_unsupported" | "invalid_frame", message: string): void {
     this.sendFrame(client, {
       type: "protocol_error",
       code,
@@ -258,17 +287,23 @@ export class MobileHostServer {
   }
 
   private acceptProtocolHello(client: ClientSocket, hello: ProtocolHello): void {
+    const claimedRelease = hello.releaseVersion ?? (isReleaseVersion(hello.clientVersion) ? hello.clientVersion : undefined);
+    if (claimedRelease !== undefined && !isCompatibleReleaseVersion(claimedRelease, this.releaseVersion)) {
+      this.sendProtocolError(client, "release_version_unsupported", `Release ${claimedRelease} is incompatible with ${this.releaseVersion}`);
+      return;
+    }
     client.handshaken = true;
     this.sendFrame(client, {
       type: "protocol_ready",
       protocolVersion: 2,
       hostVersion: this.controller.getStatus().version,
-      capabilities: HOST_PROTOCOL_CAPABILITIES,
+      capabilities: this.rolloutMode === "disabled" ? [] : HOST_PROTOCOL_CAPABILITIES,
       revision: this.controller.directory.revision,
+      releaseVersion: this.releaseVersion,
+      rolloutMode: this.rolloutMode,
     }, "required", "protocol_ready");
     this.sendFrame(client, { type: "host_status", status: "connected", seq: 0 }, "required", "host_status");
     this.sendFrame(client, { type: "host_info", info: this.controller.getStatus(), seq: 0 }, "required", "host_info");
-    void hello;
   }
 
   /**
@@ -365,6 +400,10 @@ export class MobileHostServer {
     } catch (error) {
       console.error(`[maestro-mobile] ws close failed client=${client.id} reason=${reason}:`, error instanceof Error ? error.message : error);
     }
+  }
+
+  getReleaseContract(): { releaseVersion: string; protocolVersion: 2; rolloutMode: MobileRolloutMode } {
+    return { releaseVersion: this.releaseVersion, protocolVersion: 2, rolloutMode: this.rolloutMode };
   }
 
   listen(port: number, hostname = "0.0.0.0"): Promise<void> {
@@ -700,6 +739,17 @@ export class MobileHostServer {
     }, "required", "command_result");
   }
 
+  private sendShadowResult(client: ClientSocket, command: ClientCommand): void {
+    this.sendFrame(client, {
+      type: "command_result",
+      in_reply_to: command.id ?? "",
+      ok: true,
+      status: "observed",
+      revision: this.controller.directory.revision,
+      result: { rolloutMode: "shadow", operation: command.type },
+    }, "required", "command_result");
+  }
+
   private sendQueryResult(client: ClientSocket, command: ClientCommand, result: { ok: boolean; value?: unknown; status?: "unknown" | "failed"; error?: { code: string; message?: string }; revision: number }): void {
     this.sendFrame(client, {
       type: "command_result",
@@ -758,6 +808,15 @@ export class MobileHostServer {
         revision: this.controller.directory.revision,
         error: { code, message: reason },
       }, "required", "command_result");
+      return;
+    }
+
+    if (this.rolloutMode === "disabled" && command.type !== "ping") {
+      this.sendUnavailable(client, command, "rollout_disabled");
+      return;
+    }
+    if (this.rolloutMode === "shadow" && isMutatingCommand(command)) {
+      this.sendShadowResult(client, command);
       return;
     }
 
