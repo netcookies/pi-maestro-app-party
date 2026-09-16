@@ -31,8 +31,15 @@ export interface DesktopPluginRegistryOptions {
 export class DesktopPluginRegistry {
   private readonly registrations = new Map<string, DesktopPluginRegistration>();
   private _revision = 0;
+  private filePath?: string;
 
-  constructor(private readonly options: DesktopPluginRegistryOptions = {}) {}
+  constructor(options: DesktopPluginRegistryOptions = {}) {
+    this.filePath = options.filePath;
+  }
+
+  setFilePath(filePath: string): void {
+    this.filePath = filePath;
+  }
 
   get revision(): number {
     return this._revision;
@@ -79,8 +86,8 @@ export class DesktopPluginRegistry {
   }
 
   async flush(): Promise<void> {
-    if (!this.options.filePath) return;
-    const path = this.options.filePath;
+    if (!this.filePath) return;
+    const path = this.filePath;
     await mkdir(dirname(path), { recursive: true });
     const temporary = `${path}.${process.pid}.tmp`;
     await writeFile(temporary, JSON.stringify({ revision: this._revision, registrations: this.list().map((registration) => ({ target: registration.target, capabilities: registration.capabilities })) }), { mode: 0o600 });

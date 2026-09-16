@@ -406,7 +406,7 @@ describe("WS heartbeat miss tolerance", () => {
 
     // 客户端发送任意一条有效指令或帧
     const reply = conn.nextType("command_result");
-    conn.ws.send(JSON.stringify({ id: "h1", type: "list_live_sessions" }));
+    conn.ws.send(JSON.stringify({ id: "h1", type: "get_monitor_state" }));
     await reply;
 
     // 收到 message 后，heartbeatMisses 必须被立即重置为 0

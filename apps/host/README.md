@@ -36,8 +36,7 @@ docker run -d --name maestro-mobile \
   maestro-mobile
 ```
 
-容器模式能力边界：Dashboard / Monitor 看板、会话历史浏览、usage 统计**可用**；
-`open_session` / `steer_window` 的会话接管**不可用**（需要容器内安装 pi 及认证上下文）。
+容器模式能力边界：Dashboard / Monitor 看板、会话历史浏览、usage 统计**可用**；会话控制**不可用**（需要容器内安装 pi 及认证上下文）。
 详细说明见仓库 `docs/deploy.md`。
 
 ## 使用

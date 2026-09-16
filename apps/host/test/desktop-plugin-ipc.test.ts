@@ -55,7 +55,8 @@ describe("DesktopPlugin IPC and gateway", () => {
     const dir = await mkdtemp(join(tmpdir(), "maestro-plugin-"));
     const socketPath = join(dir, "plugin.sock");
     const registryPath = join(dir, "registry.json");
-    server = new DesktopPluginIpcServer({ socketPath, registryPath, secret: "test-secret" });
+    const registry = new DesktopPluginRegistry();
+    server = new DesktopPluginIpcServer({ socketPath, registryPath, registry, secret: "test-secret" });
     await server.start();
     const mode = (await stat(socketPath)).mode & 0o777;
     expect(mode).toBe(0o600);

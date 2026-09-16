@@ -265,7 +265,7 @@ describe("MobileHostServer", () => {
           if (msg.type === "command_result") resolve(msg);
         });
       });
-      ws.send(JSON.stringify({ id: "disabled-list", type: "list_sessions" }));
+      ws.send(JSON.stringify({ id: "disabled-state", type: "get_maestro_state" }));
       await expect(reply).resolves.toEqual(expect.objectContaining({ ok: false, error: { code: "rollout_disabled" } }));
       expect(disabled.server.getReleaseContract()).toEqual({ releaseVersion: "0.4.0", protocolVersion: 2, rolloutMode: "disabled" });
       ws.close();
@@ -422,56 +422,21 @@ describe("MobileHostServer", () => {
     });
   });
 
-  it("handles abort command: forwards SIGINT when session belongs to an active desktop TUI window", async () => {
-    const fakeOwner = {
-      workspaceId: "ws-test",
-      normalizedCwd: ctx.tmpDir,
-      ownerId: "owner-tui-12345",
-      ownerNonce: "nonce-1",
-      pid: 99999, // 模拟目标终端 PID
-      sessionId: "sess-desktop-tui-1",
-      publishedAt: Date.now(),
-      alive: true,
-      ageMs: 10,
-      contextPressure: 20,
-      agents: [],
-      settled: [],
-      backgroundJobs: [],
-    };
-
-    (ctx.controller as unknown as { telemetryReader: { read: () => Promise<{ owners: typeof fakeOwner[] }> } }).telemetryReader = {
-      read: async () => ({ owners: [fakeOwner] }),
-    };
-
-    let killedPid: number | undefined;
-    let killedSignal: string | number | undefined;
-    const origKill = process.kill;
-    process.kill = ((pid: number, signal?: string | number) => {
-      killedPid = pid;
-      killedSignal = signal;
-      return true;
-    }) as typeof process.kill;
-
-    try {
-      const ws = await connectV2(ctx.url);
-      await new Promise<void>((resolve, reject) => {
-        ws.send(JSON.stringify({ type: "abort", sessionId: "sess-desktop-tui-1", id: "cmd-abort-2" }));
-        ws.on("message", (raw) => {
-          const d = JSON.parse(raw.toString());
-          if (d.type === "command_result" && d.in_reply_to === "cmd-abort-2") {
-            expect(d.status).toBe("unknown");
-            expect(d.error?.code).toBe("target_unavailable");
-            expect(killedPid).toBeUndefined();
-            expect(killedSignal).toBeUndefined();
-            ws.close();
-            resolve();
-          }
-        });
-        ws.on("error", reject);
+  it("returns target unavailable for an unregistered desktop session", async () => {
+    const ws = await connectV2(ctx.url);
+    await new Promise<void>((resolve, reject) => {
+      ws.send(JSON.stringify({ type: "abort", sessionId: "sess-desktop-tui-1", id: "cmd-abort-2" }));
+      ws.on("message", (raw) => {
+        const d = JSON.parse(raw.toString());
+        if (d.type === "command_result" && d.in_reply_to === "cmd-abort-2") {
+          expect(d.status).toBe("unknown");
+          expect(d.error?.code).toBe("target_unavailable");
+          ws.close();
+          resolve();
+        }
       });
-    } finally {
-      process.kill = origKill;
-    }
+      ws.on("error", reject);
+    });
   });
 });
 describe("MobileHostServer.listen error propagation", () => {

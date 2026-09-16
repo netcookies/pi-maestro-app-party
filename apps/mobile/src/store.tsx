@@ -30,8 +30,6 @@ export interface HostStoreValue {
   connect(url: string, token?: string): void;
   disconnect(): void;
   openSession(cwd: string): Promise<string>;
-  /** 打开该 cwd 最近一次会话（continue 语义） */
-  openSessionContinue(cwd: string): Promise<string>;
   openExistingSession(sessionFile: string, cwd: string): Promise<string>;
   /** 关闭 host 上的会话 runner（P2-4：避免重复 open 泄漏旧实例） */
   closeSession(sessionId: string): Promise<void>;
@@ -202,13 +200,6 @@ export function HostStoreProvider({ children }: { children: React.ReactNode }) {
     return r.sessionId ?? "";
   }, [getClient]);
 
-  /** 打开该 cwd 最近一次会话（工作台「现在运行」窗口跳转用） */
-  const openSessionContinue = useCallback(async (cwd: string): Promise<string> => {
-    const result = await getClient().sendCommand({ type: "open_session", cwd, mode: "continue" });
-    const r = result as { sessionId?: string };
-    return r.sessionId ?? "";
-  }, [getClient]);
-
   const openExistingSession = useCallback(async (sessionFile: string, cwd: string): Promise<string> => {
     const result = await getClient().sendCommand({ type: "open_session", cwd, mode: "create", sessionFile });
     const r = result as { sessionId?: string };
@@ -367,7 +358,6 @@ export function HostStoreProvider({ children }: { children: React.ReactNode }) {
       connect,
       disconnect,
       openSession,
-      openSessionContinue,
       openExistingSession,
       closeSession,
       listHostSessions,

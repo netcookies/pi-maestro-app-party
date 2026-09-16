@@ -51,7 +51,7 @@ headless 服务器需要 `sudo loginctl enable-linger $USER`（如果是 user se
 
 ### 能力边界
 
-完整能力：会话打开/聊天/steer/接管（steer_window）、Monitor 看板、usage 统计、ask 弹窗桥、版本探测（pi/flow/CLI 真实版本）。
+完整能力：会话打开/聊天/steer、Monitor 看板、usage 统计、ask 弹窗桥、版本探测（pi/flow/CLI 真实版本）。
 
 ---
 
@@ -75,7 +75,7 @@ pi install npm:pi-maestro-mobile
 
 ## 形态三：Docker 看板模式
 
-适合 NAS / 远程服务器 / 容器化环境。**能力边界**：Dashboard、Monitor 窗口、usage 统计、会话历史浏览可用；`open_session` / `steer_window` 会话接管**不可用**（容器内没有 pi 与 `~/.pi/agent` 认证上下文）。
+适合 NAS / 远程服务器 / 容器化环境。**能力边界**：Dashboard、Monitor 窗口、usage 统计、会话历史浏览可用；会话控制（`open_session` / `prompt` / `steer` / `abort`）不可用（容器内没有 pi 与 `~/.pi/agent` 认证上下文）。
 
 ### docker compose（推荐）
 
@@ -135,4 +135,4 @@ ws://<PC 局域网 IP>:4739/ws?token=<your-secret>
 | 手机连不上 | `curl http://<PC>:4739/api/health`；防火墙放行 4739 |
 | Monitor 无窗口 | 宿主 `~/.pi/teammate/workspaces/` 是否有 owners JSON（Pi 会话是否跑过 teammate） |
 | usage 显示 -- | 手机端需先在「会话」页打开一个会话（usage 是会话级聚合） |
-| Docker 内接管失败 | 预期行为——看板模式不支持会话接管 |
+| Docker 内会话控制不可用 | 预期行为——看板模式不包含 Pi 认证上下文 |

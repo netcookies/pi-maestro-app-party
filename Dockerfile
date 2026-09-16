@@ -2,8 +2,8 @@
 #
 # 构建：docker build -t maestro-mobile .
 #
-# 看板模式（推荐）：挂载宿主 ~/.pi 只读，Dashboard/Monitor/usage 全可用，
-# 但 open_session / steer_window 的会话接管不可用（容器内无 pi 认证上下文）。
+# 看板模式（推荐）：挂载宿主 ~/.pi 只读，Dashboard/Monitor/usage 全可用；
+# 会话控制不可用（容器内无 pi 认证上下文）。
 #
 #   docker run -d --name maestro-mobile \
 #     -p 4739:4739 \
@@ -13,7 +13,7 @@
 #     maestro-mobile
 #
 # 完整模式（进阶）：额外挂载 ~/.pi/agent 读写 + 容器内安装 pi，才能在容器里
-# 打开/接管会话。见 docs/deploy.md「完整模式」。
+# 使用会话控制。见 docs/deploy.md「完整模式」。
 
 FROM node:22-alpine AS build
 WORKDIR /app

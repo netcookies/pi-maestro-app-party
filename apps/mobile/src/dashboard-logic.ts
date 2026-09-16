@@ -25,14 +25,6 @@ export interface PendingAskItem {
   message?: string;
 }
 
-/** 「现在运行」窗口行（含 teammate agent 聚合） */
-export interface WindowRunningInfo {
-  key: string;
-  window: MonitorWindowSummary;
-  agentsTotal: number;
-  agentsRunning: number;
-}
-
 /** 「需要关注」按窗口分组的告警 */
 export interface AttentionGroup {
   key: string;
@@ -62,7 +54,6 @@ export interface DashboardMetrics {
   waitingAsk: number;
   waitingAttention: number;
   waitingCount: number;
-  runningWindows: WindowRunningInfo[];
   attentionGroups: AttentionGroup[];
 }
 
@@ -127,7 +118,6 @@ export function deriveDashboardMetrics(input: DashboardInput, now: Date = new Da
   const windows = input.monitor?.windows ?? [];
   const schedules = input.maestro?.schedules ?? [];
 
-  const runningWindows: WindowRunningInfo[] = [];
   let teammatesWorking = 0;
   let teammatesTotal = 0;
   const attentionGroups: AttentionGroup[] = [];
@@ -137,9 +127,6 @@ export function deriveDashboardMetrics(input: DashboardInput, now: Date = new Da
     teammatesTotal += agents.length;
     const agentsRunning = agents.filter((a) => a.status === "running").length;
     teammatesWorking += agentsRunning;
-    if (w.status === "running") {
-      runningWindows.push({ key: windowKey(w), window: w, agentsTotal: agents.length, agentsRunning });
-    }
     if (Array.isArray(w.attention) && w.attention.length > 0) {
       attentionGroups.push({
         key: windowKey(w),
@@ -159,7 +146,7 @@ export function deriveDashboardMetrics(input: DashboardInput, now: Date = new Da
 
   return {
     totalWindows: windows.length,
-    activeWindows: runningWindows.length,
+    activeWindows: windows.filter((w) => w.status === "running").length,
     runsCompletedToday,
     runsActive,
     teammatesWorking,
@@ -167,7 +154,6 @@ export function deriveDashboardMetrics(input: DashboardInput, now: Date = new Da
     waitingAsk,
     waitingAttention,
     waitingCount: waitingAsk + waitingAttention,
-    runningWindows,
     attentionGroups,
   };
 }

@@ -211,7 +211,7 @@ async function main(): Promise<void> {
   try {
     await desktopIpc.start();
   } catch (error) {
-    // Desktop Plugin is optional; keep mobile Host available without PID/mailbox fallback.
+    // Desktop Plugin is optional; keep mobile Host available without process-control fallback.
     console.warn("[maestro-mobile] Desktop Plugin IPC unavailable:", error instanceof Error ? error.message : error);
   }
   try {

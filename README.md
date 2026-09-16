@@ -182,7 +182,6 @@ cd apps/mobile && npx expo run:ios
 | PATCH | `/api/maestro/settings` | token | 更新 Settings |
 | GET | `/api/maestro/usage` | token | Usage 聚合（今日/本周/本月） |
 | GET | `/api/workspace-telemetry` | token | Monitor 窗口状态（原始 telemetry） |
-| GET | `/api/live-sessions` | token | 实时活跃会话（带 heartbeat） |
 
 ---
 
@@ -193,12 +192,10 @@ cd apps/mobile && npx expo run:ios
 | 命令 | 说明 |
 |------|------|
 | `list_host_sessions` | 列出所有会话 |
-| `list_live_sessions` | 列出活跃会话 |
 | `get_monitor_state` | 获取 Monitor 窗口状态 |
 | `get_snapshot { sessionId }` | 获取会话快照 |
 | `prompt { sessionId, message }` | 发送 Prompt |
 | `steer { sessionId, message }` | 发送 Steer |
-| `steer_window { endpointId, cwd, message }` | 跨窗口监督发送 |
 | `abort { sessionId }` | 中止会话 |
 | `get_maestro_settings` | 获取 Maestro Settings |
 | `update_maestro_settings { patch }` | 更新 Settings |

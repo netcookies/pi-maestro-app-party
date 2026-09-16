@@ -33,6 +33,8 @@ import { canLoadMoreSessions, mergeHostSessionPage } from "../../src/host-sessio
 
 const PAGE_SIZE = 30;
 
+type SessionView = "active" | "all";
+
 type Row = { type: "group"; key: string; cwd: string; count: number } | { type: "session"; key: string; session: HostSessionSummary };
 
 export default function HostSessionsScreen() {
@@ -45,6 +47,7 @@ export default function HostSessionsScreen() {
   const filterStateRef = useRef(filterState);
   const [queryInput, setQueryInput] = useState("");
   const [searchOpen, setSearchOpen] = useState(false);
+  const [sessionView, setSessionView] = useState<SessionView>("active");
   const [filterOpen, setFilterOpen] = useState(false);
   // 草稿多选：底部抽屉中勾选，点应用才提交（避免每次勾选都触发一次请求）
   const [cwdDraft, setCwdDraft] = useState<string[]>([]);
@@ -173,7 +176,11 @@ export default function HostSessionsScreen() {
   }, [loadSessionHistory, opening, openExistingSession, router]);
 
   const cwdOptions = useMemo(() => Array.from(new Set(sessions.map((session) => session.cwd))).sort(), [sessions]);
-  const scopedSessions = useMemo(() => filterSessionSummaries(sessions, filterState.filter), [filterState.filter, sessions]);  const rows = useMemo<Row[]>(() => {
+  const scopedSessions = useMemo(() => {
+    const filtered = filterSessionSummaries(sessions, filterState.filter);
+    return sessionView === "all" ? filtered : filtered.filter(isSessionActive);
+  }, [filterState.filter, sessionView, sessions]);
+  const rows = useMemo<Row[]>(() => {
     const groups = new Map<string, HostSessionSummary[]>();
     for (const session of scopedSessions) groups.set(session.cwd, [...(groups.get(session.cwd) ?? []), session]);
     return Array.from(groups.entries()).flatMap(([cwd, group]) => [
@@ -199,18 +206,6 @@ export default function HostSessionsScreen() {
             <View style={styles.headerActions}>
               <TouchableOpacity onPress={() => setSearchOpen((value) => !value)} accessibilityRole="button" accessibilityLabel={t.searchPlaceholder} style={styles.iconButton}>
                 <LineIcon name="search" size={18} color={theme.text} />
-              </TouchableOpacity>
-              <TouchableOpacity
-                onPress={() => {
-                  setCwdDraft(filterState.filter.cwds ?? []);
-                  setFilterOpen(true);
-                }}
-                accessibilityRole="button"
-                accessibilityLabel={t.filterSessions}
-                style={[styles.iconButton, selectedCount > 0 && { backgroundColor: theme.accent }]}
-              >
-                <LineIcon name="filter" size={18} color={selectedCount > 0 ? "#fff" : theme.text} />
-                {selectedCount > 0 && <Text style={styles.filterCount}>{selectedCount}</Text>}
               </TouchableOpacity>
             </View>
           </View>
@@ -238,6 +233,48 @@ export default function HostSessionsScreen() {
           ListEmptyComponent={<View style={styles.center}><Text style={styles.centerText}>{t.noMatchingSessions}</Text></View>}
           ListFooterComponent={rows.length > 0 ? <View style={styles.footer}>{loadingMore && <ActivityIndicator color={theme.accent} />}<Text style={styles.footerText}>{loadedLabel}</Text></View> : null}
         />
+      )}
+
+      {!searchOpen && (
+        <View style={styles.floatingBarContainer} pointerEvents="box-none">
+          <View style={[styles.floatingPill, { backgroundColor: theme.cardBg, borderColor: theme.border }]}>
+            <TouchableOpacity
+              style={[styles.floatingTabBtn, sessionView === "active" && { backgroundColor: theme.accent }]}
+              onPress={() => setSessionView("active")}
+              accessibilityRole="button"
+              accessibilityLabel={t.filterActive}
+              accessibilityState={{ selected: sessionView === "active" }}
+            >
+              <View style={[styles.greenDot, sessionView === "active" && { backgroundColor: "#fff" }]} />
+              <Text style={[styles.floatingTabText, { color: sessionView === "active" ? "#fff" : theme.muted }]}>
+                {t.filterActive}
+              </Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={[styles.floatingTabBtn, sessionView === "all" && { backgroundColor: theme.accent }]}
+              onPress={() => setSessionView("all")}
+              accessibilityRole="button"
+              accessibilityLabel={t.filterAll}
+              accessibilityState={{ selected: sessionView === "all" }}
+            >
+              <Text style={[styles.floatingTabText, { color: sessionView === "all" ? "#fff" : theme.muted }]}>
+                {t.filterAll}
+              </Text>
+            </TouchableOpacity>
+          </View>
+          <TouchableOpacity
+            style={[styles.filterFab, { backgroundColor: theme.accent }]}
+            onPress={() => {
+              setCwdDraft(filterState.filter.cwds ?? []);
+              setFilterOpen(true);
+            }}
+            accessibilityRole="button"
+            accessibilityLabel={t.filterSessions}
+          >
+            <LineIcon name="filter" size={19} color="#fff" />
+            {selectedCount > 0 && <Text style={styles.filterCount}>{selectedCount}</Text>}
+          </TouchableOpacity>
+        </View>
       )}
 
       <Modal visible={filterOpen} transparent animationType="slide" onRequestClose={() => setFilterOpen(false)}>
@@ -287,9 +324,14 @@ export default function HostSessionsScreen() {
   );
 }
 
+function isSessionActive(session: HostSessionSummary): boolean {
+  const presentation = session.presentation;
+  return presentation?.visibility === "session_list" && presentation.control.mode !== "readonly";
+}
+
 function SessionCard({ session, opening, theme, styles, t, onPress }: { session: HostSessionSummary; opening: boolean; theme: ReturnType<typeof useTheme>["theme"]; styles: ReturnType<typeof makeStyles>; t: ReturnType<typeof useI18n>["t"]; onPress: () => void }) {
   const control = session.presentation?.control;
-  const active = session.presentation?.visibility === "session_list" && session.presentation.control.mode !== "readonly";
+  const active = isSessionActive(session);
   const context = session.context;
   const title = session.name || session.cwdName || session.title || session.id;
   return <SpringCard style={[styles.sessionCard, active && { borderColor: theme.accent }]} onPress={onPress} accessibilityRole="button" accessibilityLabel={title}>
@@ -316,7 +358,13 @@ function makeStyles(theme: ReturnType<typeof useTheme>["theme"]) {
     filterCount: { position: "absolute", right: -3, top: -4, color: "#fff", backgroundColor: theme.warning, fontSize: 9, minWidth: 14, height: 14, borderRadius: 7, textAlign: "center", overflow: "hidden" },
     searchRow: { flexDirection: "row", alignItems: "center", gap: 8, marginHorizontal: 16, marginBottom: 10, paddingHorizontal: 10, height: 40, borderRadius: MIUIX_RADIUS.md, backgroundColor: theme.inputBg },
     searchInput: { flex: 1, fontSize: 13 },
-    list: { padding: MIUIX_SPACE.lg, paddingBottom: 90 },
+    list: { padding: MIUIX_SPACE.lg, paddingBottom: 112 },
+    floatingBarContainer: { position: "absolute", bottom: 16, left: 16, right: 16, flexDirection: "row", justifyContent: "space-between", alignItems: "center", zIndex: 5 },
+    floatingPill: { flexDirection: "row", alignItems: "center", borderRadius: 20, padding: 3, borderWidth: 1, shadowColor: "#000", shadowOpacity: 0.12, shadowRadius: 6, elevation: 5 },
+    floatingTabBtn: { flexDirection: "row", alignItems: "center", gap: 5, minHeight: 34, paddingHorizontal: 12, paddingVertical: 6, borderRadius: 16 },
+    floatingTabText: { fontSize: 11, fontWeight: "700" },
+    greenDot: { width: 7, height: 7, borderRadius: 4, backgroundColor: theme.success },
+    filterFab: { position: "relative", width: 46, height: 46, borderRadius: 23, alignItems: "center", justifyContent: "center", shadowColor: "#000", shadowOpacity: 0.18, shadowRadius: 6, elevation: 6 },
     group: { marginTop: 6, marginBottom: 8 },
     groupTitle: { color: theme.text, fontSize: MIUIX_TYPE.footnote1, fontWeight: "700" },
     groupPath: { color: theme.dim, fontSize: 10, fontFamily: "monospace", marginTop: 2 },

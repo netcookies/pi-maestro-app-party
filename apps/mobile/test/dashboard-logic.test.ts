@@ -100,7 +100,6 @@ describe("deriveDashboardMetrics", () => {
     expect(m.runsCompletedToday).toBe(0);
     expect(m.teammatesWorking).toBe(0);
     expect(m.waitingCount).toBe(0);
-    expect(m.runningWindows).toEqual([]);
     expect(m.attentionGroups).toEqual([]);
   });
 
@@ -119,7 +118,6 @@ describe("deriveDashboardMetrics", () => {
     expect(m.activeWindows).toBe(1);
     expect(m.teammatesTotal).toBe(3);
     expect(m.teammatesWorking).toBe(2);
-    expect(m.runningWindows).toHaveLength(1);
   });
 
   it("groups attention by window and adds to waitingCount", () => {

@@ -340,7 +340,7 @@ export interface MonitorWindowSummary {
   };
   name?: string;
   objective?: string;
-  /** 窗口 cwd（telemetry normalizedCwd；steer_window 接管路径需要） */
+  /** 监控窗口工作目录（服务端 projection 字段）。 */
   cwd?: string;
   status: string;
   lifecycle: string;
@@ -459,7 +459,6 @@ export interface ClientCommandMeta {
 export type ClientCommandPayload =
   | { type: "open_session"; cwd: string; mode?: "create" | "continue"; sessionFile?: string }
   | { type: "list_host_sessions"; cwd?: string; limit?: number; cursor?: string; query?: string; sessionIds?: string[]; latestForCwds?: string[] }
-  | { type: "list_live_sessions" }
   | { type: "load_more_history"; sessionId: string; count?: number }
   | { type: "search_history"; sessionId: string; keyword: string; maxResults?: number; previewLength?: number }
   | { type: "list_models"; sessionId: string }
@@ -471,11 +470,8 @@ export type ClientCommandPayload =
   | { type: "compact"; sessionId: string; customInstructions?: string }
   | { type: "rename_session"; sessionId: string; name: string }
   | { type: "close_session"; sessionId: string }
-  | { type: "list_sessions"; cwd?: string }
-  | { type: "list_directories"; path: string }
   | { type: "prompt"; sessionId: string; message: string; images?: { data: string; mime: string }[] }
   | { type: "steer"; sessionId: string; message: string }
-  | { type: "steer_window"; endpointId: string; cwd: string; message: string }
   | { type: "follow_up"; sessionId: string; message: string }
   | { type: "abort"; sessionId: string }
   | { type: "extension_ui_response"; sessionId: string; requestId: string; response: ExtensionUiResponse }
@@ -486,15 +482,6 @@ export type ClientCommandPayload =
   | { type: "ping" };
 
 export type ClientCommand = ClientCommandMeta & ClientCommandPayload;
-
-
-/** steer_window 结果（tookOver=true 表示窗口原先未打开，Host 已接管为受控会话） */
-export interface SteerWindowResult {
-  ok: boolean;
-  sessionId: string;
-  tookOver: boolean;
-  error?: string;
-}
 
 /** 会话 token 用量（JSONL 聚合；entries=0 表示无 usage 数据） */
 export interface SessionUsageSummary {
@@ -512,10 +499,6 @@ export interface SessionUsageSummary {
   /** SDK 实时上下文用量（未流式响应或刚 compact 后可能为 null） */
   context: { tokens: number | null; contextWindow: number; percent: number | null } | null;
 }
-
-// ─────────────────────────────────────────────────────────────────────────────
-// 宿主状态
-// ─────────────────────────────────────────────────────────────────────────────
 
 export interface HostStatus {
   ok: boolean;
@@ -590,7 +573,6 @@ export function isClientCommand(value: unknown): value is ClientCommand {
     case "list_host_sessions":
       return optionalString(value.cwd) && optionalFiniteNumber(value.limit) && optionalString(value.cursor)
         && optionalString(value.query) && optionalStringArray(value.sessionIds) && optionalStringArray(value.latestForCwds);
-    case "list_live_sessions":
     case "get_maestro_settings":
     case "get_maestro_state":
     case "get_monitor_state":
@@ -618,17 +600,11 @@ export function isClientCommand(value: unknown): value is ClientCommand {
         && (value.type !== "compact" || optionalString(value.customInstructions));
     case "update_maestro_settings":
       return isString(value.key) && isRecord(value.patch);
-    case "list_sessions":
-      return optionalString(value.cwd);
-    case "list_directories":
-      return isString(value.path);
     case "prompt":
       return isString(value.sessionId) && isString(value.message) && optionalImageArray(value.images);
     case "steer":
     case "follow_up":
       return isString(value.sessionId) && isString(value.message);
-    case "steer_window":
-      return isString(value.endpointId) && isString(value.cwd) && isString(value.message);
     case "extension_ui_response":
       return isString(value.sessionId) && isString(value.requestId) && isRecord(value.response);
     default:

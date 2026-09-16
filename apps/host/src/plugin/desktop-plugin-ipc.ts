@@ -1,5 +1,6 @@
 import { randomBytes, timingSafeEqual } from "node:crypto";
-import { access, chmod, unlink } from "node:fs/promises";
+import { dirname } from "node:path";
+import { access, chmod, mkdir, unlink } from "node:fs/promises";
 import net, { type Socket, type Server } from "node:net";
 import type {
   DesktopPluginCapability,
@@ -222,12 +223,15 @@ export class DesktopPluginIpcServer {
     if (!options.secret) throw new Error("desktop plugin secret is required");
     if (!options.socketPath) throw new Error("desktop plugin socket path is required");
     this.registry = options.registry ?? new DesktopPluginRegistry({ filePath: options.registryPath });
+    if (options.registry && options.registryPath) this.registry.setFilePath(options.registryPath);
     this.server = net.createServer((socket) => this.accept(socket));
   }
 
   async start(): Promise<void> {
     if (this.started) return;
     this.closed = false;
+    await mkdir(dirname(this.options.socketPath), { recursive: true, mode: 0o700 });
+    await chmod(dirname(this.options.socketPath), 0o700).catch(() => undefined);
     await removeStaleSocket(this.options.socketPath);
     await new Promise<void>((resolve, reject) => {
       const onError = (error: Error) => { this.server.off("listening", onListening); reject(error); };

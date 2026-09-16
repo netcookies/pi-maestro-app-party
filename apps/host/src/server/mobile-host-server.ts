@@ -53,7 +53,6 @@ const ROLLOUT_MUTATING_COMMANDS = new Set([
   "close_session",
   "prompt",
   "steer",
-  "steer_window",
   "follow_up",
   "abort",
   "extension_ui_response",
@@ -831,10 +830,6 @@ export class MobileHostServer {
           this.sendAck(client, command, { pong: true });
           break;
         }
-        case "list_live_sessions": {
-          this.sendUnavailable(client, command, "unsupported_command");
-          break;
-        }
         case "load_more_history": {
           const target = this.targetForCommand(command);
           if (!target) { this.sendUnavailable(client, command, "target_unavailable"); break; }
@@ -948,10 +943,6 @@ export class MobileHostServer {
           }
           const result = await this.controller.application.command({ requestId: command.id, target, kind: "steer", message: command.message });
           this.sendApplicationResult(client, command, result);
-          break;
-        }
-        case "steer_window": {
-          this.sendUnavailable(client, command, "unsupported_command");
           break;
         }
         case "follow_up": {

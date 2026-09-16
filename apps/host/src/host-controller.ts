@@ -3,11 +3,9 @@ import type { DesktopPluginTarget } from "@maestro-mobile/shared";
 import type { RuntimeFactory, SessionRunner, OpenSessionRequest, HostEventListener } from "./types.js";
 import { SdkSessionRunner } from "./session-runner.js";
 import { MaestroStateReader } from "./maestro-state.js";
-import { LiveSessionsService } from "./live-sessions.js";
 import { WorkspaceTelemetryReader } from "./workspace-telemetry.js";
 import { monitorStateEvent } from "./monitor-projection.js";
 import { MonitorReadService } from "./application/monitor-read-service.js";
-import { isMonitorOwner } from "./application/session-visibility.js";
 import { SessionDirectory, type SessionTargetIdentity } from "./control/SessionDirectory.js";
 import { SessionCommandService } from "./application/session-command-service.js";
 import { SessionQueryService } from "./application/session-query-service.js";
@@ -16,13 +14,11 @@ import { ApplicationCommandRouter, type SessionOperation } from "./application/a
 import { DesktopPluginRegistry } from "./plugin/desktop-plugin-registry.js";
 import { DesktopControlGatewayService } from "./control/desktop-control-gateway.js";
 import { readSettingsOverview, updateSettingsJson } from "./maestro-settings.js";
-export { isMonitorOwner } from "./application/session-visibility.js";
 import { VersionDetector, type ComponentVersions } from "./version-detector.js";
 import { EventLog } from "./event-log.js";
 import { readFileSync } from "node:fs";
-import { normalize, dirname, resolve } from "node:path";
+import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import type { WorkspaceOwner } from "./workspace-telemetry.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 let hostPackageVersion = "0.4.0";
@@ -46,7 +42,6 @@ export class HostController {
   private readonly eventLog = new EventLog();
   private readonly listeners = new Set<HostEventListener>();
   private readonly maestroReader: MaestroStateReader;
-  private readonly liveSessions: LiveSessionsService;
   private readonly telemetryReader: WorkspaceTelemetryReader;
   private readonly monitorReadService: MonitorReadService;
   private readonly sessionDirectory = new SessionDirectory();
@@ -70,7 +65,6 @@ export class HostController {
     maestroReader?: MaestroStateReader,
   ) {
     this.maestroReader = maestroReader ?? new MaestroStateReader();
-    this.liveSessions = new LiveSessionsService();
     this.telemetryReader = new WorkspaceTelemetryReader();
     this.monitorReadService = new MonitorReadService(() => this.telemetryReader.read());
     this.desktopControlGateway = new DesktopControlGatewayService(this.desktopPluginRegistry);
@@ -143,12 +137,6 @@ export class HostController {
     if (this.desktopPluginRegistry.resolve(target)) return;
     this.sessionDirectory.unregister(target);
   }
-
-
-  async listLiveSessions() {
-    return this.liveSessions.list();
-  }
-
   /** 读取 workspace telemetry（owner 状态，Monitor/Teammate 合同） */
   async readTelemetry() {
     return this.telemetryReader.read();
@@ -162,45 +150,6 @@ export class HostController {
   /** 读取 Monitor projection 及稳定 revision，供 transport 适配层使用。 */
   async readMonitorSnapshot() {
     return this.monitorReadService.read();
-  }
-
-  /**
-   * 查询匹配该会话的当前活跃桌面 TUI 窗口：
-   * - 必须 heartbeat 新鲜且 cwd 一致；
-   * - 默认过滤处于 Monitor 控制模式下的窗口（allowMonitor=false），防止业务消息错投进监控窗口；
-   * - 若提供了 sessionId，严格按 sessionId 匹配；
-   * - 若未提供 sessionId，仅在同 cwd 仅有唯一活跃非监控窗口时返回，多窗口歧义时返回 undefined 防止误投。
-   */
-  async findActiveOwnerForSession(
-    cwd: string,
-    sessionId?: string,
-    options?: { allowMonitor?: boolean },
-  ): Promise<WorkspaceOwner | undefined> {
-    try {
-      const t = await this.telemetryReader.read();
-      const normCwd = normalize(cwd);
-      let aliveOwners = t.owners.filter((o) => o.alive && normalize(o.normalizedCwd) === normCwd);
-      if (aliveOwners.length === 0) return undefined;
-
-      // 默认过滤 Monitor 监督窗口，业务 prompt 消息绝不注入监控会话
-      if (!options?.allowMonitor) {
-        aliveOwners = aliveOwners.filter((o) => !isMonitorOwner(o));
-      }
-
-      if (sessionId) {
-        return aliveOwners.find((o) => o.sessionId === sessionId);
-      }
-
-      // 未指定 sessionId 时的安全兜底：仅当存在唯一活跃窗口时才返回，多个窗口存在歧义时绝不盲猜
-      return aliveOwners.length === 1 ? aliveOwners[0] : undefined;
-    } catch {
-      return undefined;
-    }
-  }
-
-  /** 查询匹配该 cwd 的当前活跃桌面 TUI 窗口（兼容别名，内部转调 findActiveOwnerForSession） */
-  async findActiveOwnerForCwd(cwd: string, sessionId?: string, options?: { allowMonitor?: boolean }): Promise<WorkspaceOwner | undefined> {
-    return this.findActiveOwnerForSession(cwd, sessionId, options);
   }
 
   /** 轮询统一 Monitor Read Service，状态变化时推送同一份 projection */
