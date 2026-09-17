@@ -78,7 +78,36 @@ sudo systemctl enable --now maestro-mobile
 |---|---|
 | `GET /api/health` | 存活检查 |
 | `GET /api/status` | 版本/uptime/sessions（含 pi/flow/CLI 版本探测） |
-| `GET /api/workspace-telemetry` | Monitor 窗口 owners（pid/sessionId/agents/contextPressure） |
-| `GET /api/maestro` | flow-schedule 调度状态 |
-| `GET /api/live-sessions` | 活跃 Pi 会话扫描 |
-| `WS /ws` | 实时事件流 + 客户端命令（协议见 `@maestro-mobile/shared`） |
+| `GET /api/sessions` | 会话列表（`cwd`/`query`/`limit`/`cursor`/`projectCwds`） |
+| `GET /api/workspace-telemetry` | Monitor 窗口投影 |
+| `GET /api/maestro` / `GET /api/maestro-settings` | flow-schedule 调度状态 / 设置总览 |
+| `GET /api/file` | 图片只读预览 |
+| `GET /api/extension-ui/pending` | 待处理 ask 计数 |
+| `GET /api/live-sessions` | 已弃用，返回 410（不属于 Protocol v2） |
+| `WS /ws` | 实时事件流 + 客户端命令（协议见 `@maestro-mobile/shared`，摘要见 `docs/protocol.md`） |
+
+## Desktop Plugin（控制桌面 TUI 会话）
+
+外部 Pi TUI 加载 `dist/plugin/desktop-plugin-extension.js` 后，会作为 UDS 客户端连回 Host，使手机可以直接控制桌面 TUI 会话（prompt / steer / follow_up / abort / set_model / ask 作答）。
+
+| 路径 | 用途 |
+|---|---|
+| `~/.pi/maestro-mobile/ipc/desktop-plugin.sock` | UDS，NDJSON 帧，权限 `0600` |
+| `~/.pi/maestro-mobile-ipc-secret` | 共享密钥（启动时自动生成） |
+| `~/.pi/maestro-mobile/ipc/desktop-plugin-registry.json` | 注册表快照 |
+
+行为要点：
+
+- 所有控制与事件都绑定 exact target（`sessionId + endpointId + normalizedCwd + processGeneration`），不做 cwd/名称/PID/时间推断。
+- 插件自报 capability；旧插件缺 `set_model` 时返回结构化 `capability_mismatch`，不静默降级。
+- 断线后插件每 1s 重连，重连成功后重发当前模型；TUI 切换模型会经 `desktop_plugin_event(model_select)` 回流到手机。
+
+完整字段见 [`docs/protocol.md`](../../docs/protocol.md#desktop-plugin-协议)。
+
+## 构建与产物耦合（重要）
+
+Host 运行时通过 `@maestro-mobile/shared` 的 **`dist`** 解析协议 validator，而不是 `src`。因此修改 `packages/shared/src` 后：
+
+1. 必须先 `pnpm --filter @maestro-mobile/shared build` 重建 `dist`；
+2. 否则 Host 会按**旧协议**拒绝新帧（表现为新 operation 返回 `invalid_frame` / `desktop_confirmation_unavailable`，而 `typecheck` 与源码测试可能全绿）；
+3. 验证时必须包含真实运行时探针（真实 UDS + 真实 Host 进程），不能只靠单元测试。

@@ -5,15 +5,7 @@
  *  - outputTail 截断至有界行数/宽度，避免 WS 广播无界数据
  *  - 变更检测使用稳定键（不含 ageMs/observedAt 等时间派生字段）
  */
-import type {
-  HostEvent,
-  MonitorState,
-  MonitorWindowSummary,
-  TeammateAgentState,
-  TeammateAgentsFacet,
-  WorkspaceOwnerState,
-  WorkspaceTelemetryState,
-} from "@maestro-mobile/shared";
+import type { HostEvent, MonitorState, MonitorWindowSummary, SessionRuntimeStatus, TeammateAgentState, TeammateAgentsFacet, WorkspaceOwnerState, WorkspaceTelemetryState } from "@maestro-mobile/shared";
 import { projectOwnerPresentation } from "./application/session-visibility.js";
 
 /** outputTail 广播上限：每 agent 最多 8 行、每行 200 字符 */
@@ -232,8 +224,12 @@ export function projectWindow(o: WorkspaceOwnerState): MonitorWindowSummary {
     });
   }
   const execState = inspectWindowExecutionState(o, agents);
+  const runtimeStatus: SessionRuntimeStatus = execState.status;
 
   return {
+    sessionId: o.sessionId,
+    endpointId: o.sessionId,
+    runtimeStatus,
     identity,
     name: o.normalizedCwd.split("/").filter(Boolean).pop() ?? o.normalizedCwd,
     cwd: o.normalizedCwd,

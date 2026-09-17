@@ -11,11 +11,12 @@
  */
 import React, { useState, useRef, useEffect } from "react";
 import {
-  View, Text, TextInput, TouchableOpacity, StyleSheet, Modal, FlatList, Image, ScrollView,
+  View, Text, TextInput, TouchableOpacity, StyleSheet, Modal, FlatList, Image, ScrollView, Alert,
   Animated, AccessibilityInfo, Pressable, KeyboardAvoidingView, Platform, Easing,
 } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useTheme } from "../theme";
+import { useI18n } from "../i18n";
 import { LineIcon } from "./LineIcon";
 import { hapticImpactMedium } from "../utils/haptics";
 
@@ -23,7 +24,8 @@ export interface ComposerActions {
   send(text: string, images?: { data: string; mime: string }[]): Promise<void>;
   abort?(): Promise<void> | void;
   listModels?(): Promise<{ id: string; provider: string; name: string; reasoning: boolean; vision: boolean }[]>;
-  setModel?(modelId: string): Promise<{ ok: boolean; error?: string }>;
+  listSkills?(): Promise<{ name: string; description?: string }[]>;
+  setModel?(modelId: string, provider?: string): Promise<{ ok: boolean; error?: string }>;
   setThinking?(level: string): Promise<{ ok: boolean; error?: string }>;
   pickImage?(): Promise<{ data: string; mime: string } | null>;
   compact?(): Promise<{ ok: boolean; error?: string }>;
@@ -50,6 +52,7 @@ const THINKING_LEVELS = ["off", "minimal", "low", "medium", "high", "xhigh", "ma
 
 export function ChatComposer({ actions, currentModel, sending, isStreaming = false, onAbort, skills = [], placeholder, disabled = false }: Props) {
   const { theme } = useTheme();
+  const { t } = useI18n();
   const insets = useSafeAreaInsets();
   const [text, setText] = useState("");
   const [images, setImages] = useState<{ data: string; mime: string }[]>([]);
@@ -57,6 +60,8 @@ export function ChatComposer({ actions, currentModel, sending, isStreaming = fal
   const [models, setModels] = useState<{ id: string; provider: string; name: string; reasoning: boolean; vision: boolean }[]>([]);
   const [modelsLoading, setModelsLoading] = useState(false);
   const [showSkills, setShowSkills] = useState(false);
+  const [skillsLoading, setSkillsLoading] = useState(false);
+  const [loadedSkills, setLoadedSkills] = useState<(string | { name: string; description?: string })[]>(Array.isArray(skills) ? skills : []);
   const [skillQuery, setSkillQuery] = useState("");
   const [showThinking, setShowThinking] = useState(false);
   const [showPlanPicker, setShowPlanPicker] = useState(false);
@@ -123,6 +128,27 @@ export function ChatComposer({ actions, currentModel, sending, isStreaming = fal
     panelCloseTimer.current = setTimeout(() => { panelCloseTimer.current = null; setFsPanel(null); }, 200);
   };
 
+  useEffect(() => {
+    setLoadedSkills(Array.isArray(skills) ? skills : []);
+  }, [skills]);
+
+  const loadSkills = async () => {
+    if (!actions.listSkills) return;
+    setSkillsLoading(true);
+    try {
+      const next = await actions.listSkills();
+      setLoadedSkills(Array.isArray(next) ? next : []);
+    } catch {
+      // 打开抽屉时允许下次重试，不能把一次冷启动失败永久缓存为空列表。
+    } finally {
+      setSkillsLoading(false);
+    }
+  };
+
+  const skillItems = loadedSkills
+    .map((skill) => (typeof skill === "string" ? { name: skill, description: undefined } : skill))
+    .filter((skill) => typeof skill.name === "string" && skill.name.toLowerCase().includes(skillQuery.toLowerCase()));
+
   const canSend = (text.trim().length > 0 || images.length > 0) && !sending;
 
   // 发送失败时恢复草稿；actions.send 在 session 侧已 catch 不一定 reject，这里防御性兜底
@@ -181,15 +207,22 @@ export function ChatComposer({ actions, currentModel, sending, isStreaming = fal
   };
 
   const pickImage = async () => {
-    const img = await actions.pickImage?.();
-    if (img) setImages((prev) => [...prev, img]);
+    try {
+      const img = await actions.pickImage?.();
+      if (img) setImages((prev) => [...prev, img]);
+    } catch (error) {
+      const message = error instanceof Error && error.message === "photo_library_permission_denied"
+        ? "请在系统设置中允许访问照片"
+        : "无法打开图片选择器，请稍后重试";
+      Alert.alert("无法选择图片", message);
+    }
   };
 
   const [modelError, setModelError] = useState<string | null>(null);
 
-  const switchModel = async (id: string) => {
+  const switchModel = async (id: string, provider?: string, closePanel?: () => void) => {
     try {
-      const r = await actions.setModel?.(id);
+      const r = await actions.setModel?.(id, provider);
       if (r && !r.ok) {
         // P2-9：切换失败给出轻提示而非静默
         setModelError(r.error ?? "切换失败");
@@ -197,6 +230,7 @@ export function ChatComposer({ actions, currentModel, sending, isStreaming = fal
         return;
       }
       setShowModels(false);
+      closePanel?.();
     } catch {
       setModelError("切换失败（连接异常）");
       setTimeout(() => setModelError(null), 3000);
@@ -221,7 +255,7 @@ export function ChatComposer({ actions, currentModel, sending, isStreaming = fal
                 style={styles.imageRemove}
                 hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}
                 accessibilityRole="button"
-                accessibilityLabel="移除图片"
+                accessibilityLabel={t.removeImage}
                 onPress={() => setImages((prev) => prev.filter((_, j) => j !== i))}
               >
                 <Text style={styles.imageRemoveText}>
@@ -237,7 +271,11 @@ export function ChatComposer({ actions, currentModel, sending, isStreaming = fal
       <View style={[styles.inputRow, disabled && { opacity: 0.55 }]}>
         {/* / 按钮：弹 skill 弹窗 */}
         <TouchableOpacity
-          onPress={() => !disabled && setShowSkills(true)}
+          onPress={() => {
+            if (disabled) return;
+            setShowSkills(true);
+            void loadSkills();
+          }}
           style={[styles.slashBtn, { borderColor: theme.border }]}
           disabled={disabled}
           hitSlop={{ top: 4, bottom: 4, left: 4, right: 4 }}>
@@ -250,7 +288,7 @@ export function ChatComposer({ actions, currentModel, sending, isStreaming = fal
           disabled={disabled}
           hitSlop={{ top: 4, bottom: 4, left: 4, right: 4 }}
           accessibilityRole="button"
-          accessibilityLabel="添加图片"
+          accessibilityLabel={t.addImage}
         >
           <LineIcon name="clip" size={18} color={disabled ? theme.muted : theme.text} />
         </TouchableOpacity>
@@ -273,7 +311,7 @@ export function ChatComposer({ actions, currentModel, sending, isStreaming = fal
               style={[styles.expandBtn, { backgroundColor: theme.cardBg, borderColor: theme.border }]}
               hitSlop={{ top: 9, bottom: 9, left: 9, right: 9 }}
               accessibilityRole="button"
-              accessibilityLabel="展开全屏编辑"
+              accessibilityLabel={t.expandFullscreen}
               onPress={() => { setFullscreenEdit(true); void actions.listModels?.().then(setModels).catch(() => {}); }}
             >
               <LineIcon name="expand" size={13} color={theme.accent} strokeWidth={2.2} />
@@ -299,7 +337,7 @@ export function ChatComposer({ actions, currentModel, sending, isStreaming = fal
             ]}
             hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
             accessibilityRole="button"
-            accessibilityLabel="停止运行"
+            accessibilityLabel={t.stopRunning}
             disabled={!(onAbort ?? actions.abort)}
             onPress={() => {
               void hapticImpactMedium();
@@ -351,7 +389,7 @@ export function ChatComposer({ actions, currentModel, sending, isStreaming = fal
             ]}
             hitSlop={{ top: 4, bottom: 4, left: 4, right: 4 }}
             accessibilityRole="button"
-            accessibilityLabel="发送消息"
+            accessibilityLabel={t.sendMessage}
             accessibilityState={{ disabled: !canSend || sending || disabled, busy: sending }}
             onPress={() => !disabled && void handleSend()}
             disabled={!canSend || sending || disabled}
@@ -400,7 +438,7 @@ export function ChatComposer({ actions, currentModel, sending, isStreaming = fal
               style={[styles.fsMinBtn, { backgroundColor: theme.cardBg, borderColor: theme.border }]}
               hitSlop={{ top: 4, bottom: 4, left: 4, right: 4 }}
               accessibilityRole="button"
-              accessibilityLabel="收起全屏编辑"
+              accessibilityLabel={t.collapseFullscreen}
               onPress={() => setFullscreenEdit(false)}
             >
               <LineIcon name="collapse" size={18} color={theme.accent} strokeWidth={2} />
@@ -444,7 +482,7 @@ export function ChatComposer({ actions, currentModel, sending, isStreaming = fal
               <LineIcon name="plan" size={18} color={theme.muted} />
               <Text style={[styles.toolLabel, { color: theme.muted }]}>Plan</Text>
             </TouchableOpacity>
-            <TouchableOpacity onPress={() => setFsPanel("skills")} style={styles.fsToolBtn}>
+            <TouchableOpacity onPress={() => { setFsPanel("skills"); void loadSkills(); }} style={styles.fsToolBtn}>
               <Text style={[styles.slashText, { color: theme.accent }]}>/</Text>
               <Text style={[styles.toolLabel, { color: theme.muted }]}>Skill</Text>
             </TouchableOpacity>
@@ -544,26 +582,26 @@ export function ChatComposer({ actions, currentModel, sending, isStreaming = fal
               >
                 <View style={styles.modalHeader}>
                   <Text style={[styles.modalTitle, { color: theme.text }]}>
-                    {fsPanel === "models" ? "选择模型" : fsPanel === "thinking" ? "思考等级" : fsPanel === "plan" ? "Plan / Act 模式" : "Skills"}
+                    {fsPanel === "models" ? t.selectModel : fsPanel === "thinking" ? t.labelThinkLevel : fsPanel === "plan" ? t.planActMode : "Skills"}
                   </Text>
-                  <TouchableOpacity onPress={closeFsPanel} accessibilityRole="button" accessibilityLabel="关闭">
+                  <TouchableOpacity onPress={closeFsPanel} accessibilityRole="button" accessibilityLabel={t.close}>
                     <LineIcon name="x" size={14} color={theme.muted} strokeWidth={2.2} />
                   </TouchableOpacity>
                 </View>
                 {fsPanel === "models" && (
                   models.length === 0 ? (
                     modelsLoading ? (
-                      <Text style={[styles.modalEmpty, { color: theme.muted }]}>加载中...</Text>
+                      <Text style={[styles.modalEmpty, { color: theme.muted }]}>{t.loadingSessions}</Text>
                     ) : (
                       <View>
-                        <Text style={[styles.modalEmpty, { color: theme.muted }]}>无法获取模型列表</Text>
+                        <Text style={[styles.modalEmpty, { color: theme.muted }]}>{t.tabSessions === "会话" ? "无法获取模型列表" : "Cannot fetch models"}</Text>
                         <TouchableOpacity
                           style={[styles.retryBtn, { borderColor: theme.border }]}
                           accessibilityRole="button"
-                          accessibilityLabel="重试加载模型列表"
+                          accessibilityLabel={t.retryLoadModels}
                           onPress={loadModels}
                         >
-                          <Text style={[styles.retryText, { color: theme.accent }]}>重试</Text>
+                          <Text style={[styles.retryText, { color: theme.accent }]}>{t.retry}</Text>
                         </TouchableOpacity>
                       </View>
                     )
@@ -574,7 +612,7 @@ export function ChatComposer({ actions, currentModel, sending, isStreaming = fal
                       renderItem={({ item }) => (
                         <TouchableOpacity
                           style={[styles.modelItem, { borderBottomColor: theme.border }]}
-                          onPress={async () => { await actions.setModel?.(item.id); closeFsPanel(); }}
+                          onPress={() => void switchModel(item.id, item.provider, closeFsPanel)}
                         >
                           <Text style={[styles.modelName, { color: theme.text }]}>{item.name}</Text>
                           <View style={styles.modelMeta}>
@@ -618,7 +656,7 @@ export function ChatComposer({ actions, currentModel, sending, isStreaming = fal
                 )}
                 {fsPanel === "skills" && (
                   <FlatList
-                    data={skills.map((s) => (typeof s === "string" ? { name: s, description: undefined } : s)).filter((s) => s.name.toLowerCase().includes(skillQuery.toLowerCase()))}
+                    data={skillItems}
                     keyExtractor={(s) => s.name}
                     renderItem={({ item }) => (
                       <TouchableOpacity
@@ -628,7 +666,7 @@ export function ChatComposer({ actions, currentModel, sending, isStreaming = fal
                         <Text style={[styles.skillName, { color: theme.text }]} numberOfLines={1}>/skill:{item.name}</Text>
                       </TouchableOpacity>
                     )}
-                    ListEmptyComponent={<Text style={[styles.modalEmpty, { color: theme.muted }]}>No skills found</Text>}
+                    ListEmptyComponent={<Text style={[styles.modalEmpty, { color: theme.muted }]}>{skillsLoading ? t.loadingSessions : "No skills found"}</Text>}
                     style={{ maxHeight: 300 }}
                   />
                 )}
@@ -652,9 +690,7 @@ export function ChatComposer({ actions, currentModel, sending, isStreaming = fal
                 <TouchableOpacity onPress={() => setShowSkills(false)} accessibilityRole="button" accessibilityLabel="关闭"><LineIcon name="x" size={14} color={theme.muted} strokeWidth={2.2} /></TouchableOpacity>
               </View>
               <FlatList
-                data={skills
-                  .map((s) => (typeof s === "string" ? { name: s, description: undefined } : s))
-                  .filter((s) => s.name.toLowerCase().includes(skillQuery.toLowerCase()))}
+                data={skillItems}
                 keyExtractor={(s) => s.name}
                 renderItem={({ item }) => (
                   <TouchableOpacity
@@ -672,7 +708,7 @@ export function ChatComposer({ actions, currentModel, sending, isStreaming = fal
                   </TouchableOpacity>
                 )}
                 ListEmptyComponent={
-                  <Text style={[styles.modalEmpty, { color: theme.muted }]}>No skills found</Text>
+                  <Text style={[styles.modalEmpty, { color: theme.muted }]}>{skillsLoading ? t.loadingSessions : "No skills found"}</Text>
                 }
                 style={{ maxHeight: 260 }}
                 keyboardShouldPersistTaps="handled"
@@ -696,14 +732,14 @@ export function ChatComposer({ actions, currentModel, sending, isStreaming = fal
         <View style={styles.modalOverlay}>
           <View style={[styles.modalSheet, { backgroundColor: theme.cardBg, borderColor: theme.border }]}>
             <View style={styles.modalHeader}>
-              <Text style={[styles.modalTitle, { color: theme.text }]}>选择模型</Text>
-              <TouchableOpacity onPress={() => setShowModels(false)} accessibilityRole="button" accessibilityLabel="关闭"><LineIcon name="x" size={14} color={theme.muted} strokeWidth={2.2} /></TouchableOpacity>
+              <Text style={[styles.modalTitle, { color: theme.text }]}>{t.selectModel}</Text>
+              <TouchableOpacity onPress={() => setShowModels(false)} accessibilityRole="button" accessibilityLabel={t.close}><LineIcon name="x" size={14} color={theme.muted} strokeWidth={2.2} /></TouchableOpacity>
             </View>
             {modelError ? (
               <Text style={[styles.modalEmpty, { color: theme.error }]}>{modelError}</Text>
             ) : null}
             {modelsLoading ? (
-              <Text style={[styles.modalEmpty, { color: theme.muted }]}>加载中...</Text>
+              <Text style={[styles.modalEmpty, { color: theme.muted }]}>{t.loadingSessions}</Text>
             ) : (
               <FlatList
                 data={models}
@@ -711,7 +747,7 @@ export function ChatComposer({ actions, currentModel, sending, isStreaming = fal
                 renderItem={({ item }) => (
                   <TouchableOpacity
                     style={[styles.modelItem, { borderBottomColor: theme.border }]}
-                    onPress={() => void switchModel(item.id)}
+                    onPress={() => void switchModel(item.id, item.provider)}
                   >
                     <Text style={[styles.modelName, { color: theme.text }]}>{item.name}</Text>
                     <View style={styles.modelMeta}>
@@ -733,8 +769,8 @@ export function ChatComposer({ actions, currentModel, sending, isStreaming = fal
         <View style={styles.modalOverlay}>
           <View style={[styles.modalSheet, { backgroundColor: theme.cardBg, borderColor: theme.border }]}>
             <View style={styles.modalHeader}>
-              <Text style={[styles.modalTitle, { color: theme.text }]}>思考等级</Text>
-              <TouchableOpacity onPress={() => setShowThinking(false)} accessibilityRole="button" accessibilityLabel="关闭"><LineIcon name="x" size={14} color={theme.muted} strokeWidth={2.2} /></TouchableOpacity>
+              <Text style={[styles.modalTitle, { color: theme.text }]}>{t.labelThinkLevel}</Text>
+              <TouchableOpacity onPress={() => setShowThinking(false)} accessibilityRole="button" accessibilityLabel={t.close}><LineIcon name="x" size={14} color={theme.muted} strokeWidth={2.2} /></TouchableOpacity>
             </View>
             {THINKING_LEVELS.map((lv) => (
               <TouchableOpacity
@@ -754,8 +790,8 @@ export function ChatComposer({ actions, currentModel, sending, isStreaming = fal
         <View style={styles.modalOverlay}>
           <View style={[styles.modalSheet, { backgroundColor: theme.cardBg, borderColor: theme.border }]}>
             <View style={styles.modalHeader}>
-              <Text style={[styles.modalTitle, { color: theme.text }]}>Plan / Act 模式</Text>
-              <TouchableOpacity onPress={() => setShowPlanPicker(false)} accessibilityRole="button" accessibilityLabel="关闭"><LineIcon name="x" size={14} color={theme.muted} strokeWidth={2.2} /></TouchableOpacity>
+              <Text style={[styles.modalTitle, { color: theme.text }]}>{t.planActMode}</Text>
+              <TouchableOpacity onPress={() => setShowPlanPicker(false)} accessibilityRole="button" accessibilityLabel={t.close}><LineIcon name="x" size={14} color={theme.muted} strokeWidth={2.2} /></TouchableOpacity>
             </View>
             {planActions.map((p) => (
               <TouchableOpacity

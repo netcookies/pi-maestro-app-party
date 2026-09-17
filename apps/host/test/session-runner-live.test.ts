@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { randomUUID } from "node:crypto";
 import { MAX_TIMELINE_ITEMS, SdkSessionRunner } from "../src/session-runner.js";
+import { SessionDirectory } from "../src/control/SessionDirectory.js";
 import type { HostEvent, TimelineItem } from "@maestro-mobile/shared";
 
 /** 构造带 sessionFile 的 fake runtime（历史回放走真实 jsonl） */
@@ -19,6 +20,11 @@ function makeRuntime(sessionFile: string, messages: unknown[] = []) {
     isStreaming: false,
     isCompacting: false,
     model: undefined,
+    modelRegistry: {
+      getAll: () => [],
+      getById: () => undefined,
+    },
+    setModel: async () => undefined,
     thinkingLevel: undefined,
     prompt: async () => undefined,
     steer: async () => undefined,
@@ -162,6 +168,58 @@ describe("P1-1: live 会话 timeline 投影", () => {
     expect(snap.timeline).toHaveLength(1);
     expect(snap.timeline[0].text).toBe("你好，世界！");
 
+    await runner.dispose();
+  });
+
+  it("preserves the exact directory presentation in subsequent session updates", async () => {
+    const runtime = makeRuntime(path);
+    const runner = await openRunner(runtime);
+    const directory = new SessionDirectory();
+    const target = directory.registerHostRunner(runner);
+
+    runtime.emit("assistant", "done", 1756800100000);
+
+    const updates = events.filter((event) => event.type === "session_updated");
+    expect(directory.resolve(target)?.presentation?.control.mode).toBe("host");
+    expect(updates.at(-1)?.session.presentation).toEqual(directory.resolve(target)?.presentation);
+    await runner.dispose();
+  });
+
+  it("setModel updates the snapshot model and emits session_updated", async () => {
+    const runtime = makeRuntime(path);
+    const model = { id: "provider/model", provider: "provider", name: "Model", reasoning: true, input: ["text"] };
+    runtime.session.modelRegistry = {
+      getAll: () => [model],
+      getById: (id: string) => id === model.id ? model : undefined,
+    };
+    runtime.session.setModel = async (next: unknown) => {
+      runtime.session.model = next;
+    };
+    const runner = await openRunner(runtime);
+
+    await expect(runner.setModel(model.id)).resolves.toEqual({ ok: true });
+    expect(runner.snapshot().session.model).toMatchObject({ id: model.id, name: model.name });
+    expect(events.findLast((event) => event.type === "session_updated")).toMatchObject({
+      type: "session_updated",
+      session: { model: { id: model.id, name: model.name } },
+    });
+
+    await runner.dispose();
+  });
+
+  it("syncExternalModel updates the snapshot and emits session_updated without touching SDK", async () => {
+    const runtime = makeRuntime(path);
+    const runner = await openRunner(runtime);
+    const model = { provider: "provider-b", id: "shared-id", name: "Model B", reasoning: false, vision: true };
+
+    runner.syncExternalModel(model);
+
+    expect(runner.snapshot().session.model).toEqual(model);
+    expect(events.findLast((event) => event.type === "session_updated")).toMatchObject({
+      type: "session_updated",
+      session: { model },
+    });
+    expect(runtime.session.model).toBeUndefined();
     await runner.dispose();
   });
 

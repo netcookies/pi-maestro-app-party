@@ -46,6 +46,14 @@ export type SessionRole = "session" | "monitor";
 export type SessionVisibility = "session_list" | "monitor_tab" | "hidden";
 export type SessionControlMode = "host" | "desktop_plugin" | "readonly";
 
+/** 稳定标识一个 TUI 会话端点；不得由 cwd、时间或权限推断。 */
+export interface SessionTargetIdentity {
+  sessionId: string;
+  endpointId: string;
+}
+
+export type SessionRuntimeStatus = "running" | "idle" | "sleeping" | "history";
+
 export interface SessionControl {
   mode: SessionControlMode;
   canPrompt: boolean;
@@ -144,7 +152,11 @@ export interface SessionSnapshot {
 
 /** Host 端 Pi 已存在会话的摘要（移动端只读列表用，不携带大字段） */
 export interface HostSessionSummary {
+  /** Compatibility alias for sessionId; both identify the same Pi session. */
   id: string;
+  sessionId: string;
+  endpointId: string;
+  runtimeStatus: SessionRuntimeStatus;
   cwd: string;
   cwdName: string;
   path: string;
@@ -206,6 +218,8 @@ export interface WorkspaceOwnerState {
   pid: number;
   sessionId: string;
   sessionName?: string;
+  /** Optional producer-owned role; absent means the owner remains a regular session. */
+  workspaceRole?: "session" | "monitor";
   publishedAt: number;
   mainActivityAt?: number;
   contextPressure: JsonValue;
@@ -332,6 +346,9 @@ export interface MonitorPendingAsk {
 }
 
 export interface MonitorWindowSummary {
+  sessionId: string;
+  endpointId: string;
+  runtimeStatus: SessionRuntimeStatus;
   identity: {
     workspaceId: string;
     ownerId: string;
@@ -465,7 +482,7 @@ export type ClientCommandPayload =
   | { type: "list_skills"; sessionId: string }
   | { type: "get_maestro_settings" }
   | { type: "update_maestro_settings"; key: string; patch: Record<string, unknown> }
-  | { type: "set_model"; sessionId: string; modelId: string }
+  | { type: "set_model"; sessionId: string; modelId: string; provider?: string }
   | { type: "set_thinking"; sessionId: string; level: string }
   | { type: "compact"; sessionId: string; customInstructions?: string }
   | { type: "rename_session"; sessionId: string; name: string }
@@ -594,7 +611,7 @@ export function isClientCommand(value: unknown): value is ClientCommand {
     case "get_session_usage":
     case "abort":
       return isString(value.sessionId)
-        && (value.type !== "set_model" || isString(value.modelId))
+        && (value.type !== "set_model" || (isString(value.modelId) && optionalString(value.provider)))
         && (value.type !== "set_thinking" || isString(value.level))
         && (value.type !== "rename_session" || isString(value.name))
         && (value.type !== "compact" || optionalString(value.customInstructions));

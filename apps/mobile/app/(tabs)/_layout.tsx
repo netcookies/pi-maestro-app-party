@@ -27,19 +27,21 @@ interface TabDef {
 }
 
 const TABS: TabDef[] = [
-  { key: "workbench", icon: "workbench", labelKey: "tabWorkbench" },
   { key: "sessions", icon: "chat", labelKey: "tabSessions" },
+  { key: "workbench", icon: "workbench", labelKey: "tabWorkbench" },
   { key: "monitor", icon: "monitor", labelKey: "tabMonitor" },
   { key: "settings", icon: "settings", labelKey: "tabSettings" },
 ];
 
-let lastActiveTabIndex = 0;
+export const unstable_settings = { initialRouteName: "index" };
+
+let lastActiveTabIndex = 1;
 
 function getIndexFromPathname(path: string): number | null {
   if (path.includes("settings")) return 3;
   if (path.includes("monitor")) return 2;
-  if (path.includes("host-sessions") || path.includes("sessions")) return 1;
-  if (path === "/" || path === "" || path.includes("index") || path.includes("workbench")) return 0;
+  if (path.includes("host-sessions") || path.includes("sessions")) return 0;
+  if (path === "/" || path === "" || path.includes("index") || path.includes("workbench")) return 1;
   return null; // 非 tabs 路由返回 null，绝不误篡改当前激活的 Tab
 }
 
@@ -55,14 +57,16 @@ export default function TabLayout() {
     if (params.tab) {
       if (params.tab === "settings") return 3;
       if (params.tab === "monitor") return 2;
-      if (params.tab === "sessions" || params.tab === "host-sessions") return 1;
-      if (params.tab === "workbench" || params.tab === "dashboard") return 0;
+      if (params.tab === "sessions" || params.tab === "host-sessions") return 0;
+      if (params.tab === "workbench" || params.tab === "dashboard") return 1;
     }
+    if (!params.tab && pathname.includes("host-sessions")) return 1;
     const fromPath = getIndexFromPathname(pathname);
     return fromPath !== null ? fromPath : lastActiveTabIndex;
   });
   const pagerRef = useRef<ScrollView>(null);
   const isProgrammaticScroll = useRef(false);
+  const initialPathHandled = useRef(false);
 
   // 监听 query 参数中的 tab
   useEffect(() => {
@@ -70,8 +74,8 @@ export default function TabLayout() {
       let target: number | null = null;
       if (params.tab === "settings") target = 3;
       else if (params.tab === "monitor") target = 2;
-      else if (params.tab === "sessions" || params.tab === "host-sessions") target = 1;
-      else if (params.tab === "workbench" || params.tab === "dashboard") target = 0;
+      else if (params.tab === "sessions" || params.tab === "host-sessions") target = 0;
+      else if (params.tab === "workbench" || params.tab === "dashboard") target = 1;
 
       if (target !== null && target !== activeIndex) {
         lastActiveTabIndex = target;
@@ -96,6 +100,12 @@ export default function TabLayout() {
 
   // 监听外部路由变化（仅当属于具体某个 tab 路由时响应）
   useEffect(() => {
+    if (params.tab) return;
+    if (!initialPathHandled.current && pathname.includes("host-sessions")) {
+      initialPathHandled.current = true;
+      return;
+    }
+    initialPathHandled.current = true;
     const target = getIndexFromPathname(pathname);
     if (target !== null && target !== activeIndex) {
       lastActiveTabIndex = target;
@@ -108,7 +118,7 @@ export default function TabLayout() {
         }, 350);
       }
     }
-  }, [pathname, pageWidth]);
+  }, [pathname]);
 
   const handleTabPress = useCallback(
     (index: number) => {
@@ -169,10 +179,10 @@ export default function TabLayout() {
         contentContainerStyle={{ width: pageWidth * 4 }}
       >
         <View style={{ width: pageWidth, height: "100%" }}>
-          <DashboardScreen />
+          <HostSessionsScreen />
         </View>
         <View style={{ width: pageWidth, height: "100%" }}>
-          <HostSessionsScreen />
+          <DashboardScreen />
         </View>
         <View style={{ width: pageWidth, height: "100%" }}>
           <MonitorScreen />

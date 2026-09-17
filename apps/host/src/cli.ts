@@ -201,6 +201,7 @@ async function main(): Promise<void> {
     registry: controller.desktopPlugins,
     registryPath: IPC_REGISTRY_FILE,
     onConnected: (target) => controller.registerDesktopTarget(target),
+    onModelSelect: (target, event) => controller.syncDesktopModel(target, event.model),
     onDisconnected: (target) => controller.unregisterDesktopTarget(target),
   });
   const server = new MobileHostServer(controller, { token });

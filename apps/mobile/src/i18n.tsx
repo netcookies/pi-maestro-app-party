@@ -96,6 +96,14 @@ export interface I18nDictionary {
   versionCli: string;
   versionCompat: string;
   versionCompatVal: string;
+  notificationAskTitle: string;
+  notificationAskSummary: string;
+  notificationSettledTitle: string;
+  notificationSettledSummary: string;
+  notConnected: string;
+  notDetected: string;
+  notInstalled: string;
+  hostReady: string;
   allWindows: string;
   noWindows: string;
   waitingHostPush: string;
@@ -156,6 +164,24 @@ export interface I18nDictionary {
   steerCapability: string;
   followUpCapability: string;
   abortCapability: string;
+  labelThinkLevel: string;
+  labelPlanMode: string;
+  labelCompactContext: string;
+  labelScrollToBottom: string;
+  labelFastCopy: string;
+  labelBackToSessions: string;
+  labelCopySnippet: string;
+  labelCopyAllBtn: string;
+  labelCopyAll: string;
+  selectionTip: string;
+  removeImage: string;
+  addImage: string;
+  expandFullscreen: string;
+  collapseFullscreen: string;
+  stopRunning: string;
+  sendMessage: string;
+  planActMode: string;
+  retryLoadModels: string;
 }
 
 export const DICTIONARIES: Record<Language, I18nDictionary> = {
@@ -250,6 +276,14 @@ export const DICTIONARIES: Record<Language, I18nDictionary> = {
     versionCli: "Maestro CLI 核心工具",
     versionCompat: "协议版本兼容性",
     versionCompatVal: "已兼容 (v3.0.0)",
+    notificationAskTitle: "Ask 待办提问通知",
+    notificationAskSummary: "收到决策或操作确认时弹出系统横幅与震动",
+    notificationSettledTitle: "Agent 轮次完成通知",
+    notificationSettledSummary: "本轮任务思考、输出或工具执行全部结束时提醒",
+    notConnected: "未连接",
+    notDetected: "未检测到",
+    notInstalled: "未安装",
+    hostReady: "Host 直通就绪",
     allWindows: "全部窗口",
     noWindows: "暂无窗口数据",
     waitingHostPush: "等待 Host 推送",
@@ -310,6 +344,24 @@ export const DICTIONARIES: Record<Language, I18nDictionary> = {
     steerCapability: "介入",
     followUpCapability: "追问",
     abortCapability: "中止",
+    labelThinkLevel: "思考等级",
+    labelPlanMode: "计划模式",
+    labelCompactContext: "压缩上下文",
+    labelScrollToBottom: "回到底部",
+    labelFastCopy: "快捷复制全文",
+    labelBackToSessions: "返回会话列表",
+    labelCopySnippet: "选择与复制文字",
+    labelCopyAllBtn: "一键复制全部",
+    labelCopyAll: "复制全文",
+    selectionTip: "提示：按住顶部手柄可上下拖动调整大小；长按文字可自由选中",
+    removeImage: "移除图片",
+    addImage: "添加图片",
+    expandFullscreen: "展开全屏编辑",
+    collapseFullscreen: "收起全屏编辑",
+    stopRunning: "停止运行",
+    sendMessage: "发送消息",
+    planActMode: "Plan / Act 模式",
+    retryLoadModels: "重试加载模型列表",
   },
   en: {
     tabWorkbench: "Workbench",
@@ -402,6 +454,14 @@ export const DICTIONARIES: Record<Language, I18nDictionary> = {
     versionCli: "Maestro CLI Tool",
     versionCompat: "Protocol Compatibility",
     versionCompatVal: "Compatible (v3.0.0)",
+    notificationAskTitle: "Ask confirmation notifications",
+    notificationAskSummary: "Show a system banner and vibration for decisions or confirmations",
+    notificationSettledTitle: "Agent turn completion notifications",
+    notificationSettledSummary: "Notify when the turn's thinking, output, and tools are complete",
+    notConnected: "Disconnected",
+    notDetected: "Not detected",
+    notInstalled: "Not installed",
+    hostReady: "Host ready",
     allWindows: "All Windows",
     noWindows: "No window data",
     waitingHostPush: "Waiting for host push",
@@ -462,6 +522,24 @@ export const DICTIONARIES: Record<Language, I18nDictionary> = {
     steerCapability: "Steer",
     followUpCapability: "Follow-up",
     abortCapability: "Abort",
+    labelThinkLevel: "Thinking Level",
+    labelPlanMode: "Plan Mode",
+    labelCompactContext: "Compact Context",
+    labelScrollToBottom: "Scroll to bottom",
+    labelFastCopy: "Copy text quickly",
+    labelBackToSessions: "Back to sessions",
+    labelCopySnippet: "Select & Copy Text",
+    labelCopyAllBtn: "Copy all text",
+    labelCopyAll: "Copy all",
+    selectionTip: "Tip: Drag top handle to resize; long press text to select freely",
+    removeImage: "Remove image",
+    addImage: "Add image",
+    expandFullscreen: "Expand fullscreen edit",
+    collapseFullscreen: "Collapse fullscreen edit",
+    stopRunning: "Stop running",
+    sendMessage: "Send message",
+    planActMode: "Plan / Act Mode",
+    retryLoadModels: "Retry loading models",
   },
 };
 

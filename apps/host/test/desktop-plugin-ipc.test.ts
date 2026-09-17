@@ -100,6 +100,68 @@ describe("DesktopPlugin IPC and gateway", () => {
     expect(server.registry.list()).toHaveLength(0);
   });
 
+  it("forwards set_model through the gateway and reports model_select events", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "maestro-plugin-model-"));
+    let receivedEvent: unknown;
+    let receivedOperation: string | undefined;
+    server = new DesktopPluginIpcServer({
+      socketPath: join(dir, "plugin.sock"),
+      secret: "test-secret",
+      onModelSelect: (_target, event) => { receivedEvent = event; },
+    });
+    await server.start();
+    client = new DesktopPluginIpcClient({
+      socketPath: join(dir, "plugin.sock"),
+      secret: "test-secret",
+      target,
+      capabilities: ["set_model"],
+      onRequest: async (request): Promise<DesktopPluginResult> => {
+        receivedOperation = request.operation.type;
+        return { type: "desktop_plugin_result", requestId: request.requestId, operation: request.operation.type, status: "observed" };
+      },
+    });
+    await client.connect();
+    await waitFor(() => server?.registry.resolve(target) !== undefined);
+
+    const gateway = new DesktopControlGatewayService(server.registry);
+    await expect(gateway.execute({
+      requestId: "set-model",
+      target,
+      kind: "set_model",
+      provider: "provider-a",
+      modelId: "shared-id",
+    })).resolves.toMatchObject({ status: "observed" });
+    expect(receivedOperation).toBe("set_model");
+
+    await client.sendModelSelect({
+      type: "desktop_plugin_event",
+      event: "model_select",
+      model: { provider: "provider-b", id: "shared-id", name: "Model B", reasoning: false, vision: true },
+    });
+    await waitFor(() => receivedEvent !== undefined);
+    expect(receivedEvent).toMatchObject({ event: "model_select", model: { provider: "provider-b", id: "shared-id" } });
+  });
+
+  it("returns a structured capability mismatch for an older Plugin", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "maestro-plugin-old-model-"));
+    server = new DesktopPluginIpcServer({ socketPath: join(dir, "plugin.sock"), secret: "test-secret" });
+    await server.start();
+    client = new DesktopPluginIpcClient({
+      socketPath: join(dir, "plugin.sock"),
+      secret: "test-secret",
+      target,
+      capabilities: ["abort"],
+      onRequest: async (request): Promise<DesktopPluginResult> => ({ type: "desktop_plugin_result", requestId: request.requestId, operation: request.operation.type, status: "observed" }),
+    });
+    await client.connect();
+    await waitFor(() => server?.registry.resolve(target) !== undefined);
+    const gateway = new DesktopControlGatewayService(server.registry);
+    await expect(gateway.execute({ requestId: "old-model", target, kind: "set_model", modelId: "model" })).resolves.toMatchObject({
+      status: "failed",
+      error: { code: "capability_mismatch" },
+    });
+  });
+
   it("rejects a mismatched Plugin release before registry registration", async () => {
     const dir = await mkdtemp(join(tmpdir(), "maestro-plugin-release-"));
     server = new DesktopPluginIpcServer({ socketPath: join(dir, "plugin.sock"), secret: "test-secret", releaseVersion: "0.4.0" });

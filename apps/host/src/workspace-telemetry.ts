@@ -82,6 +82,7 @@ export class WorkspaceTelemetryReader {
             pid: Number(d.pid ?? 0),
             sessionId: String(d.sessionId ?? ""),
             sessionName: typeof d.sessionName === "string" ? d.sessionName : undefined,
+            workspaceRole: d.workspaceRole === "monitor" || d.workspaceRole === "session" ? d.workspaceRole : undefined,
             publishedAt,
             mainActivityAt: typeof d.mainActivityAt === "number" ? d.mainActivityAt : undefined,
             contextPressure: (d.contextPressure ?? null) as JsonValue,

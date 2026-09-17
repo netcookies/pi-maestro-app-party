@@ -15,6 +15,10 @@ function isImage(value: unknown): value is Image {
 }
 
 function desktopOperation(command: SessionCommand): DesktopPluginOperation | { error: string } {
+  if (command.kind === "set_model") {
+    if (typeof command.modelId !== "string" || command.modelId.length === 0) return { error: "model_required" };
+    return { type: "set_model", modelId: command.modelId, ...(command.provider ? { provider: command.provider } : {}) };
+  }
   if (command.kind === "abort") return { type: "abort" };
   if (typeof command.message !== "string") return { error: "message_required" };
   if (command.kind === "prompt") {

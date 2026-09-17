@@ -8,3 +8,7 @@ dist/
 .pia/.expo/
 .workflow/
 .pi/
+
+# Expo 本地构建产物（prebuild 输出与构建日志；不影响已跟踪的 .expo 元数据）
+apps/mobile/.expo/prebuild/
+apps/mobile/.expo/*.log

@@ -128,6 +128,7 @@ function NotificationWatcher() {
 
 export default function RootLayout() {
   const permissionsRequested = useRef(false);
+  const [, requestCameraPermission] = Camera.useCameraPermissions();
   const router = useRouter();
 
   // 监听系统通知点击跳转
@@ -152,7 +153,7 @@ export default function RootLayout() {
     if (permissionsRequested.current) return;
     permissionsRequested.current = true;
     void (async () => {
-      try { await Camera.useCameraPermissions()[1](); } catch { /* permission prompt unavailable */ }
+      try { await requestCameraPermission(); } catch { /* permission prompt unavailable */ }
       try { await ImagePicker.requestMediaLibraryPermissionsAsync(); } catch { /* permission prompt unavailable */ }
       try { await initNotificationService(); } catch { /* notification unavailable */ }
     })();

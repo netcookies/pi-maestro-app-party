@@ -440,18 +440,18 @@ export default function SettingsScreen() {
           <View style={[styles.prefDivider, { backgroundColor: theme.dividerLine ?? theme.border }]} />
           <View style={styles.prefRow}>
             <View style={styles.prefMain}>
-              <Text style={styles.prefLabel}>Ask 待办提问通知</Text>
-              <Text style={styles.prefSummary}>收到决策或操作确认时弹出系统横幅与震动</Text>
+              <Text style={styles.prefLabel}>{t.notificationAskTitle}</Text>
+              <Text style={styles.prefSummary}>{t.notificationAskSummary}</Text>
             </View>
-            <MiuixSwitch value={notifAsk} onValueChange={handleToggleNotifAsk} accessibilityLabel="Ask 待办提问通知" />
+            <MiuixSwitch value={notifAsk} onValueChange={handleToggleNotifAsk} accessibilityLabel={t.notificationAskTitle} />
           </View>
           <View style={[styles.prefDivider, { backgroundColor: theme.dividerLine ?? theme.border }]} />
           <View style={styles.prefRow}>
             <View style={styles.prefMain}>
-              <Text style={styles.prefLabel}>Agent 轮次完成通知</Text>
-              <Text style={styles.prefSummary}>本轮任务思考、输出或工具执行全部结束时提醒</Text>
+              <Text style={styles.prefLabel}>{t.notificationSettledTitle}</Text>
+              <Text style={styles.prefSummary}>{t.notificationSettledSummary}</Text>
             </View>
-            <MiuixSwitch value={notifSettled} onValueChange={handleToggleNotifSettled} accessibilityLabel="Agent 轮次完成通知" />
+            <MiuixSwitch value={notifSettled} onValueChange={handleToggleNotifSettled} accessibilityLabel={t.notificationSettledTitle} />
           </View>
         </View>
 
@@ -472,39 +472,39 @@ export default function SettingsScreen() {
                 {meta ? `${t.runningTime} ${Math.round((meta.uptimeMs ?? 0) / 1000)}s · ${meta.sessions ?? 0} ${t.sessionsCount}` : t.showAfterConnect}
               </Text>
             </View>
-            <Text style={styles.prefValue}>{meta?.version ?? (isConnected ? "0.3.2" : "未连接")}</Text>
+            <Text style={styles.prefValue}>{meta?.version ?? (isConnected ? "0.3.2" : t.notConnected)}</Text>
           </View>
           <View style={[styles.prefDivider, { backgroundColor: theme.dividerLine ?? theme.border }]} />
           <View style={styles.prefRow}>
             <View style={styles.prefMain}>
               <Text style={styles.prefLabel}>{t.versionPi}</Text>
-              <Text style={styles.prefSummary}>底层编码 Agent 引擎</Text>
+              <Text style={styles.prefSummary}>{t.versionPiSummary}</Text>
             </View>
-            <Text style={styles.prefValue}>{meta?.piVersion ?? (isConnected ? "未检测到" : "未连接")}</Text>
+            <Text style={styles.prefValue}>{meta?.piVersion ?? (isConnected ? t.notDetected : t.notConnected)}</Text>
           </View>
           <View style={[styles.prefDivider, { backgroundColor: theme.dividerLine ?? theme.border }]} />
           <View style={styles.prefRow}>
             <View style={styles.prefMain}>
               <Text style={styles.prefLabel}>{t.versionFlow}</Text>
-              <Text style={styles.prefSummary}>编排流与协作扩展</Text>
+              <Text style={styles.prefSummary}>{t.versionFlowSummary}</Text>
             </View>
-            <Text style={styles.prefValue}>{meta?.flowVersion ?? (isConnected ? "未安装" : "未连接")}</Text>
+            <Text style={styles.prefValue}>{meta?.flowVersion ?? (isConnected ? t.notInstalled : t.notConnected)}</Text>
           </View>
           <View style={[styles.prefDivider, { backgroundColor: theme.dividerLine ?? theme.border }]} />
           <View style={styles.prefRow}>
             <View style={styles.prefMain}>
               <Text style={styles.prefLabel}>{t.versionCli}</Text>
             </View>
-            <Text style={styles.prefValue}>{meta?.maestroCliVersion ?? (isConnected ? "未检测到" : "未连接")}</Text>
+            <Text style={styles.prefValue}>{meta?.maestroCliVersion ?? (isConnected ? t.notDetected : t.notConnected)}</Text>
           </View>
           <View style={[styles.prefDivider, { backgroundColor: theme.dividerLine ?? theme.border }]} />
           <View style={styles.prefRow}>
             <View style={styles.prefMain}>
               <Text style={styles.prefLabel}>{t.versionCompat}</Text>
-              <Text style={styles.prefSummary}>全协议链路兼容性</Text>
+              <Text style={styles.prefSummary}>{t.versionCompatSummary}</Text>
             </View>
             <Text style={[styles.prefValue, { color: isConnected ? theme.success : theme.muted }]}>
-              {isConnected ? "Host 直通就绪" : "等待连接"}
+              {isConnected ? t.hostReady : t.notConnected}
             </Text>
           </View>
         </View>

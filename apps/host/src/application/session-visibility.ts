@@ -7,12 +7,9 @@ import type { WorkspaceOwner } from "../workspace-telemetry.js";
  * 精确 endpoint 时，历史窗口默认只读。
  */
 export function isMonitorOwner(owner: WorkspaceOwner): boolean {
-  if (owner.sessionName && /control|monitor/i.test(owner.sessionName)) return true;
-  if (owner.mainLastSettle && typeof owner.mainLastSettle === "object") {
-    const lastResult = String((owner.mainLastSettle as { lastResult?: unknown }).lastResult ?? "");
-    return /peer\s+[a-f0-9]{8}|agent-watch|monitor\s+mode|<monitor_mode>/i.test(lastResult);
-  }
-  return false;
+  // Role must be explicitly published by the owner producer. Display names and
+  // settle text are historical diagnostics, not identity evidence.
+  return owner.workspaceRole === "monitor";
 }
 
 export function projectOwnerPresentation(

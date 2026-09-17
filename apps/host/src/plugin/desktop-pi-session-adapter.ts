@@ -1,12 +1,4 @@
-import type {
-  DesktopAskRequest,
-  DesktopAskResponse,
-  DesktopPluginCapability,
-  DesktopPluginRequest,
-  DesktopPluginResult,
-  DesktopPluginTarget,
-  JsonValue,
-} from "@maestro-mobile/shared";
+import type { DesktopAskRequest, DesktopAskResponse, DesktopPluginCapability, DesktopPluginRequest, DesktopPluginResult, DesktopPluginTarget, JsonValue } from "@maestro-mobile/shared";
 import { DesktopFlowAskAdapter } from "./desktop-flow-ask-adapter.js";
 
 export interface DesktopPiSessionApi {
@@ -15,6 +7,26 @@ export interface DesktopPiSessionApi {
   followUp(message: string): Promise<void>;
   abort(): Promise<void> | void;
   getAllTools(): readonly { name?: string }[];
+  setModel(provider: string | undefined, modelId: string): Promise<boolean>;
+}
+
+/** 投递失败的错误码；Host/移动端据此区分「未投递」与「插件异常」。 */
+export const DELIVERY_FAILED = "delivery_failed";
+
+/**
+ * Pi 的 `sendUserMessage` 返回 void 且失败被 SDK 吞进 emitError，调用方无法 await 或 catch。
+ * 因此必须在调用前判定可预见的投递失败，并用携带 code 的错误把它变成可观测结果。
+ */
+export function deliveryFailure(reason: string): Error & { code: string } {
+  const error = new Error(reason) as Error & { code: string };
+  error.code = DELIVERY_FAILED;
+  return error;
+}
+
+/** 从任意抛出物中取回结构化错误码，未携带时回退到通用插件失败码。 */
+function errorCodeOf(error: unknown): string {
+  const code = (error as { code?: unknown } | null | undefined)?.code;
+  return typeof code === "string" && code.length > 0 ? code : "plugin_command_failed";
 }
 
 function capabilityFor(request: DesktopPluginRequest): DesktopPluginCapability {
@@ -40,7 +52,7 @@ export class DesktopPiSessionAdapter {
   ) {
     this.target = { ...target };
     this.ask = ask;
-    this.capabilities = ["prompt", "steer", "follow_up", "abort", ...(ask.supported ? ["ask-user-question" as const] : [])];
+    this.capabilities = ["prompt", "steer", "follow_up", "abort", "set_model", ...(ask.supported ? ["ask-user-question" as const] : [])];
   }
 
   getCapabilities(): DesktopPluginCapability[] {
@@ -79,13 +91,16 @@ export class DesktopPiSessionAdapter {
       if (operation === "prompt") await this.api.prompt(request.operation.message, request.operation.images);
       else if (operation === "steer") await this.api.steer(request.operation.message);
       else if (operation === "follow_up") await this.api.followUp(request.operation.message);
-      else {
+      else if (operation === "set_model") {
+        const changed = await this.api.setModel(request.operation.provider, request.operation.modelId);
+        if (!changed) return { type: "desktop_plugin_result", requestId: request.requestId, operation, status: "failed", error: { code: "model_change_failed" } };
+      } else {
         await this.ask.cancelAll();
         await this.api.abort();
       }
       return { type: "desktop_plugin_result", requestId: request.requestId, operation, status: "observed" };
-    } catch {
-      return { type: "desktop_plugin_result", requestId: request.requestId, operation, status: "failed", error: { code: "plugin_command_failed" } };
+    } catch (error) {
+      return { type: "desktop_plugin_result", requestId: request.requestId, operation, status: "failed", error: { code: errorCodeOf(error), message: error instanceof Error ? error.message : undefined } };
     }
   }
 

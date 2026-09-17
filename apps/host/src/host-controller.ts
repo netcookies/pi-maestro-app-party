@@ -1,4 +1,4 @@
-import type { HostEvent, SessionSnapshot, ExtensionUiResponse } from "@maestro-mobile/shared";
+import type { HostEvent, SessionSnapshot, ExtensionUiResponse, DesktopPluginModel } from "@maestro-mobile/shared";
 import type { DesktopPluginTarget } from "@maestro-mobile/shared";
 import type { RuntimeFactory, SessionRunner, OpenSessionRequest, HostEventListener } from "./types.js";
 import { SdkSessionRunner } from "./session-runner.js";
@@ -19,6 +19,10 @@ import { EventLog } from "./event-log.js";
 import { readFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+
+function targetKey(target: DesktopPluginTarget): string {
+  return [target.sessionId, target.endpointId, target.normalizedCwd, target.processGeneration].join("\u0000");
+}
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 let hostPackageVersion = "0.4.0";
@@ -46,6 +50,7 @@ export class HostController {
   private readonly monitorReadService: MonitorReadService;
   private readonly sessionDirectory = new SessionDirectory();
   private readonly sessionTargets = new Map<string, SessionTargetIdentity>();
+  private readonly pendingDesktopModels = new Map<string, DesktopPluginModel>();
   private readonly sessionCommandService: SessionCommandService;
   private readonly desktopPluginRegistry = new DesktopPluginRegistry();
   private readonly desktopControlGateway: DesktopControlGatewayService;
@@ -72,7 +77,16 @@ export class HostController {
     this.sessionQueryService = new SessionQueryService(
       this.runtimeFactory,
       this.sessionDirectory,
-      (sessionId) => this.sessionDirectory.list().find((target) => target.identity.sessionId === sessionId)?.presentation,
+      (sessionId) => {
+        const target = this.getSessionTarget(sessionId);
+        return target ? this.sessionDirectory.resolve(target)?.presentation : undefined;
+      },
+      Date.now,
+      () => this.monitorReadService.read().then((snapshot) => snapshot.state),
+      (sessionId) => {
+        const target = this.getSessionTarget(sessionId);
+        return target ? this.sessionDirectory.resolve(target) : undefined;
+      },
     );
     this.applicationRouter = new ApplicationCommandRouter(
       this.sessionCommandService,
@@ -122,22 +136,70 @@ export class HostController {
   registerDesktopTarget(target: DesktopPluginTarget): void {
     const registration = this.desktopPluginRegistry.resolve(target);
     if (!registration) return;
-    this.sessionDirectory.registerDesktopTarget(target, registration.capabilities);
+    const identity = this.sessionDirectory.registerDesktopTarget(target, registration.capabilities);
+    const runner = this.sessions.get(target.sessionId);
+    const mapped = this.sessionTargets.get(target.sessionId);
+    const desktopTargets = this.sessionDirectory.list()
+      .filter((entry) => entry.identity.sessionId === target.sessionId && entry.kind === "desktop");
+    if (desktopTargets.length > 1) {
+      if (mapped && this.sessionDirectory.resolve(mapped)?.kind === "desktop") this.sessionTargets.delete(target.sessionId);
+      if (runner && mapped && this.sessionDirectory.resolve(mapped)?.kind === "host") {
+        this.sessionDirectory.unregister(mapped);
+      }
+      return;
+    }
+    if (!runner || !mapped || this.sessionDirectory.resolve(mapped)?.kind !== "host") return;
+    if (!this.sessionDirectory.attachRunner(identity, runner)) return;
+    this.sessionDirectory.unregister(mapped);
+    this.sessionTargets.set(target.sessionId, identity);
   }
 
   getSessionTarget(sessionId: string): SessionTargetIdentity | undefined {
     const mapped = this.sessionTargets.get(sessionId);
-    if (mapped) return { ...mapped };
+    if (mapped && this.sessionDirectory.resolve(mapped)) {
+      const desktopTargets = this.sessionDirectory.list()
+        .filter((target) => target.identity.sessionId === sessionId && target.kind === "desktop");
+      if (desktopTargets.length > 1) return undefined;
+      return { ...mapped };
+    }
+    if (mapped) this.sessionTargets.delete(sessionId);
     const matches = this.sessionDirectory.list().filter((target) => target.identity.sessionId === sessionId);
+    const desktopTargets = matches.filter((target) => target.kind === "desktop");
+    if (desktopTargets.length > 1) return undefined;
     return matches.length === 1 ? { ...matches[0].identity } : undefined;
+  }
+
+  syncDesktopModel(target: DesktopPluginTarget, model: DesktopPluginModel): void {
+    // The event may arrive before Mobile opens the session: remember it per exact target.
+    this.pendingDesktopModels.set(targetKey(target), model);
+    this.sessionDirectory.resolve(target)?.runner?.syncExternalModel?.(model);
   }
 
   unregisterDesktopTarget(target: DesktopPluginTarget): void {
     // A reconnect may replace the registration before the old socket closes.
     if (this.desktopPluginRegistry.resolve(target)) return;
+    const entry = this.sessionDirectory.resolve(target);
+    if (!entry) return;
+    const runner = entry.runner;
+    const sessionId = target.sessionId;
+    this.pendingDesktopModels.delete(targetKey(target));
     this.sessionDirectory.unregister(target);
+    if (!runner || this.sessions.get(sessionId) !== runner) return;
+
+    const remainingDesktopTargets = this.sessionDirectory.list()
+      .filter((candidate) => candidate.identity.sessionId === sessionId && candidate.kind === "desktop");
+    if (remainingDesktopTargets.length === 1 && this.sessionDirectory.attachRunner(remainingDesktopTargets[0].identity, runner)) {
+      const mapped = this.sessionTargets.get(sessionId);
+      if (mapped && this.sessionDirectory.resolve(mapped)?.kind === "host") this.sessionDirectory.unregister(mapped);
+      this.sessionTargets.set(sessionId, remainingDesktopTargets[0].identity);
+      return;
+    }
+
+    const mapped = this.sessionTargets.get(sessionId);
+    const mappedEntry = mapped ? this.sessionDirectory.resolve(mapped) : undefined;
+    if (mappedEntry?.kind === "host" && mappedEntry.runner === runner) return;
+    this.sessionTargets.set(sessionId, this.sessionDirectory.registerHostRunner(runner));
   }
-  /** 读取 workspace telemetry（owner 状态，Monitor/Teammate 合同） */
   async readTelemetry() {
     return this.telemetryReader.read();
   }
@@ -226,12 +288,23 @@ export class HostController {
     // 先释放旧 runner（否则旧实例仍在订阅 SDK 事件并广播，且 runtime 常驻内存），再登记新实例。
     const existing = this.sessions.get(runner.id);
     if (existing && existing !== runner) {
-      const oldTarget = this.sessionTargets.get(runner.id);
-      if (oldTarget) this.sessionDirectory.unregister(oldTarget);
+      for (const entry of this.sessionDirectory.list().filter((candidate) => candidate.identity.sessionId === runner.id && candidate.runner === existing)) {
+        if (entry.kind === "desktop") this.sessionDirectory.detachRunner(entry.identity, existing);
+        else this.sessionDirectory.unregister(entry.identity);
+      }
+      this.sessionTargets.delete(runner.id);
       await existing.dispose();
     }
     this.sessions.set(runner.id, runner);
-    this.sessionTargets.set(runner.id, this.sessionDirectory.registerHostRunner(runner));
+    const desktopTargets = this.sessionDirectory.list()
+      .filter((target) => target.identity.sessionId === runner.id && target.kind === "desktop");
+    const desktopTarget = desktopTargets.length === 1 ? desktopTargets[0].identity : undefined;
+    const target = desktopTarget && this.sessionDirectory.attachRunner(desktopTarget, runner)
+      ? desktopTarget
+      : this.sessionDirectory.registerHostRunner(runner);
+    this.sessionTargets.set(runner.id, target);
+    const pendingModel = this.pendingDesktopModels.get(targetKey(target));
+    if (pendingModel) runner.syncExternalModel?.(pendingModel);
     this.emitToListeners(this.eventLog.record({
       type: "host_status",
       status: `session ${runner.id} opened`,
@@ -253,7 +326,7 @@ export class HostController {
       case "search_history": return runner.searchHistory(operation.keyword, operation.maxResults, operation.previewLength);
       case "list_models": return typeof runner.listModels === "function" ? runner.listModels() : { ok: false, error: "unsupported_command" };
       case "list_skills": return typeof runner.listLoadedSkills === "function" ? runner.listLoadedSkills() : { ok: false, error: "unsupported_command" };
-      case "set_model": return typeof runner.setModel === "function" ? runner.setModel(operation.modelId) : { ok: false, error: "unsupported_command" };
+      case "set_model": return typeof runner.setModel === "function" ? runner.setModel(operation.modelId, operation.provider) : { ok: false, error: "unsupported_command" };
       case "set_thinking": return typeof runner.setThinking === "function" ? runner.setThinking(operation.level) : { ok: false, error: "unsupported_command" };
       case "compact": return typeof runner.compact === "function" ? runner.compact(operation.customInstructions) : { ok: false, error: "unsupported_command" };
       case "rename_session": return typeof runner.renameSession === "function" ? runner.renameSession(operation.name) : { ok: false, error: "unsupported_command" };
@@ -265,11 +338,13 @@ export class HostController {
     const runner = this.sessions.get(sessionId);
     if (!runner) return false;
     this.sessions.delete(sessionId);
-    const target = this.sessionTargets.get(sessionId);
-    if (target) {
-      this.sessionDirectory.unregister(target);
-      this.sessionTargets.delete(sessionId);
+    const attachedEntries = this.sessionDirectory.list()
+      .filter((entry) => entry.identity.sessionId === sessionId && entry.runner === runner);
+    for (const entry of attachedEntries) {
+      if (entry.kind === "desktop") this.sessionDirectory.detachRunner(entry.identity, runner);
+      else this.sessionDirectory.unregister(entry.identity);
     }
+    this.sessionTargets.delete(sessionId);
     await runner.dispose();
     return true;
   }
@@ -309,6 +384,7 @@ export class HostController {
     }
     this.sessions.clear();
     this.sessionTargets.clear();
+    this.pendingDesktopModels.clear();
     for (const target of this.sessionDirectory.list()) this.sessionDirectory.unregister(target.identity);
     this.desktopPluginRegistry.clear();
     this.listeners.clear();

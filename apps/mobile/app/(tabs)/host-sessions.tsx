@@ -178,7 +178,7 @@ export default function HostSessionsScreen() {
   const cwdOptions = useMemo(() => Array.from(new Set(sessions.map((session) => session.cwd))).sort(), [sessions]);
   const scopedSessions = useMemo(() => {
     const filtered = filterSessionSummaries(sessions, filterState.filter);
-    return sessionView === "all" ? filtered : filtered.filter(isSessionActive);
+    return sessionView === "all" ? filtered : filtered.filter((session) => isSessionActive(session));
   }, [filterState.filter, sessionView, sessions]);
   const rows = useMemo<Row[]>(() => {
     const groups = new Map<string, HostSessionSummary[]>();
@@ -235,8 +235,7 @@ export default function HostSessionsScreen() {
         />
       )}
 
-      {!searchOpen && (
-        <View style={styles.floatingBarContainer} pointerEvents="box-none">
+      <View style={styles.floatingBarContainer} pointerEvents="box-none">
           <View style={[styles.floatingPill, { backgroundColor: theme.cardBg, borderColor: theme.border }]}>
             <TouchableOpacity
               style={[styles.floatingTabBtn, sessionView === "active" && { backgroundColor: theme.accent }]}
@@ -275,7 +274,6 @@ export default function HostSessionsScreen() {
             {selectedCount > 0 && <Text style={styles.filterCount}>{selectedCount}</Text>}
           </TouchableOpacity>
         </View>
-      )}
 
       <Modal visible={filterOpen} transparent animationType="slide" onRequestClose={() => setFilterOpen(false)}>
         <KeyboardAvoidingView behavior={Platform.OS === "ios" ? "padding" : undefined} style={styles.modalBackdrop}>
@@ -325,17 +323,18 @@ export default function HostSessionsScreen() {
 }
 
 function isSessionActive(session: HostSessionSummary): boolean {
-  const presentation = session.presentation;
-  return presentation?.visibility === "session_list" && presentation.control.mode !== "readonly";
+  return session.runtimeStatus === "running" || session.runtimeStatus === "idle" || session.runtimeStatus === "sleeping";
 }
 
 function SessionCard({ session, opening, theme, styles, t, onPress }: { session: HostSessionSummary; opening: boolean; theme: ReturnType<typeof useTheme>["theme"]; styles: ReturnType<typeof makeStyles>; t: ReturnType<typeof useI18n>["t"]; onPress: () => void }) {
   const control = session.presentation?.control;
-  const active = isSessionActive(session);
+  const status = session.runtimeStatus;
+  const active = status !== "history";
   const context = session.context;
   const title = session.name || session.cwdName || session.title || session.id;
+  const statusColor = status === "running" ? theme.success : status === "idle" ? "#0A84FF" : status === "sleeping" ? theme.warning : theme.dim;
   return <SpringCard style={[styles.sessionCard, active && { borderColor: theme.accent }]} onPress={onPress} accessibilityRole="button" accessibilityLabel={title}>
-    <View style={styles.sessionHeader}><View style={styles.sessionHeaderLeft}><PulsingDot color={active ? theme.success : theme.dim} active={active} size={8} /><Text style={styles.sessionTitle} numberOfLines={1}>{title}</Text></View><View style={styles.badge}><Text style={styles.badgeText}>#{session.id.slice(0, 8)}</Text></View>{opening && <ActivityIndicator size="small" color={theme.accent} />}</View>
+    <View style={styles.sessionHeader}><View style={styles.sessionHeaderLeft}><PulsingDot color={statusColor} active={active} size={8} /><Text style={styles.sessionTitle} numberOfLines={1}>{title}</Text></View><View style={[styles.badge, { borderColor: statusColor }]}><Text style={[styles.badgeText, { color: statusColor }]}>#{session.id.slice(0, 8)}</Text></View>{opening && <ActivityIndicator size="small" color={theme.accent} />}</View>
     <View style={styles.pathRow}><LineIcon name="folder" size={13} color={theme.muted} /><Text style={styles.pathText} numberOfLines={1}>{session.cwd || session.path}</Text></View>
     <View style={styles.stats}><Stat label={t.contextLabel} value={context?.percent != null ? `${Math.round(context.percent)}%` : "--"} theme={theme} /><Stat label={t.tokensLabel} value={session.totalTokens ? `${Math.round(session.totalTokens / 1000)}k` : "--"} theme={theme} /><Stat label={t.messagesAndTime} value={`${session.messageCount} · ${formatRelativeTime(session.updatedAt, t)}`} theme={theme} /></View>
     <View style={styles.controlRow}><Text style={styles.controlText}>{control?.mode ?? "readonly"}</Text><Text style={styles.controlText}>{control?.canPrompt ? t.canPrompt : t.readOnly}</Text></View>
@@ -359,7 +358,7 @@ function makeStyles(theme: ReturnType<typeof useTheme>["theme"]) {
     searchRow: { flexDirection: "row", alignItems: "center", gap: 8, marginHorizontal: 16, marginBottom: 10, paddingHorizontal: 10, height: 40, borderRadius: MIUIX_RADIUS.md, backgroundColor: theme.inputBg },
     searchInput: { flex: 1, fontSize: 13 },
     list: { padding: MIUIX_SPACE.lg, paddingBottom: 112 },
-    floatingBarContainer: { position: "absolute", bottom: 16, left: 16, right: 16, flexDirection: "row", justifyContent: "space-between", alignItems: "center", zIndex: 5 },
+    floatingBarContainer: { position: "absolute", bottom: 20, left: 20, right: 20, flexDirection: "row", justifyContent: "space-between", alignItems: "center", zIndex: 5 },
     floatingPill: { flexDirection: "row", alignItems: "center", borderRadius: 20, padding: 3, borderWidth: 1, shadowColor: "#000", shadowOpacity: 0.12, shadowRadius: 6, elevation: 5 },
     floatingTabBtn: { flexDirection: "row", alignItems: "center", gap: 5, minHeight: 34, paddingHorizontal: 12, paddingVertical: 6, borderRadius: 16 },
     floatingTabText: { fontSize: 11, fontWeight: "700" },

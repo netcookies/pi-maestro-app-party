@@ -4,6 +4,7 @@ import type {
   SessionSnapshot,
   HostEvent,
   JsonValue,
+  DesktopPluginModel,
 } from "@maestro-mobile/shared";
 import type { DistributiveOmit } from "./event-log.js";
 import type { MobileAgentRuntime, MobileAgentSession } from "./mobile-agent.js";
@@ -161,22 +162,29 @@ export class SdkSessionRunner implements SessionRunner {
   }
 
   /** 切换模型 */
-  async setModel(modelId: string): Promise<{ ok: boolean; error?: string }> {
+  async setModel(modelId: string, provider?: string): Promise<{ ok: boolean; error?: string }> {
     const reg = this.session.modelRegistry;
     if (!reg || typeof reg.getAll !== "function") {
       return { ok: false, error: "model registry unavailable" };
     }
-    const model = reg.getAll().find((m) => String(m.id ?? "") === modelId)
-      ?? (typeof reg.getById === "function" ? reg.getById(modelId) : undefined);
+    const model = reg.getAll().find((m) => String(m.id ?? "") === modelId && (!provider || String(m.provider ?? "") === provider))
+      ?? (typeof reg.getById === "function" && !provider ? reg.getById(modelId) : undefined);
     if (!model || typeof this.session.setModel !== "function") {
       return { ok: false, error: "model not found" };
     }
     try {
       await this.session.setModel(model);
+      this._state = { ...this._state, model: toJsonValue(model), updatedAt: new Date().toISOString() };
+      this.emit(this.eventLog.record({ type: "session_updated", session: this._state }));
       return { ok: true };
     } catch (e) {
       return { ok: false, error: e instanceof Error ? e.message : String(e) };
     }
+  }
+
+  syncExternalModel(model: DesktopPluginModel): void {
+    this._state = { ...this._state, model: toJsonValue(model), updatedAt: new Date().toISOString() };
+    this.emit(this.eventLog.record({ type: "session_updated", session: this._state }));
   }
 
   /** 切换思考等级 */

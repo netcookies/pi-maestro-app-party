@@ -170,10 +170,12 @@ describe("inspectWindowExecutionState & projectWindow", () => {
   });
 
   it("classifies #control as monitor_tab and regular owners as session_list", () => {
-    const control = projectWindow(makeOwner({ sessionName: "#control-abc123" }));
-    const regular = projectWindow(makeOwner({ sessionName: "work-session" }));
+    const control = projectWindow(makeOwner({ workspaceRole: "monitor", sessionName: "work-session" }));
+    const regular = projectWindow(makeOwner({ sessionName: "#control-abc123" }));
+    const unknown = projectWindow(makeOwner());
     expect(control.presentation).toMatchObject({ role: "monitor", visibility: "monitor_tab" });
     expect(control.presentation?.control.canAbort).toBe(false);
     expect(regular.presentation).toMatchObject({ role: "session", visibility: "session_list" });
+    expect(unknown.presentation).toMatchObject({ role: "session", visibility: "session_list" });
   });
 });

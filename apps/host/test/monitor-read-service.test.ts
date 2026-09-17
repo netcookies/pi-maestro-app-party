@@ -10,6 +10,7 @@ const owner = {
   pid: 123,
   sessionId: "session-1",
   sessionName: "#control-main",
+  workspaceRole: "monitor",
   publishedAt: 1000,
   contextPressure: 20,
   agents: [],

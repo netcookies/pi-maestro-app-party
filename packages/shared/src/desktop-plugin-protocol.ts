@@ -12,7 +12,16 @@ export type DesktopPluginCapability =
   | "steer"
   | "follow_up"
   | "abort"
+  | "set_model"
   | "ask-user-question";
+
+export interface DesktopPluginModel {
+  provider: string;
+  id: string;
+  name: string;
+  reasoning: boolean;
+  vision: boolean;
+}
 
 export interface DesktopPluginTarget {
   sessionId: string;
@@ -25,7 +34,8 @@ export type DesktopPluginOperation =
   | { type: "prompt"; message: string; images?: Array<{ data: string; mime: string }> }
   | { type: "steer"; message: string }
   | { type: "follow_up"; message: string }
-  | { type: "abort" };
+  | { type: "abort" }
+  | { type: "set_model"; provider?: string; modelId: string };
 
 export interface DesktopPluginHello {
   type: "desktop_plugin_hello";
@@ -48,6 +58,12 @@ export interface DesktopPluginRequest {
   deadlineAt: number;
   target: DesktopPluginTarget;
   operation: DesktopPluginOperation;
+}
+
+export interface DesktopPluginEvent {
+  type: "desktop_plugin_event";
+  event: "model_select";
+  model: DesktopPluginModel;
 }
 
 export interface DesktopAskRequest {
@@ -73,6 +89,7 @@ export interface DesktopPluginGoodbye {
 export type DesktopPluginClientFrame =
   | DesktopPluginHello
   | DesktopPluginRequest
+  | DesktopPluginEvent
   | DesktopAskRequest
   | DesktopAskResponse
   | DesktopPluginGoodbye;
@@ -144,6 +161,8 @@ export function isDesktopPluginClientFrame(value: unknown): value is DesktopPlug
         && finiteNumber(value.deadlineAt)
         && isDesktopPluginTarget(value.target)
         && isDesktopPluginOperation(value.operation);
+    case "desktop_plugin_event":
+      return value.event === "model_select" && isDesktopPluginModel(value.model);
     case "desktop_ask_request":
       return stringFields(value, "requestId", "toolCallId")
         && finiteNumber(value.deadlineAt)
@@ -203,8 +222,19 @@ function isDesktopPluginTarget(value: unknown): value is DesktopPluginTarget {
 function isDesktopPluginOperation(value: unknown): value is DesktopPluginOperation {
   if (!isRecord(value) || typeof value.type !== "string") return false;
   if (value.type === "abort") return true;
+  if (value.type === "set_model") {
+    return typeof value.modelId === "string" && value.modelId.length > 0
+      && (value.provider === undefined || (typeof value.provider === "string" && value.provider.length > 0));
+  }
   return (value.type === "prompt" || value.type === "steer" || value.type === "follow_up")
     && typeof value.message === "string";
+}
+
+function isDesktopPluginModel(value: unknown): value is DesktopPluginModel {
+  return isRecord(value)
+    && stringFields(value, "provider", "id", "name")
+    && typeof value.reasoning === "boolean"
+    && typeof value.vision === "boolean";
 }
 
 function isExtensionUiResponse(value: unknown): value is ExtensionUiResponse {

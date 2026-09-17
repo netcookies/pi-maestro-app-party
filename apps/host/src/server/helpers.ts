@@ -27,6 +27,9 @@ export async function toSessionSummaryList(records: unknown[]): Promise<HostSess
     const path = String(r.path ?? r.sessionFile ?? "");
     return {
       id: String(r.id ?? ""),
+      sessionId: String(r.id ?? ""),
+      endpointId: "history",
+      runtimeStatus: "history",
       cwd,
       cwdName: cwd.split("/").filter(Boolean).pop() ?? cwd,
       path,

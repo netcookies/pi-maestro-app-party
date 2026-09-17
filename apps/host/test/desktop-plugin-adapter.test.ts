@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 import type { DesktopPluginRequest } from "@maestro-mobile/shared";
 import { DesktopFlowAskAdapter } from "../src/plugin/desktop-flow-ask-adapter.js";
-import { DesktopPiSessionAdapter } from "../src/plugin/desktop-pi-session-adapter.js";
+import { DesktopPiSessionAdapter, deliveryFailure } from "../src/plugin/desktop-pi-session-adapter.js";
 
 const target = {
   sessionId: "session-1",
@@ -81,6 +81,75 @@ describe("DesktopPiSessionAdapter", () => {
     expect(result.status).toBe("observed");
     expect(aborts).toBe(1);
     expect(ask.pendingCount).toBe(0);
+  });
+
+  it("invokes the same-process model switch with provider and id", async () => {
+    const calls: Array<[string | undefined, string]> = [];
+    const adapter = new DesktopPiSessionAdapter({
+      prompt: async () => {},
+      steer: async () => {},
+      followUp: async () => {},
+      abort: () => {},
+      setModel: async (provider, modelId) => {
+        calls.push([provider, modelId]);
+        return true;
+      },
+      getAllTools: () => [],
+    }, target);
+
+    await expect(adapter.execute(request({ type: "set_model", provider: "provider-a", modelId: "shared-id" }))).resolves.toMatchObject({
+      status: "observed",
+    });
+    expect(calls).toEqual([["provider-a", "shared-id"]]);
+  });
+
+  it("reports model_change_failed when Pi rejects the selected model", async () => {
+    const adapter = new DesktopPiSessionAdapter({
+      prompt: async () => {},
+      steer: async () => {},
+      followUp: async () => {},
+      abort: () => {},
+      setModel: async () => false,
+      getAllTools: () => [],
+    }, target);
+
+    await expect(adapter.execute(request({ type: "set_model", provider: "provider-a", modelId: "missing" }))).resolves.toMatchObject({
+      status: "failed",
+      error: { code: "model_change_failed" },
+    });
+  });
+
+  it("preserves a structured delivery code instead of flattening it", async () => {
+    const adapter = new DesktopPiSessionAdapter({
+      prompt: async () => { throw deliveryFailure("no_model_selected"); },
+      steer: async () => {},
+      followUp: async () => {},
+      abort: () => {},
+      setModel: async () => true,
+      getAllTools: () => [],
+    }, target);
+
+    await expect(adapter.execute(request({ type: "prompt", message: "hello" }))).resolves.toMatchObject({
+      status: "failed",
+      // code 稳定可判别；原因走 message，便于诊断且不破坏机器可读性。
+      error: { code: "delivery_failed", message: "no_model_selected" },
+    });
+  });
+
+  it("falls back to a generic code when the thrown error carries none", async () => {
+    const adapter = new DesktopPiSessionAdapter({
+      prompt: async () => { throw new Error("boom"); },
+      steer: async () => {},
+      followUp: async () => {},
+      abort: () => {},
+      setModel: async () => true,
+      getAllTools: () => [],
+    }, target);
+
+    await expect(adapter.execute(request({ type: "prompt", message: "hello" }))).resolves.toMatchObject({
+      status: "failed",
+      error: { code: "plugin_command_failed" },
+    });
   });
 
   it("rejects stale target identity before invoking Pi", async () => {

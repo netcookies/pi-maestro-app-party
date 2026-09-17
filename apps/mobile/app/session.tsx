@@ -37,10 +37,25 @@ type ListRow = TimelineItem | { id: typeof LOAD_MORE_ID; __virtual: true };
 // 全局模型列表内存缓存，跨会话秒级复用
 let cachedModelsList: { id: string; provider: string; name: string; reasoning: boolean; vision: boolean }[] = [];
 
+function modelIdOf(value: unknown): string | undefined {
+  if (typeof value === "string" && value.length > 0) return value;
+  if (typeof value !== "object" || value === null) return undefined;
+  const model = value as { id?: unknown };
+  return typeof model.id === "string" && model.id.length > 0 ? model.id : undefined;
+}
+
+function modelNameOf(value: unknown): string | undefined {
+  if (typeof value === "string" && value.length > 0) return value;
+  if (typeof value !== "object" || value === null) return undefined;
+  const model = value as { name?: unknown; id?: unknown };
+  if (typeof model.name === "string" && model.name.length > 0) return model.name;
+  return typeof model.id === "string" && model.id.length > 0 ? model.id : undefined;
+}
+
 export default function SessionScreen() {
   const { id } = useLocalSearchParams<{ id: string }>();
   const router = useRouter();
-  const { state, sendPrompt, sendAbort, answerDialog, cancelDialog, loadSessionHistory, loadMoreHistory, searchHistory, listModels, setModel, setThinking, listSkills, compactSession, isConnected, connectionState } = useHost();
+  const { state, sendPrompt, sendAbort, answerDialog, cancelDialog, loadSessionHistory, loadMoreHistory, searchHistory, listModels, setModel, setThinking, listSkills, compactSession, isConnected, connectionState, lastError, clearError: dispatchLocalError } = useHost();
   const { theme } = useTheme();
   const { t } = useI18n();
   const cfg = getConfig();
@@ -66,18 +81,33 @@ export default function SessionScreen() {
   const [planMode, setPlanMode] = useState("YOLO");
   const [actionSheetType, setActionSheetType] = useState<"think" | "plan" | "compact_confirm" | null>(null);
 
-  // 确保配置加载与会话数据、技能后台预取（冷启动直接进本页时）
+  // 确保配置加载与会话数据（冷启动直接进本页时）
   useEffect(() => {
     void loadConfig();
     if (id) {
       setActiveViewingSession(id);
       void loadSessionHistory(id).catch(() => {});
-      void listSkills(id).then(setAvailableSkills).catch(() => {});
     }
     return () => {
       setActiveViewingSession(null);
     };
-  }, [id, loadSessionHistory, listSkills]);
+  }, [id, loadSessionHistory]);
+
+  // 技能请求必须跟随协议连接状态重试；冷启动时的一次失败不能永久留下空抽屉。
+  useEffect(() => {
+    if (!id || !isConnected) return;
+    let active = true;
+    void listSkills(id)
+      .then((skills) => {
+        if (active) setAvailableSkills(Array.isArray(skills) ? skills : []);
+      })
+      .catch(() => {
+        if (active) setAvailableSkills([]);
+      });
+    return () => {
+      active = false;
+    };
+  }, [id, isConnected, listSkills]);
   const [input, setInput] = useState("");
   const [sending, setSending] = useState(false);
   const [loadingMore, setLoadingMore] = useState(false);
@@ -105,7 +135,7 @@ export default function SessionScreen() {
   const [searchTotal, setSearchTotal] = useState(0);
   // ChatComposer 状态（store listSkills 返回 {name, description} 对象列表）
   const [availableSkills, setAvailableSkills] = useState<{ name: string; description?: string }[]>([]);
-  const [currentModelId, setCurrentModelId] = useState<string | undefined>(session?.model ? String((session.model as { id?: string })?.id ?? "") : undefined);
+  const [currentModelId, setCurrentModelId] = useState<string | undefined>(modelIdOf(session?.model));
   // 复制反馈状态（记录被复制消息的 id）
   const [copiedId, setCopiedId] = useState<string | null>(null);
   // 选中文本抽屉状态（存放当前长按查看/选择的消息文本）
@@ -127,9 +157,7 @@ export default function SessionScreen() {
 
   // 确保 session.model 发生变更或由子页面更新后同步回显当前模型 Badge
   useEffect(() => {
-    const curName = typeof session?.model === "string"
-      ? session.model
-      : (session?.model as { name?: string; id?: string })?.name ?? (session?.model as { name?: string; id?: string })?.id;
+    const curName = modelIdOf(session?.model);
     if (curName) {
       setCurrentModelId(curName);
     }
@@ -546,7 +574,7 @@ export default function SessionScreen() {
               }}
               hitSlop={{ top: 8, bottom: 8, left: 12, right: 8 }}
               accessibilityRole="button"
-              accessibilityLabel="快捷复制全文"
+              accessibilityLabel={t.labelFastCopy}
             >
               <LineIcon
                 name={copiedId === item.id ? "check" : "copy"}
@@ -554,7 +582,7 @@ export default function SessionScreen() {
                 color={copiedId === item.id ? theme.success : theme.dim ?? theme.muted}
               />
               {copiedId === item.id && (
-                <Text style={[styles.copySuccessText, { color: theme.success }]}>已复制</Text>
+                <Text style={[styles.copySuccessText, { color: theme.success }]}>{t.tabSessions === "会话" ? "已复制" : "Copied"}</Text>
               )}
             </TouchableOpacity>
           </View>
@@ -581,32 +609,32 @@ export default function SessionScreen() {
           }}
           style={styles.backBtn}
           accessibilityRole="button"
-          accessibilityLabel="返回会话列表"
+          accessibilityLabel={t.labelBackToSessions}
           hitSlop={{ top: 16, bottom: 16, left: 16, right: 24 }}
         >
           <LineIcon name="arrowLeft" size={20} color={theme.text} strokeWidth={2.4} />
         </TouchableOpacity>
-        <Text style={styles.headerTitle} numberOfLines={1}>{session?.title ?? "会话"}</Text>
+        <Text style={styles.headerTitle} numberOfLines={1}>{session?.title ?? t.tabSessions}</Text>
         
         {/* 右侧：当前模型 Badge，点击进入独立全屏“模型选择”子页面 */}
         <TouchableOpacity
           onPress={() => {
-            const curName = typeof session?.model === "string" ? session.model : (session?.model as { name?: string; id?: string })?.name ?? (session?.model as { name?: string; id?: string })?.id ?? "";
+            const curId = modelIdOf(session?.model) ?? currentModelId ?? "";
             router.push({
               pathname: "/model-select",
               params: {
                 id: id ?? "",
-                currentModelId: currentModelId ?? curName,
+                currentModelId: curId,
               },
             });
           }}
           style={styles.modelHeaderBtn}
           accessibilityRole="button"
-          accessibilityLabel="选择模型"
+          accessibilityLabel={t.selectModel}
           hitSlop={{ top: 15, bottom: 15, left: 20, right: 20 }}
         >
           <Text style={styles.modelHeaderBtnText} numberOfLines={1}>
-            {currentModelId ?? (typeof session?.model === "string" ? session.model : (session?.model as { name?: string; id?: string })?.name ?? (session?.model as { name?: string; id?: string })?.id ?? "Model")}
+            {modelNameOf(session?.model) ?? currentModelId ?? "Model"}
           </Text>
           <LineIcon name="chevronDown" size={11} color={theme.accent} />
         </TouchableOpacity>
@@ -738,7 +766,7 @@ export default function SessionScreen() {
               style={styles.floatingToolBtn}
               onPress={() => setActionSheetType("think")}
               accessibilityRole="button"
-              accessibilityLabel="思考等级"
+              accessibilityLabel={t.labelThinkLevel}
               hitSlop={{ top: 8, bottom: 8, left: 8, right: 6 }}
             >
               <LineIcon name="thinkBrain" size={15} color={theme.accent} />
@@ -752,7 +780,7 @@ export default function SessionScreen() {
               style={styles.floatingToolBtn}
               onPress={() => setActionSheetType("plan")}
               accessibilityRole="button"
-              accessibilityLabel="计划模式"
+              accessibilityLabel={t.labelPlanMode}
               hitSlop={{ top: 8, bottom: 8, left: 6, right: 6 }}
             >
               <LineIcon name="planClipboard" size={15} color={theme.accent} />
@@ -766,7 +794,7 @@ export default function SessionScreen() {
               style={styles.floatingToolBtnOnlyIcon}
               onPress={() => setActionSheetType("compact_confirm")}
               accessibilityRole="button"
-              accessibilityLabel="压缩上下文"
+              accessibilityLabel={t.labelCompactContext}
               hitSlop={{ top: 8, bottom: 8, left: 6, right: 8 }}
             >
               <LineIcon name="compactSqueeze" size={15} color={theme.muted} />
@@ -776,7 +804,7 @@ export default function SessionScreen() {
           {showFab ? (
             <TouchableOpacity
               style={[styles.fab, { backgroundColor: theme.accent }]}
-              accessibilityLabel="回到底部"
+              accessibilityLabel={t.labelScrollToBottom}
               hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}
               onPress={() => {
                 animateLayout();
@@ -795,6 +823,17 @@ export default function SessionScreen() {
         onLayout={(e) => setComposerHeight(e.nativeEvent.layout.height)}
         style={{ backgroundColor: theme.headerBg, paddingBottom: Math.max(insets.bottom > 0 ? 4 : 8, 4) }}
       >
+      {/* 投递失败必须可见：消息未送达时不能只保留草稿而不告知用户 */}
+      {lastError ? (
+        <TouchableOpacity
+          onPress={() => dispatchLocalError(null)}
+          accessibilityRole="button"
+          accessibilityLabel={t.close}
+          style={{ paddingHorizontal: 20, paddingBottom: 6 }}
+        >
+          <Text style={[styles.toolError, { color: theme.error }]} numberOfLines={3}>{lastError}</Text>
+        </TouchableOpacity>
+      ) : null}
       <ChatComposer
         actions={{
           send: async (text, imgs) => {
@@ -813,8 +852,9 @@ export default function SessionScreen() {
             }
           },
           listModels: async () => (id ? listModels(id) : []),
-          setModel: async (modelId) => {
-            const r = id ? await setModel(id, modelId) : { ok: false, error: "no session" };
+          listSkills: async () => (id ? listSkills(id) : []),
+          setModel: async (modelId, provider) => {
+            const r = id ? await setModel(id, modelId, provider) : { ok: false, error: "no session" };
             if (r.ok) setCurrentModelId(modelId);
             return r;
           },
@@ -985,7 +1025,7 @@ export default function SessionScreen() {
             <View style={styles.sheetHeader}>
               <View style={{ flexDirection: "row", alignItems: "center", gap: 6, flex: 1, minWidth: 0 }}>
                 <LineIcon name="chat" size={16} color={theme.accent} />
-                <Text style={[styles.sheetTitle, { color: theme.text }]} numberOfLines={1}>选择与复制文字</Text>
+                <Text style={[styles.sheetTitle, { color: theme.text }]} numberOfLines={1}>{t.labelCopySnippet}</Text>
               </View>
               <TouchableOpacity
                 onPress={async () => {
@@ -1005,15 +1045,15 @@ export default function SessionScreen() {
                   borderColor: theme.border,
                 }}
                 accessibilityRole="button"
-                accessibilityLabel="一键复制全部"
+                accessibilityLabel={t.labelCopyAllBtn}
                 hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
               >
                 <LineIcon name="copy" size={14} color={theme.accent} />
-                <Text style={{ fontSize: 12, color: theme.accent, fontWeight: "600" }}>复制全文</Text>
+                <Text style={{ fontSize: 12, color: theme.accent, fontWeight: "600" }}>{t.labelCopyAll}</Text>
               </TouchableOpacity>
             </View>
             <Text style={{ fontSize: 12, color: theme.muted, marginBottom: 10 }}>
-              提示：按住顶部手柄可上下拖动调整大小；长按文字可自由选中
+              {t.selectionTip}
             </Text>
             {Platform.OS === "ios" ? (
               <TextInput
@@ -1253,8 +1293,8 @@ function makeStyles(theme: ReturnType<typeof useTheme>["theme"]) {
     modelHeaderBtnText: { fontSize: 11, fontFamily: "monospace", color: theme.accent, fontWeight: "600" },
     floatingBarContainer: {
       position: "absolute",
-      left: 16,
-      right: 16,
+      left: 20,
+      right: 20,
       flexDirection: "row",
       justifyContent: "space-between",
       alignItems: "center",
@@ -1262,7 +1302,7 @@ function makeStyles(theme: ReturnType<typeof useTheme>["theme"]) {
     },
     floatingToolPillWrap: {
       position: "absolute",
-      left: 16,
+      left: 20,
       zIndex: 40,
     },
     floatingToolPill: {

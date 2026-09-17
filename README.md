@@ -22,6 +22,7 @@
 |------|------|
 | 移动端监控 Pi 工作窗口（Maestro Schedule / Monitor） | ✅ |
 | 查看会话日志、发送 Prompt / Steer / Abort | ✅ |
+| 桌面 TUI 会话模型双向同步（手机切换模型实时生效到 TUI，TUI 内切换实时回流到手机） | ✅ |
 | 多题交互向导（Ask Wizard：多题连续作答、单选/多选/文本、无缝穿透桌面 TUI） | ✅ |
 | 系统级推送与应用内通知（OS Push / Local Notification、灵动岛顶部横幅、触觉反馈） | ✅ |
 | 全生命周期运行态感知（输入框停止/旋转进度环与终端端到端生命周期精准对齐） | ✅ |
@@ -80,6 +81,17 @@
 │  │              WorkspaceTelemetryReader                         │  │
 │  │  ~/.pi/teammate/workspaces/<id>/runtime/owners/*.json       │  │
 │  └───────────────────────────────────────────────────────────────┘ │
+│                                                                   │
+│  ┌───────────────────────────────────────────────────────────────┐ │
+│  │  SessionDirectory   → exact target 注册表（host / desktop）   │ │
+│  │  DesktopControlGateway → Desktop target 控制（capability/幂等）│ │
+│  │  DesktopPluginIpcServer → UDS 帧 + 共享密钥认证               │ │
+│  └───────────────────────────────┬───────────────────────────────┘ │
+└──────────────────────────────────┼───────────────────────────────┘
+                                   │ UDS（~/.pi/maestro-mobile/ipc/）
+┌──────────────────────────────────▼───────────────────────────────┐
+│  外部 Pi TUI 进程（Desktop Plugin extension）                     │
+│  └─ DesktopPiSessionAdapter → ExtensionAPI（set_model / model_select）│
 └───────────────────────────────────────────────────────────────────┘
 ```
 
@@ -175,13 +187,14 @@ cd apps/mobile && npx expo run:ios
 |------|------|------|------|
 | GET | `/api/health` | 否 | 健康检查 |
 | GET | `/api/status` | token | Host 状态（版本/运行时间/sessions 数量） |
-| GET | `/api/sessions` | token | 所有 Pi 会话列表 |
-| GET | `/api/sessions/:id/snapshot` | token | 会话快照（timeline + metadata） |
-| GET | `/api/maestro/schedule` | token | Maestro Schedule（所有 Run） |
-| GET | `/api/maestro/settings` | token | Maestro Settings 文件 |
-| PATCH | `/api/maestro/settings` | token | 更新 Settings |
-| GET | `/api/maestro/usage` | token | Usage 聚合（今日/本周/本月） |
-| GET | `/api/workspace-telemetry` | token | Monitor 窗口状态（原始 telemetry） |
+| GET | `/api/sessions` | token | 所有 Pi 会话列表（支持 `cwd`/`query`/`limit`/`cursor`） |
+| GET | `/api/maestro` | token | Maestro 调度状态 |
+| GET | `/api/maestro-settings` | token | Maestro Settings 文件总览 |
+| GET | `/api/workspace-telemetry` | token | Monitor 窗口状态投影 |
+| GET | `/api/pair-ips` | 否 | 配对候选 IP 列表 |
+| GET | `/api/pair-short` | 否 | 短码换 token |
+| GET | `/api/file` | token | 图片只读预览 |
+| GET | `/api/extension-ui/pending` | token | 待处理 ask 计数 |
 
 ---
 
@@ -201,10 +214,17 @@ cd apps/mobile && npx expo run:ios
 | `update_maestro_settings { patch }` | 更新 Settings |
 | `list_models { sessionId }` | 列出可用模型 |
 | `list_skills { sessionId }` | 列出可用 Skills |
-| `set_model { sessionId, modelId }` | 切换模型 |
+| `set_model { sessionId, modelId, provider? }` | 切换模型（`provider` 区分跨 provider 同名 id） |
 | `set_thinking { sessionId, level }` | 设置 Thinking 级别 |
-| `compact_session { sessionId, customInstructions? }` | 压缩会话 |
+| `compact { sessionId, customInstructions? }` | 压缩会话 |
 | `rename_session { sessionId, name }` | 重命名会话 |
+| `follow_up { sessionId, message }` | 排队到本轮后 |
+| `load_more_history` / `search_history` | 历史翻页 / 搜索 |
+| `get_session_usage` | 会话 token 用量 |
+| `get_maestro_state` | 拉取 Maestro 状态 |
+
+> 命令最终由**谁拥有该会话**决定路径：Host 进程内 runner（`host`）或 Desktop gateway → UDS → TUI plugin（`desktop`）。
+> 详见 [docs/protocol.md](docs/protocol.md#命令路由按-target-kind-分叉)。
 
 ---
 

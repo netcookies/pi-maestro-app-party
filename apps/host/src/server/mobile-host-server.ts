@@ -873,7 +873,8 @@ export class MobileHostServer {
         case "set_model": {
           const target = this.targetForCommand(command);
           if (!target) { this.sendUnavailable(client, command, "target_unavailable"); break; }
-          this.sendAck(client, command, await this.controller.application.sessionOperation({ kind: "set_model", target, modelId: command.modelId }));
+          const result = await this.controller.application.command({ requestId: command.id, target, kind: "set_model", modelId: command.modelId, provider: command.provider });
+          this.sendApplicationResult(client, command, result);
           break;
         }
         case "set_thinking": {

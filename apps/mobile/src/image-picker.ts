@@ -13,7 +13,9 @@ export interface PickResult {
 /** 请求权限 + 打开相册选图（可多选），返回 base64 列表 */
 export async function pickImagesFromLibrary(maxCount = 3): Promise<PickResult[]> {
   const perm = await ImagePicker.requestMediaLibraryPermissionsAsync();
-  if (!perm.granted) return [];
+  if (!perm.granted) {
+    throw new Error("photo_library_permission_denied");
+  }
 
   const result = await ImagePicker.launchImageLibraryAsync({
     mediaTypes: ["images"],

@@ -2,13 +2,15 @@ import type { JsonValue, OperationReceipt, OperationStatus } from "@maestro-mobi
 import { IdempotencyLedger } from "../control/idempotency-ledger.js";
 import type { SessionDirectory, SessionTargetIdentity } from "../control/SessionDirectory.js";
 
-export type SessionCommandKind = "prompt" | "steer" | "follow_up" | "abort";
+export type SessionCommandKind = "prompt" | "steer" | "follow_up" | "abort" | "set_model";
 
 export interface SessionCommand {
   requestId: string;
   target: SessionTargetIdentity;
   kind: SessionCommandKind;
   message?: string;
+  modelId?: string;
+  provider?: string;
   images?: unknown[];
 }
 
@@ -69,7 +71,11 @@ export class SessionCommandService {
           else await runner.prompt(command.message ?? "", undefined, command.images);
         } else if (command.kind === "steer") await runner.steer(command.message ?? "");
         else if (command.kind === "follow_up") await runner.followUp(command.message ?? "");
-        else await runner.abort();
+        else if (command.kind === "set_model") {
+          if (!command.modelId || typeof runner.setModel !== "function") throw new Error("model_unavailable");
+          const changed = await runner.setModel(command.modelId, command.provider);
+          if (!changed.ok) return result(command, this.directory.revision, "failed", { code: changed.error ?? "model_change_failed" });
+        } else await runner.abort();
         return result(command, this.directory.revision, "observed");
       } catch {
         return result(command, this.directory.revision, "failed", { code: "host_command_failed" });

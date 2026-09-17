@@ -5,6 +5,7 @@ import net, { type Socket, type Server } from "node:net";
 import type {
   DesktopPluginCapability,
   DesktopAskRequest,
+  DesktopPluginEvent,
   DesktopAskResponse,
   DesktopPluginClientFrame,
   DesktopPluginError,
@@ -40,6 +41,7 @@ export interface DesktopPluginIpcServerOptions {
   requestTimeoutMs?: number;
   releaseVersion?: string;
   onConnected?: (target: DesktopPluginTarget) => void;
+  onModelSelect?: (target: DesktopPluginTarget, event: DesktopPluginEvent) => void;
   onAskRequest?: (target: DesktopPluginTarget, request: DesktopAskRequest) => void;
   onDisconnected?: (target: DesktopPluginTarget) => void;
 }
@@ -54,6 +56,7 @@ export interface DesktopPluginIpcClientOptions {
   releaseVersion?: string;
   onRequest: (request: DesktopPluginRequest) => Promise<DesktopPluginResult>;
   onAskResponse?: (response: DesktopAskResponse) => Promise<void>;
+  onDisconnected?: () => void;
 }
 
 function sanitizedMessage(error: unknown): string {
@@ -291,6 +294,14 @@ export class DesktopPluginIpcServer {
         connection.close(new Error("desktop plugin goodbye"));
         return;
       }
+      if (raw && typeof raw === "object" && (raw as { type?: unknown }).type === "desktop_plugin_event") {
+        if (isDesktopPluginClientFrame(raw) && raw.type === "desktop_plugin_event" && target) {
+          this.options.onModelSelect?.(target, raw);
+          return;
+        }
+        this.sendError(connection, "invalid_frame", undefined);
+        return;
+      }
       if (raw && typeof raw === "object" && (raw as { type?: unknown }).type === "desktop_ask_request") {
         if (isDesktopPluginClientFrame(raw) && raw.type === "desktop_ask_request" && target) {
           this.options.onAskRequest?.(target, raw);
@@ -449,7 +460,10 @@ export class DesktopPluginIpcClient {
           finishError(new Error("invalid desktop plugin frame"));
         }
       }, (error) => {
-        if (!authenticated) reject(error ?? new Error("desktop plugin disconnected"));
+        if (!authenticated) {
+          reject(error ?? new Error("desktop plugin disconnected"));
+        }
+        this.options.onDisconnected?.();
       });
       this.connection = connection;
       timer = setTimeout(() => finishError(new Error("desktop plugin handshake timeout")), this.options.handshakeTimeoutMs ?? DEFAULT_DESKTOP_PLUGIN_HANDSHAKE_TIMEOUT_MS);
@@ -474,6 +488,12 @@ export class DesktopPluginIpcClient {
       });
     });
     return this.ready;
+  }
+
+  async sendModelSelect(event: DesktopPluginEvent): Promise<void> {
+    await this.connect();
+    if (this.closed || !this.connection) throw new Error("desktop plugin disconnected");
+    this.connection.send(event);
   }
 
   async sendAskRequest(request: DesktopAskRequest): Promise<void> {

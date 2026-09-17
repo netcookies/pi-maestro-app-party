@@ -11,6 +11,7 @@ import type { ExtensionUiRequest, HostEvent, HostSessionList, TimelineItem, Sess
 import { HostClient, type ConnectionState } from "./host-client";
 import { isServerSessionPresentation, filterSessionsByVisibility } from "./host-session-pagination";
 import { ExtensionUiQueue } from "./extension-ui-queue";
+import { describeSendFailure } from "./delivery-error";
 import {
   createInitialState,
   reduceEvent,
@@ -43,7 +44,7 @@ export interface HostStoreValue {
   /** 会话 token 用量（JSONL 聚合 + SDK context）；目标会话未打开时返回 null */
   fetchSessionUsage(sessionId: string): Promise<SessionUsageSummary | null>;
   updateMaestroSettings(patch: Record<string, unknown>): Promise<{ ok: boolean; error?: string }>;
-  setModel(sessionId: string, modelId: string): Promise<{ ok: boolean; error?: string }>;
+  setModel(sessionId: string, modelId: string, provider?: string): Promise<{ ok: boolean; error?: string }>;
   setThinking(sessionId: string, level: string): Promise<{ ok: boolean; error?: string }>;
   compactSession(sessionId: string, customInstructions?: string): Promise<{ ok: boolean; error?: string }>;
   renameSession(sessionId: string, name: string): Promise<{ ok: boolean; error?: string }>;
@@ -53,6 +54,8 @@ export interface HostStoreValue {
   answerDialog(requestId: string, value: string | string[]): void;
   cancelDialog(requestId: string): void;
   lastError: string | null;
+  /** 清除本地错误提示（可关闭横幅）；只影响本地提示，不影响 host 事件流。 */
+  clearError(): void;
 }
 
 const HostStoreContext = createContext<HostStoreValue | null>(null);
@@ -226,18 +229,45 @@ export function HostStoreProvider({ children }: { children: React.ReactNode }) {
     return { ...list, sessions: filterSessionsByVisibility(list.sessions, "session_list") };
   }, [getClient]);
 
+  const clearError = useCallback(() => {
+    dispatch({ type: "__local_error", message: "" });
+  }, [dispatch]);
+
   const sendPrompt = useCallback(async (sessionId: string, message: string, images?: { data: string; mime: string }[]) => {
-    await getClient().sendCommand({ type: "prompt", sessionId, message, ...(images && images.length > 0 ? { images } : {}) });
-  }, [getClient]);
+    try {
+      await getClient().sendCommand({ type: "prompt", sessionId, message, ...(images && images.length > 0 ? { images } : {}) });
+    } catch (error) {
+      // 投递失败必须可见：此前只 reject，调用方 catch 后静默保留草稿，用户无从得知消息未送达。
+      // 走本地内部事件（不冒充 host 事件流的 error 帧，避开其必填 seq 语义）。
+      dispatch({ type: "__local_error", message: describeSendFailure(error) });
+      throw error;
+    }
+  }, [getClient, dispatch]);
 
   const listModels = useCallback(async (sessionId: string) => {
     const result = await getClient().sendCommand({ type: "list_models", sessionId });
-    return result as { id: string; provider: string; name: string; reasoning: boolean; vision: boolean }[];
+    if (!Array.isArray(result)) {
+      const error = result && typeof result === "object" && "error" in result ? String((result as { error?: unknown }).error ?? "") : "Invalid model list response";
+      throw new Error(error || "Invalid model list response");
+    }
+    return result.filter((model): model is { id: string; provider: string; name: string; reasoning: boolean; vision: boolean } => {
+      if (!model || typeof model !== "object") return false;
+      const value = model as Record<string, unknown>;
+      return typeof value.id === "string" && typeof value.provider === "string" && typeof value.name === "string";
+    });
   }, [getClient]);
 
   const listSkills = useCallback(async (sessionId: string) => {
     const result = await getClient().sendCommand({ type: "list_skills", sessionId });
-    return result as { name: string; description?: string }[];
+    if (!Array.isArray(result)) {
+      const error = result && typeof result === "object" && "error" in result ? String((result as { error?: unknown }).error ?? "") : "Invalid skills response";
+      throw new Error(error || "Invalid skills response");
+    }
+    return result.filter((skill): skill is { name: string; description?: string } => {
+      if (!skill || typeof skill !== "object") return false;
+      const value = skill as Record<string, unknown>;
+      return typeof value.name === "string";
+    });
   }, [getClient]);
 
   const getMaestroSettings = useCallback(async () => {
@@ -259,9 +289,13 @@ export function HostStoreProvider({ children }: { children: React.ReactNode }) {
     }
   }, [getClient]);
 
-  const setModel = useCallback(async (sessionId: string, modelId: string) => {
-    const result = await getClient().sendCommand({ type: "set_model", sessionId, modelId });
-    return result as { ok: boolean; error?: string };
+  const setModel = useCallback(async (sessionId: string, modelId: string, provider?: string) => {
+    try {
+      await getClient().sendCommand({ type: "set_model", sessionId, modelId, ...(provider ? { provider } : {}) });
+      return { ok: true };
+    } catch (error) {
+      return { ok: false, error: error instanceof Error ? error.message : String(error) };
+    }
   }, [getClient]);
 
   const setThinking = useCallback(async (sessionId: string, level: string) => {
@@ -379,8 +413,9 @@ export function HostStoreProvider({ children }: { children: React.ReactNode }) {
       answerDialog,
       cancelDialog,
       lastError: state.lastError,
+      clearError,
     }),
-    [state, connectionState, hostUrl, token, connect, disconnect, openSession, openExistingSession, closeSession, listHostSessions, loadSessionHistory, loadMoreHistory, searchHistory, listModels, listSkills, getMaestroSettings, updateMaestroSettings, fetchSessionUsage, setModel, setThinking, compactSession, renameSession, sendPrompt, sendSteer, sendAbort, answerDialog, cancelDialog],
+    [state, connectionState, hostUrl, token, connect, disconnect, openSession, openExistingSession, closeSession, listHostSessions, loadSessionHistory, loadMoreHistory, searchHistory, listModels, listSkills, getMaestroSettings, updateMaestroSettings, fetchSessionUsage, setModel, setThinking, compactSession, renameSession, sendPrompt, sendSteer, sendAbort, answerDialog, cancelDialog, clearError],
   );
 
   return <HostStoreContext.Provider value={value}>{children}</HostStoreContext.Provider>;

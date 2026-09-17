@@ -42,14 +42,22 @@ export default function ModelSelectScreen() {
   const { t } = useI18n();
 
   const session = id ? state.sessions.get(id) : undefined;
-  const initialModel = currentModelId || (session?.model as { name?: string } | undefined)?.name || "";
+  const sessionModel = session?.model;
+  const initialModelProvider = typeof sessionModel === "object" && sessionModel !== null && typeof (sessionModel as { provider?: unknown }).provider === "string"
+    ? (sessionModel as { provider: string }).provider
+    : undefined;
+  const initialModel = currentModelId
+    || (typeof sessionModel === "string" ? sessionModel : undefined)
+    || (typeof sessionModel === "object" && sessionModel !== null && typeof (sessionModel as { id?: unknown }).id === "string" ? (sessionModel as { id: string }).id : "");
 
   const [availableModels, setAvailableModels] = useState<ModelItem[]>(cachedModelsList);
   const [selectedModelDraft, setSelectedModelDraft] = useState<string>(initialModel);
+  const [selectedModelProvider, setSelectedModelProvider] = useState<string | undefined>(initialModelProvider);
   const [modelsLoading, setModelsLoading] = useState(cachedModelsList.length === 0);
   const [refreshingModels, setRefreshingModels] = useState(false);
   const [modelSearchQuery, setModelSearchQuery] = useState("");
   const [applying, setApplying] = useState(false);
+  const [applyError, setApplyError] = useState<string | null>(null);
 
   const fetchModels = useCallback(async (forceRefresh = false) => {
     if (!id) return;
@@ -80,8 +88,15 @@ export default function ModelSelectScreen() {
     if (!id || !selectedModelDraft || applying) return;
     setApplying(true);
     try {
-      await setModel(id, selectedModelDraft);
+      const result = await setModel(id, selectedModelDraft, selectedModelProvider);
+      if (!result?.ok) {
+        setApplyError(result?.error ?? "无法切换模型");
+        return;
+      }
+      setApplyError(null);
       router.back();
+    } catch (error) {
+      setApplyError(error instanceof Error && error.message ? error.message : "无法切换模型");
     } finally {
       setApplying(false);
     }
@@ -132,6 +147,12 @@ export default function ModelSelectScreen() {
         </TouchableOpacity>
       </View>
 
+      {applyError ? (
+        <Text style={{ color: theme.error, fontSize: 12, paddingHorizontal: 16, paddingTop: 8 }}>
+          {applyError}
+        </Text>
+      ) : null}
+
       {/* 搜索框 */}
       <View style={[styles.searchRow, { backgroundColor: theme.cardBg, borderColor: theme.border }]}>
         <LineIcon name="search" size={16} color={theme.muted} style={{ marginLeft: 8 }} />
@@ -160,7 +181,7 @@ export default function ModelSelectScreen() {
       ) : (
         <FlatList
           data={filteredModels}
-          keyExtractor={(m) => m.id}
+          keyExtractor={(m) => `${m.provider}/${m.id}`}
           contentContainerStyle={{ padding: 16, gap: 10 }}
           keyboardShouldPersistTaps="handled"
           refreshing={refreshingModels}
@@ -177,7 +198,7 @@ export default function ModelSelectScreen() {
             </View>
           }
           renderItem={({ item: m }) => {
-            const isSelected = selectedModelDraft === m.id;
+            const isSelected = selectedModelDraft === m.id && (!selectedModelProvider || selectedModelProvider === m.provider);
             return (
               <TouchableOpacity
                 style={[
@@ -187,7 +208,7 @@ export default function ModelSelectScreen() {
                     backgroundColor: theme.cardBg,
                   },
                 ]}
-                onPress={() => setSelectedModelDraft(m.id)}
+                onPress={() => { setSelectedModelDraft(m.id); setSelectedModelProvider(m.provider); }}
                 activeOpacity={0.7}
               >
                 <View style={styles.modelCardHeader}>

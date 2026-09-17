@@ -44,20 +44,46 @@ describe("Desktop Plugin IPC protocol", () => {
     expect(isDesktopPluginClientFrame({ ...request, target: { ...request.target, processGeneration: "" } })).toBe(false);
   });
 
-  it("accepts receipts/results and rejects unsupported server frames", () => {
-    expect(isDesktopPluginServerFrame({
-      type: "desktop_plugin_receipt",
-      requestId: "request-1",
-      operation: "abort",
-      status: "accepted",
+  it("accepts set_model operations and model_select events with provider identity", () => {
+    const target = {
+      sessionId: "session-1",
+      endpointId: "endpoint-1",
+      normalizedCwd: "/work/app",
+      processGeneration: "generation-1",
+    };
+    expect(isDesktopPluginClientFrame({
+      type: "desktop_plugin_request",
+      requestId: "request-model",
+      commandId: "command-model",
+      deadlineAt: Date.now() + 1000,
+      target,
+      operation: { type: "set_model", provider: "provider-a", modelId: "shared-id" },
     })).toBe(true);
-    expect(isDesktopPluginServerFrame({
-      type: "desktop_plugin_result",
-      requestId: "request-1",
-      operation: "abort",
-      status: "observed",
-      result: { cancelled: true },
+    expect(isDesktopPluginClientFrame({
+      type: "desktop_plugin_event",
+      event: "model_select",
+      model: { provider: "provider-b", id: "shared-id", name: "Model B", reasoning: true, vision: false },
     })).toBe(true);
-    expect(isDesktopPluginServerFrame({ type: "desktop_plugin_receipt", status: "observed" })).toBe(false);
+  });
+
+  it("rejects malformed model operations and events", () => {
+    expect(isDesktopPluginClientFrame({
+      type: "desktop_plugin_event",
+      event: "model_select",
+      model: { provider: "", id: "model", name: "Model", reasoning: true, vision: false },
+    })).toBe(false);
+    expect(isDesktopPluginClientFrame({
+      type: "desktop_plugin_request",
+      requestId: "request-model",
+      commandId: "command-model",
+      deadlineAt: Date.now() + 1000,
+      target: {
+        sessionId: "session-1",
+        endpointId: "endpoint-1",
+        normalizedCwd: "/work/app",
+        processGeneration: "generation-1",
+      },
+      operation: { type: "set_model", provider: "provider-a", modelId: "" },
+    })).toBe(false);
   });
 });

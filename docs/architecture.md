@@ -11,8 +11,15 @@
 │  ├─ MobileExtensionUiBridge → ask 桥接 (extension_ui)    │
 │  ├─ MaestroStateReader    → 读 flow-schedule store       │
 │  ├─ WorkspaceTelemetryReader → 读 teammate owners 状态   │
+│  ├─ SessionDirectory       → exact target 注册表         │
+│  ├─ DesktopControlGateway  → Desktop target 控制通道     │
 │  └─ MobileHostServer      → HTTP + WS 直连               │
 │                        │                                 │
+│                        │ UDS（~/.pi/maestro-mobile/ipc/） │
+│  ┌─────────────────────▼─────────────────────────────┐   │
+│  │ 外部 Pi TUI 进程（Desktop Plugin extension）         │   │
+│  │  └─ DesktopPiSessionAdapter → ExtensionAPI          │   │
+│  └─────────────────────────────────────────────────────┘   │
 └─────────────────────────┼────────────────────────────────┘
                           │ WebSocket (LAN 直连)
 ┌─────────────────────────▼────────────────────────────────┐
@@ -36,6 +43,11 @@
 | `MaestroStateReader` | 读 `.pi/flow-schedule` store，投影 `maestro_state`（变化驱动推送） |
 | `WorkspaceTelemetryReader` | 读 `~/.pi/teammate/workspaces/*/runtime/owners/*.json`，投影 `monitor_state` |
 | `MobileHostServer` | HTTP（健康检查 / 快照 / 设置 API）+ WebSocket 直连 |
+| `SessionDirectory` | exact target 注册表（`sessionId + endpointId + normalizedCwd + processGeneration`），区分 host/desktop 与 capability |
+| `SessionCommandService` | 命令唯一分叉点：按 target kind 选择 Host runner 或 Desktop gateway |
+| `DesktopControlGatewayService` | Desktop target 控制通道：capability 校验 + deadline + 幂等 |
+| `DesktopPluginIpcServer` | UDS 服务端：NDJSON 帧、共享密钥认证、registry 持久化 |
+| `DesktopPiSessionAdapter` | 在 TUI 进程内执行 operation（含 `set_model`），校验 exact target 与 capability |
 
 ### Mobile（`apps/mobile`）
 
@@ -45,6 +57,43 @@
 | `ExtensionUiQueue` | ask 弹窗队列（select / input / confirm / 多问题 / multiSelect） |
 | `AppState` reducer | 事件流 → UI 状态（会话 / 时间线 / maestro / monitor） |
 | Tabs | 会话（对话 + 历史搜索）/ Teammate / Monitor / 设置 |
+
+## 消息路由：两个正交的轴
+
+**轴 1 — target kind（谁拥有 AgentSession）**
+
+`SessionCommandService.execute()` 是唯一分叉点：
+
+```
+Mobile → MobileHostServer → SessionCommandService
+   ├── host    → SdkSessionRunner.prompt/steer/followUp/setModel   （进程内）
+   └── desktop → DesktopControlGateway → UDS → ExtensionAPI        （跨进程）
+```
+
+Desktop Plugin **不是** host runner 的替代模式，而是同一条链路的通道（gateway）+ 终点（plugin）。
+
+**轴 2 — 投递语义**
+
+`prompt`（新轮次）/ `steer`（介入当前流）/ `follow_up`（排队到本轮后），与 target kind 正交。
+
+已知差异：无。host 侧 `prompt` 在 streaming 时自动降级为 steer；desktop 侧以 `deliverAs:"steer"` 投递（Pi 仅在流式时读取该选项，故空闲走新轮次、流式中入队 steer），两条路径语义已对齐。投递失败以结构化 `delivery_failed` 回传，不再返回假成功。详见 `docs/protocol.md` 的「投递语义」与「投递失败」。
+
+## Desktop Plugin（跨进程 TUI 控制）
+
+外部 Pi TUI 启动时加载 `dist/plugin/desktop-plugin-extension.js`，作为 UDS 客户端连回 Host：
+
+```
+~/.pi/maestro-mobile/ipc/desktop-plugin.sock   NDJSON 帧，0600
+~/.pi/maestro-mobile-ipc-secret               共享密钥（timingSafeEqual）
+~/.pi/maestro-mobile/ipc/desktop-plugin-registry.json  注册表快照
+```
+
+- 身份：exact target 四元组；禁止 cwd/名称/PID/时间推断
+- 能力：插件自报 capability，Host 执行前校验；缺 `set_model` 返回结构化 `capability_mismatch`
+- 模型双向同步：Mobile `set_model` → gateway → `ExtensionAPI.setModel()`；TUI `model_select` → `desktop_plugin_event` → `session_updated`
+- 断线：插件每 1s 重连；重连成功后重发当前模型；事件早于会话打开时按 target 暂存后补发
+
+完整字段与帧类型见 `docs/protocol.md#desktop-plugin-协议`。
 
 ## Workspace Telemetry 合同
 

@@ -22,7 +22,7 @@ export type SessionOperation =
   | { kind: "search_history"; target: SessionTargetIdentity; keyword: string; maxResults: number; previewLength: number }
   | { kind: "list_models"; target: SessionTargetIdentity }
   | { kind: "list_skills"; target: SessionTargetIdentity }
-  | { kind: "set_model"; target: SessionTargetIdentity; modelId: string }
+  | { kind: "set_model"; target: SessionTargetIdentity; modelId: string; provider?: string }
   | { kind: "set_thinking"; target: SessionTargetIdentity; level: string }
   | { kind: "compact"; target: SessionTargetIdentity; customInstructions?: string }
   | { kind: "rename_session"; target: SessionTargetIdentity; name: string };
