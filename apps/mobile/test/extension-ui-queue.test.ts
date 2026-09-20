@@ -140,7 +140,7 @@ describe("ExtensionUiQueue 回收终态条目（ISS-004）", () => {
     expect(q.count).toBe(0);
   });
 
-  it("过期条目在后续入队时被回收，但同一批次内仍可被 get 查到（保留现有可见语义）", () => {
+  it("过期条目在后续入队时被回收，并保持驻留有界", () => {
     let now = 1000;
     const q = new ExtensionUiQueue({ defaultTimeoutMs: 5000, now: () => now });
     const ids: string[] = [];
@@ -151,17 +151,19 @@ describe("ExtensionUiQueue 回收终态条目（ISS-004）", () => {
     }
     now = 9000; // 全部过期
     expect(q.count).toBe(0);
-    expect(q.get(ids[0])?.status).toBe("expired"); // 过期不等于立即消失：仍可查
+    expect(q.get(ids[0])).toBeUndefined(); // 超出上限的旧条目已被回收
     // 再入队一条触发修剪：过期条目应被回收
     q.enqueue(makeRequest({ id: "trigger" }));
     expect(sizeOf(q)).toBeLessThanOrEqual(CAP);
   });
 
-  it("全部仍是 pending 时不强制丢弃（用户可见弹窗不得被静默清掉）", () => {
+  it("pending 条目超过上限时过期最早请求并保持驻留有界", () => {
     const q = new ExtensionUiQueue();
     for (let i = 0; i < CAP + 5; i++) q.enqueue(makeRequest({ id: `p${i}` }));
-    expect(q.count).toBe(CAP + 5); // 未过期 ⇒ 保留，宁可超限也不丢可见弹窗
-    expect(sizeOf(q)).toBe(CAP + 5);
+    expect(q.count).toBe(CAP);
+    expect(sizeOf(q)).toBe(CAP);
+    expect(q.get("p0")).toBeUndefined(); // 最早 pending 已为驻留上限让位
+    expect(q.takeOverflowed()).toHaveLength(5);
   });
 
   it("修剪优先回收最早插入的终态条目，pending 条目按插入序保留", () => {

@@ -60,7 +60,7 @@ export default function TabLayout() {
       if (params.tab === "sessions" || params.tab === "host-sessions") return 0;
       if (params.tab === "workbench" || params.tab === "dashboard") return 1;
     }
-    if (!params.tab && pathname.includes("host-sessions")) return 1;
+    if (!params.tab && pathname.includes("host-sessions")) return 0;
     const fromPath = getIndexFromPathname(pathname);
     return fromPath !== null ? fromPath : lastActiveTabIndex;
   });
@@ -185,7 +185,7 @@ export default function TabLayout() {
           <DashboardScreen />
         </View>
         <View style={{ width: pageWidth, height: "100%" }}>
-          <MonitorScreen />
+          <MonitorScreen active={activeIndex === 2} />
         </View>
         <View style={{ width: pageWidth, height: "100%" }}>
           <SettingsScreen />

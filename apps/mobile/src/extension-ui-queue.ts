@@ -4,7 +4,8 @@
  * 这是解决 maestro ask 在移动端可用的核心：
  * host 推送 extension_ui_request → 这里排队 → UI 渲染弹窗 → 用户作答 → 返回响应
  */
-import type { ExtensionUiRequest, ExtensionUiResponse, DistributiveOmitUiResponse } from "@maestro-mobile/shared";
+import { sessionTargetKey } from "@maestro-mobile/shared";
+import type { ExtensionUiRequest, ExtensionUiResponse, DistributiveOmitUiResponse, SessionTargetIdentity } from "@maestro-mobile/shared";
 
 export type DialogStatus = "pending" | "answered" | "cancelled" | "expired";
 
@@ -27,6 +28,7 @@ export interface DialogEntry {
   request: ExtensionUiRequest;
   receivedAt: number;
   status: DialogStatus;
+  target?: SessionTargetIdentity;
 }
 
 export interface ExtensionUiQueueOptions {
@@ -37,6 +39,7 @@ export interface ExtensionUiQueueOptions {
 
 export class ExtensionUiQueue {
   private readonly dialogs = new Map<string, DialogEntry>();
+  private overflowed: ExtensionUiRequest[] = [];
   private readonly defaultTimeoutMs: number;
   private readonly now: () => number;
 
@@ -57,18 +60,32 @@ export class ExtensionUiQueue {
   }
 
   /**
-   * 回收终态条目（answered/cancelled/expired），按插入顺序单趟淘汰至容量内。
-   * 若全为未过期 pending 则不强制丢（保证可见弹窗完整）。
+   * 回收终态条目并强制限制 Map 驻留量。
+   * pending 也不能无限保留：Host 断链或异常插件可能持续产生 ask，超过上限时过期最早请求。
    */
   private pruneFinished(): void {
     this.sweepExpired();
-    if (this.dialogs.size <= MAX_QUEUED_DIALOGS) return;
     for (const [id, entry] of this.dialogs) {
-      if (entry.status !== "pending") {
+      if (this.dialogs.size <= MAX_QUEUED_DIALOGS || entry.status === "pending") continue;
+      this.dialogs.delete(id);
+    }
+    while (this.dialogs.size > MAX_QUEUED_DIALOGS) {
+      const oldest = this.dialogs.entries().next().value as [string, DialogEntry] | undefined;
+      if (!oldest) break;
+      const [id, entry] = oldest;
+      if (entry.status === "pending") {
+        this.dialogs.set(id, { ...entry, status: "expired" });
+        this.overflowed.push(entry.request);
+      } else {
         this.dialogs.delete(id);
-        if (this.dialogs.size <= MAX_QUEUED_DIALOGS) break;
       }
     }
+  }
+
+  takeOverflowed(): ExtensionUiRequest[] {
+    const requests = this.overflowed;
+    this.overflowed = [];
+    return requests;
   }
 
   get pendingDialogs(): DialogEntry[] {
@@ -89,10 +106,11 @@ export class ExtensionUiQueue {
   /** 入队新弹窗（同一 session 的请求）
    *  只有交互类方法（select/confirm/input/editor）需要用户响应；
    *  setStatus/setTitle/notify/setWidget 等 fire-and-forget 通知不入队。 */
-  enqueue(request: ExtensionUiRequest): DialogEntry | undefined {
+  enqueue(request: ExtensionUiRequest, target?: SessionTargetIdentity): DialogEntry | undefined {
     if (!isInteractiveMethod(request.method)) return undefined;
     const entry: DialogEntry = {
       request,
+      target,
       receivedAt: this.now(),
       status: "pending",
     };
@@ -147,8 +165,19 @@ export class ExtensionUiQueue {
    * 不问状态。之前 extension_ui_cleared 只过滤投影数组、条目留在 Map 里
    *（实测 q.get("r1") 仍为 true），使 reopen 的「条目不存在 ⇒ 不恢复」判据永不生效。
    */
-  drop(requestId: string): boolean {
-    return this.dialogs.delete(requestId);
+  drop(requestId: string, target?: SessionTargetIdentity): boolean {
+    const entry = this.dialogs.get(requestId);
+    if (entry && (!target || !entry.target || sessionTargetKey(entry.target) === sessionTargetKey(target))) {
+      return this.dialogs.delete(requestId);
+    }
+    if (target) {
+      for (const [id, candidate] of this.dialogs) {
+        if (candidate.request.id === requestId && candidate.target && sessionTargetKey(candidate.target) === sessionTargetKey(target)) {
+          return this.dialogs.delete(id);
+        }
+      }
+    }
+    return false;
   }
 
   /** 清空某 session 的所有弹窗（会话关闭/切换时） */

@@ -1,5 +1,6 @@
 import { describe, expect, it, beforeEach, afterEach, vi } from "vitest";
 import {
+  buildOpenExistingSessionCommand,
   calculateBackoffDelay,
   CommandConnectionLostError,
   HostClient,
@@ -55,6 +56,44 @@ describe("HostClient", () => {
   let client: HostClient;
   let events: HostEvent[];
   let fakeWs: ReturnType<typeof createFakeWs>;
+
+  it("omits an empty sessionFile when opening a live Desktop target", () => {
+    const target = {
+      sessionId: "s1",
+      endpointId: "desktop-1",
+      normalizedCwd: "/work/app",
+      processGeneration: "generation-1",
+    };
+
+    expect(buildOpenExistingSessionCommand({
+      id: "s1",
+      sessionId: "s1",
+      endpointId: "desktop-1",
+      runtimeStatus: "idle",
+      cwd: "/work/app",
+      cwdName: "app",
+      path: "",
+      title: "app",
+      messageCount: 0,
+      updatedAt: new Date(0).toISOString(),
+      target,
+    })).toEqual({ type: "open_session", cwd: "/work/app", target });
+  });
+
+  it("keeps a non-empty sessionFile when opening a persisted session", () => {
+    expect(buildOpenExistingSessionCommand({
+      id: "s1",
+      sessionId: "s1",
+      endpointId: "history",
+      runtimeStatus: "history",
+      cwd: "/work/app",
+      cwdName: "app",
+      path: "/sessions/s1.jsonl",
+      title: "app",
+      messageCount: 0,
+      updatedAt: new Date(0).toISOString(),
+    })).toEqual({ type: "open_session", cwd: "/work/app", sessionFile: "/sessions/s1.jsonl" });
+  });
 
   beforeEach(() => {
     events = [];
@@ -116,6 +155,27 @@ describe("HostClient", () => {
     expect(result).toEqual({ closed: true });
   });
 
+  it("getSnapshot sends the exact target identity", async () => {
+    client.connect();
+    fakeWs._open();
+    const target = {
+      sessionId: "s1",
+      endpointId: "desktop-1",
+      normalizedCwd: "/work/app",
+      processGeneration: "generation-1",
+    };
+    const promise = client.getSnapshot("s1", target);
+    const sent = JSON.parse(fakeWs._sent[0]) as ClientCommand & { id: string };
+    expect(sent).toMatchObject({ type: "get_snapshot", sessionId: "s1", target });
+    fakeWs._message(JSON.stringify({
+      type: "command_result",
+      in_reply_to: sent.id,
+      ok: true,
+      result: { session: { id: "s1" }, timeline: [], nextSeq: 1 },
+    }));
+    await expect(promise).resolves.toMatchObject({ session: { id: "s1" }, timeline: [] });
+  });
+
   it("rejects command on error response", async () => {
     client.connect();
     fakeWs._open();
@@ -153,15 +213,19 @@ describe("HostClient", () => {
     expect(client.connectionState).toBe("disconnected");
   });
 
-  it("respondExtensionUi sends correct command", async () => {
+  it("respondExtensionUi forwards the exact target", async () => {
     client.connect();
     fakeWs._open();
-    const promise = client.respondExtensionUi("s1", "req-1", { id: "req-1", selected: ["A"] });
+    const target = {
+      sessionId: "s1",
+      endpointId: "desktop-1",
+      normalizedCwd: "/work/app",
+      processGeneration: "generation-1",
+    };
+    const promise = client.respondExtensionUi("s1", "req-1", { id: "req-1", selected: ["A"] }, target);
     expect(fakeWs._sent).toHaveLength(1);
-    const sent = JSON.parse(fakeWs._sent[0]) as { type: string; sessionId: string; requestId: string; id: string };
-    expect(sent.type).toBe("extension_ui_response");
-    expect(sent.sessionId).toBe("s1");
-    expect(sent.requestId).toBe("req-1");
+    const sent = JSON.parse(fakeWs._sent[0]) as { type: string; sessionId: string; requestId: string; target: unknown; id: string };
+    expect(sent).toMatchObject({ type: "extension_ui_response", sessionId: "s1", requestId: "req-1", target });
     // 模拟服务器响应，用实际发送的命令 id
     fakeWs._message(JSON.stringify({
       type: "command_result",

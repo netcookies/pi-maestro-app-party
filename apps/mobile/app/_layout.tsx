@@ -6,7 +6,7 @@ import {
   type NativeStackNavigationOptions,
 } from "@react-navigation/native-stack";
 import { withLayoutContext } from "expo-router";
-import screenTransitions, {
+import {
   type NativeStackAdapterOptions,
   withScreenTransitions,
 } from "react-native-screen-transitions";
@@ -52,33 +52,9 @@ function RootNavigator() {
         }}
       >
         <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
-        <Stack.Screen
-          name="session"
-          options={{
-            ...screenTransitions.Presets.DraggableCard({
-              gestureDirection: "horizontal",
-            }),
-            headerShown: false,
-          }}
-        />
-        <Stack.Screen
-          name="model-select"
-          options={{
-            ...screenTransitions.Presets.DraggableCard({
-              gestureDirection: "horizontal",
-            }),
-            headerShown: false,
-          }}
-        />
-        <Stack.Screen
-          name="pair-scan"
-          options={{
-            ...screenTransitions.Presets.SlideFromBottom({
-              gestureDirection: "vertical",
-            }),
-            headerShown: false,
-          }}
-        />
+        <Stack.Screen name="session" options={{ headerShown: false }} />
+        <Stack.Screen name="model-select" options={{ headerShown: false }} />
+        <Stack.Screen name="pair-scan" options={{ headerShown: false }} />
       </Stack>
     </View>
   );

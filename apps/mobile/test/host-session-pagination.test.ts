@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { HostSessionList, HostSessionSummary } from "@maestro-mobile/shared";
-import { canLoadMoreSessions, filterSessionsByVisibility, isLoadMoreResponseCurrent, isServerSessionPresentation, isTargetedResponseCurrent, mergeHostSessionPage, mergeSessionPresentation, mergeTargetedHostSessions, shouldBlockSessionListError, shouldRequestTargetedSummaries } from "../src/host-session-pagination";
+import { canLoadMoreSessions, filterSessionsByVisibility, isLoadMoreResponseCurrent, isServerSessionPresentation, isTargetedResponseCurrent, mergeHostSessionPage, mergeSessionPresentation, mergeTargetedHostSessions, patchHostSessionSummary, shouldBlockSessionListError, shouldRequestTargetedSummaries } from "../src/host-session-pagination";
 
 function session(id: string, title = id): HostSessionSummary {
   return {
@@ -42,6 +42,61 @@ describe("host session pagination", () => {
     expect(result.sessions.map((item) => item.id)).toEqual(["a", "b", "c"]);
     expect(result.sessions[1].title).toBe("new");
     expect(result).toMatchObject({ hasMore: true, nextCursor: "cursor-2", total: 4 });
+  });
+
+  it("keeps rows for sibling endpoints that share a sessionId", () => {
+    const first = { ...session("same", "one"), targetKey: "same:endpoint-1", endpointId: "endpoint-1" };
+    const second = { ...session("same", "two"), targetKey: "same:endpoint-2", endpointId: "endpoint-2" };
+    const result = mergeHostSessionPage([], page([first, second], { hasMore: false, total: 2 }), true);
+
+    expect(result.sessions).toHaveLength(2);
+    expect(result.sessions.map((item) => item.endpointId)).toEqual(["endpoint-1", "endpoint-2"]);
+  });
+
+  it("patches only the matching exact target card", () => {
+    const target = { sessionId: "same", endpointId: "endpoint-1", normalizedCwd: "/project", processGeneration: "g1" };
+    const sibling = { ...target, endpointId: "endpoint-2", processGeneration: "g2" };
+    const current = [
+      { ...session("same", "one"), target, targetKey: JSON.stringify([target.sessionId, target.endpointId, target.normalizedCwd, target.processGeneration]), runtimeStatus: "idle" as const },
+      { ...session("same", "two"), target: sibling, targetKey: JSON.stringify([sibling.sessionId, sibling.endpointId, sibling.normalizedCwd, sibling.processGeneration]), runtimeStatus: "idle" as const },
+    ];
+    const result = patchHostSessionSummary(current, target, { runtimeStatus: "running", activeSince: "2026-01-01T00:00:00.000Z", messageCount: 7 }, 3);
+    expect(result[0]).toMatchObject({ runtimeStatus: "running", messageCount: 7, activeSince: "2026-01-01T00:00:00.000Z" });
+    expect(result[1]).toBe(current[1]);
+  });
+
+  it("clears prior live summary fields at a reset boundary", () => {
+    const target = { sessionId: "reset", endpointId: "endpoint-1", normalizedCwd: "/project", processGeneration: "g1" };
+    const row = {
+      ...session("reset"),
+      target,
+      targetKey: JSON.stringify([target.sessionId, target.endpointId, target.normalizedCwd, target.processGeneration]),
+      runtimeStatus: "running" as const,
+      activeSince: "2026-01-01T00:00:00.000Z",
+      lastActivityAt: "2026-01-01T00:00:01.000Z",
+      messageCount: 7,
+      usage: { input: 10, output: 5, cacheRead: 2, cacheWrite: 1, totalTokens: 18, cost: 0.2 },
+      totalTokens: 18,
+      cost: 0.2,
+      context: { tokens: 18, contextWindow: 100, percent: 18 },
+    };
+    const [patched] = patchHostSessionSummary([row], target, { reset: true, runtimeStatus: "sleeping", activeSince: null }, 4);
+
+    expect(patched).toMatchObject({ runtimeStatus: "sleeping", summaryRevision: 4 });
+    expect(patched).not.toHaveProperty("messageCount");
+    expect(patched).not.toHaveProperty("usage");
+    expect(patched).not.toHaveProperty("totalTokens");
+    expect(patched).not.toHaveProperty("cost");
+    expect(patched).not.toHaveProperty("context");
+    expect(patched.activeSince).toBeUndefined();
+    expect(patched.lastActivityAt).toBeUndefined();
+  });
+
+  it("does not let an exact-target event patch a legacy row by sessionId fallback", () => {
+    const target = { sessionId: "same", endpointId: "endpoint-1", normalizedCwd: "/project", processGeneration: "g1" };
+    const legacy = { ...session("same", "legacy"), endpointId: "history", runtimeStatus: "history" as const };
+    const result = patchHostSessionSummary([legacy], target, { runtimeStatus: "sleeping" }, 3);
+    expect(result[0]).toBe(legacy);
   });
 
   it("resets the prior result for refresh and search", () => {

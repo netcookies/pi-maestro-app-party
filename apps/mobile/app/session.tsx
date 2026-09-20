@@ -12,10 +12,11 @@ import { LineIcon } from "../src/components/LineIcon";
 import { useI18n } from "../src/i18n";
 import { hapticImpactLight, hapticImpactMedium, hapticNotificationSuccess } from "../src/utils/haptics";
 import { SafeAreaView, useSafeAreaInsets } from "react-native-safe-area-context";
-import type { TimelineItem } from "@maestro-mobile/shared";
+import { sessionTargetKey, type TimelineItem } from "@maestro-mobile/shared";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { ExtensionUiDialog } from "../src/components/ExtensionUiDialog";
-import { AskWizardDialog, type AskAnswer, type QuestionSpec } from "../src/components/AskWizardDialog";
+import { AskWizardDialog, type AskAnswer } from "../src/components/AskWizardDialog";
+import { selectActiveAskWizard, buildAskWizardPayload } from "../src/ask-wizard";
 import { setActiveViewingSession } from "../src/notifications";
 import { InlineImage } from "../src/components/InlineImage";
 import { CollapsibleTool } from "../src/components/CollapsibleTool";
@@ -53,13 +54,13 @@ function modelNameOf(value: unknown): string | undefined {
 }
 
 export default function SessionScreen() {
-  const { id } = useLocalSearchParams<{ id: string }>();
+  const { id, targetKey } = useLocalSearchParams<{ id: string; targetKey?: string }>();
   const router = useRouter();
   const { state, sendPrompt, sendAbort, answerDialog, cancelDialog, loadSessionHistory, loadMoreHistory, searchHistory, listModels, setModel, setThinking, listSkills, compactSession, isConnected, connectionState, lastError, clearError: dispatchLocalError } = useHost();
   const { theme } = useTheme();
   const { t } = useI18n();
   const cfg = getConfig();
-  const session = state.sessions.get(id ?? "");
+  const session = (targetKey ? state.targetedSessions.get(targetKey) : undefined) ?? state.sessions.get(id ?? "");
   const insets = useSafeAreaInsets();
 
   // 统一的 FAB（回到底部向下箭头）显示状态判定逻辑
@@ -77,7 +78,6 @@ export default function SessionScreen() {
   }, [cfg.stickBottomTolerance]);
 
   // 优化项 1 落地：FloatingToolBar 状态回显与操作
-  const [thinkLevel, setThinkLevel] = useState("xhigh");
   const [planMode, setPlanMode] = useState("YOLO");
   const [actionSheetType, setActionSheetType] = useState<"think" | "plan" | "compact_confirm" | null>(null);
 
@@ -86,12 +86,12 @@ export default function SessionScreen() {
     void loadConfig();
     if (id) {
       setActiveViewingSession(id);
-      void loadSessionHistory(id).catch(() => {});
+      void loadSessionHistory(id, targetKey).catch(() => {});
     }
     return () => {
       setActiveViewingSession(null);
     };
-  }, [id, loadSessionHistory]);
+  }, [id, targetKey, loadSessionHistory]);
 
   // 技能请求必须跟随协议连接状态重试；冷启动时的一次失败不能永久留下空抽屉。
   useEffect(() => {
@@ -155,6 +155,8 @@ export default function SessionScreen() {
     }
   }, []);
 
+  const thinkLevel = session?.thinkingLevel ?? "xhigh";
+
   // 确保 session.model 发生变更或由子页面更新后同步回显当前模型 Badge
   useEffect(() => {
     const curName = modelIdOf(session?.model);
@@ -196,7 +198,7 @@ export default function SessionScreen() {
   };
 
   const styles = useMemo(() => makeStyles(theme), [theme]);
-  const timeline = state.timelines.get(id ?? "") ?? [];
+  const timeline = (targetKey ? state.targetedTimelines.get(targetKey) : undefined) ?? state.timelines.get(id ?? "") ?? [];
   const [dismissedAskIds, setDismissedAskIds] = useState<Set<string>>(new Set());
 
   // 恢复已忽略或已完成的 ask 交互 ID，重启 app 后不重复弹出
@@ -213,42 +215,31 @@ export default function SessionScreen() {
     });
   }, []);
 
-  const markAskDismissed = (callId: string) => {
+  const markAsksDismissed = (callIds: readonly string[]) => {
     setDismissedAskIds((prev) => {
-      const next = new Set(prev).add(callId);
+      const next = new Set(prev);
+      for (const callId of callIds) next.add(callId);
       void AsyncStorage.setItem("maestro-mobile.dismissed-asks", JSON.stringify([...next])).catch(() => {});
       return next;
     });
   };
 
-  // 识别 timeline 中正在运行的多题问答向导（ask-user-question）
-  const activeAskWizard = useMemo(() => {
-    for (let i = timeline.length - 1; i >= 0; i--) {
-      const item = timeline[i];
-      if (item.kind === "tool" && item.toolName && (item.toolName.includes("ask") || item.toolName.includes("question"))) {
-        const callId = item.toolCallId || item.id;
-        if (dismissedAskIds.has(callId)) continue;
-        if (item.status === "completed") continue;
+  const isCurrentDialog = useCallback((entry: { request: { sessionId: string }; target?: Parameters<typeof sessionTargetKey>[0]; status: string }) =>
+    entry.request.sessionId === id && entry.status === "pending"
+      && (!targetKey || !entry.target || sessionTargetKey(entry.target) === targetKey), [id, targetKey]);
 
-        const args = item.toolArgs as Record<string, unknown> | undefined;
-        const rawQuestions = Array.isArray(args?.questions) ? (args.questions as QuestionSpec[]) : undefined;
-        if (rawQuestions && rawQuestions.length > 0) {
-          return {
-            callId,
-            questions: rawQuestions,
-          };
-        }
-      }
-    }
-    return null;
-  }, [timeline, dismissedAskIds]);
+  const directDialog = useMemo(() => state.dialogs.find(isCurrentDialog), [state.dialogs, isCurrentDialog]);
+
+  // Prefer the authoritative extension-ui request when available. A readerless
+  // Desktop session has no timeline row yet, while a live session may project the
+  // same ask through both sources; the helper pairs both IDs to suppress duplicates.
+  const activeAskWizard = useMemo(() =>
+    selectActiveAskWizard(timeline, directDialog?.request, dismissedAskIds),
+  [timeline, directDialog, dismissedAskIds]);
 
   // 待处理单项交互弹窗：优先本地直通 dialog
   const activeAskDialog = useMemo(() => {
     if (activeAskWizard) return null; // 存在问答向导时优先展示向导
-
-    // 1. 本地直通 dialog
-    const directDialog = state.dialogs.find((d) => d.request.sessionId === id && d.status === "pending");
     if (directDialog) {
       return {
         request: directDialog.request,
@@ -257,7 +248,7 @@ export default function SessionScreen() {
     }
 
     return null;
-  }, [activeAskWizard, state.dialogs, id]);
+  }, [activeAskWizard, directDialog]);
 
   // T7：composer/abort/edit 能力完全来自服务端 presentation.control（不再由 PID/name/window 推断）
   const control = session?.presentation?.control;
@@ -270,29 +261,19 @@ export default function SessionScreen() {
   // 若同一会话存在 pending 的 extension-ui 直通弹窗，则把答案打包成 value 提交；
   // 否则仅记录已忽略状态（只读会话无法回传答案）。
   const handleAnswerWizard = async (answers: AskAnswer[]) => {
-    if (!activeAskWizard || !id) return;
-    const callId = activeAskWizard.callId;
-    markAskDismissed(callId);
+    if (!activeAskWizard) return;
+    markAsksDismissed(activeAskWizard.dismissIds);
 
-    const answerSummaries = answers.map((a, i) => {
-      const chosen = a.selected.join("、");
-      const extra = a.text ? ` (${a.text})` : "";
-      return `${i + 1}. ${a.question} → ${chosen || "无"}${extra}`;
-    });
-    const payload = JSON.stringify({ answers, summary: answerSummaries.join("\n") });
-
-    const directDialog = state.dialogs.find((d) => d.request.sessionId === id && d.status === "pending");
-    if (directDialog) {
-      answerDialog(directDialog.request.id, payload);
+    const payload = buildAskWizardPayload(answers);
+    if (activeAskWizard.requestId) {
+      answerDialog(activeAskWizard.requestId, payload);
     }
   };
 
   const handleCancelWizard = () => {
     if (!activeAskWizard) return;
-    const callId = activeAskWizard.callId;
-    markAskDismissed(callId);
-    const directDialog = state.dialogs.find((d) => d.request.sessionId === id && d.status === "pending");
-    if (directDialog) cancelDialog(directDialog.request.id);
+    markAsksDismissed(activeAskWizard.dismissIds);
+    if (activeAskWizard.requestId) cancelDialog(activeAskWizard.requestId);
   };
 
   const handleAnswerAsk = async (value: string | string[]) => {
@@ -918,8 +899,10 @@ export default function SessionScreen() {
                     { borderColor: thinkLevel === lvl ? theme.accent : theme.border, backgroundColor: theme.inputBg },
                   ]}
                   onPress={async () => {
-                    setThinkLevel(lvl);
-                    if (id) await setThinking(id, lvl);
+                    if (!id) return;
+                    const result = await setThinking(id, lvl);
+                    if (!result.ok) return;
+                    // 不把请求值写入显示状态；等待 session_updated 的 Pi 实际值（包括 clamp）。
                     setActionSheetType(null);
                   }}
                 >

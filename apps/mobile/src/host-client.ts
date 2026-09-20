@@ -10,9 +10,11 @@
 import type {
   ClientCommand,
   HostEvent,
+  HostSessionSummary,
   SessionSnapshot,
   ExtensionUiResponse,
   ProtocolCapability,
+  SessionTargetIdentity,
 } from "@maestro-mobile/shared";
 import { isCompatibleReleaseVersion, MOBILE_PROTOCOL_VERSION, MOBILE_RELEASE_VERSION } from "@maestro-mobile/shared";
 
@@ -57,6 +59,15 @@ export interface WebSocketLike {
 }
 
 export const WS_OPEN = 1;
+
+export function buildOpenExistingSessionCommand(session: HostSessionSummary): ClientCommand {
+  return {
+    type: "open_session",
+    cwd: session.cwd,
+    ...(session.path ? { sessionFile: session.path } : {}),
+    ...(session.target ? { target: session.target } : {}),
+  };
+}
 
 /**
  * 计算带 Jitter 的指数退避时长（纯函数）。
@@ -216,18 +227,19 @@ export class HostClient {
   }
 
   /** 发送扩展 UI 响应 */
-  respondExtensionUi(sessionId: string, requestId: string, response: ExtensionUiResponse): Promise<unknown> {
+  respondExtensionUi(sessionId: string, requestId: string, response: ExtensionUiResponse, target?: SessionTargetIdentity): Promise<unknown> {
     return this.sendCommand({
       type: "extension_ui_response",
       sessionId,
       requestId,
       response,
+      ...(target ? { target } : {}),
     });
   }
 
   /** 获取快照 */
-  getSnapshot(sessionId: string): Promise<SessionSnapshot> {
-    return this.sendCommand({ type: "get_snapshot", sessionId }) as Promise<SessionSnapshot>;
+  getSnapshot(sessionId: string, target?: SessionTargetIdentity): Promise<SessionSnapshot> {
+    return this.sendCommand({ type: "get_snapshot", sessionId, ...(target ? { target } : {}) }) as Promise<SessionSnapshot>;
   }
 
   private openSocket(): void {

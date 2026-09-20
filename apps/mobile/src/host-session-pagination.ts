@@ -1,4 +1,4 @@
-import type { HostSessionList, HostSessionSummary, SessionPresentation, SessionVisibility } from "@maestro-mobile/shared";
+import { sessionTargetKey, type HostSessionList, type HostSessionSummary, type SessionPresentation, type SessionSummaryPatch, type SessionTargetIdentity, type SessionVisibility } from "@maestro-mobile/shared";
 
 export function isServerSessionPresentation(value: unknown): value is SessionPresentation {
   if (!value || typeof value !== "object" || Array.isArray(value)) return false;
@@ -20,6 +20,11 @@ export function filterSessionsByVisibility(
   visibility: SessionVisibility,
 ): HostSessionSummary[] {
   return sessions.filter((session) => session.presentation?.visibility === visibility);
+}
+
+/** Current shows a known runtime in the Sessions list, including readonly sleeping telemetry. */
+export function isCurrentSessionSummary(session: HostSessionSummary): boolean {
+  return session.runtimeStatus !== "history" && session.presentation?.visibility === "session_list";
 }
 
 export interface HostSessionPageState {
@@ -94,12 +99,13 @@ export function mergeHostSessionPage(
   reset: boolean,
 ): HostSessionPageState {
   const merged = reset ? [] : [...current];
-  const indexes = new Map(merged.map((session, index) => [session.id, index]));
+  const indexes = new Map(merged.map((session, index) => [session.targetKey ?? session.id, index]));
 
   for (const session of response.sessions) {
-    const index = indexes.get(session.id);
+    const key = session.targetKey ?? session.id;
+    const index = indexes.get(key);
     if (index === undefined) {
-      indexes.set(session.id, merged.length);
+      indexes.set(key, merged.length);
       merged.push(session);
     } else {
       merged[index] = session;
@@ -119,6 +125,38 @@ export function mergeHostSessionPage(
     total: paginated ? response.total : undefined,
     revision: merged.reduce((max, session) => Math.max(max, session.presentation?.revision ?? 0), 0) || undefined,
   };
+}
+
+export function patchHostSessionSummary(
+  current: readonly HostSessionSummary[],
+  target: SessionTargetIdentity,
+  patch: SessionSummaryPatch,
+  revision: number,
+): HostSessionSummary[] {
+  const key = sessionTargetKey(target);
+  return current.map((session) => {
+    // Event targets are exact identities. A legacy row without target metadata cannot
+    // safely accept a patch from a different endpoint sharing the same sessionId.
+    if (session.targetKey !== key) return session;
+    if ((session.summaryRevision ?? 0) >= revision) return session;
+    const usage = patch.usage;
+    // Reset is a boundary for the target's live projection. Remove fields that may
+    // have been merged by an earlier runtime before applying any values in this patch.
+    const base = patch.reset
+      ? (({ activeSince: _activeSince, lastActivityAt: _lastActivityAt, messageCount: _messageCount,
+          usage: _usage, totalTokens: _totalTokens, cost: _cost, context: _context, ...withoutStale } = session) => withoutStale)(session)
+      : session;
+    return {
+      ...base,
+      ...(patch.runtimeStatus !== undefined ? { runtimeStatus: patch.runtimeStatus } : {}),
+      ...(patch.activeSince !== undefined ? (patch.activeSince === null ? { activeSince: undefined } : { activeSince: patch.activeSince }) : {}),
+      ...(patch.lastActivityAt !== undefined ? { lastActivityAt: patch.lastActivityAt, updatedAt: patch.lastActivityAt } : {}),
+      ...(patch.messageCount !== undefined ? { messageCount: patch.messageCount } : {}),
+      ...(usage !== undefined ? { usage, totalTokens: usage.totalTokens, cost: usage.cost } : {}),
+      ...(patch.context !== undefined ? { context: patch.context } : {}),
+      summaryRevision: revision,
+    } as HostSessionSummary;
+  });
 }
 
 export function mergeTargetedHostSessions(

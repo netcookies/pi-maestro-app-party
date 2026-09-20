@@ -3,6 +3,7 @@ import {
   createInitialState,
   reduceEvent,
   createAppActions,
+  MAX_SESSION_SUMMARY_PATCHES,
   type AppState,
 } from "../src/app-state.js";
 import { ExtensionUiQueue } from "../src/extension-ui-queue.js";
@@ -58,6 +59,167 @@ describe("AppState reducer", () => {
       type: "session_updated", session, seq: 1,
     });
     expect(state.sessions.get("s1")?.title).toBe("Test");
+  });
+
+  it("bounds retained exact-target summary patches", () => {
+    let state = createInitialState();
+    for (let index = 0; index < MAX_SESSION_SUMMARY_PATCHES + 4; index += 1) {
+      const target = { sessionId: `s-${index}`, endpointId: "desktop", normalizedCwd: "/work", processGeneration: `g-${index}` };
+      state = reduceEvent(state, {
+        type: "session_summary_updated",
+        target,
+        patch: { runtimeStatus: "idle" },
+        revision: index + 1,
+        seq: index + 1,
+      });
+    }
+    expect(state.sessionSummaryPatches.size).toBe(MAX_SESSION_SUMMARY_PATCHES);
+  });
+
+  it("starts a fresh summary patch epoch on reset", () => {
+    const target = { sessionId: "reset-session", endpointId: "desktop", normalizedCwd: "/work", processGeneration: "g1" };
+    let state = reduceEvent(createInitialState(), {
+      type: "session_summary_updated",
+      target,
+      patch: {
+        runtimeStatus: "running",
+        messageCount: 9,
+        usage: { input: 10, output: 5, cacheRead: 2, cacheWrite: 1, totalTokens: 18, cost: 0.2 },
+        context: { tokens: 18, contextWindow: 100, percent: 18 },
+      },
+      revision: 1,
+      seq: 1,
+    });
+    state = reduceEvent(state, {
+      type: "session_summary_updated",
+      target,
+      patch: { reset: true, runtimeStatus: "sleeping", activeSince: null },
+      revision: 2,
+      seq: 2,
+    });
+
+    expect(state.sessionSummaryPatches.get(JSON.stringify(["reset-session", "desktop", "/work", "g1"]))?.patch).toEqual({
+      reset: true,
+      runtimeStatus: "sleeping",
+      activeSince: null,
+    });
+  });
+
+  it("keeps targeted timelines and event sequences separate for sibling endpoints", () => {
+    const first = { sessionId: "same", endpointId: "desktop-1", normalizedCwd: "/work", processGeneration: "g1" };
+    const second = { ...first, endpointId: "desktop-2", processGeneration: "g2" };
+    let state = createInitialState();
+    state = reduceEvent(state, { type: "timeline_item", sessionId: "same", target: first, item: { id: "item", kind: "assistant", text: "first", createdAt: "" }, seq: 2 });
+    state = reduceEvent(state, { type: "timeline_item", sessionId: "same", target: second, item: { id: "item", kind: "assistant", text: "second", createdAt: "" }, seq: 1 });
+    state = reduceEvent(state, { type: "timeline_delta", sessionId: "same", target: first, itemId: "item", delta: " stale", seq: 1 });
+    expect([...state.targetedTimelines.values()].map((items) => items[0]?.text).sort()).toEqual(["first", "second"]);
+  });
+
+  it("rejects readonly snapshots after a newer target event", () => {
+    const target = { sessionId: "same", endpointId: "desktop-1", normalizedCwd: "/work", processGeneration: "g1" };
+    const base: SessionState = { id: "same", cwd: "/work", title: "base", runState: "idle", messageCount: 0, pendingMessageCount: 0, updatedAt: "" };
+    let state = reduceEvent(createInitialState(), { type: "session_updated", session: { ...base, title: "new" }, target, seq: 3 });
+    state = reduceEvent(state, { type: "__snapshot_load", session: { ...base, title: "old" }, items: [], seq: 0, target });
+    expect(state.targetedSessions.get(JSON.stringify(["same", "desktop-1", "/work", "g1"]))?.title).toBe("new");
+  });
+
+  it("keeps targeted session updates separate for sibling endpoints", () => {
+    const first = { sessionId: "same", endpointId: "desktop-1", normalizedCwd: "/work", processGeneration: "g1" };
+    const second = { ...first, endpointId: "desktop-2", processGeneration: "g2" };
+    const base: SessionState = { id: "same", cwd: "/work", title: "first", runState: "idle", messageCount: 0, pendingMessageCount: 0, updatedAt: "" };
+    let state = reduceEvent(createInitialState(), { type: "__snapshot_load", session: base, items: [], seq: 0, target: first });
+    state = reduceEvent(state, { type: "session_updated", session: { ...base, title: "second" }, target: second, seq: 1 });
+    expect(state.sessions.get("same")?.title).toBe("first");
+    expect(state.targetedSessions.get(JSON.stringify(["same", "desktop-2", "/work", "g2"]))?.title).toBe("second");
+  });
+
+  it("uses the latest server thinkingLevel for local and reconnect snapshots", () => {
+    const base: SessionState = {
+      id: "thinking-session", cwd: "/work", title: "Thinking", runState: "idle",
+      messageCount: 0, pendingMessageCount: 0, updatedAt: "2026-01-01T00:00:00.000Z", thinkingLevel: "low",
+    };
+    let state = reduceEvent(createInitialState(), { type: "session_updated", session: base, seq: 1 });
+    expect(state.sessions.get(base.id)?.thinkingLevel).toBe("low");
+
+    state = reduceEvent(state, {
+      type: "session_updated",
+      session: { ...base, thinkingLevel: "high", updatedAt: "2026-01-01T00:00:01.000Z" },
+      seq: 2,
+    });
+    expect(state.sessions.get(base.id)?.thinkingLevel).toBe("high");
+
+    state = reduceEvent(state, {
+      type: "session_updated",
+      session: { ...base, thinkingLevel: "minimal", updatedAt: "2026-01-01T00:00:02.000Z" },
+      seq: 3,
+    });
+    expect(state.sessions.get(base.id)?.thinkingLevel).toBe("minimal");
+  });
+
+  it("patches exact-target summary events without merging sibling endpoints", () => {
+    const first = { sessionId: "same", endpointId: "desktop-1", normalizedCwd: "/work/app", processGeneration: "g1" };
+    const second = { ...first, endpointId: "desktop-2", processGeneration: "g2" };
+    let state = reduceEvent(createInitialState(), {
+      type: "session_summary_updated", target: first,
+      patch: { runtimeStatus: "running", activeSince: "2026-01-01T00:00:00.000Z", lastActivityAt: "2026-01-01T00:00:01.000Z", messageCount: 2 },
+      revision: 4, seq: 1,
+    });
+    state = reduceEvent(state, {
+      type: "session_summary_updated", target: second,
+      patch: { runtimeStatus: "idle", lastActivityAt: "2026-01-01T00:00:02.000Z" },
+      revision: 5, seq: 2,
+    });
+    expect(state.sessionSummaryPatches.size).toBe(2);
+    expect([...state.sessionSummaryPatches.values()][0].patch.runtimeStatus).toBe("running");
+    expect([...state.sessionSummaryPatches.values()][1].patch.runtimeStatus).toBe("idle");
+    expect(state.revision).toBe(5);
+    state = reduceEvent(state, {
+      type: "session_summary_updated", target: first,
+      patch: { messageCount: 3 }, revision: 6, seq: 3,
+    });
+    expect(state.sessionSummaryPatches.get(JSON.stringify(["same", "desktop-1", "/work/app", "g1"]))?.patch).toMatchObject({ runtimeStatus: "running", messageCount: 3 });
+    state = reduceEvent(state, {
+      type: "session_summary_updated", target: first,
+      patch: { runtimeStatus: "idle" }, revision: 3, seq: 4,
+    });
+    expect(state.sessionSummaryPatches.get(JSON.stringify(["same", "desktop-1", "/work/app", "g1"]))?.patch.runtimeStatus).toBe("running");
+  });
+
+  it("orders snapshots only within their runner-local namespace", () => {
+    const target = { sessionId: "snapshot-session", endpointId: "host-1", normalizedCwd: "/work", processGeneration: "g1" };
+    const unrelated = { sessionId: "other", endpointId: "host-2", normalizedCwd: "/other", processGeneration: "g2" };
+    const base = { id: "snapshot-session", cwd: "/work", title: "old", runState: "idle" as const, messageCount: 0, pendingMessageCount: 0, updatedAt: "", thinkingLevel: "low" };
+
+    let state = reduceEvent(createInitialState(), {
+      type: "session_updated",
+      session: { ...base, id: "other", title: "unrelated" },
+      target: unrelated,
+      seq: 90,
+    });
+    state = reduceEvent(state, { type: "__snapshot_load", session: base, items: [], seq: 2, wireSeq: 91, target });
+    expect(state.targetedSessions.get(JSON.stringify(["snapshot-session", "host-1", "/work", "g1"]))?.title).toBe("old");
+    expect(state.snapshotNextSeq.get(`target:${JSON.stringify(["snapshot-session", "host-1", "/work", "g1"])}`)).toBe(2);
+
+    state = reduceEvent(state, { type: "__snapshot_load", session: { ...base, title: "latest" }, items: [], seq: 3, wireSeq: 91, target });
+    state = reduceEvent(state, { type: "__snapshot_load", session: { ...base, title: "stale" }, items: [], seq: 2, wireSeq: 91, target });
+    expect(state.targetedSessions.get(JSON.stringify(["snapshot-session", "host-1", "/work", "g1"]))?.title).toBe("latest");
+
+    state = reduceEvent(state, { type: "__snapshot_load", session: { ...base, title: "presentation-newer" }, items: [], seq: 3, wireSeq: 92, target });
+    expect(state.targetedSessions.get(JSON.stringify(["snapshot-session", "host-1", "/work", "g1"]))?.title).toBe("presentation-newer");
+
+    state = reduceEvent(state, { type: "session_updated", session: { ...base, title: "wire-newer" }, target, seq: 92 });
+    state = reduceEvent(state, { type: "__snapshot_load", session: { ...base, title: "wire-stale" }, items: [], seq: 4, wireSeq: 92, target });
+    expect(state.targetedSessions.get(JSON.stringify(["snapshot-session", "host-1", "/work", "g1"]))?.title).toBe("wire-newer");
+    expect(state.targetEventSeq.get(JSON.stringify(["other", "host-2", "/other", "g2"]))).toBe(90);
+  });
+
+  it("does not advance the global wire watermark from a runner-local snapshot", () => {
+    const session = { id: "snapshot-session", cwd: "/work", title: "snapshot", runState: "idle" as const, messageCount: 0, pendingMessageCount: 0, updatedAt: "" };
+    let state = reduceEvent(createInitialState(), { type: "host_status", status: "connected", seq: 7 });
+    state = reduceEvent(state, { type: "__snapshot_load", session, items: [], seq: 100, wireSeq: 8 });
+    expect(state.sessions.get(session.id)?.title).toBe("snapshot");
+    expect(state.eventSeq).toBe(7);
+    expect(state.snapshotNextSeq.get(`session:${session.id}`)).toBe(100);
   });
 
   it("keeps app revision monotonic and rejects stale server presentation updates", () => {

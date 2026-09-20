@@ -29,11 +29,12 @@ import {
   updateFilterState,
   type FilterState,
 } from "../../src/filter-state";
-import { canLoadMoreSessions, mergeHostSessionPage } from "../../src/host-session-pagination";
+import { canLoadMoreSessions, isCurrentSessionSummary, mergeHostSessionPage, patchHostSessionSummary } from "../../src/host-session-pagination";
+import { routeForOpenedSession } from "../../src/session-navigation";
 
 const PAGE_SIZE = 30;
 
-type SessionView = "active" | "all";
+type SessionView = "current" | "all";
 
 type Row = { type: "group"; key: string; cwd: string; count: number } | { type: "session"; key: string; session: HostSessionSummary };
 
@@ -42,12 +43,12 @@ export default function HostSessionsScreen() {
   const { theme } = useTheme();
   const { t } = useI18n();
   const styles = useMemo(() => makeStyles(theme), [theme]);
-  const { listHostSessions, openExistingSession, loadSessionHistory, isConnected, connectionState, hostUrl } = useHost();
+  const { state, listHostSessions, openExistingSession, loadSessionHistory, isConnected, connectionState, hostUrl } = useHost();
   const [filterState, setFilterState] = useState<FilterState>(() => createFilterState());
   const filterStateRef = useRef(filterState);
   const [queryInput, setQueryInput] = useState("");
   const [searchOpen, setSearchOpen] = useState(false);
-  const [sessionView, setSessionView] = useState<SessionView>("active");
+  const [sessionView, setSessionView] = useState<SessionView>("current");
   const [filterOpen, setFilterOpen] = useState(false);
   // 草稿多选：底部抽屉中勾选，点应用才提交（避免每次勾选都触发一次请求）
   const [cwdDraft, setCwdDraft] = useState<string[]>([]);
@@ -65,6 +66,19 @@ export default function HostSessionsScreen() {
   const lastRequestedCursorRef = useRef<string | undefined>(undefined);
   const [error, setError] = useState<string | null>(null);
   const [opening, setOpening] = useState<string | null>(null);
+
+  // Host summary 事件只 patch 当前已加载行；不重拉列表，也不扫描历史会话。
+  useEffect(() => {
+    if (state.sessionSummaryPatches.size === 0 || sessionsRef.current.length === 0) return;
+    let next = sessionsRef.current;
+    for (const update of state.sessionSummaryPatches.values()) {
+      const patched = patchHostSessionSummary(next, update.target, update.patch, update.revision);
+      if (patched.some((session, index) => session !== next[index])) next = patched;
+    }
+    if (next === sessionsRef.current) return;
+    sessionsRef.current = next;
+    setSessions(next);
+  }, [state.sessionSummaryPatches, sessions]);
 
   const setFilter = useCallback((patch: Partial<FilterState["filter"]>) => {
     const next = updateFilterState(filterStateRef.current, patch);
@@ -163,13 +177,14 @@ export default function HostSessionsScreen() {
 
   const handleOpen = useCallback(async (session: HostSessionSummary) => {
     if (opening) return;
-    setOpening(session.id);
+    setOpening(session.targetKey ?? session.id);
+    setError(null);
     try {
-      const sessionId = await openExistingSession(session.path, session.cwd);
-      void loadSessionHistory(sessionId).catch(() => {});
-      router.push({ pathname: "/session", params: { id: sessionId } });
-    } catch {
-      router.push({ pathname: "/session", params: { id: session.id } });
+      const opened = await openExistingSession(session);
+      await loadSessionHistory(opened.sessionId, opened.targetKey);
+      router.push(routeForOpenedSession(opened));
+    } catch (error) {
+      setError(error instanceof Error ? error.message : "打开会话失败");
     } finally {
       setOpening(null);
     }
@@ -178,14 +193,14 @@ export default function HostSessionsScreen() {
   const cwdOptions = useMemo(() => Array.from(new Set(sessions.map((session) => session.cwd))).sort(), [sessions]);
   const scopedSessions = useMemo(() => {
     const filtered = filterSessionSummaries(sessions, filterState.filter);
-    return sessionView === "all" ? filtered : filtered.filter((session) => isSessionActive(session));
+    return sessionView === "all" ? filtered : filtered.filter(isCurrentSessionSummary);
   }, [filterState.filter, sessionView, sessions]);
   const rows = useMemo<Row[]>(() => {
     const groups = new Map<string, HostSessionSummary[]>();
     for (const session of scopedSessions) groups.set(session.cwd, [...(groups.get(session.cwd) ?? []), session]);
     return Array.from(groups.entries()).flatMap(([cwd, group]) => [
       { type: "group", key: `g:${cwd}`, cwd, count: group.length } as Row,
-      ...group.map((session) => ({ type: "session", key: `s:${session.id}`, session } as Row)),
+      ...group.map((session) => ({ type: "session", key: `s:${session.targetKey ?? session.id}`, session } as Row)),
     ]);
   }, [scopedSessions]);
 
@@ -219,11 +234,16 @@ export default function HostSessionsScreen() {
         </SafeAreaView>
       </View>
 
+      {error && sessions.length > 0 ? (
+        <TouchableOpacity style={styles.errorPanel} onPress={() => setError(null)} accessibilityRole="button">
+          <Text style={styles.errorText}>{error}</Text>
+        </TouchableOpacity>
+      ) : null}
       {error && sessions.length === 0 ? <View style={styles.errorPanel}><Text style={styles.errorText}>{error}</Text><TouchableOpacity onPress={() => void loadFirstPage()}><Text style={[styles.retryText, { color: theme.accent }]}>{t.retry}</Text></TouchableOpacity></View> : loading && sessions.length === 0 ? <View style={styles.center}><ActivityIndicator color={theme.accent} /><Text style={styles.centerText}>{t.loadingSessions}</Text></View> : (
         <FlatList
           data={rows}
           keyExtractor={(row) => row.key}
-          renderItem={({ item }) => item.type === "group" ? <View style={styles.group}><Text style={styles.groupTitle}>{cwdName(item.cwd)} · {item.count}</Text><Text style={styles.groupPath} numberOfLines={1}>{item.cwd}</Text></View> : <SessionCard session={item.session} opening={opening === item.session.id} theme={theme} styles={styles} t={t} onPress={() => void handleOpen(item.session)} />}
+          renderItem={({ item }) => item.type === "group" ? <View style={styles.group}><Text style={styles.groupTitle}>{cwdName(item.cwd)} · {item.count}</Text><Text style={styles.groupPath} numberOfLines={1}>{item.cwd}</Text></View> : <SessionCard session={item.session} opening={opening === (item.session.targetKey ?? item.session.id)} theme={theme} styles={styles} t={t} onPress={() => void handleOpen(item.session)} />}
           contentContainerStyle={styles.list}
           keyboardShouldPersistTaps="handled"
           refreshing={refreshing}
@@ -238,15 +258,15 @@ export default function HostSessionsScreen() {
       <View style={styles.floatingBarContainer} pointerEvents="box-none">
           <View style={[styles.floatingPill, { backgroundColor: theme.cardBg, borderColor: theme.border }]}>
             <TouchableOpacity
-              style={[styles.floatingTabBtn, sessionView === "active" && { backgroundColor: theme.accent }]}
-              onPress={() => setSessionView("active")}
+              style={[styles.floatingTabBtn, sessionView === "current" && { backgroundColor: theme.accent }]}
+              onPress={() => setSessionView("current")}
               accessibilityRole="button"
-              accessibilityLabel={t.filterActive}
-              accessibilityState={{ selected: sessionView === "active" }}
+              accessibilityLabel={t.filterCurrent}
+              accessibilityState={{ selected: sessionView === "current" }}
             >
-              <View style={[styles.greenDot, sessionView === "active" && { backgroundColor: "#fff" }]} />
-              <Text style={[styles.floatingTabText, { color: sessionView === "active" ? "#fff" : theme.muted }]}>
-                {t.filterActive}
+              <View style={[styles.greenDot, sessionView === "current" && { backgroundColor: "#fff" }]} />
+              <Text style={[styles.floatingTabText, { color: sessionView === "current" ? "#fff" : theme.muted }]}>
+                {t.filterCurrent}
               </Text>
             </TouchableOpacity>
             <TouchableOpacity
@@ -322,26 +342,23 @@ export default function HostSessionsScreen() {
   );
 }
 
-function isSessionActive(session: HostSessionSummary): boolean {
-  return session.runtimeStatus === "running" || session.runtimeStatus === "idle" || session.runtimeStatus === "sleeping";
-}
-
 function SessionCard({ session, opening, theme, styles, t, onPress }: { session: HostSessionSummary; opening: boolean; theme: ReturnType<typeof useTheme>["theme"]; styles: ReturnType<typeof makeStyles>; t: ReturnType<typeof useI18n>["t"]; onPress: () => void }) {
-  const control = session.presentation?.control;
   const status = session.runtimeStatus;
   const active = status !== "history";
   const context = session.context;
   const title = session.name || session.cwdName || session.title || session.id;
   const statusColor = status === "running" ? theme.success : status === "idle" ? "#0A84FF" : status === "sleeping" ? theme.warning : theme.dim;
-  return <SpringCard style={[styles.sessionCard, active && { borderColor: theme.accent }]} onPress={onPress} accessibilityRole="button" accessibilityLabel={title}>
+  const statusLabel = status === "running" ? t.running : status === "idle" ? t.statusIdle : status === "sleeping" ? t.statusSleeping : t.statusHistory;
+  const cacheDenominator = session.usage ? session.usage.input + session.usage.cacheRead : 0;
+  const cacheHit = cacheDenominator > 0 && session.usage ? `${Math.round((session.usage.cacheRead / cacheDenominator) * 100)}%` : "--";
+  return <SpringCard style={[styles.sessionCard, active && { borderColor: theme.accent }]} onPress={onPress} accessibilityRole="button" accessibilityLabel={`${title} · ${statusLabel}`}>
     <View style={styles.sessionHeader}><View style={styles.sessionHeaderLeft}><PulsingDot color={statusColor} active={active} size={8} /><Text style={styles.sessionTitle} numberOfLines={1}>{title}</Text></View><View style={[styles.badge, { borderColor: statusColor }]}><Text style={[styles.badgeText, { color: statusColor }]}>#{session.id.slice(0, 8)}</Text></View>{opening && <ActivityIndicator size="small" color={theme.accent} />}</View>
     <View style={styles.pathRow}><LineIcon name="folder" size={13} color={theme.muted} /><Text style={styles.pathText} numberOfLines={1}>{session.cwd || session.path}</Text></View>
-    <View style={styles.stats}><Stat label={t.contextLabel} value={context?.percent != null ? `${Math.round(context.percent)}%` : "--"} theme={theme} /><Stat label={t.tokensLabel} value={session.totalTokens ? `${Math.round(session.totalTokens / 1000)}k` : "--"} theme={theme} /><Stat label={t.messagesAndTime} value={`${session.messageCount} · ${formatRelativeTime(session.updatedAt, t)}`} theme={theme} /></View>
-    <View style={styles.controlRow}><Text style={styles.controlText}>{control?.mode ?? "readonly"}</Text><Text style={styles.controlText}>{control?.canPrompt ? t.canPrompt : t.readOnly}</Text></View>
+    <View style={styles.stats}><Stat label={t.contextLabel} value={context?.percent != null ? `${Math.round(context.percent)}%` : "--"} theme={theme} /><Stat label={t.tokensLabel} value={session.totalTokens ? `${Math.round(session.totalTokens / 1000)}k` : "--"} theme={theme} /><Stat label={t.cacheLabel} value={cacheHit} theme={theme} /><Stat label={t.messagesAndTime} value={`${session.messageCount} · ${status === "running" && session.activeSince ? `${t.statusActive} ${formatRelativeTime(session.activeSince, t)}` : formatRelativeTime(session.lastActivityAt ?? session.updatedAt, t)}`} theme={theme} /></View>
   </SpringCard>;
 }
 
-function Stat({ label, value, theme }: { label: string; value: string; theme: ReturnType<typeof useTheme>["theme"] }) { return <View style={{ flex: 1 }}><Text style={{ color: theme.dim, fontSize: 9 }}>{label}</Text><Text style={{ color: theme.text, fontSize: 11, fontFamily: "monospace", fontWeight: "600", marginTop: 2 }}>{value}</Text></View>; }
+function Stat({ label, value, theme }: { label: string; value: string; theme: ReturnType<typeof useTheme>["theme"] }) { return <View style={{ width: "48%" }}><Text style={{ color: theme.dim, fontSize: 9 }}>{label}</Text><Text style={{ color: theme.text, fontSize: 11, fontFamily: "monospace", fontWeight: "600", marginTop: 2 }}>{value}</Text></View>; }
 function cwdName(cwd: string): string { return cwd.split("/").filter(Boolean).pop() ?? cwd; }
 
 function makeStyles(theme: ReturnType<typeof useTheme>["theme"]) {
@@ -375,9 +392,7 @@ function makeStyles(theme: ReturnType<typeof useTheme>["theme"]) {
     badgeText: { color: theme.accent, fontSize: 9, fontFamily: "monospace", fontWeight: "600" },
     pathRow: { flexDirection: "row", alignItems: "center", gap: 5, marginTop: 8, marginBottom: 8 },
     pathText: { color: theme.muted, fontSize: 11, fontFamily: "monospace", flex: 1 },
-    stats: { flexDirection: "row", gap: 8, backgroundColor: theme.inputBg, borderRadius: MIUIX_RADIUS.md, padding: 9, borderWidth: 1, borderColor: theme.border },
-    controlRow: { flexDirection: "row", justifyContent: "space-between", marginTop: 8 },
-    controlText: { color: theme.dim, fontSize: 10, fontFamily: "monospace" },
+    stats: { flexDirection: "row", flexWrap: "wrap", columnGap: 8, rowGap: 6, backgroundColor: theme.inputBg, borderRadius: MIUIX_RADIUS.md, padding: 9, borderWidth: 1, borderColor: theme.border },
     center: { flex: 1, alignItems: "center", justifyContent: "center", padding: 40 },
     centerText: { color: theme.muted, marginTop: 10 },
     errorPanel: { alignItems: "center", padding: 24, gap: 10 },

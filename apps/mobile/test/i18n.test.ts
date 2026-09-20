@@ -11,8 +11,8 @@ describe("I18n", () => {
   it("provides expected translations", () => {
     expect(DICTIONARIES.zh.tabSessions).toBe("会话");
     expect(DICTIONARIES.en.tabSessions).toBe("Sessions");
-    expect(DICTIONARIES.zh.filterActive).toBe("活跃中");
-    expect(DICTIONARIES.en.filterActive).toBe("Active");
+    expect(DICTIONARIES.zh.filterCurrent).toBe("当前会话");
+    expect(DICTIONARIES.en.filterCurrent).toBe("Current");
     expect(DICTIONARIES.zh.hostConnected).toBe("已连接主机");
     expect(DICTIONARIES.en.hostConnected).toBe("Connected");
   });

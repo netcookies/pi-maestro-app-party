@@ -10,12 +10,14 @@ export interface I18nDictionary {
   tabSessions: string;
   tabMonitor: string;
   tabSettings: string;
-  filterActive: string;
+  filterCurrent: string;
   filterAll: string;
   searchPlaceholder: string;
   statusStreaming: string;
   statusActive: string;
   statusIdle: string;
+  statusSleeping: string;
+  statusHistory: string;
   contextLabel: string;
   tokensLabel: string;
   cacheLabel: string;
@@ -190,12 +192,14 @@ export const DICTIONARIES: Record<Language, I18nDictionary> = {
     tabSessions: "会话",
     tabMonitor: "监控",
     tabSettings: "设置",
-    filterActive: "活跃中",
+    filterCurrent: "当前会话",
     filterAll: "全部会话",
     searchPlaceholder: "输入关键词搜索标题、ID、路径...",
     statusStreaming: "流式生成中",
     statusActive: "活跃在线",
-    statusIdle: "空闲等待",
+    statusIdle: "空闲",
+    statusSleeping: "睡眠",
+    statusHistory: "历史",
     contextLabel: "上下文视窗",
     tokensLabel: "Token 消耗",
     cacheLabel: "缓存命中",
@@ -368,12 +372,14 @@ export const DICTIONARIES: Record<Language, I18nDictionary> = {
     tabSessions: "Sessions",
     tabMonitor: "Monitor",
     tabSettings: "Settings",
-    filterActive: "Active",
+    filterCurrent: "Current",
     filterAll: "All",
     searchPlaceholder: "Search project, ID, model, path...",
     statusStreaming: "Streaming",
     statusActive: "Active Ready",
     statusIdle: "Idle",
+    statusSleeping: "Sleeping",
+    statusHistory: "History",
     contextLabel: "Context Window",
     tokensLabel: "Token Usage",
     cacheLabel: "Cache Hit",

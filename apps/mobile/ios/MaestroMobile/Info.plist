@@ -45,6 +45,8 @@
     </dict>
     <key>NSCameraUsageDescription</key>
     <string>允许 Maestro Mobile 使用相机拍摄图片发送给 Pi agent</string>
+    <key>NSLocalNetworkUsageDescription</key>
+    <string>允许 Maestro Mobile 连接本地网络中的 Host</string>
     <key>NSMicrophoneUsageDescription</key>
     <string>Allow $(PRODUCT_NAME) to access your microphone</string>
     <key>NSPhotoLibraryUsageDescription</key>
@@ -77,6 +79,8 @@
       <string>UIInterfaceOrientationLandscapeLeft</string>
       <string>UIInterfaceOrientationLandscapeRight</string>
     </array>
+    <key>UIUserInterfaceStyle</key>
+    <string>Automatic</string>
     <key>UIViewControllerBasedStatusBarAppearance</key>
     <false/>
   </dict>
