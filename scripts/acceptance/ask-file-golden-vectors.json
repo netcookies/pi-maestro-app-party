@@ -1,0 +1,41 @@
+{
+  "version": 2,
+  "prefix": "pi-ask-response-",
+  "suffix": ".json",
+  "maxFilenameComponentBytes": 240,
+  "boundary": {
+    "acceptedToolCallIdBytes": 219,
+    "rejectedToolCallIdBytes": 220
+  },
+  "accepted": [
+    {
+      "name": "ascii",
+      "raw": "call-123",
+      "filename": "pi-ask-response-call-123.json"
+    },
+    {
+      "name": "provider-pipe",
+      "raw": "call_a|fc_b",
+      "filename": "pi-ask-response-call_a|fc_b.json"
+    },
+    {
+      "name": "observed-safe-characters",
+      "raw": "call_a:fc-b.1|fc_2",
+      "filename": "pi-ask-response-call_a:fc-b.1|fc_2.json"
+    }
+  ],
+  "rejected": [
+    "",
+    ".",
+    "..",
+    "../x",
+    "..\\x",
+    "a/b",
+    "a\\b",
+    "x\u0000y",
+    "x\u001fy",
+    "x\ny",
+    "call id",
+    "é"
+  ]
+}

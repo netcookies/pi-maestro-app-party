@@ -18,7 +18,7 @@ Host 是 PC 端常驻服务，把 Pi agent 会话、Monitor 窗口 telemetry、m
 npm install -g pi-maestro-mobile
 ```
 
-要求 Node ≥ 22.19。包自包含（vendored shared），只拉 `pi-coding-agent` SDK 和 `ws` 两个运行时依赖。
+要求 Node ≥ 22.19。包自包含 vendored shared，并安装 Pi Agent SDK、`ws` 与二维码终端运行时依赖。
 
 ### 手动运行
 
@@ -30,9 +30,9 @@ pi-maestro-mobile --port 4739
 ### 常驻（macOS launchd）
 
 ```bash
-cp deploy/com.maestro-mobile.host.plist ~/Library/LaunchAgents/
+cp deploy/com.maestro-mobile.plist ~/Library/LaunchAgents/
 # 编辑 plist：ProgramArguments 里的 node 路径与 cli.js 路径、WorkingDirectory、MAESTRO_MOBILE_TOKEN
-launchctl load ~/Library/LaunchAgents/com.maestro-mobile.host.plist
+launchctl load ~/Library/LaunchAgents/com.maestro-mobile.plist
 ```
 
 日志：`/tmp/maestro-mobile.{out,err}.log`。`KeepAlive` 开启，崩溃自动拉起。
@@ -61,12 +61,13 @@ headless 服务器需要 `sudo loginctl enable-linger $USER`（如果是 user se
 pi install npm:pi-maestro-mobile
 ```
 
-提供 `/maestro-host status|start|stop` 薄扩展命令。**扩展不承载服务**：它只 spawn/探测独立的 host 进程（`detached` + PID 文件 `~/.pi/maestro-host.pid` + `/api/health` 幂等探测），host 生命周期与 Pi 会话完全解耦——关掉 Pi 会话 host 继续跑，launchd/systemd 管理的实例也不会被误杀（stop 仅针对本扩展启动的 PID）。
+提供 `/maestro-mobile` 薄扩展命令。**扩展不承载服务**：它只 spawn/探测独立的 Host 进程（`detached` + PID 文件 `~/.pi/maestro-mobile.pid` + `/api/health` 幂等探测），Host 生命周期与 Pi 会话完全解耦——关掉 Pi 会话后 Host 仍继续运行。`stop` 会向 PID 文件指向的 Host 发送 `SIGTERM`；若实例由 launchd / systemd 管理，服务管理器可能重新拉起它，应使用对应服务命令永久停止。
 
 ```text
-/maestro-host status   # 探测 :4739，显示运行状态与版本（未配 token 时提示）
-/maestro-host start    # 幂等启动：已在监听则跳过；否则 spawn dist/cli.js 并等待 health
-/maestro-host stop     # 仅停止本扩展启动的实例
+/maestro-mobile status   # 探测 :4739，显示状态、版本和 token 摘要
+/maestro-mobile start    # 幂等启动：已在监听则跳过；否则 spawn dist/cli.js 并等待 health
+/maestro-mobile qr       # 生成二维码、8 位短码和候选端点
+/maestro-mobile stop     # 停止 PID 文件指向的实例
 ```
 
 端口跟随 `MAESTRO_MOBILE_PORT`（默认 4739）。
@@ -104,7 +105,7 @@ docker run -d --name maestro-mobile \
   maestro-mobile
 ```
 
-镜像自带 HEALTHCHECK（`/api/health`），非 root 用户运行。
+镜像以非 root 用户运行。
 
 ### 版本探测在容器里的行为
 
@@ -112,27 +113,49 @@ docker run -d --name maestro-mobile \
 
 ---
 
-## 手机端连接
+## Desktop Broker 运行与升级
 
-App「会话」页 Host 连接卡填：
+正式拓扑只有一个 singleton Broker：
 
+- Broker 独占 `~/.pi/maestro-mobile/ipc/desktop-plugin.sock`，内存 registry 是 live authority。
+- Host 独占 `~/.pi/maestro-mobile/ipc/desktop-broker-host.sock`，只消费 Broker 的认证 snapshot/delta projection。
+- `desktop-plugin-registry.json` 只用于诊断，不恢复 live transport、pending command 或 ask 状态。
+- Host restart 不应清空 Plugin live connection；Broker crash 后 supervisor 会恢复 Broker，Plugin 会 bounded reconnect，Host 会等待新的完整 snapshot。
+
+升级或协议不兼容时：先停止 Host/Broker，再安装新版并重新启动；Desktop Plugin protocol v1 不兼容 v2，旧 TUI 必须 reload/restart。socket collision 时检查 `~/.pi/maestro-mobile/*.pid`、lock 和 log，确认 owner 后再处理，禁止以删除 JSON 快照代替恢复。
+
+使用 `/maestro-mobile status --current` 检查四层状态：Pi local runtime、Plugin→Broker、Broker→Host、Host projection。输出 verdict 为 `synced`、`drift`、`target_missing`、`plugin_disconnected`、`broker_host_disconnected`、`host_unreachable` 或 `broker_flapping`。
+
+
+
+推荐在 Pi TUI 执行：
+
+```text
+/maestro-mobile qr
 ```
-ws://<PC 局域网 IP>:4739/ws?token=<your-secret>
+
+随后在 App 的 **Settings** 中扫码；无法扫码时，输入二维码下方的 8 位短码与 PC 局域网地址。配对成功后 App 会保存 WS 端点和 token，并自动重连。
+
+协议端点格式为：
+
+```text
+ws://<PC 局域网 IP>:4739/ws
 ```
 
-同一局域网内直连，数据不过公网。多台手机可同时连接（事件广播）。
+同一局域网内直连，数据不过公网。多台手机可以同时连接并接收事件广播。
 
 ## 安全
 
-- 强烈建议设置 `MAESTRO_MOBILE_TOKEN`（尤其公共 Wi-Fi）
+- Host CLI 默认监听 `0.0.0.0`，并始终启用 token；未显式设置时会自动生成并持久化到 `~/.pi/maestro-mobile-token`
+- 只需本机访问时设置 `MAESTRO_MOBILE_HOST=127.0.0.1`
 - Docker 看板模式的挂载全部只读（`:ro`）
-- 跨公网访问请套 Tailscale/WireGuard，不要裸暴露端口
+- 跨公网访问请套 Tailscale / WireGuard，不要裸暴露端口
 
 ## 故障排查
 
 | 症状 | 检查 |
 |---|---|
-| 手机连不上 | `curl http://<PC>:4739/api/health`；防火墙放行 4739 |
+| 手机连不上 | `curl -H "Authorization: Bearer $MAESTRO_MOBILE_TOKEN" http://<PC>:4739/api/health`；无 token 的 `401` 也说明服务已监听；同时检查防火墙端口 4739 |
 | Monitor 无窗口 | 宿主 `~/.pi/teammate/workspaces/` 是否有 owners JSON（Pi 会话是否跑过 teammate） |
 | usage 显示 -- | 手机端需先在「会话」页打开一个会话（usage 是会话级聚合） |
 | Docker 内会话控制不可用 | 预期行为——看板模式不包含 Pi 认证上下文 |

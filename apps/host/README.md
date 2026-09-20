@@ -23,7 +23,17 @@ pi-maestro-mobile --port 4739
 pi install npm:pi-maestro-mobile
 ```
 
-（薄扩展入口：`/maestro-host` 命令管理守护进程，规划中；当前版本请用方式一。）
+安装后可在任意 Pi TUI 中使用薄扩展命令管理独立 Host：
+
+```text
+/maestro-mobile start    # 幂等启动
+/maestro-mobile status   # 查看状态、版本和 token 摘要
+/maestro-mobile status --current # 比较当前 Pi/Plugin/Broker/Host 四层状态
+/maestro-mobile qr       # 生成二维码与 8 位短码
+/maestro-mobile stop     # 停止 PID 文件指向的 Host 实例
+```
+
+扩展只负责启动、探测、配对与停止；Host 是独立常驻进程，不随当前 Pi 会话退出。
 
 ### 方式三：Docker（看板模式）
 
@@ -53,16 +63,18 @@ pi-maestro-mobile [--port 4739] [--host 0.0.0.0] [--token <secret>] [--project-r
 | `--project-root` | `MAESTRO_MOBILE_PROJECT_ROOT` | cwd | maestro flow-schedule 读取根 |
 | `--poll-ms` | `MAESTRO_MOBILE_POLL_MS` | 5000 | telemetry/调度轮询间隔 |
 
-手机 App 里填 `ws://<PC 局域网 IP>:4739/ws`（有 token 时加 `?token=`）。
+`MAESTRO_MOBILE_ROLLOUT` 可设为 `disabled`、`shadow` 或 `enabled`（默认），用于控制 Protocol v2 rollout。
+
+官方 App 推荐通过 `/maestro-mobile qr` 配对。协议端点格式为 `ws://<PC 局域网 IP>:4739/ws`，token 可使用查询参数或 Bearer header 传递。
 
 ## 守护进程
 
 **macOS（launchd）**：
 
 ```bash
-cp deploy/com.maestro-mobile.host.plist ~/Library/LaunchAgents/
+cp deploy/com.maestro-mobile.plist ~/Library/LaunchAgents/
 # 编辑 plist 里的安装路径、WorkingDirectory、token
-launchctl load ~/Library/LaunchAgents/com.maestro-mobile.host.plist
+launchctl load ~/Library/LaunchAgents/com.maestro-mobile.plist
 ```
 
 **Linux（systemd）**：
@@ -74,35 +86,46 @@ sudo systemctl enable --now maestro-mobile
 
 ## HTTP 接口速览
 
+Host CLI 始终启用 token。除 `/api/pair-short` 使用 8 位一次性短码外，下列 HTTP 路由都需要 Bearer 或 `?token=` 鉴权。
+
 | 路由 | 说明 |
 |---|---|
-| `GET /api/health` | 存活检查 |
+| `GET /api/pair-short` | 短码换 token、候选 IP 和端口 |
+| `GET /api/health` | 存活检查；无 token 时 `401` 也表示服务已监听 |
 | `GET /api/status` | 版本/uptime/sessions（含 pi/flow/CLI 版本探测） |
+| `GET /api/desktop/current` | 认证的 Broker link、epoch/revision、projection 和 exact target 诊断 |
 | `GET /api/sessions` | 会话列表（`cwd`/`query`/`limit`/`cursor`/`projectCwds`） |
+| `GET /api/pair-ips` | 配对候选 IP 列表 |
 | `GET /api/workspace-telemetry` | Monitor 窗口投影 |
 | `GET /api/maestro` / `GET /api/maestro-settings` | flow-schedule 调度状态 / 设置总览 |
 | `GET /api/file` | 图片只读预览 |
-| `GET /api/extension-ui/pending` | 待处理 ask 计数 |
+| `GET /api/extension-ui/pending` | 兼容占位，固定返回 `pending: 0` |
 | `GET /api/live-sessions` | 已弃用，返回 410（不属于 Protocol v2） |
 | `WS /ws` | 实时事件流 + 客户端命令（协议见 `@maestro-mobile/shared`，摘要见 `docs/protocol.md`） |
 
-## Desktop Plugin（控制桌面 TUI 会话）
+真实 Ask 状态通过 WS 的 `extension_ui_request` / `extension_ui_cleared` 事件投影。
 
-外部 Pi TUI 加载 `dist/plugin/desktop-plugin-extension.js` 后，会作为 UDS 客户端连回 Host，使手机可以直接控制桌面 TUI 会话（prompt / steer / follow_up / abort / set_model / ask 作答）。
+## Desktop Plugin 与 Singleton Broker（控制桌面 TUI 会话）
 
-| 路径 | 用途 |
+| 路径 | owner / 用途 |
 |---|---|
-| `~/.pi/maestro-mobile/ipc/desktop-plugin.sock` | UDS，NDJSON 帧，权限 `0600` |
-| `~/.pi/maestro-mobile-ipc-secret` | 共享密钥（启动时自动生成） |
-| `~/.pi/maestro-mobile/ipc/desktop-plugin-registry.json` | 注册表快照 |
+| `~/.pi/maestro-mobile/ipc/desktop-plugin.sock` | Broker 独占的 Plugin UDS，NDJSON，权限 `0600` |
+| `~/.pi/maestro-mobile/ipc/desktop-broker-host.sock` | Host 独占的 Broker uplink UDS，权限 `0600` |
+| `~/.pi/maestro-mobile-ipc-secret` | Plugin/Broker/Host 共享密钥 |
+| `~/.pi/maestro-mobile/ipc/desktop-plugin-registry.json` | Broker 诊断快照；不是 live authority，不能恢复 transport |
+| `~/.pi/maestro-mobile/desktop-broker.pid` | singleton Broker PID |
 
 行为要点：
 
-- 所有控制与事件都绑定 exact target（`sessionId + endpointId + normalizedCwd + processGeneration`），不做 cwd/名称/PID/时间推断。
-- 插件自报 capability；旧插件缺 `set_model` 时返回结构化 `capability_mismatch`，不静默降级。
-- 断线后插件每 1s 重连，重连成功后重发当前模型；TUI 切换模型会经 `desktop_plugin_event(model_select)` 回流到手机。
+- Broker 内存 registry 是唯一 live authority；每次 mutation 有单调 revision，Host 只接受同一 epoch 的 contiguous delta。
+- 所有控制与事件都绑定 exact target：`sessionId + endpointId + normalizedCwd + processGeneration`，不做 cwd/名称/PID/时间推断。
+- Host restart 只重建 Broker uplink projection，不应断开 Plugin；Broker crash 后 Plugin 按 bounded reconnect 重连，旧 JSON 不会伪造在线 target。
+- 升级或协议不兼容时，先执行 `/maestro-mobile stop`，更新 npm 包或重新构建后执行 `/maestro-mobile start`；Desktop Plugin v1 必须 reload/restart 使用 v2。
+- 若 `desktop-plugin.sock` 或 `desktop-broker-host.sock` 被其他进程占用，先停止旧 Host/Broker 实例，确认 PID/lock/log 后再启动，不要删除仍被活进程使用的 socket。
+- `/maestro-mobile status --current` 只读比较四层状态，输出 `synced`、`drift`、`target_missing`、`plugin_disconnected`、`broker_host_disconnected`、`host_unreachable` 或 `broker_flapping`。
 
 完整字段见 [`docs/protocol.md`](../../docs/protocol.md#desktop-plugin-协议)。
+
 
 ## 构建与产物耦合（重要）
 

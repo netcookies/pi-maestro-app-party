@@ -1,35 +1,30 @@
 # 架构
 
-基于 **Bridge 模式 + 选择性缝合**：以 `pi-mobile` 的 SDK Host 架构为基底，复用 `pi-maestro-flow` 的 teammate/monitor 能力，解决 maestro `ask-user-question` 在远程环境失效的问题。
+基于 **Bridge + Singleton Broker**：Host 负责 Mobile HTTP/WS 与 Host-owned AgentSession；singleton Broker 负责所有 Desktop Plugin socket 和 live registry；Host 通过认证的 Broker uplink 消费不可回退的 projection。
 
+```text
+┌────────────── PC 端：Pi Host（Node 进程）─────────────────────────┐
+│ MobileHostServer（HTTP + WS）                                    │
+│ HostController → SessionDirectory + DesktopBroker projection     │
+│ Host-owned SdkSessionRunner / Monitor / Maestro readers           │
+│                  │ authenticated UDS: desktop-broker-host.sock    │
+└──────────────────┼────────────────────────────────────────────────┘
+                   ▼
+┌────────────────── Singleton Desktop Broker ───────────────────────┐
+│ 独占 desktop-plugin.sock；内存 registry 是 live authority          │
+│ 向 Host 推送 chunked snapshot / contiguous delta                  │
+│ registry.json 仅诊断快照，不恢复 live transport                   │
+└──────────────────┬────────────────────────────────────────────────┘
+                   ▼ authenticated UDS
+┌────────────────── 外部 Pi TUI：Desktop Plugin protocol v2 ────────┐
+│ DesktopPiSessionAdapter → ExtensionAPI                             │
+└────────────────────────────────────────────────────────────────────┘
+                   ▲
+                   │ LAN WebSocket / HTTP
+             移动端 Expo / React Native
 ```
-┌────────────── PC 端：Pi Host（Node 进程）────────────────┐
-│                                                          │
-│  maestro-mobile (apps/host)                         │
-│  ├─ PiSdkRuntimeFactory   → createAgentSession           │
-│  ├─ SdkSessionRunner      → 订阅事件 + 投影              │
-│  ├─ MobileExtensionUiBridge → ask 桥接 (extension_ui)    │
-│  ├─ MaestroStateReader    → 读 flow-schedule store       │
-│  ├─ WorkspaceTelemetryReader → 读 teammate owners 状态   │
-│  ├─ SessionDirectory       → exact target 注册表         │
-│  ├─ DesktopControlGateway  → Desktop target 控制通道     │
-│  └─ MobileHostServer      → HTTP + WS 直连               │
-│                        │                                 │
-│                        │ UDS（~/.pi/maestro-mobile/ipc/） │
-│  ┌─────────────────────▼─────────────────────────────┐   │
-│  │ 外部 Pi TUI 进程（Desktop Plugin extension）         │   │
-│  │  └─ DesktopPiSessionAdapter → ExtensionAPI          │   │
-│  └─────────────────────────────────────────────────────┘   │
-└─────────────────────────┼────────────────────────────────┘
-                          │ WebSocket (LAN 直连)
-┌─────────────────────────▼────────────────────────────────┐
-│  移动端：Expo / React Native (apps/mobile)               │
-│  ├─ HostClient      → WS 连接 + 重连                     │
-│  ├─ ExtensionUiQueue → ask 弹窗队列                      │
-│  ├─ AppState        → 事件流 → UI 状态 reducer           │
-│  └─ Tabs            → 会话 / Teammate / Monitor / 设置   │
-└──────────────────────────────────────────────────────────┘
-```
+
+
 
 ## 组件职责
 
@@ -42,12 +37,15 @@
 | `MobileExtensionUiBridge` | maestro ask 的 RPC 调用 ↔ `extension_ui_request` 事件桥接 |
 | `MaestroStateReader` | 读 `.pi/flow-schedule` store，投影 `maestro_state`（变化驱动推送） |
 | `WorkspaceTelemetryReader` | 读 `~/.pi/teammate/workspaces/*/runtime/owners/*.json`，投影 `monitor_state` |
-| `MobileHostServer` | HTTP（健康检查 / 快照 / 设置 API）+ WebSocket 直连 |
-| `SessionDirectory` | exact target 注册表（`sessionId + endpointId + normalizedCwd + processGeneration`），区分 host/desktop 与 capability |
-| `SessionCommandService` | 命令唯一分叉点：按 target kind 选择 Host runner 或 Desktop gateway |
-| `DesktopControlGatewayService` | Desktop target 控制通道：capability 校验 + deadline + 幂等 |
-| `DesktopPluginIpcServer` | UDS 服务端：NDJSON 帧、共享密钥认证、registry 持久化 |
-| `DesktopPiSessionAdapter` | 在 TUI 进程内执行 operation（含 `set_model`），校验 exact target 与 capability |
+| `MobileHostServer` | HTTP（健康检查 / 快照 / 设置 / current diagnostics）+ WebSocket |
+| `SessionDirectory` | Host 与 Broker projection 的 exact target 目录 |
+| `DesktopBrokerHostIpc` | Host 独占 uplink：认证、snapshot staging、epoch/revision 校验 |
+| `DesktopBrokerProjectedRegistry` | Host 对 Broker live registry 的原子 projection |
+| `DesktopControlGatewayService` | Desktop target 控制：capability、deadline、幂等 |
+| `DesktopBroker` | singleton 进程：独占 Plugin socket、live registry、命令/事件路由 |
+| `DesktopPluginIpcServer` | Broker 侧 Plugin UDS：NDJSON、共享密钥、protocol v2 |
+| `DesktopPluginRegistryStore` | 诊断快照持久化；不承担 live recovery |
+| `DesktopPiSessionAdapter` | 在 TUI 进程内执行 operation（含 `set_model`） |
 
 ### Mobile（`apps/mobile`）
 
@@ -67,7 +65,7 @@
 ```
 Mobile → MobileHostServer → SessionCommandService
    ├── host    → SdkSessionRunner.prompt/steer/followUp/setModel   （进程内）
-   └── desktop → DesktopControlGateway → UDS → ExtensionAPI        （跨进程）
+   └── desktop → DesktopControlGateway → Host Broker projection → Broker UDS → ExtensionAPI        （跨进程）
 ```
 
 Desktop Plugin **不是** host runner 的替代模式，而是同一条链路的通道（gateway）+ 终点（plugin）。
@@ -76,24 +74,17 @@ Desktop Plugin **不是** host runner 的替代模式，而是同一条链路的
 
 `prompt`（新轮次）/ `steer`（介入当前流）/ `follow_up`（排队到本轮后），与 target kind 正交。
 
-已知差异：无。host 侧 `prompt` 在 streaming 时自动降级为 steer；desktop 侧以 `deliverAs:"steer"` 投递（Pi 仅在流式时读取该选项，故空闲走新轮次、流式中入队 steer），两条路径语义已对齐。投递失败以结构化 `delivery_failed` 回传，不再返回假成功。详见 `docs/protocol.md` 的「投递语义」与「投递失败」。
+已知差异：投递确认层级不同，但命令投递方式一致。host 侧 `prompt` 在 streaming 时自动降级为 steer，并在 Promise 完成后报告 `observed`；desktop 侧以 `deliverAs:"steer"` 投递（Pi 仅在流式时读取该选项，故空闲走新轮次、流式中入队 steer），但公开 `ExtensionAPI.sendUserMessage()` 是 fire-and-forget，因此请求完成后只能报告 `accepted`，后续 `agent_start` / `agent_end` 事件才是运行生命周期证据。可预见投递失败以结构化 `delivery_failed` 回传，不返回假 `observed`。详见 `docs/protocol.md` 的「投递语义」与「投递失败」。
 
-## Desktop Plugin（跨进程 TUI 控制）
+### Desktop Plugin 与 Broker
 
-外部 Pi TUI 启动时加载 `dist/plugin/desktop-plugin-extension.js`，作为 UDS 客户端连回 Host：
+路径 owner 是固定的：Broker 独占 `~/.pi/maestro-mobile/ipc/desktop-plugin.sock`，Host 独占 `~/.pi/maestro-mobile/ipc/desktop-broker-host.sock`。Broker 内存 registry 是唯一 live authority；`desktop-plugin-registry.json` 只记录排序后的诊断 metadata，不能恢复 transport 或命令状态。
 
-```
-~/.pi/maestro-mobile/ipc/desktop-plugin.sock   NDJSON 帧，0600
-~/.pi/maestro-mobile-ipc-secret               共享密钥（timingSafeEqual）
-~/.pi/maestro-mobile/ipc/desktop-plugin-registry.json  注册表快照
-```
+Broker 向 Host 发送带 `brokerInstanceId` 和单调 `revision` 的 chunked snapshot 与 contiguous delta。Host 只在完整 snapshot 收齐后原子替换 projection；epoch 改变、revision gap、断线或 Broker crash 都 fail closed，命令不自动 replay。
 
-- 身份：exact target 四元组；禁止 cwd/名称/PID/时间推断
-- 能力：插件自报 capability，Host 执行前校验；缺 `set_model` 返回结构化 `capability_mismatch`
-- 模型双向同步：Mobile `set_model` → gateway → `ExtensionAPI.setModel()`；TUI `model_select` → `desktop_plugin_event` → `session_updated`
-- 断线：插件每 1s 重连；重连成功后重发当前模型；事件早于会话打开时按 target 暂存后补发
+`/maestro-mobile status --current` 读取 Pi extension 的 symbol-keyed local runtime state，再调用认证的 `GET /api/desktop/current`，比较 Pi local、Plugin→Broker、Broker→Host 和 Host exact-target projection 四层状态。诊断 verdict 为 `synced`、`drift`、`target_missing`、`plugin_disconnected`、`broker_host_disconnected`、`host_unreachable`、`broker_flapping`；它是只读操作，不改变 Mobile UI。
 
-完整字段与帧类型见 `docs/protocol.md#desktop-plugin-协议`。
+
 
 ## Workspace Telemetry 合同
 
