@@ -23,6 +23,9 @@ export type JsonValue =
   | JsonValue[]
   | { [key: string]: JsonValue };
 
+/**
+ * Bump only for a breaking wire change. Backward-compatible fields and events must be capability-negotiated.
+ */
 export const MOBILE_PROTOCOL_VERSION = 2 as const;
 export type MobileProtocolVersion = typeof MOBILE_PROTOCOL_VERSION;
 
@@ -46,14 +49,29 @@ export type SessionRole = "session" | "monitor";
 export type SessionVisibility = "session_list" | "monitor_tab" | "hidden";
 export type SessionControlMode = "host" | "desktop_plugin" | "readonly";
 
-/** 稳定标识一个 TUI 会话端点；不得由 cwd、时间或权限推断。 */
+/** 稳定标识一个具体运行时端点；四个字段必须整体透传，不得由 cwd、时间或权限推断。 */
 export interface SessionTargetIdentity {
   sessionId: string;
   endpointId: string;
+  normalizedCwd: string;
+  processGeneration: string;
 }
 
+/** Exact-target key shared by Host list rows and Mobile event projection. */
+export function sessionTargetKey(identity: SessionTargetIdentity): string {
+  return JSON.stringify([identity.sessionId, identity.endpointId, identity.normalizedCwd, identity.processGeneration]);
+}
+
+/**
+ * Runtime/liveness is independent from list placement and control authority.
+ * - running: a runtime endpoint is executing an agent turn.
+ * - idle: a runtime endpoint is connected and ready for another turn.
+ * - sleeping: telemetry still knows the endpoint, but it is disconnected.
+ * - history: only the persisted session record remains; no runtime endpoint is confirmed.
+ */
 export type SessionRuntimeStatus = "running" | "idle" | "sleeping" | "history";
 
+/** Control authority; never infer it from runtimeStatus, cwd, PID, name, or timestamps. */
 export interface SessionControl {
   mode: SessionControlMode;
   canPrompt: boolean;
@@ -63,9 +81,13 @@ export interface SessionControl {
   canAnswerAsk: boolean;
 }
 
+/** Server-owned UI placement and control projection, orthogonal to runtimeStatus. */
 export interface SessionPresentation {
+  /** Semantic role, not an activity signal. */
   role: SessionRole;
+  /** The only authority for choosing the Sessions, Monitor, or hidden surface. */
   visibility: SessionVisibility;
+  /** The only authority for whether and how Mobile may control the target. */
   control: SessionControl;
   revision: number;
   monitorWindowCount?: number;
@@ -142,10 +164,46 @@ export interface SessionState {
   presentation?: SessionPresentation;
 }
 
+export interface SessionUsageTotals {
+  input: number;
+  output: number;
+  cacheRead: number;
+  cacheWrite: number;
+  totalTokens: number;
+  cost: number;
+}
+
+export interface SessionContextUsage {
+  tokens: number | null;
+  contextWindow: number;
+  percent: number | null;
+}
+
+/**
+ * Exact-target list-card projection. Activity fields are event-driven; usage/context are
+ * published only at semantic checkpoints such as agent_end or session_compact.
+ */
+export interface SessionSummaryPatch {
+  /** Invalidate previously merged summary fields for this exact target. */
+  reset?: boolean;
+  runtimeStatus?: SessionRuntimeStatus;
+  /** Start of the current running interval; null explicitly clears it. */
+  activeSince?: string | null;
+  /** Most recent authoritative runtime/message activity timestamp. */
+  lastActivityAt?: string;
+  messageCount?: number;
+  usage?: SessionUsageTotals;
+  context?: SessionContextUsage | null;
+}
+
 export interface SessionSnapshot {
   session: SessionState;
   timeline: TimelineItem[];
   nextSeq: number;
+  /** Exclusive Host event-stream sequence sampled before this snapshot query. */
+  wireSeq?: number;
+  /** Exact live target history is unavailable when no authoritative JSONL reader exists. */
+  historyAvailable?: boolean;
   /** 是否还有更早的历史可懒加载 */
   hasMoreHistory?: boolean;
 }
@@ -156,6 +214,11 @@ export interface HostSessionSummary {
   id: string;
   sessionId: string;
   endpointId: string;
+  /** Exact live target. Missing only for persisted history or a legacy Host. */
+  target?: SessionTargetIdentity;
+  /** 稳定的列表行 identity；存在精确 endpoint 时包含完整 target。 */
+  targetKey?: string;
+  /** Runtime/liveness axis; do not use it alone as control authorization. */
   runtimeStatus: SessionRuntimeStatus;
   cwd: string;
   cwdName: string;
@@ -167,13 +230,20 @@ export interface HostSessionSummary {
   model?: string;
   messageCount: number;
   updatedAt: string;
+  /** Current running interval and last authoritative activity for this exact endpoint. */
+  activeSince?: string;
+  lastActivityAt?: string;
+  /** Per-target projection revision; list snapshots and events use it to reject stale races. */
+  summaryRevision?: number;
   createdAt?: string;
   /** 累计 Token 用量（若已聚合） */
   totalTokens?: number;
   /** 累计成本（美元） */
   cost?: number;
+  /** Structured totals used to derive cache hit semantics without guessing. */
+  usage?: SessionUsageTotals;
   /** 实时上下文用量（若处于活跃/已打开状态） */
-  context?: { tokens: number | null; contextWindow: number; percent: number | null } | null;
+  context?: SessionContextUsage | null;
   presentation?: SessionPresentation;
 }
 
@@ -412,6 +482,8 @@ export interface ExtensionUiRequest {
   title?: string;
   message?: string;
   options?: string[];
+  /** Desktop ask-user-question payload; rendered as a wizard even without a JSONL reader. */
+  questions?: JsonValue[];
   placeholder?: string;
   prefill?: string;
   timeout?: number;
@@ -444,21 +516,22 @@ export type DistributiveOmitUiResponse =
 export type HostEvent =
   | { type: "host_status"; status: string; seq: number }
   | { type: "host_info"; info: HostStatus; seq: number }
-  | { type: "session_updated"; session: SessionState; seq: number }
+  | { type: "session_updated"; session: SessionState; target?: SessionTargetIdentity; seq: number }
+  | { type: "session_summary_updated"; target: SessionTargetIdentity; patch: SessionSummaryPatch; revision: number; seq: number }
   /**
    * 消息终态投影：host 在 message_end 时按稳定 id 发出。
    * 客户端契约：若 timeline 中已存在相同 id 的条目则替换，否则追加。
    */
-  | { type: "timeline_item"; sessionId: string; item: TimelineItem; seq: number }
+  | { type: "timeline_item"; sessionId: string; item: TimelineItem; target?: SessionTargetIdentity; seq: number }
   /**
    * 流式增量：message_update 期间按同一稳定 itemId 发出（可节流）。
    * 客户端契约：已存在该 id 的条目则追加文本；尚不存在时可忽略（终态由 timeline_item 补齐）。
    */
-  | { type: "timeline_delta"; sessionId: string; itemId: string; delta: string; seq: number }
-  | { type: "raw_event"; sessionId: string; event: JsonValue; seq: number }
-  | { type: "command_error"; sessionId: string; command: string; message: string; seq: number }
-  | { type: "extension_ui_request"; sessionId: string; request: ExtensionUiRequest; seq: number }
-  | { type: "extension_ui_cleared"; sessionId: string; requestId: string; seq: number }
+  | { type: "timeline_delta"; sessionId: string; itemId: string; delta: string; target?: SessionTargetIdentity; seq: number }
+  | { type: "raw_event"; sessionId: string; event: JsonValue; target?: SessionTargetIdentity; seq: number }
+  | { type: "command_error"; sessionId: string; command: string; message: string; target?: SessionTargetIdentity; seq: number }
+  | { type: "extension_ui_request"; sessionId: string; request: ExtensionUiRequest; target?: SessionTargetIdentity; seq: number }
+  | { type: "extension_ui_cleared"; sessionId: string; requestId: string; target?: SessionTargetIdentity; seq: number }
   | { type: "maestro_state"; state: MaestroState; seq: number }
   | { type: "monitor_state"; state: MonitorState; seq: number }
   | { type: "teammate_event"; scheduleId: string; dispatchId?: string; status: string; seq: number }
@@ -473,27 +546,33 @@ export interface ClientCommandMeta {
   id?: string;
 }
 
+export type TargetedSessionCommand = {
+  sessionId: string;
+  /** Exact server-issued identity; legacy clients may omit it only while the target remains unambiguous. */
+  target?: SessionTargetIdentity;
+};
+
 export type ClientCommandPayload =
-  | { type: "open_session"; cwd: string; mode?: "create" | "continue"; sessionFile?: string }
+  | { type: "open_session"; cwd: string; mode?: "create" | "continue"; sessionFile?: string; target?: SessionTargetIdentity }
   | { type: "list_host_sessions"; cwd?: string; limit?: number; cursor?: string; query?: string; sessionIds?: string[]; latestForCwds?: string[] }
-  | { type: "load_more_history"; sessionId: string; count?: number }
-  | { type: "search_history"; sessionId: string; keyword: string; maxResults?: number; previewLength?: number }
-  | { type: "list_models"; sessionId: string }
-  | { type: "list_skills"; sessionId: string }
+  | ({ type: "load_more_history"; count?: number } & TargetedSessionCommand)
+  | ({ type: "search_history"; keyword: string; maxResults?: number; previewLength?: number } & TargetedSessionCommand)
+  | ({ type: "list_models" } & TargetedSessionCommand)
+  | ({ type: "list_skills" } & TargetedSessionCommand)
   | { type: "get_maestro_settings" }
   | { type: "update_maestro_settings"; key: string; patch: Record<string, unknown> }
-  | { type: "set_model"; sessionId: string; modelId: string; provider?: string }
-  | { type: "set_thinking"; sessionId: string; level: string }
-  | { type: "compact"; sessionId: string; customInstructions?: string }
-  | { type: "rename_session"; sessionId: string; name: string }
-  | { type: "close_session"; sessionId: string }
-  | { type: "prompt"; sessionId: string; message: string; images?: { data: string; mime: string }[] }
-  | { type: "steer"; sessionId: string; message: string }
-  | { type: "follow_up"; sessionId: string; message: string }
-  | { type: "abort"; sessionId: string }
-  | { type: "extension_ui_response"; sessionId: string; requestId: string; response: ExtensionUiResponse }
-  | { type: "get_snapshot"; sessionId: string }
-  | { type: "get_session_usage"; sessionId: string }
+  | ({ type: "set_model"; modelId: string; provider?: string } & TargetedSessionCommand)
+  | ({ type: "set_thinking"; level: string } & TargetedSessionCommand)
+  | ({ type: "compact"; customInstructions?: string } & TargetedSessionCommand)
+  | ({ type: "rename_session"; name: string } & TargetedSessionCommand)
+  | ({ type: "close_session" } & TargetedSessionCommand)
+  | ({ type: "prompt"; message: string; images?: { data: string; mime: string }[] } & TargetedSessionCommand)
+  | ({ type: "steer"; message: string } & TargetedSessionCommand)
+  | ({ type: "follow_up"; message: string } & TargetedSessionCommand)
+  | ({ type: "abort" } & TargetedSessionCommand)
+  | ({ type: "extension_ui_response"; requestId: string; response: ExtensionUiResponse } & TargetedSessionCommand)
+  | ({ type: "get_snapshot" } & TargetedSessionCommand)
+  | ({ type: "get_session_usage" } & TargetedSessionCommand)
   | { type: "get_maestro_state" }
   | { type: "get_monitor_state" }
   | { type: "ping" };
@@ -554,19 +633,31 @@ export function isHostEvent(value: unknown): value is HostEvent {
     case "host_info":
       return isRecord(value.info);
     case "session_updated":
-      return isRecord(value.session);
+      return isRecord(value.session)
+        && (value.target === undefined || isSessionTargetIdentity(value.target));
+    case "session_summary_updated":
+      return isSessionTargetIdentity(value.target)
+        && isSessionSummaryPatch(value.patch)
+        && isFiniteNumber(value.revision)
+        && value.revision >= 0;
     case "timeline_item":
-      return isString(value.sessionId) && isRecord(value.item);
+      return isString(value.sessionId) && isRecord(value.item)
+        && (value.target === undefined || isSessionTargetIdentity(value.target));
     case "timeline_delta":
-      return isString(value.sessionId) && isString(value.itemId) && isString(value.delta);
+      return isString(value.sessionId) && isString(value.itemId) && isString(value.delta)
+        && (value.target === undefined || isSessionTargetIdentity(value.target));
     case "raw_event":
-      return isString(value.sessionId) && "event" in value;
+      return isString(value.sessionId) && "event" in value
+        && (value.target === undefined || isSessionTargetIdentity(value.target));
     case "command_error":
-      return isString(value.sessionId) && isString(value.command) && isString(value.message);
+      return isString(value.sessionId) && isString(value.command) && isString(value.message)
+        && (value.target === undefined || isSessionTargetIdentity(value.target));
     case "extension_ui_request":
-      return isString(value.sessionId) && isRecord(value.request);
+      return isString(value.sessionId) && isRecord(value.request)
+        && (value.target === undefined || isSessionTargetIdentity(value.target));
     case "extension_ui_cleared":
-      return isString(value.sessionId) && isString(value.requestId);
+      return isString(value.sessionId) && isString(value.requestId)
+        && (value.target === undefined || isSessionTargetIdentity(value.target));
     case "maestro_state":
       return isRecord(value.state);
     case "monitor_state":
@@ -584,6 +675,7 @@ export function isHostEvent(value: unknown): value is HostEvent {
 export function isClientCommand(value: unknown): value is ClientCommand {
   if (!isRecord(value) || typeof value.type !== "string") return false;
   if (value.id !== undefined && !isString(value.id)) return false;
+  if (value.target !== undefined && !isSessionTargetIdentity(value.target)) return false;
   switch (value.type) {
     case "open_session":
       return isString(value.cwd) && optionalEnum(value.mode, "create", "continue") && optionalString(value.sessionFile);
@@ -671,6 +763,44 @@ function isOperationStatus(value: unknown): value is OperationStatus {
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+export function isSessionTargetIdentity(value: unknown): value is SessionTargetIdentity {
+  if (!isRecord(value)) return false;
+  return isString(value.sessionId)
+    && isString(value.endpointId)
+    && isString(value.normalizedCwd)
+    && isString(value.processGeneration);
+}
+
+export function isSessionSummaryPatch(value: unknown): value is SessionSummaryPatch {
+  if (!isRecord(value)) return false;
+  const hasKnownField = ["reset", "runtimeStatus", "activeSince", "lastActivityAt", "messageCount", "usage", "context"]
+    .some((field) => field in value);
+  if (!hasKnownField) return false;
+  if (value.reset !== undefined && typeof value.reset !== "boolean") return false;
+  if (value.runtimeStatus !== undefined
+    && value.runtimeStatus !== "running" && value.runtimeStatus !== "idle"
+    && value.runtimeStatus !== "sleeping" && value.runtimeStatus !== "history") return false;
+  if (value.activeSince !== undefined && value.activeSince !== null && !isString(value.activeSince)) return false;
+  if (value.lastActivityAt !== undefined && !isString(value.lastActivityAt)) return false;
+  if (value.messageCount !== undefined
+    && (!Number.isInteger(value.messageCount) || (value.messageCount as number) < 0)) return false;
+  if (value.usage !== undefined && !isSessionUsageTotals(value.usage)) return false;
+  return value.context === undefined || value.context === null || isSessionContextUsage(value.context);
+}
+
+function isSessionUsageTotals(value: unknown): value is SessionUsageTotals {
+  if (!isRecord(value)) return false;
+  return [value.input, value.output, value.cacheRead, value.cacheWrite, value.totalTokens, value.cost]
+    .every((item) => isFiniteNumber(item) && item >= 0);
+}
+
+function isSessionContextUsage(value: unknown): value is SessionContextUsage {
+  if (!isRecord(value)) return false;
+  return (value.tokens === null || (isFiniteNumber(value.tokens) && value.tokens >= 0))
+    && isFiniteNumber(value.contextWindow) && value.contextWindow >= 0
+    && (value.percent === null || (isFiniteNumber(value.percent) && value.percent >= 0));
 }
 
 function isString(value: unknown): value is string {

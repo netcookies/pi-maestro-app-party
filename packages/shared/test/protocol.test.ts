@@ -14,8 +14,36 @@ describe("protocol", () => {
     expect(isHostEvent(event)).toBe(true);
   });
 
+  it("validates an exact-target session summary patch event", () => {
+    expect(isHostEvent({
+      type: "session_summary_updated",
+      target: { sessionId: "s1", endpointId: "e1", normalizedCwd: "/work/app", processGeneration: "g1" },
+      patch: {
+        runtimeStatus: "running",
+        activeSince: "2026-01-01T00:00:00.000Z",
+        lastActivityAt: "2026-01-01T00:00:01.000Z",
+        messageCount: 4,
+        usage: { input: 1, output: 2, cacheRead: 3, cacheWrite: 4, totalTokens: 10, cost: 0.1 },
+        context: { tokens: 8, contextWindow: 100, percent: 8 },
+      },
+      revision: 2,
+      seq: 1,
+    })).toBe(true);
+    expect(isHostEvent({
+      type: "session_summary_updated",
+      target: { sessionId: "s1", endpointId: "e1", normalizedCwd: "/work/app", processGeneration: "g1" },
+      patch: { reset: true, runtimeStatus: "sleeping" }, revision: 3, seq: 2,
+    })).toBe(true);
+    expect(isHostEvent({
+      type: "session_summary_updated",
+      target: { sessionId: "s1", endpointId: "e1", normalizedCwd: "/work/app", processGeneration: "g1" },
+      patch: { messageCount: -1 }, revision: 2, seq: 1,
+    })).toBe(false);
+  });
+
   it("rejects malformed HostEvent", () => {
     expect(isHostEvent({ type: "session_updated" })).toBe(false);
+    expect(isHostEvent({ type: "session_summary_updated", target: {}, patch: {}, revision: 1, seq: 1 })).toBe(false);
     expect(isHostEvent(null)).toBe(false);
     expect(isHostEvent("string")).toBe(false);
   });
@@ -23,6 +51,18 @@ describe("protocol", () => {
   it("validates ClientCommand shape", () => {
     const cmd: ClientCommand = { type: "prompt", sessionId: "s1", message: "hi" };
     expect(isClientCommand(cmd)).toBe(true);
+  });
+
+  it("preserves and validates the complete target identity on session commands", () => {
+    const target = {
+      sessionId: "s1",
+      endpointId: "desktop-1",
+      normalizedCwd: "/work/app",
+      processGeneration: "generation-1",
+    };
+    expect(isClientCommand({ type: "open_session", cwd: "/work/app", sessionFile: "/sessions/s1.jsonl", target })).toBe(true);
+    expect(isClientCommand({ type: "get_snapshot", sessionId: "s1", target })).toBe(true);
+    expect(isClientCommand({ type: "get_snapshot", sessionId: "s1", target: { ...target, processGeneration: undefined } })).toBe(false);
   });
 
   it("rejects malformed ClientCommand", () => {
