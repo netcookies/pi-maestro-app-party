@@ -10,7 +10,7 @@ import type { DistributiveOmit } from "./event-log.js";
 import type { MobileAgentRuntime, MobileAgentSession } from "./mobile-agent.js";
 import type { SessionRunner, RuntimeFactory } from "./types.js";
 import { EventLog } from "./event-log.js";
-import { replayTailFromJsonl, replayPageFromJsonl, searchInJsonl } from "./jsonl-pager.js";
+import { replayTailFromJsonl, replayPageBeforeJsonl, searchInJsonl } from "./jsonl-pager.js";
 import { readSessionUsage } from "./usage-reader.js";
 import { MobileExtensionUiBridge } from "./mobile-ui-context.js";
 import { imageBlocksFromContent, materializeImages } from "./image-cache.js";
@@ -182,8 +182,11 @@ export class SdkSessionRunner implements SessionRunner {
     }
   }
 
-  syncExternalModel(model: DesktopPluginModel): void {
-    this._state = { ...this._state, model: toJsonValue(model), updatedAt: new Date().toISOString() };
+  syncExternalModel(model: DesktopPluginModel | undefined): void {
+    if (JSON.stringify(this._state.model) === JSON.stringify(model)) return;
+    this._state = { ...this._state, updatedAt: new Date().toISOString() };
+    if (model === undefined) delete this._state.model;
+    else this._state.model = toJsonValue(model);
     this.emit(this.eventLog.record({ type: "session_updated", session: this._state }));
   }
 
@@ -194,10 +197,21 @@ export class SdkSessionRunner implements SessionRunner {
     }
     try {
       this.session.setThinkingLevel(level);
+      const actualLevel = this.session.thinkingLevel ?? level;
+      this._state = { ...this._state, thinkingLevel: actualLevel, updatedAt: new Date().toISOString() };
+      this.emit(this.eventLog.record({ type: "session_updated", session: this._state }));
       return { ok: true };
     } catch (e) {
       return { ok: false, error: e instanceof Error ? e.message : String(e) };
     }
+  }
+
+  syncExternalThinking(level: string | undefined): void {
+    if (this._state.thinkingLevel === level) return;
+    this._state = { ...this._state, updatedAt: new Date().toISOString() };
+    if (level === undefined) delete this._state.thinkingLevel;
+    else this._state.thinkingLevel = level;
+    this.emit(this.eventLog.record({ type: "session_updated", session: this._state }));
   }
 
   /** 手动压缩上下文 */
@@ -293,14 +307,12 @@ export class SdkSessionRunner implements SessionRunner {
     let replayed: TimelineItem[] = [];
     if (this.session.sessionFile) {
       const tail = await replayTailFromJsonl(this.session.sessionFile, HISTORY_PAGE_SIZE);
-      if (tail.items.length > 0) {
-        replayed = tail.items;
-        hasMoreTail = tail.hasMore;
-        this.historyCursor = tail.cursor;
-        this.historyTotalEntries = tail.totalEntries;
-      }
+      replayed = tail.items;
+      hasMoreTail = tail.hasMore;
+      this.historyCursor = Math.max(0, tail.totalEntries - tail.cursor);
+      this.historyTotalEntries = tail.totalEntries;
     }
-    if (replayed.length === 0) {
+    if (replayed.length === 0 && this.historyTotalEntries === 0) {
       replayed = this.restoreTimelineFromMessages(this.session.messages);
     }
     this.hasMoreHistoryFlag = hasMoreTail;
@@ -324,7 +336,10 @@ export class SdkSessionRunner implements SessionRunner {
     // 方案 A 双端实时同步：监听外部进程（如桌面 TUI）追加写进会话 JSONL 的新内容，
     // 实时通过 WebSocket 广播给已连接的移动端，实现桌面敲字/输出手机同屏实时显示。
     if (this.session.sessionFile) {
-      this.tailWatcher = new JsonlTailWatcher(this.session.sessionFile, (items) => {
+      this.tailWatcher = new JsonlTailWatcher(this.session.sessionFile, (items, appendedEntries) => {
+        // historyCursor is the absolute index of the earliest loaded message. Appends do not
+        // move that boundary, so pagination stays disjoint even when the file grows mid-scan.
+        this.historyTotalEntries += appendedEntries;
         for (const item of items) {
           this.pushTimelineItem(item);
           this.emit(this.eventLog.record({ type: "timeline_item", sessionId: this.id, item }));
@@ -379,17 +394,14 @@ export class SdkSessionRunner implements SessionRunner {
     }
     // 本页按剩余额度限量（而非取到后再裁）：保证硬上限的同时不丢弃已交付条目
     const pageSize = Math.min(Number.isInteger(count) && (count as number) > 0 ? (count as number) : HISTORY_PAGE_SIZE, room);
-    const page = await replayPageFromJsonl(this.session.sessionFile, this.historyCursor, pageSize);
-    if (page.items.length === 0) {
-      this.hasMoreHistoryFlag = false;
-      return { items: [], hasMore: false, totalEntries: this.historyTotalEntries };
-    }
-    // 追加到 timeline 最前面（更早的内容）
-    this.timeline.unshift(...page.items);
+    const page = await replayPageBeforeJsonl(this.session.sessionFile, this.historyCursor, pageSize);
+    // A page may contain only non-rendering messages. Its absolute boundary still advanced and
+    // must be committed so a later request can continue past that window.
+    this.historyCursor = page.cursor;
+    if (page.totalEntries > 0) this.historyTotalEntries = Math.max(this.historyTotalEntries, page.totalEntries);
+    if (page.items.length > 0) this.timeline.unshift(...page.items);
     // 用真实 timeline 长度判断是否触顶：不能用 page.items.length 推算（message 与条目不相等）
     this.hasMoreHistoryFlag = page.hasMore && this.timeline.length < MAX_TIMELINE_ITEMS;
-    this.historyCursor = page.cursor;
-    if (page.totalEntries > 0) this.historyTotalEntries = page.totalEntries;
     // 返回与 flag 同一个值，避免客户端按已触顶的 hasMore 再发一次空往返
     return { items: page.items, hasMore: this.hasMoreHistoryFlag, totalEntries: this.historyTotalEntries };
   }
@@ -679,7 +691,7 @@ export class SdkSessionRunner implements SessionRunner {
     return {
       id: session.sessionId,
       cwd: this.runtime.cwd,
-      title: session.sessionName ?? this.runtime.cwd.split("/").pop() ?? session.sessionId.slice(0, 8),
+      title: titleForSession(session, this.runtime.cwd),
       runState: session.isCompacting ? "compacting" : session.isStreaming ? "streaming" : "idle",
       messageCount: session.messages.length,
       pendingMessageCount: session.pendingMessageCount,
@@ -689,6 +701,18 @@ export class SdkSessionRunner implements SessionRunner {
       ...(session.thinkingLevel ? { thinkingLevel: session.thinkingLevel } : {}),
     };
   }
+}
+
+function titleForSession(session: MobileAgentSession, cwd: string): string {
+  const customName = session.sessionName?.trim();
+  if (customName) return customName;
+  for (const raw of session.messages) {
+    const message = raw as Record<string, unknown>;
+    if (message.role !== "user") continue;
+    const text = (extractText(message.content) || (typeof message.text === "string" ? message.text : "")).trim();
+    if (text) return text.length > 80 ? `${text.slice(0, 80)}…` : text;
+  }
+  return cwd.split("/").filter(Boolean).at(-1) ?? session.sessionId.slice(0, 8);
 }
 
 function sanitizeForClient(value: JsonValue): JsonValue {

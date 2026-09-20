@@ -2,7 +2,7 @@ import type { JsonValue, OperationReceipt, OperationStatus } from "@maestro-mobi
 import { IdempotencyLedger } from "../control/idempotency-ledger.js";
 import type { SessionDirectory, SessionTargetIdentity } from "../control/SessionDirectory.js";
 
-export type SessionCommandKind = "prompt" | "steer" | "follow_up" | "abort" | "set_model";
+export type SessionCommandKind = "prompt" | "steer" | "follow_up" | "abort" | "set_model" | "set_thinking";
 
 export interface SessionCommand {
   requestId: string;
@@ -11,6 +11,7 @@ export interface SessionCommand {
   message?: string;
   modelId?: string;
   provider?: string;
+  level?: string;
   images?: unknown[];
 }
 
@@ -21,6 +22,10 @@ export interface CommandResult extends OperationReceipt {
 
 export interface DesktopControlGateway {
   execute(command: SessionCommand): Promise<CommandResult>;
+}
+
+function commandScope(command: SessionCommand): string {
+  return JSON.stringify([command.kind, command.target.sessionId, command.target.endpointId, command.target.normalizedCwd, command.target.processGeneration]);
 }
 
 function result(
@@ -47,7 +52,7 @@ export class SessionCommandService {
   ) {}
 
   execute(command: SessionCommand): Promise<CommandResult> {
-    return this.ledger.run(command.requestId, command.kind, async () => {
+    return this.ledger.run(command.requestId, commandScope(command), async () => {
       const target = this.directory.resolve(command.target, command.kind);
       if (!target) return result(command, this.directory.revision, "unknown", { code: "target_unavailable" });
 
@@ -75,6 +80,10 @@ export class SessionCommandService {
           if (!command.modelId || typeof runner.setModel !== "function") throw new Error("model_unavailable");
           const changed = await runner.setModel(command.modelId, command.provider);
           if (!changed.ok) return result(command, this.directory.revision, "failed", { code: changed.error ?? "model_change_failed" });
+        } else if (command.kind === "set_thinking") {
+          if (!command.level || typeof runner.setThinking !== "function") throw new Error("thinking_unavailable");
+          const changed = runner.setThinking(command.level);
+          if (!changed.ok) return result(command, this.directory.revision, "failed", { code: changed.error ?? "thinking_change_failed" });
         } else await runner.abort();
         return result(command, this.directory.revision, "observed");
       } catch {

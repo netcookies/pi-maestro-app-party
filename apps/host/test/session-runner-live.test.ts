@@ -122,6 +122,56 @@ describe("P2-3: loadMoreHistory 并发合并", () => {
 
     await runner.dispose();
   });
+  it("consumes a non-rendering page and can continue to earlier visible history", async () => {
+    const visibleEarly = Array.from({ length: 10 }, (_, i) =>
+      JSON.stringify({ type: "message", message: { role: "user", content: `early-${i}`, timestamp: 1756800000000 + i } }),
+    );
+    const hiddenMiddle = Array.from({ length: 80 }, (_, i) =>
+      JSON.stringify({ type: "message", message: { role: "compactionSummary", content: `hidden-${i}` } }),
+    );
+    const visibleTail = Array.from({ length: 80 }, (_, i) =>
+      JSON.stringify({ type: "message", message: { role: "user", content: `tail-${i}`, timestamp: 1756800000100 + i } }),
+    );
+    await writeFile(path, [...visibleEarly, ...hiddenMiddle, ...visibleTail].join("\n") + "\n");
+
+    const runtime = makeRuntime(path);
+    const runner = await SdkSessionRunner.open(
+      { createRuntime: async () => runtime.runtime, listSessions: async () => [] },
+      { cwd: "/tmp", mode: "continue", sessionFile: path },
+      () => {},
+    );
+
+    await expect(runner.loadMoreHistory(80)).resolves.toMatchObject({ items: [], hasMore: true });
+    const earlier = await runner.loadMoreHistory(10);
+    expect(earlier.items.map((item) => item.text)).toEqual(Array.from({ length: 10 }, (_, i) => `early-${i}`));
+    expect(earlier.hasMore).toBe(false);
+    await runner.dispose();
+  });
+
+  it("keeps the older-page boundary stable after externally appended messages", async () => {
+    const lines = Array.from({ length: 90 }, (_, i) =>
+      JSON.stringify({ type: "message", message: { role: "user", content: `msg-${i}`, timestamp: 1756800000000 + i } }),
+    );
+    await writeFile(path, lines.join("\n") + "\n");
+
+    const runtime = makeRuntime(path);
+    const runner = await SdkSessionRunner.open(
+      { createRuntime: async () => runtime.runtime, listSessions: async () => [] },
+      { cwd: "/tmp", mode: "continue", sessionFile: path },
+      () => {},
+    );
+    const appended = Array.from({ length: 5 }, (_, i) =>
+      JSON.stringify({ type: "message", message: { role: "user", content: `msg-${90 + i}`, timestamp: 1756800000090 + i } }),
+    );
+    await appendFile(path, appended.join("\n") + "\n");
+    await (runner as unknown as { tailWatcher: { checkNewContent(): Promise<void> } }).tailWatcher.checkNewContent();
+
+    const older = await runner.loadMoreHistory(10);
+    expect(older.items.map((item) => item.text)).toEqual(Array.from({ length: 10 }, (_, i) => `msg-${i}`));
+    const ids = runner.snapshot().timeline.map((item) => item.id);
+    expect(new Set(ids).size).toBe(ids.length);
+    await runner.dispose();
+  });
 });
 
 describe("P1-1: live 会话 timeline 投影", () => {
@@ -220,6 +270,21 @@ describe("P1-1: live 会话 timeline 投影", () => {
       session: { model },
     });
     expect(runtime.session.model).toBeUndefined();
+    await runner.dispose();
+  });
+
+  it("syncExternalThinking updates the snapshot and emits session_updated without touching SDK", async () => {
+    const runtime = makeRuntime(path);
+    const runner = await openRunner(runtime);
+
+    runner.syncExternalThinking("xhigh");
+
+    expect(runner.snapshot().session.thinkingLevel).toBe("xhigh");
+    expect(events.findLast((event) => event.type === "session_updated")).toMatchObject({
+      type: "session_updated",
+      session: { thinkingLevel: "xhigh" },
+    });
+    expect(runtime.session.thinkingLevel).toBeUndefined();
     await runner.dispose();
   });
 

@@ -12,15 +12,17 @@ import type {
   HostEvent,
   HostSessionList,
   HostStatus,
+  SessionSnapshot,
   ProtocolCapability,
   ProtocolHello,
   JsonValue,
   MobileRolloutMode,
+  DesktopPluginTarget,
 } from "@maestro-mobile/shared";
 import type { HostController } from "../host-controller.js";
 import type { SessionTargetIdentity } from "../control/SessionDirectory.js";
 import type { CommandResult as ApplicationCommandResult } from "../application/session-command-service.js";
-import { validateClientCommand, validateProtocolHello, isCompatibleReleaseVersion, isReleaseVersion, MOBILE_RELEASE_VERSION, parseRolloutMode } from "@maestro-mobile/shared";
+import { validateClientCommand, validateProtocolHello, isCompatibleReleaseVersion, isReleaseVersion, isSessionTargetIdentity, isDesktopPluginTarget, MOBILE_RELEASE_VERSION, parseRolloutMode } from "@maestro-mobile/shared";
 
 const HOST_PROTOCOL_CAPABILITIES: ProtocolCapability[] = [
   "session_control",
@@ -32,15 +34,6 @@ const HOST_PROTOCOL_CAPABILITIES: ProtocolCapability[] = [
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
-}
-
-function isTargetIdentity(value: unknown): value is SessionTargetIdentity {
-  if (typeof value !== "object" || value === null) return false;
-  const target = value as Record<string, unknown>;
-  return typeof target.sessionId === "string"
-    && typeof target.endpointId === "string"
-    && typeof target.normalizedCwd === "string"
-    && typeof target.processGeneration === "string";
 }
 
 const ROLLOUT_MUTATING_COMMANDS = new Set([
@@ -303,6 +296,9 @@ export class MobileHostServer {
     }, "required", "protocol_ready");
     this.sendFrame(client, { type: "host_status", status: "connected", seq: 0 }, "required", "host_status");
     this.sendFrame(client, { type: "host_info", info: this.controller.getStatus(), seq: 0 }, "required", "host_info");
+    if (this.rolloutMode !== "disabled") {
+      for (const event of this.controller.pendingDesktopAskEvents()) this.sendFrame(client, event, "required", event.type);
+    }
   }
 
   /**
@@ -498,6 +494,15 @@ export class MobileHostServer {
         return;
       }
 
+      if (request.method === "GET" && url.pathname === "/api/desktop/current") {
+        const target = desktopTargetFromQuery(url);
+        if (target === null) {
+          writeJson(response, 400, { error: "exact target requires sessionId, endpointId, normalizedCwd, and processGeneration" });
+          return;
+        }
+        writeJson(response, 200, this.controller.getDesktopCurrentStatus(target ?? undefined));
+        return;
+      }
       if (request.method === "GET" && url.pathname === "/api/sessions") {
         const cwd = url.searchParams.get("cwd") ?? undefined;
         const limitRaw = url.searchParams.get("limit");
@@ -710,9 +715,13 @@ export class MobileHostServer {
   }
 
   private targetForCommand(command: { sessionId: string; target?: unknown }): SessionTargetIdentity | undefined {
-    if (command.target !== undefined) return isTargetIdentity(command.target) ? command.target : undefined;
+    if (command.target !== undefined) return isSessionTargetIdentity(command.target) ? command.target : undefined;
     // Host-owned targets are exact directory entries; this does not infer a cwd/PID/owner.
     return this.controller.getSessionTarget(command.sessionId);
+  }
+
+  private scopedRequestId(client: ClientSocket, command: ClientCommand, target: SessionTargetIdentity): string {
+    return JSON.stringify([client.id, command.id, target.sessionId, target.endpointId, target.normalizedCwd, target.processGeneration]);
   }
 
   private sendApplicationResult(client: ClientSocket, command: ClientCommand, result: ApplicationCommandResult): void {
@@ -820,7 +829,10 @@ export class MobileHostServer {
     }
 
     const commandTarget = command as ClientCommand & { sessionId?: string; target?: unknown };
-    if (commandTarget.target !== undefined && (!isTargetIdentity(commandTarget.target) || commandTarget.target.sessionId !== commandTarget.sessionId)) {
+    if (commandTarget.target !== undefined && (
+      !isSessionTargetIdentity(commandTarget.target)
+      || (typeof commandTarget.sessionId === "string" && commandTarget.target.sessionId !== commandTarget.sessionId)
+    )) {
       this.sendUnavailable(client, command, "target_mismatch");
       return;
     }
@@ -873,14 +885,15 @@ export class MobileHostServer {
         case "set_model": {
           const target = this.targetForCommand(command);
           if (!target) { this.sendUnavailable(client, command, "target_unavailable"); break; }
-          const result = await this.controller.application.command({ requestId: command.id, target, kind: "set_model", modelId: command.modelId, provider: command.provider });
+          const result = await this.controller.application.command({ requestId: this.scopedRequestId(client, command, target), target, kind: "set_model", modelId: command.modelId, provider: command.provider });
           this.sendApplicationResult(client, command, result);
           break;
         }
         case "set_thinking": {
           const target = this.targetForCommand(command);
           if (!target) { this.sendUnavailable(client, command, "target_unavailable"); break; }
-          this.sendAck(client, command, await this.controller.application.sessionOperation({ kind: "set_thinking", target, level: command.level }));
+          const result = await this.controller.application.command({ requestId: this.scopedRequestId(client, command, target), target, kind: "set_thinking", level: command.level });
+          this.sendApplicationResult(client, command, result);
           break;
         }
         case "compact": {
@@ -904,18 +917,28 @@ export class MobileHostServer {
               ...(command.query ? { query: command.query } : {}),
               ...(command.limit !== undefined ? { limit: command.limit } : {}),
               ...(command.cursor ? { cursor: command.cursor } : {}),
+              ...(command.sessionIds !== undefined ? { sessionIds: command.sessionIds } : {}),
+              ...(command.latestForCwds !== undefined ? { latestForCwds: command.latestForCwds } : {}),
             },
           });
           this.sendAck(client, command, list);
           break;
         }
         case "open_session": {
-          const opened = await this.controller.application.openSession({ cwd: command.cwd, mode: command.mode, sessionFile: command.sessionFile });
-          this.sendAck(client, command, { sessionId: opened.id });
+          const opened = await this.controller.application.openSession({
+            cwd: command.cwd,
+            mode: command.mode,
+            sessionFile: command.sessionFile,
+            target: command.target,
+          });
+          const target = this.controller.getSessionTarget(opened.id);
+          this.sendAck(client, command, { sessionId: opened.id, ...(target ? { target } : {}) });
           break;
         }
         case "close_session": {
-          const closed = await this.controller.application.closeSession(command.sessionId);
+          const target = this.targetForCommand(command);
+          if (!target || !this.controller.directory.resolve(target)) { this.sendUnavailable(client, command, "target_unavailable"); break; }
+          const closed = await this.controller.application.closeSession(command.sessionId, target);
           if (!closed) this.sendUnavailable(client, command, "session_not_found");
           else this.sendAck(client, command, { closed: true });
           break;
@@ -927,7 +950,7 @@ export class MobileHostServer {
             break;
           }
           const result = await this.controller.application.command({
-            requestId: command.id,
+            requestId: this.scopedRequestId(client, command, target),
             target,
             kind: "prompt",
             message: command.message,
@@ -942,7 +965,7 @@ export class MobileHostServer {
             this.sendUnavailable(client, command, "target_unavailable");
             break;
           }
-          const result = await this.controller.application.command({ requestId: command.id, target, kind: "steer", message: command.message });
+          const result = await this.controller.application.command({ requestId: this.scopedRequestId(client, command, target), target, kind: "steer", message: command.message });
           this.sendApplicationResult(client, command, result);
           break;
         }
@@ -952,7 +975,7 @@ export class MobileHostServer {
             this.sendUnavailable(client, command, "target_unavailable");
             break;
           }
-          const result = await this.controller.application.command({ requestId: command.id, target, kind: "follow_up", message: command.message });
+          const result = await this.controller.application.command({ requestId: this.scopedRequestId(client, command, target), target, kind: "follow_up", message: command.message });
           this.sendApplicationResult(client, command, result);
           break;
         }
@@ -962,12 +985,14 @@ export class MobileHostServer {
             this.sendUnavailable(client, command, "target_unavailable");
             break;
           }
-          const result = await this.controller.application.command({ requestId: command.id, target, kind: "abort" });
+          const result = await this.controller.application.command({ requestId: this.scopedRequestId(client, command, target), target, kind: "abort" });
           this.sendApplicationResult(client, command, result);
           break;
         }
         case "extension_ui_response": {
-          const ok = this.controller.application.respondToExtensionUi(command.sessionId, command.requestId, command.response);
+          const target = this.targetForCommand(command);
+          if (!target || !this.controller.directory.resolve(target)) { this.sendUnavailable(client, command, "target_unavailable"); break; }
+          const ok = await this.controller.application.respondToExtensionUi(command.sessionId, command.requestId, command.response, target);
           if (ok) this.sendAck(client, command, {});
           else this.sendError(client, "request_not_found", undefined, command.id);
           break;
@@ -987,7 +1012,11 @@ export class MobileHostServer {
             this.sendUnavailable(client, command, "target_unavailable");
             break;
           }
-          this.sendQueryResult(client, command, await this.controller.application.query({ kind: "session_snapshot", target }) as { ok: boolean; value?: unknown; status?: "unknown" | "failed"; error?: { code: string; message?: string }; revision: number });
+          const wireSeq = this.controller.nextEventSequence;
+          const result = await this.controller.application.query({ kind: "session_snapshot", target }) as { ok: boolean; value?: SessionSnapshot; status?: "unknown" | "failed"; error?: { code: string; message?: string }; revision: number };
+          this.sendQueryResult(client, command, result.ok && result.value
+            ? { ...result, value: { ...result.value, wireSeq } }
+            : result);
           break;
         }
         case "get_session_usage": {
@@ -1005,7 +1034,9 @@ export class MobileHostServer {
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       // 必须带 in_reply_to：客户端靠它匹配 pendingCommands，空值会让命令挂满 30s 超时
-      const code = message === "session_not_found" ? "session_not_found" : "command_failed";
+      const code = message === "session_not_found" || message === "target_unavailable" || message === "target_mismatch"
+        ? message
+        : "command_failed";
       this.sendError(client, code, message, (command as { id?: string }).id ?? "");
     }
   }
@@ -1097,6 +1128,19 @@ export function sanitizeWsErrorMessage(raw: string, secrets: string[] = []): str
   return out;
 }
 
+function desktopTargetFromQuery(url: URL): DesktopPluginTarget | null | undefined {
+  const fields = ["sessionId", "endpointId", "normalizedCwd", "processGeneration"] as const;
+  const values = fields.map((field) => url.searchParams.get(field));
+  if (values.every((value) => value === null)) return undefined;
+  if (values.some((value) => value === null)) return null;
+  const target = {
+    sessionId: values[0]!,
+    endpointId: values[1]!,
+    normalizedCwd: values[2]!,
+    processGeneration: values[3]!,
+  };
+  return isDesktopPluginTarget(target) ? target : null;
+}
 function writeJson(response: ServerResponse, status: number, body: unknown): void {
   response.writeHead(status, {
     "Content-Type": "application/json; charset=utf-8",
@@ -1104,6 +1148,8 @@ function writeJson(response: ServerResponse, status: number, body: unknown): voi
   });
   response.end(JSON.stringify(body));
 }
+
+
 
 function applyCorsHeaders(response: ServerResponse, origin?: string): void {
   if (origin) {

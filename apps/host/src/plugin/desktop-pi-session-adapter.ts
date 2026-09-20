@@ -8,6 +8,7 @@ export interface DesktopPiSessionApi {
   abort(): Promise<void> | void;
   getAllTools(): readonly { name?: string }[];
   setModel(provider: string | undefined, modelId: string): Promise<boolean>;
+  setThinking(level: string): void;
 }
 
 /** 投递失败的错误码；Host/移动端据此区分「未投递」与「插件异常」。 */
@@ -52,7 +53,7 @@ export class DesktopPiSessionAdapter {
   ) {
     this.target = { ...target };
     this.ask = ask;
-    this.capabilities = ["prompt", "steer", "follow_up", "abort", "set_model", ...(ask.supported ? ["ask-user-question" as const] : [])];
+    this.capabilities = ["prompt", "steer", "follow_up", "abort", "set_model", "set_thinking", ...(ask.supported ? ["ask-user-question" as const] : [])];
   }
 
   getCapabilities(): DesktopPluginCapability[] {
@@ -88,12 +89,25 @@ export class DesktopPiSessionAdapter {
       return { type: "desktop_plugin_result", requestId: request.requestId, operation, status: "failed", error: { code: "capability_mismatch" } };
     }
     try {
-      if (operation === "prompt") await this.api.prompt(request.operation.message, request.operation.images);
-      else if (operation === "steer") await this.api.steer(request.operation.message);
-      else if (operation === "follow_up") await this.api.followUp(request.operation.message);
-      else if (operation === "set_model") {
+      if (operation === "prompt") {
+        await this.api.prompt(request.operation.message, request.operation.images);
+        // `ExtensionAPI.sendUserMessage()` 是 fire-and-forget；这里只能确认请求已被接受。
+        return { type: "desktop_plugin_result", requestId: request.requestId, operation, status: "accepted" };
+      }
+      if (operation === "steer") {
+        await this.api.steer(request.operation.message);
+        return { type: "desktop_plugin_result", requestId: request.requestId, operation, status: "accepted" };
+      }
+      if (operation === "follow_up") {
+        await this.api.followUp(request.operation.message);
+        return { type: "desktop_plugin_result", requestId: request.requestId, operation, status: "accepted" };
+      }
+      if (operation === "set_model") {
         const changed = await this.api.setModel(request.operation.provider, request.operation.modelId);
         if (!changed) return { type: "desktop_plugin_result", requestId: request.requestId, operation, status: "failed", error: { code: "model_change_failed" } };
+      } else if (operation === "set_thinking") {
+        this.api.setThinking(request.operation.level);
+        return { type: "desktop_plugin_result", requestId: request.requestId, operation, status: "accepted" };
       } else {
         await this.ask.cancelAll();
         await this.api.abort();

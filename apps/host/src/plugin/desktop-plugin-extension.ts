@@ -4,13 +4,25 @@ import { join, normalize } from "node:path";
 import { randomUUID } from "node:crypto";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import type { ImageContent, Model, TextContent } from "@earendil-works/pi-ai";
-import type { DesktopPluginEvent, DesktopPluginModel, DesktopPluginTarget } from "@maestro-mobile/shared";
+import type { DesktopPluginEvent, DesktopPluginModel, DesktopPluginRuntimeStatus, DesktopPluginSessionSummary, DesktopPluginTarget, DesktopAskRequest } from "@maestro-mobile/shared";
 import { DesktopPluginIpcClient } from "./desktop-plugin-ipc.js";
+import {
+  beginDesktopPluginRuntimeRecord,
+  clearDesktopPluginRuntimeRecord,
+  updateDesktopPluginRuntimeRecord,
+} from "./desktop-plugin-runtime-state.js";
 import { DesktopPiSessionAdapter, deliveryFailure } from "./desktop-pi-session-adapter.js";
 
 const DEFAULT_SOCKET_PATH = join(homedir(), ".pi", "maestro-mobile", "ipc", "desktop-plugin.sock");
 const DEFAULT_SECRET_PATH = join(homedir(), ".pi", "maestro-mobile-ipc-secret");
 const DESKTOP_PLUGIN_RECONNECT_DELAY_MS = 1_000;
+
+type PiThinkingLevel = Parameters<ExtensionAPI["setThinkingLevel"]>[0];
+
+function isPiThinkingLevel(level: string): level is PiThinkingLevel {
+  return level === "off" || level === "minimal" || level === "low" || level === "medium"
+    || level === "high" || level === "xhigh" || level === "max";
+}
 
 export interface DesktopPluginExtensionOptions {
   socketPath?: string;
@@ -65,63 +77,169 @@ export function createDesktopPluginExtension(options: DesktopPluginExtensionOpti
     let client: DesktopPluginIpcClient | undefined;
     let adapter: DesktopPiSessionAdapter | undefined;
     let reconnectTimer: ReturnType<typeof setTimeout> | undefined;
-    let connecting = false;
     let stopping = false;
+    let sessionGeneration = 0;
+    let connectionAttempt: {
+      generation: number;
+      adapter: DesktopPiSessionAdapter;
+      promise: Promise<void>;
+    } | undefined;
     let latestModel: DesktopPluginModel | undefined;
+    let latestThinkingLevel: string | undefined;
+    let sessionFile: string | undefined;
+    let latestRuntimeStatus: DesktopPluginRuntimeStatus = "idle";
+    let activeSince: string | undefined;
+    let lastActivityAt: string | undefined;
+    let messageCount = 0;
+    let latestUsage: DesktopPluginSessionSummary["usage"];
+    let latestContext: DesktopPluginSessionSummary["context"];
+    let runtimeGenerationToken: string | undefined;
+    const pendingAskRequests = new Map<string, DesktopAskRequest>();
+    const updateRuntime = (patch: Parameters<typeof updateDesktopPluginRuntimeRecord>[1]): void => {
+      if (runtimeGenerationToken) updateDesktopPluginRuntimeRecord(runtimeGenerationToken, patch);
+    };
 
-    const scheduleReconnect = (): void => {
-      if (stopping || reconnectTimer || client?.isConnected) return;
+    const countStoredMessages = (ctx: ExtensionContext): number => {
+      const getEntries = (ctx.sessionManager as unknown as { getEntries?: () => unknown[] }).getEntries;
+      return typeof getEntries === "function"
+        ? getEntries.call(ctx.sessionManager).filter((entry) => Boolean(entry && typeof entry === "object" && (entry as { type?: unknown }).type === "message")).length
+        : messageCount;
+    };
+    const readContextUsage = (ctx: ExtensionContext): DesktopPluginSessionSummary["context"] => {
+      const getContextUsage = (ctx as unknown as { getContextUsage?: () => DesktopPluginSessionSummary["context"] }).getContextUsage;
+      return typeof getContextUsage === "function" ? getContextUsage.call(ctx) : undefined;
+    };
+
+    const isCurrentSession = (generation: number, sessionAdapter: DesktopPiSessionAdapter): boolean => (
+      !stopping && sessionGeneration === generation && adapter === sessionAdapter
+    );
+
+    const scheduleReconnect = (generation = sessionGeneration): void => {
+      if (stopping || generation !== sessionGeneration || reconnectTimer || client?.isConnected) return;
       reconnectTimer = setTimeout(() => {
         reconnectTimer = undefined;
+        if (stopping || generation !== sessionGeneration) return;
         void connectDesktopPlugin();
       }, DESKTOP_PLUGIN_RECONNECT_DELAY_MS);
     };
 
-    const connectDesktopPlugin = async (): Promise<void> => {
-      if (stopping || connecting || client?.isConnected || !adapter) return;
-      connecting = true;
-      const secret = await resolveSecret(options);
-      if (!secret) {
-        connecting = false;
-        scheduleReconnect();
-        return;
-      }
-      const candidate = new DesktopPluginIpcClient({
-        socketPath: options.socketPath ?? DEFAULT_SOCKET_PATH,
-        secret,
-        target: adapter.target,
-        capabilities: adapter.getCapabilities(),
-        onRequest: (request) => adapter?.execute(request) ?? Promise.resolve({
-          type: "desktop_plugin_result" as const,
-          requestId: request.requestId,
-          operation: request.operation.type,
-          status: "failed" as const,
-          error: { code: "plugin_unavailable" },
-        }),
-        onAskResponse: (response) => adapter?.answerAsk(response) ?? Promise.resolve(),
-        onDisconnected: () => {
-          if (client !== candidate) return;
-          client = undefined;
-          scheduleReconnect();
-        },
-      });
-      client = candidate;
-      try {
-        await candidate.connect();
-        if (latestModel) {
-          await candidate.sendModelSelect({ type: "desktop_plugin_event", event: "model_select", model: latestModel }).catch(() => undefined);
-        }
-      } catch {
+    const connectDesktopPlugin = (): Promise<void> => {
+      const sessionAdapter = adapter;
+      const generation = sessionGeneration;
+      if (stopping || client?.isConnected || !sessionAdapter) return Promise.resolve();
+      if (connectionAttempt?.generation === generation) return connectionAttempt.promise;
+
+      const attempt = {
+        generation,
+        adapter: sessionAdapter,
+        promise: Promise.resolve(),
+      };
+      const abandonCandidate = (candidate: DesktopPluginIpcClient): void => {
         if (client === candidate) client = undefined;
         candidate.close();
-        scheduleReconnect();
-      } finally {
-        connecting = false;
-      }
+      };
+      attempt.promise = (async () => {
+        let candidate: DesktopPluginIpcClient | undefined;
+        try {
+          const secret = await resolveSecret(options);
+          if (!isCurrentSession(generation, sessionAdapter)) return;
+          if (!secret) {
+            scheduleReconnect(generation);
+            return;
+          }
+
+          candidate = new DesktopPluginIpcClient({
+            socketPath: options.socketPath ?? DEFAULT_SOCKET_PATH,
+            secret,
+            target: sessionAdapter.target,
+            ...(sessionFile ? { sessionFile } : {}),
+            capabilities: sessionAdapter.getCapabilities(),
+            onRequest: (request) => sessionAdapter.execute(request),
+            onAskResponse: async (response) => {
+              try {
+                await sessionAdapter.answerAsk(response);
+              } finally {
+                // A rejected/expired answer must also retire the Plugin-side pending ask.
+                if (isCurrentSession(generation, sessionAdapter)) pendingAskRequests.delete(response.toolCallId);
+              }
+            },
+            onDisconnected: () => {
+              if (client !== candidate) return;
+              client = undefined;
+              if (!isCurrentSession(generation, sessionAdapter)) return;
+              updateRuntime({ pluginBroker: "disconnected", error: "desktop plugin disconnected" });
+              scheduleReconnect(generation);
+            },
+          });
+          client = candidate;
+          await candidate.connect();
+          if (!isCurrentSession(generation, sessionAdapter)) {
+            abandonCandidate(candidate);
+            return;
+          }
+
+          updateRuntime({ pluginBroker: "connected", error: null });
+          await candidate.sendSessionSummary({
+            type: "desktop_plugin_event",
+            event: "session_summary",
+            summary: currentSummary(),
+          }).catch(() => undefined);
+          if (!isCurrentSession(generation, sessionAdapter)) {
+            abandonCandidate(candidate);
+            return;
+          }
+          if (latestModel) {
+            await candidate.sendModelSelect({ type: "desktop_plugin_event", event: "model_select", model: latestModel }).catch(() => undefined);
+          }
+          if (!isCurrentSession(generation, sessionAdapter)) {
+            abandonCandidate(candidate);
+            return;
+          }
+          if (latestThinkingLevel) {
+            await candidate.sendThinkingLevelSelect({
+              type: "desktop_plugin_event", event: "thinking_level_select", level: latestThinkingLevel,
+            }).catch(() => undefined);
+          }
+          if (!isCurrentSession(generation, sessionAdapter)) {
+            abandonCandidate(candidate);
+            return;
+          }
+          for (const [toolCallId, request] of pendingAskRequests) {
+            if (!isCurrentSession(generation, sessionAdapter)) {
+              abandonCandidate(candidate);
+              return;
+            }
+            if (request.deadlineAt <= Date.now()) {
+              pendingAskRequests.delete(toolCallId);
+              continue;
+            }
+            await candidate.sendAskRequest(request).catch(() => undefined);
+          }
+        } catch (error) {
+          if (candidate) abandonCandidate(candidate);
+          if (isCurrentSession(generation, sessionAdapter)) {
+            updateRuntime({ pluginBroker: "disconnected", error });
+            scheduleReconnect(generation);
+          }
+        }
+      })().finally(() => {
+        if (connectionAttempt === attempt) connectionAttempt = undefined;
+      });
+      connectionAttempt = attempt;
+      return attempt.promise;
     };
 
     pi.on("session_start", (_event, ctx: ExtensionContext) => {
+      sessionGeneration += 1;
       stopping = false;
+      if (reconnectTimer) {
+        clearTimeout(reconnectTimer);
+        reconnectTimer = undefined;
+      }
+      const staleClient = client;
+      client = undefined;
+      staleClient?.close();
+      pendingAskRequests.clear();
       const target: DesktopPluginTarget = {
         sessionId: ctx.sessionManager.getSessionId(),
         endpointId: options.endpointId ?? `desktop-${randomUUID()}`,
@@ -161,31 +279,125 @@ export function createDesktopPluginExtension(options: DesktopPluginExtensionOpti
             : ctx.modelRegistry.getAll().find((candidate) => String(candidate.id ?? "") === modelId);
           return model ? pi.setModel(model) : false;
         },
+        setThinking: (level: string) => {
+          if (!isPiThinkingLevel(level)) throw new Error("invalid_thinking_level");
+          pi.setThinkingLevel(level);
+        },
         abort: () => {
           ctx.abort();
         },
         getAllTools: () => pi.getAllTools(),
       };
       latestModel = modelInfo(ctx.model);
+      latestThinkingLevel = pi.getThinkingLevel();
+      sessionFile = ctx.sessionManager.getSessionFile();
+      latestRuntimeStatus = ctx.isIdle() ? "idle" : "running";
+      activeSince = undefined;
+      latestUsage = undefined;
+      if (latestRuntimeStatus === "running") activeSince = new Date().toISOString();
+      lastActivityAt = new Date().toISOString();
+      messageCount = countStoredMessages(ctx);
+      latestContext = readContextUsage(ctx);
+      runtimeGenerationToken = target.processGeneration;
+      beginDesktopPluginRuntimeRecord({
+        target,
+        localStatus: latestRuntimeStatus,
+        pluginBroker: "disconnected",
+        transitionAt: new Date().toISOString(),
+        generationToken: runtimeGenerationToken,
+      });
       adapter = new DesktopPiSessionAdapter(api, target);
       void connectDesktopPlugin();
     });
 
     pi.on("model_select", (event) => {
       latestModel = modelInfo(event.model);
-      const modelEvent: DesktopPluginEvent | undefined = latestModel
+      const modelEvent: Extract<DesktopPluginEvent, { event: "model_select" }> | undefined = latestModel
         ? { type: "desktop_plugin_event", event: "model_select", model: latestModel }
         : undefined;
       if (modelEvent) void client?.sendModelSelect(modelEvent).catch(() => undefined);
     });
 
+    pi.on("thinking_level_select", (event) => {
+      latestThinkingLevel = event.level;
+      void client?.sendThinkingLevelSelect({
+        type: "desktop_plugin_event",
+        event: "thinking_level_select",
+        level: event.level,
+      }).catch(() => undefined);
+    });
+
+    const currentSummary = (): DesktopPluginSessionSummary => ({
+      runtimeStatus: latestRuntimeStatus,
+      activeSince: activeSince ?? null,
+      ...(lastActivityAt ? { lastActivityAt } : {}),
+      messageCount,
+      ...(latestUsage ? { usage: latestUsage } : {}),
+      ...(latestContext !== undefined ? { context: latestContext } : {}),
+    });
+
+    const publishSummary = (): void => {
+      const summary = currentSummary();
+      updateRuntime({ localStatus: latestRuntimeStatus, summary });
+      void client?.sendSessionSummary({
+        type: "desktop_plugin_event",
+        event: "session_summary",
+        summary,
+      }).catch(() => undefined);
+    };
+
+    const publishRuntimeStatus = (runtimeStatus: DesktopPluginRuntimeStatus): void => {
+      latestRuntimeStatus = runtimeStatus;
+      const now = new Date().toISOString();
+      lastActivityAt = now;
+      if (runtimeStatus === "running") activeSince = activeSince ?? now;
+      else activeSince = undefined;
+      publishSummary();
+    };
+
+    pi.on("agent_start", () => publishRuntimeStatus("running"));
+    pi.on("message_end", (event, ctx) => {
+      const role = (event as { message?: { role?: string; usage?: { input?: number; output?: number; cacheRead?: number; cacheWrite?: number; totalTokens?: number; cost?: { total?: number } } } }).message?.role;
+      messageCount += 1;
+      lastActivityAt = new Date().toISOString();
+      if (role === "assistant") {
+        const usage = (event as { message?: { usage?: { input?: number; output?: number; cacheRead?: number; cacheWrite?: number; totalTokens?: number; cost?: { total?: number } } } }).message?.usage;
+        if (usage && [usage.input, usage.output, usage.cacheRead, usage.cacheWrite, usage.totalTokens, usage.cost?.total].every((value) => typeof value === "number")) {
+          latestUsage = { input: usage.input!, output: usage.output!, cacheRead: usage.cacheRead!, cacheWrite: usage.cacheWrite!, totalTokens: usage.totalTokens!, cost: usage.cost!.total! };
+        }
+      }
+      latestContext = readContextUsage(ctx);
+      publishSummary();
+    });
+    pi.on("session_compact", (_event, ctx) => {
+      messageCount = countStoredMessages(ctx);
+      latestContext = readContextUsage(ctx);
+      lastActivityAt = new Date().toISOString();
+      publishSummary();
+    });
+    pi.on("agent_end", (_event, ctx) => {
+      latestContext = readContextUsage(ctx);
+      publishRuntimeStatus("idle");
+    });
+
     pi.on("tool_call", (event) => {
       const askRequest = adapter?.observeToolCall({ toolCallId: event.toolCallId, toolName: event.toolName, input: event.input });
-      if (askRequest) void client?.sendAskRequest(askRequest).catch(() => undefined);
+      if (askRequest) {
+        pendingAskRequests.set(askRequest.toolCallId, askRequest);
+        void client?.sendAskRequest(askRequest).catch(() => undefined);
+      }
     });
 
     pi.on("session_shutdown", async () => {
+      const shutdownGeneration = sessionGeneration;
+      const shutdownAdapter = adapter;
+      const shutdownAttempt = connectionAttempt?.generation === shutdownGeneration
+        ? connectionAttempt.promise
+        : undefined;
       stopping = true;
+      sessionGeneration += 1;
+      adapter = undefined;
+      pendingAskRequests.clear();
       if (reconnectTimer) {
         clearTimeout(reconnectTimer);
         reconnectTimer = undefined;
@@ -193,8 +405,11 @@ export function createDesktopPluginExtension(options: DesktopPluginExtensionOpti
       const activeClient = client;
       client = undefined;
       activeClient?.close();
-      await adapter?.dispose();
-      adapter = undefined;
+      const generationToken = runtimeGenerationToken;
+      runtimeGenerationToken = undefined;
+      if (generationToken) clearDesktopPluginRuntimeRecord(generationToken);
+      await shutdownAttempt;
+      await shutdownAdapter?.dispose();
     });
   };
 }

@@ -18,7 +18,8 @@
     }
   },
   "bin": {
-    "pi-maestro-mobile": "./dist/cli.js"
+    "pi-maestro-mobile": "./dist/cli.js",
+    "pi-maestro-mobile-broker": "./dist/broker-cli.js"
   },
   "files": [
     "dist",

@@ -48,6 +48,11 @@ export class IdempotencyLedger<T> {
     return this.entries.has(`${operation}\u0000${requestId}`);
   }
 
+  forget(requestId: string, operation: string, promise: Promise<T>): void {
+    const key = `${operation}\u0000${requestId}`;
+    if (this.entries.get(key)?.promise === promise) this.entries.delete(key);
+  }
+
   clear(): void {
     this.entries.clear();
   }

@@ -1,5 +1,5 @@
 import type { MonitorState, WorkspaceTelemetryState } from "@maestro-mobile/shared";
-import { projectMonitorState, telemetryStableKey } from "../monitor-projection.js";
+import { projectMonitorWindows, telemetryStableKeyFromWindows } from "../monitor-projection.js";
 import type { WorkspaceTelemetryReader } from "../workspace-telemetry.js";
 
 export interface MonitorReadSnapshot {
@@ -18,22 +18,39 @@ export class MonitorReadService {
   private lastStableKey: string | undefined;
   private revision = 0;
 
+  private readChain: Promise<void> = Promise.resolve();
+
   constructor(private readonly source: MonitorTelemetrySource) {}
 
   async read(): Promise<MonitorReadSnapshot> {
-    const telemetry = typeof this.source === "function"
-      ? await this.source()
-      : await this.source.read();
-    const state = projectMonitorState(telemetry);
-    const stableKey = telemetryStableKey(telemetry);
-    if (stableKey !== this.lastStableKey) {
-      this.lastStableKey = stableKey;
-      this.revision += 1;
-    }
-    return {
-      state: { ...state, revision: this.revision },
-      stableKey,
-      revision: this.revision,
-    };
+    let resolveResult!: (value: MonitorReadSnapshot) => void;
+    let rejectResult!: (reason?: unknown) => void;
+    const result = new Promise<MonitorReadSnapshot>((resolve, reject) => {
+      resolveResult = resolve;
+      rejectResult = reject;
+    });
+    const run = this.readChain.then(async () => {
+      try {
+        const telemetry = typeof this.source === "function"
+          ? await this.source()
+          : await this.source.read();
+        const windows = projectMonitorWindows(telemetry);
+        const state = { windows, observedAt: telemetry.observedAt };
+        const stableKey = telemetryStableKeyFromWindows(windows);
+        if (stableKey !== this.lastStableKey) {
+          this.lastStableKey = stableKey;
+          this.revision += 1;
+        }
+        resolveResult({
+          state: { ...state, revision: this.revision },
+          stableKey,
+          revision: this.revision,
+        });
+      } catch (error) {
+        rejectResult(error);
+      }
+    });
+    this.readChain = run.then(() => undefined, () => undefined);
+    return result;
   }
 }

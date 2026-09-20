@@ -7,6 +7,7 @@ import type {
   DesktopAskRequest,
   DesktopPluginEvent,
   DesktopAskResponse,
+  DesktopAskResult,
   DesktopPluginClientFrame,
   DesktopPluginError,
   DesktopPluginFrame,
@@ -30,6 +31,7 @@ import { DesktopPluginRegistry, type DesktopPluginTransport } from "./desktop-pl
 export const DEFAULT_DESKTOP_PLUGIN_MAX_FRAME_BYTES = 1024 * 1024;
 export const DEFAULT_DESKTOP_PLUGIN_HANDSHAKE_TIMEOUT_MS = 5_000;
 export const DEFAULT_DESKTOP_PLUGIN_REQUEST_TIMEOUT_MS = 2_000;
+export const DEFAULT_DESKTOP_PLUGIN_ASK_RESPONSE_TIMEOUT_MS = 2_000;
 
 export interface DesktopPluginIpcServerOptions {
   socketPath: string;
@@ -40,8 +42,12 @@ export interface DesktopPluginIpcServerOptions {
   handshakeTimeoutMs?: number;
   requestTimeoutMs?: number;
   releaseVersion?: string;
+  supportedEvents?: readonly DesktopPluginEvent["event"][];
   onConnected?: (target: DesktopPluginTarget) => void;
-  onModelSelect?: (target: DesktopPluginTarget, event: DesktopPluginEvent) => void;
+  onModelSelect?: (target: DesktopPluginTarget, event: Extract<DesktopPluginEvent, { event: "model_select" }>) => void;
+  onThinkingLevelSelect?: (target: DesktopPluginTarget, event: Extract<DesktopPluginEvent, { event: "thinking_level_select" }>) => void;
+  onRuntimeStatus?: (target: DesktopPluginTarget, event: Extract<DesktopPluginEvent, { event: "runtime_status" }>) => void;
+  onSessionSummary?: (target: DesktopPluginTarget, event: Extract<DesktopPluginEvent, { event: "session_summary" }>) => void;
   onAskRequest?: (target: DesktopPluginTarget, request: DesktopAskRequest) => void;
   onDisconnected?: (target: DesktopPluginTarget) => void;
 }
@@ -50,6 +56,7 @@ export interface DesktopPluginIpcClientOptions {
   socketPath: string;
   secret: string;
   target: DesktopPluginTarget;
+  sessionFile?: string;
   capabilities: DesktopPluginCapability[];
   maxFrameBytes?: number;
   handshakeTimeoutMs?: number;
@@ -59,11 +66,15 @@ export interface DesktopPluginIpcClientOptions {
   onDisconnected?: () => void;
 }
 
+function askCorrelationKey(requestId: string, toolCallId: string): string {
+  return JSON.stringify([requestId, toolCallId]);
+}
+
 function sanitizedMessage(error: unknown): string {
   return error instanceof Error ? error.message.slice(0, 256) : "desktop plugin operation failed";
 }
 
-async function removeStaleSocket(path: string): Promise<void> {
+export async function removeStaleSocket(path: string): Promise<void> {
   try {
     await access(path);
   } catch {
@@ -85,13 +96,13 @@ function isSameSecret(actual: string, expected: string): boolean {
   return actualBytes.length === expectedBytes.length && timingSafeEqual(actualBytes, expectedBytes);
 }
 
-function encodeFrame(frame: DesktopPluginFrame, maxFrameBytes: number): Buffer {
+function encodeFrame(frame: unknown, maxFrameBytes: number): Buffer {
   const payload = Buffer.from(`${JSON.stringify(frame)}\n`, "utf8");
   if (payload.length > maxFrameBytes) throw new Error("desktop plugin frame too large");
   return payload;
 }
 
-class JsonLineConnection {
+export class JsonLineConnection {
   private buffer = Buffer.alloc(0);
   private closed = false;
 
@@ -106,7 +117,7 @@ class JsonLineConnection {
     socket.once("close", () => this.close());
   }
 
-  send(frame: DesktopPluginFrame): void {
+  send(frame: unknown): void {
     if (this.closed) throw new Error("desktop plugin disconnected");
     this.socket.write(encodeFrame(frame, this.maxFrameBytes));
   }
@@ -152,6 +163,7 @@ class JsonLineConnection {
 
 class ServerTransport implements DesktopPluginTransport {
   private readonly pending = new Map<string, { resolve: (result: DesktopPluginResult) => void; reject: (error: Error) => void; timer: ReturnType<typeof setTimeout> }>();
+  private readonly pendingAskResponses = new Map<string, { requestId: string; toolCallId: string; resolve: (result: DesktopAskResult) => void; reject: (error: Error) => void; timer: ReturnType<typeof setTimeout> }>();
   private closed = false;
 
   constructor(
@@ -181,9 +193,32 @@ class ServerTransport implements DesktopPluginTransport {
     });
   }
 
-  answerAsk(response: DesktopAskResponse): void {
-    if (this.closed) throw new Error("desktop plugin disconnected");
-    this.connection.send(response);
+  answerAsk(response: DesktopAskResponse): Promise<DesktopAskResult> {
+    if (this.closed) return Promise.resolve({ type: "desktop_ask_result", requestId: response.requestId, toolCallId: response.toolCallId, status: "unknown", error: { code: "disconnected" } });
+    const key = askCorrelationKey(response.requestId, response.toolCallId);
+    return new Promise<DesktopAskResult>((resolve, reject) => {
+      const timer = setTimeout(() => {
+        this.pendingAskResponses.delete(key);
+        resolve({ type: "desktop_ask_result", requestId: response.requestId, toolCallId: response.toolCallId, status: "unknown", error: { code: "deadline_exceeded" } });
+      }, DEFAULT_DESKTOP_PLUGIN_ASK_RESPONSE_TIMEOUT_MS);
+      this.pendingAskResponses.set(key, { requestId: response.requestId, toolCallId: response.toolCallId, resolve, reject, timer });
+      try {
+        this.connection.send(response);
+      } catch (error) {
+        clearTimeout(timer);
+        this.pendingAskResponses.delete(key);
+        resolve({ type: "desktop_ask_result", requestId: response.requestId, toolCallId: response.toolCallId, status: "unknown", error: { code: "disconnected" } });
+      }
+    });
+  }
+
+  handleAskResult(result: DesktopAskResult): void {
+    const key = askCorrelationKey(result.requestId, result.toolCallId);
+    const pending = this.pendingAskResponses.get(key);
+    if (!pending) return;
+    clearTimeout(pending.timer);
+    this.pendingAskResponses.delete(key);
+    pending.resolve(result);
   }
 
   handle(frame: DesktopPluginServerFrame): void {
@@ -210,6 +245,11 @@ class ServerTransport implements DesktopPluginTransport {
       pending.reject(new Error("desktop plugin disconnected"));
     }
     this.pending.clear();
+    for (const pending of this.pendingAskResponses.values()) {
+      clearTimeout(pending.timer);
+      pending.resolve({ type: "desktop_ask_result", requestId: pending.requestId, toolCallId: pending.toolCallId, status: "unknown", error: { code: "disconnected" } });
+    }
+    this.pendingAskResponses.clear();
     this.connection.close();
   }
 }
@@ -275,7 +315,6 @@ export class DesktopPluginIpcServer {
         this.registry.unregister(target, transport);
         this.targets.delete(connection);
         this.options.onDisconnected?.(target);
-        void this.registry.flush().catch(() => undefined);
       }
     };
     const onFrame = (raw: unknown) => {
@@ -296,7 +335,27 @@ export class DesktopPluginIpcServer {
       }
       if (raw && typeof raw === "object" && (raw as { type?: unknown }).type === "desktop_plugin_event") {
         if (isDesktopPluginClientFrame(raw) && raw.type === "desktop_plugin_event" && target) {
-          this.options.onModelSelect?.(target, raw);
+          if (raw.event === "model_select") {
+            this.registry.updateModel(target, raw.model);
+            this.options.onModelSelect?.(target, raw);
+          } else if (raw.event === "thinking_level_select") {
+            this.registry.updateThinkingLevel(target, raw.level);
+            this.options.onThinkingLevelSelect?.(target, raw);
+          } else if (raw.event === "runtime_status") {
+            this.registry.updateRuntimeStatus(target, raw.runtimeStatus);
+            this.options.onRuntimeStatus?.(target, raw);
+          } else {
+            this.registry.updateSessionSummary(target, raw.summary);
+            this.options.onSessionSummary?.(target, raw);
+          }
+          return;
+        }
+        this.sendError(connection, "invalid_frame", undefined);
+        return;
+      }
+      if (raw && typeof raw === "object" && (raw as { type?: unknown }).type === "desktop_ask_result") {
+        if (isDesktopPluginClientFrame(raw) && raw.type === "desktop_ask_result") {
+          transport?.handleAskResult(validateDesktopPluginClientFrame(raw) as DesktopAskResult);
           return;
         }
         this.sendError(connection, "invalid_frame", undefined);
@@ -365,9 +424,20 @@ export class DesktopPluginIpcServer {
       this.options.requestTimeoutMs ?? DEFAULT_DESKTOP_PLUGIN_REQUEST_TIMEOUT_MS,
     );
     connection.send({ type: "desktop_plugin_challenge", protocolVersion: DESKTOP_PLUGIN_PROTOCOL_VERSION, nonce: randomBytes(16).toString("hex") });
-    connection.send({ type: "desktop_plugin_ready", protocolVersion: DESKTOP_PLUGIN_PROTOCOL_VERSION, endpointId: hello.endpointId, capabilities: hello.capabilities, releaseVersion: expectedRelease });
-    this.registry.register({ target, capabilities: hello.capabilities, transport });
-    void this.registry.flush().catch(() => undefined);
+    connection.send({
+      type: "desktop_plugin_ready",
+      protocolVersion: DESKTOP_PLUGIN_PROTOCOL_VERSION,
+      endpointId: hello.endpointId,
+      capabilities: hello.capabilities,
+      releaseVersion: expectedRelease,
+      ...(this.options.supportedEvents ? { supportedEvents: [...this.options.supportedEvents] } : {}),
+    });
+    this.registry.register({
+      target,
+      ...(hello.sessionFile ? { sessionFile: hello.sessionFile } : {}),
+      capabilities: hello.capabilities,
+      transport,
+    });
     onAuthenticated(target, transport);
   }
 
@@ -380,6 +450,9 @@ export class DesktopPluginIpcClient {
   private connection: JsonLineConnection | undefined;
   private ready: Promise<void> | undefined;
   private closed = false;
+  private supportsThinkingLevelSelect = false;
+  private supportsRuntimeStatus = false;
+  private supportsSessionSummary = false;
 
   constructor(private readonly options: DesktopPluginIpcClientOptions) {}
 
@@ -405,6 +478,9 @@ export class DesktopPluginIpcClient {
               return finishError(new Error("desktop plugin release unsupported"));
             }
             authenticated = true;
+            this.supportsThinkingLevelSelect = frame.supportedEvents?.includes("thinking_level_select") ?? false;
+            this.supportsRuntimeStatus = frame.supportedEvents?.includes("runtime_status") ?? false;
+            this.supportsSessionSummary = frame.supportedEvents?.includes("session_summary") ?? false;
             if (timer) clearTimeout(timer);
             resolve();
           }
@@ -412,7 +488,7 @@ export class DesktopPluginIpcClient {
         }
         if (isDesktopPluginClientFrame(raw) && raw.type === "desktop_ask_response") {
           const response = validateDesktopPluginClientFrame(raw) as DesktopAskResponse;
-          void this.options.onAskResponse?.(response);
+          this.handleAskResponse(response);
           return;
         }
         if (isDesktopPluginClientFrame(raw) && raw.type === "desktop_plugin_request") {
@@ -476,6 +552,7 @@ export class DesktopPluginIpcClient {
             endpointId: target.endpointId,
             sessionId: target.sessionId,
             normalizedCwd: target.normalizedCwd,
+            ...(this.options.sessionFile ? { sessionFile: this.options.sessionFile } : {}),
             processGeneration: target.processGeneration,
             capabilities: this.options.capabilities,
             clientNonce: randomBytes(16).toString("hex"),
@@ -490,7 +567,64 @@ export class DesktopPluginIpcClient {
     return this.ready;
   }
 
-  async sendModelSelect(event: DesktopPluginEvent): Promise<void> {
+  private handleAskResponse(response: DesktopAskResponse): void {
+    void (async () => {
+      try {
+        await this.options.onAskResponse?.(response);
+        this.connection?.send({
+          type: "desktop_ask_result",
+          requestId: response.requestId,
+          toolCallId: response.toolCallId,
+          status: "accepted",
+        });
+      } catch (error) {
+        try {
+          this.connection?.send({
+            type: "desktop_ask_result",
+            requestId: response.requestId,
+            toolCallId: response.toolCallId,
+            status: "failed",
+            error: { code: "plugin_ask_rejected", message: sanitizedMessage(error) },
+          });
+        } catch {
+          // The connection is already closed; there is no upstream acknowledgement to send.
+        }
+      }
+    })();
+  }
+
+  async sendModelSelect(event: Extract<DesktopPluginEvent, { event: "model_select" }>): Promise<void> {
+    await this.sendEvent(event);
+  }
+
+  async sendThinkingLevelSelect(event: Extract<DesktopPluginEvent, { event: "thinking_level_select" }>): Promise<void> {
+    await this.connect();
+    if (!this.supportsThinkingLevelSelect) return;
+    await this.sendEvent(event);
+  }
+
+  async sendRuntimeStatus(event: Extract<DesktopPluginEvent, { event: "runtime_status" }>): Promise<void> {
+    await this.connect();
+    if (!this.supportsRuntimeStatus) return;
+    await this.sendEvent(event);
+  }
+
+  async sendSessionSummary(event: Extract<DesktopPluginEvent, { event: "session_summary" }>): Promise<void> {
+    await this.connect();
+    if (this.supportsSessionSummary) {
+      await this.sendEvent(event);
+      return;
+    }
+    if (this.supportsRuntimeStatus) {
+      await this.sendEvent({
+        type: "desktop_plugin_event",
+        event: "runtime_status",
+        runtimeStatus: event.summary.runtimeStatus,
+      });
+    }
+  }
+
+  private async sendEvent(event: DesktopPluginEvent): Promise<void> {
     await this.connect();
     if (this.closed || !this.connection) throw new Error("desktop plugin disconnected");
     this.connection.send(event);

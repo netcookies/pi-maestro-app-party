@@ -38,6 +38,7 @@ describe("MonitorReadService", () => {
     const second = await service.read();
 
     expect(first.state.windows[0]?.presentation?.visibility).toBe("monitor_tab");
+    expect(first.state.windows[0]?.identity.ownerNonce).toBe("nonce-1");
     expect(second.state.revision).toBe(first.state.revision);
     expect(second.stableKey).toBe(first.stableKey);
     expect(second.state.observedAt).not.toBe(first.state.observedAt);
@@ -58,5 +59,30 @@ describe("MonitorReadService", () => {
     const second = await service.read();
     expect(second.state.revision).toBe(first.state.revision! + 1);
     expect(second.state.windows[0]?.status).toBe("running");
+  });
+
+  it("serializes concurrent reads so revisions follow read order", async () => {
+    const firstTelemetry: WorkspaceTelemetryState = { owners: [owner], observedAt: "first", aliveCount: 1 };
+    const secondTelemetry: WorkspaceTelemetryState = { owners: [{ ...owner, mainProgress: { events: [{ kind: "lifecycle", phase: "turn_start" }] } }], observedAt: "second", aliveCount: 1 };
+    let calls = 0;
+    let releaseFirst!: () => void;
+    const firstGate = new Promise<void>((resolve) => { releaseFirst = resolve; });
+    const service = new MonitorReadService(async () => {
+      calls += 1;
+      if (calls === 1) {
+        await firstGate;
+        return firstTelemetry;
+      }
+      return secondTelemetry;
+    });
+    const first = service.read();
+    const second = service.read();
+    await Promise.resolve();
+    expect(calls).toBe(1);
+    releaseFirst();
+    const [oldRead, newRead] = await Promise.all([first, second]);
+    expect(oldRead.revision).toBe(1);
+    expect(newRead.revision).toBe(2);
+    expect(newRead.state.windows[0]?.status).toBe("running");
   });
 });

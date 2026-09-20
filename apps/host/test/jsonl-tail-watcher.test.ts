@@ -32,8 +32,10 @@ describe("JsonlTailWatcher (AC1, AC2, AC5)", () => {
     const { filePath } = await makeFixture(initial);
 
     const received: TimelineItem[] = [];
-    const watcher = new JsonlTailWatcher(filePath, (items) => {
+    let appendedEntries = 0;
+    const watcher = new JsonlTailWatcher(filePath, (items, count) => {
       received.push(...items);
+      appendedEntries += count;
     }, { pollIntervalMs: 50 });
 
     await watcher.start();
@@ -51,8 +53,13 @@ describe("JsonlTailWatcher (AC1, AC2, AC5)", () => {
     await watcher.checkNewContent();
 
     expect(received).toHaveLength(1);
+    expect(appendedEntries).toBe(1);
     expect(received[0].kind).toBe("user");
-    expect(received[0].text).toBe("新提问");
+    const spaced = '{ "type": "message", "message": { "role": "user", "content": "空格 JSON" } }\n';
+    await appendFile(filePath, spaced, "utf8");
+    await watcher.checkNewContent();
+    expect(appendedEntries).toBe(2);
+    expect(received.at(-1)?.text).toBe("空格 JSON");
 
     await watcher.dispose();
   });
@@ -117,6 +124,26 @@ describe("JsonlTailWatcher (AC1, AC2, AC5)", () => {
     expect(received.some((r) => r.text === "总结")).toBe(true);
     expect(watcher.offset).toBeLessThan(initialOffset);
 
+    await watcher.dispose();
+  });
+
+  it("截断重写跨多个 chunk 时不把重放内容计为 append", async () => {
+    const { filePath } = await makeFixture([
+      { type: "message", id: "old", message: { role: "user", content: "旧消息".repeat(200) } },
+    ]);
+    const counts: number[] = [];
+    const watcher = new JsonlTailWatcher(filePath, (_items, count) => counts.push(count), { pollIntervalMs: 50, maxChunkBytes: 64 });
+    await watcher.start();
+
+    const rewritten = Array.from({ length: 8 }, (_, i) => JSON.stringify({
+      type: "message",
+      id: `new-${i}`,
+      message: { role: "assistant", content: `重写-${i}` },
+    })).join("\n") + "\n";
+    await writeFile(filePath, rewritten, "utf8");
+    while (watcher.offset < Buffer.byteLength(rewritten)) await watcher.checkNewContent();
+
+    expect(counts.every((count) => count === 0)).toBe(true);
     await watcher.dispose();
   });
 

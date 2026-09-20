@@ -26,6 +26,26 @@ function makeOwner(overrides: Partial<WorkspaceOwnerState> = {}): WorkspaceOwner
 }
 
 describe("inspectWindowExecutionState & projectWindow", () => {
+  it("preserves the producer owner nonce in monitor identity", () => {
+    const projected = projectWindow(makeOwner({ ownerNonce: "restart-2" }));
+    expect(projected.identity.ownerNonce).toBe("restart-2");
+    expect(projected.facets[0]).toMatchObject({ target: { identity: { ownerNonce: "restart-2" } } });
+  });
+
+  it("does not keep an ask after agent_end", () => {
+    const projected = projectWindow(makeOwner({
+      mainProgress: {
+        events: [
+          { kind: "lifecycle", phase: "turn_start", at: 1000 },
+          { kind: "tool", toolCallId: "ask-1", toolName: "ask_user_question", status: "running", at: 1010 },
+          { kind: "lifecycle", phase: "agent_end", at: 1020 },
+        ],
+      },
+    }));
+    expect(projected.pendingAsk).toBeUndefined();
+    expect(projected.attention).toEqual([]);
+  });
+
   it("marks disconnected window when not alive", () => {
     const owner = makeOwner({ alive: false });
     const projected = projectWindow(owner);

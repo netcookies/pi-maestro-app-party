@@ -1,10 +1,30 @@
-import type { DesktopAskResponse, DesktopPluginOperation, DesktopPluginTarget, ExtensionUiResponse } from "@maestro-mobile/shared";
+import type {
+  DesktopAskResponse,
+  DesktopAskResult,
+  DesktopPluginCapability,
+  DesktopPluginOperation,
+  DesktopPluginRequest,
+  DesktopPluginResult,
+  DesktopPluginTarget,
+  ExtensionUiResponse,
+} from "@maestro-mobile/shared";
 import { IdempotencyLedger } from "../control/idempotency-ledger.js";
 import type { SessionCommand, CommandResult, DesktopControlGateway } from "../application/session-command-service.js";
 import type { SessionTargetIdentity } from "../control/SessionDirectory.js";
-import { DesktopPluginRegistry } from "../plugin/desktop-plugin-registry.js";
-
 const DEFAULT_GATEWAY_DEADLINE_MS = 2_000;
+
+interface DesktopPluginRegistryLike {
+  readonly revision: number;
+  resolve(target: DesktopPluginTarget): {
+    capabilities: readonly DesktopPluginCapability[];
+    transport: {
+      request(request: DesktopPluginRequest): Promise<DesktopPluginResult>;
+      answerAsk?(response: DesktopAskResponse): Promise<DesktopAskResult>;
+    };
+  } | undefined;
+  hasCapability(target: DesktopPluginTarget, capability: DesktopPluginCapability): boolean;
+}
+
 
 type Image = { data: string; mime: string };
 
@@ -18,6 +38,10 @@ function desktopOperation(command: SessionCommand): DesktopPluginOperation | { e
   if (command.kind === "set_model") {
     if (typeof command.modelId !== "string" || command.modelId.length === 0) return { error: "model_required" };
     return { type: "set_model", modelId: command.modelId, ...(command.provider ? { provider: command.provider } : {}) };
+  }
+  if (command.kind === "set_thinking") {
+    if (typeof command.level !== "string" || command.level.length === 0) return { error: "thinking_level_required" };
+    return { type: "set_thinking", level: command.level };
   }
   if (command.kind === "abort") return { type: "abort" };
   if (typeof command.message !== "string") return { error: "message_required" };
@@ -38,17 +62,21 @@ function targetOf(command: SessionCommand): DesktopPluginTarget {
   };
 }
 
+function commandScope(command: SessionCommand): string {
+  return JSON.stringify([command.kind, command.target.sessionId, command.target.endpointId, command.target.normalizedCwd, command.target.processGeneration]);
+}
+
 export class DesktopControlGatewayService implements DesktopControlGateway {
   private readonly ledger = new IdempotencyLedger<CommandResult>();
 
   constructor(
-    private readonly registry: DesktopPluginRegistry,
+    private readonly registry: DesktopPluginRegistryLike,
     private readonly deadlineMs = DEFAULT_GATEWAY_DEADLINE_MS,
     private readonly now: () => number = Date.now,
   ) {}
 
   execute(command: SessionCommand): Promise<CommandResult> {
-    return this.ledger.run(command.requestId, command.kind, async () => {
+    return this.ledger.run(command.requestId, commandScope(command), async () => {
       const target = targetOf(command);
       const registration = this.registry.resolve(target);
       if (!registration) {
@@ -87,7 +115,8 @@ export class DesktopControlGatewayService implements DesktopControlGateway {
   }
 
   answerAsk(target: SessionTargetIdentity, requestId: string, toolCallId: string, response: ExtensionUiResponse): Promise<CommandResult> {
-    return this.ledger.run(requestId, "ask_response", async () => {
+    const scope = JSON.stringify(["ask_response", target.sessionId, target.endpointId, target.normalizedCwd, target.processGeneration, toolCallId]);
+    const receipt = this.ledger.run(requestId, scope, async () => {
       const desktopTarget = targetOf({ requestId, target, kind: "abort" });
       const registration = this.registry.resolve(desktopTarget);
       if (!registration) return { requestId, operation: "ask_response", status: "unknown", revision: this.registry.revision, error: { code: "target_unavailable" } };
@@ -96,11 +125,24 @@ export class DesktopControlGatewayService implements DesktopControlGateway {
       }
       const message: DesktopAskResponse = { type: "desktop_ask_response", requestId, toolCallId, response };
       try {
-        registration.transport.answerAsk(message);
+        const result = await registration.transport.answerAsk(message);
+        if (result.status !== "accepted") {
+          return {
+            requestId,
+            operation: "ask_response",
+            status: result.status,
+            revision: this.registry.revision,
+            ...(result.error ? { error: result.error } : { error: { code: "desktop_ask_rejected" } }),
+          };
+        }
         return { requestId, operation: "ask_response", status: "accepted", revision: this.registry.revision };
       } catch {
         return { requestId, operation: "ask_response", status: "unknown", revision: this.registry.revision, error: { code: "desktop_confirmation_unavailable" } };
       }
+    });
+    return receipt.then((result) => {
+      if (result.status !== "accepted") this.ledger.forget(requestId, scope, receipt);
+      return result;
     });
   }
 

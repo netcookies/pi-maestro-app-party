@@ -91,6 +91,34 @@ describe("MobileHostServer", () => {
     expect(body.observedAt).toBeTruthy();
   });
 
+  it("forwards targeted session filters through the WebSocket query", async () => {
+    const target = { sessionId: "readerless", endpointId: "desktop", normalizedCwd: ctx.tmpDir, processGeneration: "g1" };
+    ctx.controller.desktopPlugins.register({
+      target,
+      capabilities: ["prompt"],
+      transport: { close: () => undefined, request: async (request) => ({ type: "desktop_plugin_result", requestId: request.requestId, operation: request.operation.type, status: "accepted" }) },
+    });
+    ctx.controller.registerDesktopTarget(target);
+    const ws = await connectV2(ctx.url);
+    try {
+      const request = (id: string, filters: object) => new Promise<{ sessions: { id: string }[]; targeted: boolean }>((resolve, reject) => {
+        const onMessage = (data: WebSocket.RawData) => {
+          const frame = JSON.parse(data.toString()) as { type: string; in_reply_to?: string; result?: { sessions: { id: string }[]; targeted: boolean } };
+          if (frame.type !== "command_result" || frame.in_reply_to !== id) return;
+          ws.off("message", onMessage);
+          resolve(frame.result!);
+        };
+        ws.on("message", onMessage);
+        ws.once("error", reject);
+        ws.send(JSON.stringify({ type: "list_host_sessions", id, ...filters }));
+      });
+      await expect(request("targeted-missing", { sessionIds: ["missing"] })).resolves.toMatchObject({ sessions: [], targeted: true });
+      await expect(request("targeted-cwd", { latestForCwds: [ctx.tmpDir] })).resolves.toMatchObject({ sessions: [{ id: "readerless" }], targeted: true });
+    } finally {
+      ws.close();
+    }
+  });
+
   it("serves image file via /api/file", async () => {
     // 构造一个最小 PNG
     const png = Buffer.from(
@@ -422,6 +450,67 @@ describe("MobileHostServer", () => {
     });
   });
 
+  it("forwards readerless Desktop asks to Mobile and routes exact-target answers", async () => {
+    const target = { sessionId: "desktop-ask", endpointId: "desktop", normalizedCwd: ctx.tmpDir, processGeneration: "generation-1" };
+    let answered: unknown;
+    ctx.controller.desktopPlugins.register({
+      target,
+      capabilities: ["ask-user-question"],
+      transport: {
+        close: () => undefined,
+        request: async (request) => ({ type: "desktop_plugin_result", requestId: request.requestId, operation: request.operation.type, status: "accepted" }),
+        answerAsk: async (response) => { answered = response; return { type: "desktop_ask_result", requestId: response.requestId, toolCallId: response.toolCallId, status: "accepted" }; },
+      },
+    });
+    ctx.controller.registerDesktopTarget(target);
+    const ws = await connectV2(ctx.url);
+    try {
+      const snapshotReply = new Promise<{ result?: { nextSeq: number; wireSeq: number } }>((resolve) => {
+        ws.on("message", (raw) => {
+          const frame = JSON.parse(raw.toString()) as { in_reply_to?: string; result?: { nextSeq: number; wireSeq: number } };
+          if (frame.in_reply_to === "snapshot-1") resolve(frame);
+        });
+      });
+      ws.send(JSON.stringify({ type: "get_snapshot", id: "snapshot-1", sessionId: target.sessionId, target }));
+      expect((await snapshotReply).result).toMatchObject({ nextSeq: 0, wireSeq: expect.any(Number) });
+      const ask = new Promise<{ request: { id: string; questions: unknown[] }; target: typeof target }>((resolve) => {
+        ws.on("message", (raw) => {
+          const event = JSON.parse(raw.toString()) as { type: string; request?: { id: string; questions: unknown[] }; target?: typeof target };
+          if (event.type === "extension_ui_request" && event.request && event.target) resolve({ request: event.request, target: event.target });
+        });
+      });
+      ctx.controller.onDesktopAskRequest(target, { type: "desktop_ask_request", requestId: "ask-1", toolCallId: "tool-1", questions: [{ question: "Continue?" }], deadlineAt: Date.now() + 10_000 });
+      const received = await ask;
+      expect(received).toMatchObject({ target, request: { questions: [{ question: "Continue?" }] } });
+      const result = new Promise<{ type: string; ok: boolean; in_reply_to: string }>((resolve) => {
+        ws.on("message", (raw) => {
+          const frame = JSON.parse(raw.toString()) as { type: string; ok: boolean; in_reply_to: string };
+          if (frame.in_reply_to === "answer-1") resolve(frame);
+        });
+      });
+      ws.send(JSON.stringify({ type: "extension_ui_response", id: "answer-1", sessionId: target.sessionId, target, requestId: received.request.id, response: { id: received.request.id, selected: ["yes"] } }));
+      expect(await result).toMatchObject({ type: "command_result", ok: true, in_reply_to: "answer-1" });
+      expect(answered).toMatchObject({ requestId: "ask-1", toolCallId: "tool-1" });
+      ctx.controller.onDesktopAskRequest(target, { type: "desktop_ask_request", requestId: "ask-2", toolCallId: "tool-2", questions: [{ question: "Later?" }], deadlineAt: Date.now() + 10_000 });
+      const late = new WebSocket(`${ctx.url}/ws`);
+      try {
+        const replay = new Promise<{ target: typeof target; request: { questions: unknown[]; timeout: number } }>((resolve, reject) => {
+          late.on("message", (raw) => {
+            const event = JSON.parse(raw.toString()) as { type: string; target?: typeof target; request?: { questions: unknown[]; timeout: number } };
+            if (event.type === "extension_ui_request" && event.target && event.request) resolve({ target: event.target, request: event.request });
+          });
+          late.once("error", reject);
+        });
+        late.once("open", () => late.send(JSON.stringify(protocolHello())));
+        expect(await replay).toMatchObject({ target, request: { questions: [{ question: "Later?" }] } });
+      } finally {
+        late.close();
+      }
+    } finally {
+      ws.close();
+    }
+  });
+
   it("returns target unavailable for an unregistered desktop session", async () => {
     const ws = await connectV2(ctx.url);
     await new Promise<void>((resolve, reject) => {
@@ -437,6 +526,26 @@ describe("MobileHostServer", () => {
       });
       ws.on("error", reject);
     });
+  });
+
+  it("serves authenticated Broker projection diagnostics without exposing transports", async () => {
+    const protectedServer = await createTestServer("diagnostic-secret");
+    try {
+      const unauthorized = await fetch(`${protectedServer.url}/api/desktop/current`);
+      expect(unauthorized.status).toBe(401);
+      const authorized = await fetch(`${protectedServer.url}/api/desktop/current`, {
+        headers: { Authorization: "Bearer diagnostic-secret" },
+      });
+      expect(authorized.status).toBe(200);
+      const body = await authorized.json() as { broker: { projectionValid: boolean }; targets: unknown[] };
+      expect(body.broker.projectionValid).toBe(false);
+      expect(body.targets).toEqual([]);
+      expect(JSON.stringify(body)).not.toContain("transport");
+    } finally {
+      await protectedServer.server.close();
+      await protectedServer.controller.dispose();
+      await rm(protectedServer.tmpDir, { recursive: true, force: true });
+    }
   });
 });
 describe("MobileHostServer.listen error propagation", () => {

@@ -48,15 +48,28 @@ export async function replayPageFromJsonl(
   return scanWindow(filePath, { limit: count, skip: cursor });
 }
 
+export async function replayPageBeforeJsonl(
+  filePath: string,
+  endEntryExclusive: number,
+  count = 100,
+): Promise<PageResult> {
+  if (endEntryExclusive <= 0) return { items: [], hasMore: false, cursor: 0, totalEntries: 0 };
+  return scanWindow(filePath, { limit: count, skip: 0, endEntryExclusive });
+}
+
 interface WindowOptions {
   limit: number;
   /** 从尾部跳过的条数（已消费） */
   skip: number;
+  /** 供 live runner 使用的稳定绝对边界；文件增长时不能改变它。 */
+  endEntryExclusive?: number;
 }
 
 async function scanWindow(filePath: string, opts: WindowOptions): Promise<PageResult> {
   // ring 容量（按 message 数计，与 cursor 语义一致）：需要返回窗口 + 1 前瞻
   const want = opts.limit + opts.skip + 1;
+  const absoluteEnd = opts.endEntryExclusive;
+  const absoluteStart = absoluteEnd === undefined ? undefined : Math.max(0, absoluteEnd - opts.limit);
   let fd: Awaited<ReturnType<typeof open>> | undefined;
   try {
     let opened = true;
@@ -90,11 +103,16 @@ async function scanWindow(filePath: string, opts: WindowOptions): Promise<PageRe
       // 只有 message 与 custom_message 类型计入总数（session/model_change 等忽略）
       if (!line.includes('"type":"message"') && !line.includes('"type":"custom_message"')) return;
       totalEntries++;
+      const parsed = parseMessageLineItems(line, totalEntries - 1, seenToolResults);
+      if (absoluteEnd !== undefined && absoluteStart !== undefined) {
+        const index = totalEntries - 1;
+        if (index >= absoluteStart && index < absoluteEnd) ring.push(parsed.length > 0 ? parsed : null);
+        return;
+      }
       // ring 按 message 数保留最后 want 条（含 null 占位）
       if (ring.length >= want) {
         ring.shift();
       }
-      const parsed = parseMessageLineItems(line, totalEntries - 1, seenToolResults);
       ring.push(parsed.length > 0 ? parsed : null);
     };
 
@@ -136,6 +154,15 @@ async function scanWindow(filePath: string, opts: WindowOptions): Promise<PageRe
           it.status = "completed";
         }
       }
+    }
+
+    if (absoluteEnd !== undefined && absoluteStart !== undefined) {
+      return {
+        items: ring.flatMap((messageItems) => messageItems ?? []),
+        hasMore: absoluteStart > 0,
+        cursor: absoluteStart,
+        totalEntries,
+      };
     }
 
     // ring 现在 = 最后 want 条 message（含 null 占位）。返回窗口 [skip, skip+limit) 的 item

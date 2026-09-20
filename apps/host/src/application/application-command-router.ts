@@ -9,8 +9,8 @@ import type { OpenSessionRequest } from "../types.js";
 
 export interface ApplicationLifecycle {
   openSession(request: OpenSessionRequest): Promise<{ id: string }>;
-  closeSession(sessionId: string): Promise<boolean>;
-  respondToExtensionUi(sessionId: string, requestId: string, response: ExtensionUiResponse): boolean;
+  closeSession(sessionId: string, target?: SessionTargetIdentity): Promise<boolean>;
+  respondToExtensionUi(sessionId: string, requestId: string, response: ExtensionUiResponse, target?: SessionTargetIdentity): Promise<boolean>;
   sessionOperation?(operation: SessionOperation): Promise<unknown>;
   readMaestroState?(): Promise<unknown>;
   readSettings?(): Promise<unknown>;
@@ -23,7 +23,6 @@ export type SessionOperation =
   | { kind: "list_models"; target: SessionTargetIdentity }
   | { kind: "list_skills"; target: SessionTargetIdentity }
   | { kind: "set_model"; target: SessionTargetIdentity; modelId: string; provider?: string }
-  | { kind: "set_thinking"; target: SessionTargetIdentity; level: string }
   | { kind: "compact"; target: SessionTargetIdentity; customInstructions?: string }
   | { kind: "rename_session"; target: SessionTargetIdentity; name: string };
 
@@ -37,7 +36,7 @@ export type ApplicationQuery =
 export type ApplicationQueryResult =
   | HostSessionList
   | QueryResult<SessionSnapshot>
-  | QueryResult<{ items: TimelineItem[]; hasMore: boolean; totalEntries: number }>
+  | QueryResult<{ items: TimelineItem[]; hasMore: boolean; totalEntries: number; historyAvailable?: boolean }>
   | QueryResult<UsageTotals>
   | MonitorReadSnapshot;
 
@@ -68,13 +67,13 @@ export class ApplicationCommandRouter {
     return this.lifecycle.openSession(request);
   }
 
-  closeSession(sessionId: string): Promise<boolean> {
+  closeSession(sessionId: string, target?: SessionTargetIdentity): Promise<boolean> {
     if (!this.lifecycle) return Promise.reject(new Error("session lifecycle unavailable"));
-    return this.lifecycle.closeSession(sessionId);
+    return this.lifecycle.closeSession(sessionId, target);
   }
 
-  respondToExtensionUi(sessionId: string, requestId: string, response: ExtensionUiResponse): boolean {
-    return this.lifecycle?.respondToExtensionUi(sessionId, requestId, response) ?? false;
+  respondToExtensionUi(sessionId: string, requestId: string, response: ExtensionUiResponse, target?: SessionTargetIdentity): Promise<boolean> {
+    return this.lifecycle?.respondToExtensionUi(sessionId, requestId, response, target) ?? Promise.resolve(false);
   }
 
   sessionOperation(operation: SessionOperation): Promise<unknown> {

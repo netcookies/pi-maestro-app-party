@@ -3,7 +3,7 @@ import { mkdir, writeFile, rm } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { randomUUID } from "node:crypto";
-import { replayTailFromJsonl, replayPageFromJsonl } from "../src/jsonl-pager.js";
+import { replayTailFromJsonl, replayPageFromJsonl, replayPageBeforeJsonl } from "../src/jsonl-pager.js";
 import { invalidateIndex } from "../src/jsonl-index.js";
 
 function msg(role: string, content: string, ts = 1756800000000, extra: Record<string, unknown> = {}) {
@@ -64,6 +64,16 @@ describe("jsonl-pager", () => {
     expect(page3.items.map((t) => t.text)).toEqual(["msg-0"]);
     expect(page3.hasMore).toBe(false);
     expect(page3.cursor).toBe(10);
+  });
+
+  it("reads an absolute older-page boundary without overlap after file appends", async () => {
+    await writeLines(Array.from({ length: 10 }, (_, i) => msg("user", `msg-${i}`, 1000 + i)));
+    const tail = await replayTailFromJsonl(path, 3);
+    await writeFile(path, [...Array.from({ length: 10 }, (_, i) => msg("user", `msg-${i}`, 1000 + i)), msg("user", "new")].join("\n") + "\n");
+    const page = await replayPageBeforeJsonl(path, tail.totalEntries - tail.cursor, 3);
+
+    expect(page.items.map((item) => item.text)).toEqual(["msg-4", "msg-5", "msg-6"]);
+    expect(page.cursor).toBe(4);
   });
 
   it("tail smaller than limit returns all", async () => {

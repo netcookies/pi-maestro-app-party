@@ -19,6 +19,9 @@ import { join } from "node:path";
 import { homedir } from "node:os";
 import { fileURLToPath } from "node:url";
 import qrcodeTerminal from "qrcode-terminal";
+import { DEFAULT_DESKTOP_BROKER_PID_FILE, isOwnedProcessCommand } from "./plugin/desktop-broker-supervisor.js";
+import { compareDesktopCurrentStatus, formatDesktopCurrentStatus, type DesktopHostDiagnostic } from "./current-desktop-status.js";
+import { getDesktopPluginRuntimeRecord } from "./plugin/desktop-plugin-runtime-state.js";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 
 const PID_FILE = join(homedir(), ".pi", "maestro-mobile.pid");
@@ -72,13 +75,40 @@ function probeHealth(port: number, timeoutMs = 800): Promise<boolean> {
   });
 }
 
-function hostStatus(port: number, timeoutMs = 800): Promise<Record<string, unknown> | null> {
+function hostStatus(port: number, timeoutMs = 800, token?: string): Promise<Record<string, unknown> | null> {
   return new Promise((resolve) => {
-    fetch(`http://127.0.0.1:${port}/api/status`, { signal: AbortSignal.timeout(timeoutMs) })
+    fetch(`http://127.0.0.1:${port}/api/status`, {
+      signal: AbortSignal.timeout(timeoutMs),
+      ...(token ? { headers: { Authorization: `Bearer ${token}` } } : {}),
+    })
       .then(async (r) => (r.ok ? (await r.json()) as Record<string, unknown> : null))
       .then((d) => resolve(d ?? null))
       .catch(() => resolve(null));
   });
+}
+
+async function hostCurrentStatus(
+  port: number,
+  token: string,
+  target?: { sessionId: string; endpointId: string; normalizedCwd: string; processGeneration: string },
+): Promise<DesktopHostDiagnostic | null> {
+  const query = target
+    ? `?${new URLSearchParams({
+      sessionId: target.sessionId,
+      endpointId: target.endpointId,
+      normalizedCwd: target.normalizedCwd,
+      processGeneration: target.processGeneration,
+    })}`
+    : "";
+  try {
+    const response = await fetch(`http://127.0.0.1:${port}/api/desktop/current${query}`, {
+      signal: AbortSignal.timeout(1200),
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    return response.ok ? await response.json() as DesktopHostDiagnostic : null;
+  } catch {
+    return null;
+  }
 }
 
 /**
@@ -185,14 +215,70 @@ async function startHostDetached(
   }
 }
 
-async function readPid(): Promise<number | null> {
+async function readPid(path = PID_FILE): Promise<number | null> {
   try {
-    const raw = await readFile(PID_FILE, "utf8");
+    const raw = await readFile(path, "utf8");
     const pid = Number(raw.trim());
     return Number.isInteger(pid) && pid > 0 ? pid : null;
   } catch {
     return null;
   }
+}
+
+async function processCommand(pid: number): Promise<string> {
+  const invocation = process.platform === "win32"
+    ? {
+      file: "powershell.exe",
+      args: [
+        "-NoProfile",
+        "-NonInteractive",
+        "-Command",
+        `$process = Get-CimInstance Win32_Process -Filter 'ProcessId = ${pid}'; if ($null -ne $process) { [Console]::Out.Write($process.CommandLine) }`,
+      ],
+    }
+    : { file: "ps", args: ["-p", String(pid), "-o", "command="] };
+  return new Promise((resolve, reject) => {
+    execFile(invocation.file, invocation.args, { windowsHide: true }, (error, stdout) => {
+      if (error) reject(error);
+      else resolve(stdout.trim());
+    });
+  });
+}
+
+async function unlinkPidIfUnchanged(path: string, pid: number): Promise<void> {
+  if (await readPid(path) === pid) await unlink(path).catch(() => { });
+}
+
+export type ManagedProcessStopResult = "missing" | "not_owned" | "signalled";
+
+/** Verify a PID's command before signalling, then remove only the PID file that was verified. */
+export async function stopManagedProcess(
+  pidFile: string,
+  expectedCommandPath: string,
+  controls: {
+    commandForPid?: (pid: number) => Promise<string>;
+    signal?: (pid: number) => void;
+  } = {},
+): Promise<{ pid: number | null; result: ManagedProcessStopResult }> {
+  const pid = await readPid(pidFile);
+  if (pid === null) return { pid: null, result: "missing" };
+
+  let command: string;
+  try {
+    command = await (controls.commandForPid ?? processCommand)(pid);
+  } catch {
+    return { pid, result: "not_owned" };
+  }
+  const owned = isOwnedProcessCommand(command, expectedCommandPath);
+  if (!owned) return { pid, result: "not_owned" };
+
+  try {
+    (controls.signal ?? ((ownedPid: number) => process.kill(ownedPid, "SIGTERM")))(pid);
+  } catch {
+    // Ownership was verified; the process may have exited between the command probe and signal.
+  }
+  await unlinkPidIfUnchanged(pidFile, pid);
+  return { pid, result: "signalled" };
 }
 
 /** 配对二维码 PNG 固定文件名（覆盖写，避免每次 qr 累积含 token 的图片） */
@@ -265,6 +351,16 @@ export default function maestroHostExtension(pi: ExtensionAPI): void {
       const sub = (args ?? "").trim().split(/\s+/)[0] || "default";
       const port = hostPort();
       const alive = await probeHealth(port);
+      const requestedCurrent = (args ?? "").trim().split(/\s+/).includes("--current");
+
+      if (sub === "status" && requestedCurrent) {
+        const token = await readToken();
+        const local = getDesktopPluginRuntimeRecord();
+        const host = token ? await hostCurrentStatus(port, token, local?.target) : null;
+        const report = compareDesktopCurrentStatus({ hostReachable: alive, local, host: host ?? undefined });
+        ctx.ui.notify(formatDesktopCurrentStatus(report), report.verdict === "synced" ? "info" : "warning");
+        return;
+      }
 
       // 默认（无子命令）：未启动 → 直接 start（与 cli 默认行为一致）
       if (sub === "default" && !alive) {
@@ -355,19 +451,25 @@ export default function maestroHostExtension(pi: ExtensionAPI): void {
       }
 
       if (sub === "stop") {
-        const pid = await readPid();
-        if (!pid) {
-          ctx.ui.notify("maestro-mobile: 无本扩展启动的实例（PID 文件不存在）；launchd/systemd 管理的实例请用对应服务命令停", "warning");
+        const brokerCliPath = join(fileURLToPath(new URL(".", import.meta.url)), "broker-cli.js");
+        const results = await Promise.all([
+          stopManagedProcess(PID_FILE, hostCliPath()),
+          stopManagedProcess(DEFAULT_DESKTOP_BROKER_PID_FILE, brokerCliPath),
+        ]);
+        const signalled = results.filter((entry) => entry.result === "signalled" && entry.pid !== null);
+        const unverified = results.filter((entry) => entry.result === "not_owned" && entry.pid !== null);
+        if (signalled.length === 0 && unverified.length === 0) {
+          ctx.ui.notify("maestro-mobile: 无本扩展启动的 Host/Broker 实例（PID 文件不存在）；外部服务请用对应服务命令停", "warning");
           return;
         }
-        try {
-          process.kill(pid, "SIGTERM");
-          await unlink(PID_FILE).catch(() => { });
-          ctx.ui.notify(`maestro-mobile: 已发送 SIGTERM 到 pid=${pid}`, "info");
-        } catch {
-          await unlink(PID_FILE).catch(() => { });
-          ctx.ui.notify(`maestro-mobile: pid=${pid} 已不存在，清理 PID 文件`, "info");
+        if (signalled.length === 0) {
+          ctx.ui.notify(`maestro-mobile: PID 文件中的进程不属于受管 Host/Broker，未发送信号（${unverified.map((entry) => `pid=${entry.pid}`).join(", ")}）`, "warning");
+          return;
         }
+        const unverifiedNote = unverified.length > 0
+          ? `；未触碰非受管 PID（${unverified.map((entry) => `pid=${entry.pid}`).join(", ")}）`
+          : "";
+        ctx.ui.notify(`maestro-mobile: 已停止受管 Host/Broker（${signalled.map((entry) => `pid=${entry.pid}`).join(", ")}）${unverifiedNote}`, "info");
         void refreshStatus();
         return;
       }

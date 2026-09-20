@@ -157,7 +157,7 @@ function extractPendingAsk(mainProgress: unknown): { pendingAsk?: MonitorWindowS
 
   for (let i = events.length - 1; i >= 0; i--) {
     const ev = events[i];
-    if (ev.kind === "lifecycle" && (ev.phase === "agent_settled" || ev.phase === "turn_end")) {
+    if (ev.kind === "lifecycle" && (ev.phase === "agent_settled" || ev.phase === "agent_end" || ev.phase === "turn_end")) {
       settled = true;
     }
     if (ev.kind === "lifecycle" && ev.phase === "turn_start") {
@@ -198,7 +198,7 @@ export function projectWindow(o: WorkspaceOwnerState): MonitorWindowSummary {
   const identity = {
     workspaceId: o.workspaceId,
     ownerId: o.ownerId,
-    ownerNonce: "",
+    ownerNonce: o.ownerNonce ?? "",
     endpointId: o.sessionId,
   };
   const agents = (o.agents ?? []).slice(0, AGENTS_MAX)
@@ -207,7 +207,7 @@ export function projectWindow(o: WorkspaceOwnerState): MonitorWindowSummary {
   const facet: TeammateAgentsFacet = {
     kind: "teammate-agents",
     target: { identity },
-    revision: `${o.ownerId}:${o.sessionId}`,
+    revision: `${o.ownerId}:${o.ownerNonce ?? ""}:${o.sessionId}`,
     data: {
       agents,
       backgroundJobs: Array.isArray(o.backgroundJobs) ? o.backgroundJobs.slice(0, 8) : [],
@@ -245,23 +245,27 @@ export function projectWindow(o: WorkspaceOwnerState): MonitorWindowSummary {
   };
 }
 
+export function projectMonitorWindows(t: WorkspaceTelemetryState): MonitorWindowSummary[] {
+  return t.owners.map(projectWindow);
+}
+
 export function projectMonitorState(t: WorkspaceTelemetryState): MonitorState {
   return {
-    windows: t.owners.map(projectWindow),
+    windows: projectMonitorWindows(t),
     observedAt: t.observedAt,
   };
 }
 
-/**
- * 稳定变更键 — 不含 ageMs/observedAt 等时间派生字段。
- * 对与广播相同的有界投影做确定性 JSON 序列化：投影可见的字段变化必然触发广播，
- * 且 JSON.stringify 无分隔符碰撞问题。
- */
-export function telemetryStableKey(t: WorkspaceTelemetryState): string {
-  const projected = t.owners.map(projectWindow).sort((a, b) =>
+export function telemetryStableKeyFromWindows(windows: readonly MonitorWindowSummary[]): string {
+  const projected = [...windows].sort((a, b) =>
     a.identity.ownerId < b.identity.ownerId ? -1 : a.identity.ownerId > b.identity.ownerId ? 1 : 0,
   );
   return JSON.stringify(projected);
+}
+
+/** 稳定变更键不含时间派生字段，保持旧 API 供其他调用方使用。 */
+export function telemetryStableKey(t: WorkspaceTelemetryState): string {
+  return telemetryStableKeyFromWindows(projectMonitorWindows(t));
 }
 
 /** 从 monitor_state 构造 HostEvent（供 controller emit） */

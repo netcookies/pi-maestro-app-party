@@ -3,7 +3,7 @@ import { createConnection } from "node:net";
 import { mkdtemp, stat } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import type { DesktopPluginResult, DesktopPluginTarget } from "@maestro-mobile/shared";
+import type { DesktopAskResult, DesktopPluginResult, DesktopPluginTarget } from "@maestro-mobile/shared";
 import { DesktopPluginIpcClient, DesktopPluginIpcServer } from "../src/plugin/desktop-plugin-ipc.js";
 import { DesktopPluginRegistry } from "../src/plugin/desktop-plugin-registry.js";
 import { DesktopControlGatewayService } from "../src/control/desktop-control-gateway.js";
@@ -100,21 +100,28 @@ describe("DesktopPlugin IPC and gateway", () => {
     expect(server.registry.list()).toHaveLength(0);
   });
 
-  it("forwards set_model through the gateway and reports model_select events", async () => {
+  it("forwards model/thinking operations and reports their state events", async () => {
     const dir = await mkdtemp(join(tmpdir(), "maestro-plugin-model-"));
     let receivedEvent: unknown;
+    let receivedThinkingLevel: string | undefined;
+    let receivedRuntimeStatus: string | undefined;
+    let receivedSummary: unknown;
     let receivedOperation: string | undefined;
     server = new DesktopPluginIpcServer({
       socketPath: join(dir, "plugin.sock"),
       secret: "test-secret",
+      supportedEvents: ["model_select", "thinking_level_select", "runtime_status", "session_summary"],
       onModelSelect: (_target, event) => { receivedEvent = event; },
+      onThinkingLevelSelect: (_target, event) => { receivedThinkingLevel = event.level; },
+      onRuntimeStatus: (_target, event) => { receivedRuntimeStatus = event.runtimeStatus; },
+      onSessionSummary: (_target, event) => { receivedSummary = event.summary; },
     });
     await server.start();
     client = new DesktopPluginIpcClient({
       socketPath: join(dir, "plugin.sock"),
       secret: "test-secret",
       target,
-      capabilities: ["set_model"],
+      capabilities: ["set_model", "set_thinking"],
       onRequest: async (request): Promise<DesktopPluginResult> => {
         receivedOperation = request.operation.type;
         return { type: "desktop_plugin_result", requestId: request.requestId, operation: request.operation.type, status: "observed" };
@@ -133,6 +140,17 @@ describe("DesktopPlugin IPC and gateway", () => {
     })).resolves.toMatchObject({ status: "observed" });
     expect(receivedOperation).toBe("set_model");
 
+    const thinkingResult = await server.registry.resolve(target)!.transport.request({
+      type: "desktop_plugin_request",
+      requestId: "set-thinking",
+      commandId: "set-thinking",
+      deadlineAt: Date.now() + 1000,
+      target,
+      operation: { type: "set_thinking", level: "high" },
+    });
+    expect(thinkingResult).toMatchObject({ status: "observed" });
+    expect(receivedOperation).toBe("set_thinking");
+
     await client.sendModelSelect({
       type: "desktop_plugin_event",
       event: "model_select",
@@ -140,6 +158,43 @@ describe("DesktopPlugin IPC and gateway", () => {
     });
     await waitFor(() => receivedEvent !== undefined);
     expect(receivedEvent).toMatchObject({ event: "model_select", model: { provider: "provider-b", id: "shared-id" } });
+
+    await client.sendThinkingLevelSelect({ type: "desktop_plugin_event", event: "thinking_level_select", level: "xhigh" });
+    await waitFor(() => receivedThinkingLevel === "xhigh");
+
+    await client.sendRuntimeStatus({ type: "desktop_plugin_event", event: "runtime_status", runtimeStatus: "running" });
+    await waitFor(() => receivedRuntimeStatus === "running");
+    await client.sendSessionSummary({
+      type: "desktop_plugin_event",
+      event: "session_summary",
+      summary: { runtimeStatus: "running", messageCount: 4, lastActivityAt: "2026-01-01T00:00:00.000Z" },
+    });
+    await waitFor(() => receivedSummary !== undefined);
+    expect(receivedSummary).toMatchObject({ runtimeStatus: "running", messageCount: 4 });
+  });
+
+  it("keeps a v1 connection when the server does not advertise runtime events", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "maestro-plugin-old-events-"));
+    let receivedRuntimeStatus: string | undefined;
+    server = new DesktopPluginIpcServer({
+      socketPath: join(dir, "plugin.sock"),
+      secret: "test-secret",
+      onRuntimeStatus: (_target, event) => { receivedRuntimeStatus = event.runtimeStatus; },
+    });
+    await server.start();
+    client = new DesktopPluginIpcClient({
+      socketPath: join(dir, "plugin.sock"),
+      secret: "test-secret",
+      target,
+      capabilities: ["abort"],
+      onRequest: async (request) => ({ type: "desktop_plugin_result", requestId: request.requestId, operation: request.operation.type, status: "observed" }),
+    });
+    await client.connect();
+    await client.sendRuntimeStatus({ type: "desktop_plugin_event", event: "runtime_status", runtimeStatus: "running" });
+
+    expect(receivedRuntimeStatus).toBeUndefined();
+    const gateway = new DesktopControlGatewayService(server.registry);
+    await expect(gateway.execute(command("still-connected"))).resolves.toMatchObject({ status: "observed" });
   });
 
   it("returns a structured capability mismatch for an older Plugin", async () => {
@@ -246,9 +301,66 @@ describe("DesktopPlugin IPC and gateway", () => {
       },
     });
     await client.connect();
-    await client.sendAskRequest({ type: "desktop_ask_request", requestId: "question:call-1", toolCallId: "call-1", questions: [{ question: "Continue?" }], deadlineAt: Date.now() + 1000 });
-    await expect(answer).resolves.toEqual({ toolCallId: "call-1", selected: ["yes"] });
+    await client.sendAskRequest({ type: "desktop_ask_request", requestId: "question:call_a|fc_b", toolCallId: "call_a|fc_b", questions: [{ question: "Continue?" }], deadlineAt: Date.now() + 1000 });
+    await expect(answer).resolves.toEqual({ toolCallId: "call_a|fc_b", selected: ["yes"] });
   });
+  it("turns a rejected async ask answer into a correlated failed receipt", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "maestro-plugin-ask-rejected-"));
+    let receipt: Promise<DesktopAskResult> | undefined;
+    server = new DesktopPluginIpcServer({
+      socketPath: join(dir, "plugin.sock"),
+      secret: "test-secret",
+      onAskRequest: (connectedTarget, request) => {
+        receipt = server?.registry.resolve(connectedTarget)?.transport.answerAsk?.({
+          type: "desktop_ask_response",
+          requestId: request.requestId,
+          toolCallId: request.toolCallId,
+          response: { selected: ["yes"] },
+        }) as Promise<DesktopAskResult>;
+      },
+    });
+    await server.start();
+    client = new DesktopPluginIpcClient({
+      socketPath: join(dir, "plugin.sock"),
+      secret: "test-secret",
+      target,
+      capabilities: ["ask-user-question"],
+      onRequest: async (request) => ({ type: "desktop_plugin_result", requestId: request.requestId, operation: request.operation.type, status: "observed" }),
+      onAskResponse: async () => { throw new Error("ask expired in Plugin"); },
+    });
+    await client.connect();
+    await client.sendAskRequest({ type: "desktop_ask_request", requestId: "question:call-rejected", toolCallId: "call-rejected", questions: [{ question: "Continue?" }], deadlineAt: Date.now() + 1000 });
+    await waitFor(() => receipt !== undefined);
+    await expect(receipt).resolves.toMatchObject({ requestId: "question:call-rejected", toolCallId: "call-rejected", status: "failed", error: { code: "plugin_ask_rejected" } });
+  });
+
+  it("retries a rejected ask receipt without replaying an accepted answer", async () => {
+    const registry = new DesktopPluginRegistry();
+    let attempts = 0;
+    registry.register({
+      target,
+      capabilities: ["ask-user-question"],
+      transport: {
+        close: () => undefined,
+        request: async (request) => ({ type: "desktop_plugin_result", requestId: request.requestId, operation: request.operation.type, status: "accepted" }),
+        answerAsk: async (response) => ({
+          type: "desktop_ask_result",
+          requestId: response.requestId,
+          toolCallId: response.toolCallId,
+          status: ++attempts === 1 ? "failed" : "accepted",
+          ...(attempts === 1 ? { error: { code: "response_write_failed" } } : {}),
+        }),
+      },
+    });
+    const gateway = new DesktopControlGatewayService(registry);
+    const answer = () => gateway.answerAsk(target, "ask-retry", "tool-retry", { selected: ["yes"] });
+
+    await expect(answer()).resolves.toMatchObject({ status: "failed", error: { code: "response_write_failed" } });
+    await expect(answer()).resolves.toMatchObject({ status: "accepted" });
+    await expect(answer()).resolves.toMatchObject({ status: "accepted" });
+    expect(attempts).toBe(2);
+  });
+
   it("isolates an oversized frame", async () => {
     const dir = await mkdtemp(join(tmpdir(), "maestro-plugin-frame-"));
     server = new DesktopPluginIpcServer({ socketPath: join(dir, "plugin.sock"), secret: "test-secret", maxFrameBytes: 128 });

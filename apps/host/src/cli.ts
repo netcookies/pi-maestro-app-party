@@ -19,14 +19,21 @@ import { randomBytes } from "node:crypto";
 import { readFile, writeFile, unlink, mkdir, chmod } from "node:fs/promises";
 import { homedir } from "node:os";
 import { join } from "node:path";
-import { DesktopPluginIpcServer } from "./plugin/desktop-plugin-ipc.js";
+import { DesktopBrokerHostIpc, DesktopBrokerProjectedRegistry } from "./plugin/desktop-broker-host-ipc.js";
+import {
+  DEFAULT_DESKTOP_BROKER_HOST_SOCKET,
+  DEFAULT_DESKTOP_BROKER_PLUGIN_SOCKET,
+  DEFAULT_DESKTOP_BROKER_REGISTRY_FILE,
+  DesktopBrokerSupervisor,
+} from "./plugin/desktop-broker-supervisor.js";
 
 const TOKEN_FILE = join(homedir(), ".pi", "maestro-mobile-token");
 /** PID 文件（与 extension start/stop 共用同一语义：谁起的都能被 /maestro-mobile stop 停掉） */
 const PID_FILE = join(homedir(), ".pi", "maestro-mobile.pid");
 const IPC_SECRET_FILE = join(homedir(), ".pi", "maestro-mobile-ipc-secret");
-const IPC_SOCKET_PATH = join(homedir(), ".pi", "maestro-mobile", "ipc", "desktop-plugin.sock");
-const IPC_REGISTRY_FILE = join(homedir(), ".pi", "maestro-mobile", "ipc", "desktop-plugin-registry.json");
+const BROKER_HOST_SOCKET = DEFAULT_DESKTOP_BROKER_HOST_SOCKET;
+const BROKER_PLUGIN_SOCKET = DEFAULT_DESKTOP_BROKER_PLUGIN_SOCKET;
+const BROKER_REGISTRY_FILE = DEFAULT_DESKTOP_BROKER_REGISTRY_FILE;
 
 async function loadOrCreateIpcSecret(): Promise<string> {
   try {
@@ -123,16 +130,18 @@ async function main(): Promise<void> {
   // P0-3：进程级 handler 必须在任何 await 之前注册。原先它们挂在 listen() 之后，
   // 启动期（token 读写、listen、版本探测）的异常会绕过统一清理路径，以原生栈崩溃。
   // controller/server 此时尚未构造，用 late 绑定延后注入。
-  const late: { controller?: HostController; server?: MobileHostServer; desktopIpc?: DesktopPluginIpcServer } = {};
+  const late: { controller?: HostController; server?: MobileHostServer; brokerHost?: DesktopBrokerHostIpc; supervisor?: DesktopBrokerSupervisor } = {};
   let shuttingDown = false;
   async function shutdown(reason: string, exitCode: number): Promise<void> {
     if (shuttingDown) return;
     shuttingDown = true;
     console.log(`[maestro-mobile] received ${reason}, shutting down...`);
-    // 关闭失败不应阻断退出（例如 listen 未成功时 close 会抛 ERR_SERVER_NOT_RUNNING）
-    await late.desktopIpc?.close().catch(() => { });
-    await late.controller?.dispose().catch(() => { });
+    // A normal Host restart must leave the singleton Broker alive so Plugin
+    // sockets can reconnect. Explicit extension stop owns Broker termination.
+    late.supervisor?.stopWatch();
     await late.server?.close().catch(() => { });
+    await late.controller?.dispose().catch(() => { });
+    await late.brokerHost?.close().catch(() => { });
     // 只能删自己写的 PID：崩在 writeFile 之前时，文件属于另一个存活实例，误删会使 /maestro-mobile stop 失效
     await unlinkIfOwned(PID_FILE, process.pid);
     console.log("[maestro-mobile] shutdown complete");
@@ -193,28 +202,32 @@ async function main(): Promise<void> {
 
   const runtimeFactory = new PiSdkRuntimeFactory();
   const maestroReader = new MaestroStateReader({ projectRoot: cli.projectRoot });
-  const controller = new HostController(runtimeFactory, maestroReader);
+  const projection = new DesktopBrokerProjectedRegistry();
+  const controller = new HostController(runtimeFactory, maestroReader, projection);
   const desktopSecret = await loadOrCreateIpcSecret();
-  const desktopIpc = new DesktopPluginIpcServer({
-    socketPath: IPC_SOCKET_PATH,
+  const brokerHost = new DesktopBrokerHostIpc({
+    socketPath: BROKER_HOST_SOCKET,
     secret: desktopSecret,
-    registry: controller.desktopPlugins,
-    registryPath: IPC_REGISTRY_FILE,
-    onConnected: (target) => controller.registerDesktopTarget(target),
-    onModelSelect: (target, event) => controller.syncDesktopModel(target, event.model),
-    onDisconnected: (target) => controller.unregisterDesktopTarget(target),
+    projection,
+    onProjection: (records) => controller.applyDesktopProjection(records),
+    onAskRequest: (target, request) => controller.onDesktopAskRequest(target, request),
+  });
+  controller.setDesktopBrokerLinkHealth(() => brokerHost.isConnected, () => brokerHost.isFlapping);
+  const supervisor = new DesktopBrokerSupervisor({
+    secretFile: IPC_SECRET_FILE,
+    pluginSocketPath: BROKER_PLUGIN_SOCKET,
+    hostSocketPath: BROKER_HOST_SOCKET,
+    registryPath: BROKER_REGISTRY_FILE,
   });
   const server = new MobileHostServer(controller, { token });
 
   late.controller = controller;
-  late.desktopIpc = desktopIpc;
+  late.brokerHost = brokerHost;
+  late.supervisor = supervisor;
   late.server = server;
-  try {
-    await desktopIpc.start();
-  } catch (error) {
-    // Desktop Plugin is optional; keep mobile Host available without process-control fallback.
-    console.warn("[maestro-mobile] Desktop Plugin IPC unavailable:", error instanceof Error ? error.message : error);
-  }
+  await brokerHost.start();
+  await supervisor.ensureRunning();
+  supervisor.startWatch();
   try {
     await server.listen(cli.port, cli.host);
   } catch (error) {
@@ -226,7 +239,8 @@ async function main(): Promise<void> {
     } else {
       console.error(`[maestro-mobile] 监听 ${cli.host}:${cli.port} 失败（${code ?? "unknown"}）:`, error);
     }
-    await desktopIpc.close().catch(() => { });
+    supervisor.stopWatch();
+    await brokerHost.close().catch(() => { });
     await controller.dispose().catch(() => { });
     process.exit(1);
   }

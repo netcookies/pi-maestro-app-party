@@ -6,11 +6,11 @@ import { MAX_TIMELINE_ITEMS, SdkSessionRunner } from "../src/session-runner.js";
 import type { HostEvent, TimelineItem } from "@maestro-mobile/shared";
 
 /** 构造带历史消息的 fake session */
-function makeSessionWithHistory(messages: unknown[]) {
+function makeSessionWithHistory(messages: unknown[], sessionName: string | undefined = "hist") {
   const subscribers = new Set<(e: unknown) => void>();
   const session = {
     sessionId: "sess-hist",
-    sessionName: "hist",
+    sessionName,
     cwd: "/tmp",
     sessionFile: "/tmp/x.jsonl",
     messages,
@@ -64,6 +64,21 @@ describe("SdkSessionRunner history replay", () => {
     expect(snapshot.timeline[0].text).toBe("你好");
     expect(snapshot.timeline[1].text).toBe("你好！有什么可以帮你？");
 
+    await runner.dispose();
+  });
+
+  it("uses the first user message as the title when the session has no custom name", async () => {
+    const runtime = makeSessionWithHistory([
+      { role: "assistant", content: "ignore me", timestamp: 1756800000000 },
+      { role: "user", content: "请总结下当前软件的功能", timestamp: 1756800100000 },
+    ]);
+    runtime.session.sessionName = undefined;
+    const runner = await SdkSessionRunner.open(
+      { createRuntime: async () => runtime.runtime, listSessions: async () => [] },
+      { cwd: "/tmp", mode: "create" },
+      () => {},
+    );
+    expect(runner.snapshot().session.title).toBe("请总结下当前软件的功能");
     await runner.dispose();
   });
 

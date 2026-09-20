@@ -28,6 +28,8 @@ export class JsonlTailWatcher {
   private readonly now: () => number;
 
   private currentOffset = 0;
+  /** 截断重写的字节属于重放；读过该 offset 前不计为 append。 */
+  private suppressAppendCountUntilOffset = 0;
   private carry = "";
   private fileHandle: FileHandle | null = null;
   private pollTimer: NodeJS.Timeout | null = null;
@@ -37,7 +39,7 @@ export class JsonlTailWatcher {
 
   constructor(
     private readonly filePath: string,
-    private readonly onItems: (items: TimelineItem[]) => void,
+    private readonly onItems: (items: TimelineItem[], appendedEntries: number) => void,
     options: JsonlTailWatcherOptions = {},
   ) {
     this.pollIntervalMs = options.pollIntervalMs ?? 250;
@@ -124,9 +126,12 @@ export class JsonlTailWatcher {
 
       const newSize = fileStat.size;
 
-      // 异常截断保护（例如 compact 导致文件缩小重写）：重置游标从头开始
-      if (newSize < this.currentOffset) {
+      // 异常截断保护（例如 compact 导致文件缩小重写）：重置游标从头开始。
+      // 重写后的内容不是「尾部追加」，不能再推进历史分页的 appendedEntries。
+      const resetFromStart = newSize < this.currentOffset;
+      if (resetFromStart) {
         this.currentOffset = 0;
+        this.suppressAppendCountUntilOffset = newSize;
         this.carry = "";
       }
 
@@ -145,14 +150,16 @@ export class JsonlTailWatcher {
         return;
       }
 
-      const bytesToRead = Math.min(newSize - this.currentOffset, this.maxChunkBytes);
+      const readOffset = this.currentOffset;
+      const bytesToRead = Math.min(newSize - readOffset, this.maxChunkBytes);
       const buffer = Buffer.alloc(bytesToRead);
-      const { bytesRead } = await this.fileHandle.read(buffer, 0, bytesToRead, this.currentOffset);
+      const { bytesRead } = await this.fileHandle.read(buffer, 0, bytesToRead, readOffset);
 
       if (bytesRead > 0) {
         this.currentOffset += bytesRead;
         const chunkStr = buffer.toString("utf8", 0, bytesRead);
-        this.processChunk(chunkStr);
+        this.processChunk(chunkStr, readOffset >= this.suppressAppendCountUntilOffset);
+        if (this.currentOffset >= this.suppressAppendCountUntilOffset) this.suppressAppendCountUntilOffset = 0;
       }
     } catch {
       // 读错误时安全释放句柄，下次轮询重新尝试 open
@@ -167,25 +174,34 @@ export class JsonlTailWatcher {
     }
   }
 
-  private processChunk(chunk: string): void {
+  private processChunk(chunk: string, countAppends = true): void {
     const combined = this.carry + chunk;
     const lines = combined.split("\n");
     // 最后一个元素若没有换行符则作为未完成的残行继续缓存
     this.carry = lines.pop() ?? "";
 
     const newItems: TimelineItem[] = [];
+    let appendedEntries = 0;
 
     for (const line of lines) {
       const trimmed = line.trim();
       if (!trimmed) continue;
       const items = this.parseLine(trimmed);
+      if (countAppends) {
+        try {
+          const entry = JSON.parse(trimmed) as Record<string, unknown>;
+          if (entry.type === "message" || entry.type === "custom_message") appendedEntries += 1;
+        } catch {
+          // parseLine already rejects malformed JSON; no append entry to count here.
+        }
+      }
       if (items.length > 0) {
         newItems.push(...items);
       }
     }
 
-    if (newItems.length > 0 && !this.isDisposed) {
-      this.onItems(newItems);
+    if ((newItems.length > 0 || appendedEntries > 0) && !this.isDisposed) {
+      this.onItems(newItems, appendedEntries);
     }
   }
 

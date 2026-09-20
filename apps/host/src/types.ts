@@ -1,4 +1,4 @@
-import type { DesktopPluginModel, SessionState, SessionSnapshot, HostEvent, TimelineItem } from "@maestro-mobile/shared";
+import type { DesktopPluginModel, SessionState, SessionSnapshot, HostEvent, TimelineItem, SessionTargetIdentity } from "@maestro-mobile/shared";
 import type { MobileAgentRuntime, MobileAgentSession } from "./mobile-agent.js";
 
 export type HostEventListener = (event: HostEvent) => void;
@@ -7,6 +7,8 @@ export interface OpenSessionRequest {
   cwd: string;
   mode?: "create" | "continue";
   sessionFile?: string;
+  /** Exact live endpoint selected from the server-issued session summary. */
+  target?: SessionTargetIdentity;
 }
 
 export interface SessionRunner {
@@ -29,8 +31,9 @@ export interface SessionRunner {
   listModels?(): { id: string; provider: string; name: string; reasoning: boolean; vision: boolean }[];
   listLoadedSkills?(): { name: string; description?: string }[];
   setModel?(modelId: string, provider?: string): Promise<{ ok: boolean; error?: string }>;
-  syncExternalModel?(model: DesktopPluginModel): void;
+  syncExternalModel?(model: DesktopPluginModel | undefined): void;
   setThinking?(level: string): { ok: boolean; error?: string };
+  syncExternalThinking?(level: string | undefined): void;
   compact?(customInstructions?: string): Promise<{ ok: boolean; error?: string }>;
   renameSession?(name: string): { ok: boolean; error?: string };
   respondToExtensionUi(requestId: string, response: unknown): boolean;
