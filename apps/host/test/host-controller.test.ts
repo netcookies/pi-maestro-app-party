@@ -111,12 +111,10 @@ describe("HostController", () => {
     const sessionFile = join(tmpDir, "desktop-session.jsonl");
     await writeFile(sessionFile, "");
     const runtime = makeRuntime("desktop-session", "/work/app", sessionFile);
-    const desktopEvents: unknown[] = [];
     const desktopController = new HostController({
       createRuntime: async () => runtime,
       listSessions: async () => [],
     }, reader);
-    desktopController.onEvent((event) => desktopEvents.push(event));
     const target = {
       sessionId: "desktop-session",
       endpointId: "desktop-endpoint",
@@ -146,11 +144,6 @@ describe("HostController", () => {
         ok: true,
         value: { session: { presentation: { control: { mode: "desktop_plugin", canPrompt: true } } } },
       });
-      runtime.emit({ type: "message_end", message: { role: "assistant", content: "done", timestamp: 1756800100000 } });
-      const sessionUpdate = desktopEvents.findLast((event) => (event as { type?: string }).type === "session_updated") as {
-        session?: { presentation?: { control?: { mode?: string } } };
-      } | undefined;
-      expect(sessionUpdate?.session?.presentation?.control?.mode).toBe("desktop_plugin");
       await expect(desktopController.application.command({ requestId: "abort-1", target, kind: "abort" })).resolves.toMatchObject({
         status: "observed",
       });
@@ -264,7 +257,7 @@ describe("HostController", () => {
     })));
   });
 
-  it("attaches a reader after a projected Desktop JSONL file materializes", async () => {
+  it("keeps projected Desktop targets readerless for open and snapshot", async () => {
     const sessionFile = join(tmpDir, "desktop-session-materialized.jsonl");
     const runtime = makeRuntime("desktop-session-materialized", "/work/app", sessionFile);
     const createRuntime = vi.fn(async () => runtime);
@@ -286,22 +279,29 @@ describe("HostController", () => {
       runtimeStatus: "idle" as const,
       transport,
     };
-    const waitFor = async (predicate: () => boolean): Promise<void> => {
-      for (let attempt = 0; attempt < 20 && !predicate(); attempt += 1) await new Promise((resolve) => setTimeout(resolve, 10));
-    };
 
     try {
       desktopController.desktopPlugins.register(registration);
       desktopController.applyDesktopProjection([registration]);
-      await waitFor(() => createRuntime.mock.calls.length > 0);
+      await Promise.resolve();
       expect(createRuntime).not.toHaveBeenCalled();
 
-      await writeFile(sessionFile, "");
-      expect(desktopController.directory.resolve(target)?.sessionFile).toBe(sessionFile);
+      await writeFile(sessionFile, [
+        JSON.stringify({ type: "message", message: { role: "user", content: "older", timestamp: 1756800000000 } }),
+        JSON.stringify({ type: "message", message: { role: "assistant", content: "latest", timestamp: 1756800100000 } }),
+      ].join("\n") + "\n");
       desktopController.applyDesktopProjection([registration]);
-      await waitFor(() => desktopController.directory.resolve(target)?.runner !== undefined);
-      expect(createRuntime).toHaveBeenCalledTimes(1);
-      expect(desktopController.directory.resolve(target)?.runner).toBeDefined();
+      await Promise.resolve();
+      expect(createRuntime).not.toHaveBeenCalled();
+      expect(desktopController.directory.resolve(target)?.runner).toBeUndefined();
+      await expect(desktopController.application.query({ kind: "session_snapshot", target })).resolves.toMatchObject({
+        ok: true,
+        value: { timeline: [{ text: "older" }, { text: "latest" }], historyAvailable: true },
+      });
+
+      await desktopController.openSession({ cwd: "/work/app", mode: "create", target });
+      expect(createRuntime).not.toHaveBeenCalled();
+      expect(desktopController.directory.resolve(target)?.runner).toBeUndefined();
     } finally {
       await desktopController.dispose();
     }
@@ -376,13 +376,13 @@ describe("HostController", () => {
       desktopController.desktopPlugins.register({ target, sessionFile, capabilities: ["prompt", "abort"], transport: firstTransport });
       desktopController.registerDesktopTarget(target);
       await desktopController.openSession({ cwd: "/work/app", mode: "create", target });
-      expect(desktopController.directory.resolve(target)?.runner).toBeDefined();
+      expect(desktopController.directory.resolve(target)?.runner).toBeUndefined();
 
       desktopController.desktopPlugins.register({ target, sessionFile, capabilities: ["prompt", "abort"], transport: secondTransport });
       desktopController.registerDesktopTarget(target);
 
       expect(desktopController.getSessionTarget(target.sessionId)).toEqual(target);
-      expect(desktopController.directory.resolve(target)?.runner).toBe(desktopController.getSession(target.sessionId));
+      expect(desktopController.directory.resolve(target)?.runner).toBeUndefined();
       await expect(desktopController.application.query({ kind: "session_snapshot", target })).resolves.toMatchObject({ ok: true });
     } finally {
       await desktopController.dispose();
@@ -446,15 +446,16 @@ describe("HostController", () => {
       const opened = await desktopController.openSession({ cwd: "/work/app", mode: "create", target: second });
       expect(desktopController.getSessionTarget(second.sessionId)).toEqual(second);
       expect(desktopController.directory.resolve(first)?.runner).toBeUndefined();
-      expect(desktopController.directory.resolve(second)?.runner).toBe(opened);
-      expect(createRuntime).toHaveBeenCalledWith(expect.objectContaining({ sessionFile }));
+      expect(desktopController.directory.resolve(second)?.runner).toBeUndefined();
+      expect(opened).toEqual({ id: second.sessionId });
+      expect(createRuntime).not.toHaveBeenCalled();
       await expect(desktopController.application.query({ kind: "session_snapshot", target: second })).resolves.toMatchObject({
         ok: true,
         value: { session: { presentation: { control: { mode: "desktop_plugin", canPrompt: true } } } },
       });
 
-      await expect(desktopController.openSession({ cwd: "/work/app", mode: "create", target: second })).resolves.toBe(opened);
-      expect(createRuntime).toHaveBeenCalledTimes(1);
+      await expect(desktopController.openSession({ cwd: "/work/app", mode: "create", target: second })).resolves.toEqual({ id: second.sessionId });
+      expect(createRuntime).not.toHaveBeenCalled();
     } finally {
       await desktopController.dispose();
     }
@@ -518,7 +519,7 @@ describe("HostController", () => {
       const stale = { ...target, processGeneration: "stale-generation" };
       expect(await local.closeSession(target.sessionId, stale)).toBe(false);
       expect(runtime.dispose).not.toHaveBeenCalled();
-      expect(local.getSession(target.sessionId)).toBeDefined();
+      expect(local.getSession(target.sessionId)).toBeUndefined();
       expect(await local.respondToExtensionUi(target.sessionId, "request", { id: "request", value: "x" }, stale)).toBe(false);
     } finally {
       await local.dispose();
@@ -533,8 +534,6 @@ describe("HostController", () => {
       createRuntime: async () => runtime,
       listSessions: async () => [],
     }, reader);
-    const events: unknown[] = [];
-    desktopController.onEvent((event) => events.push(event));
     const target = {
       sessionId: "desktop-session",
       endpointId: "desktop-endpoint",
@@ -559,11 +558,10 @@ describe("HostController", () => {
 
       await desktopController.openSession({ cwd: "/work/app", mode: "create", target });
 
-      const last = events.filter((event) => (event as { type?: string }).type === "session_updated").at(-1) as {
-        session?: { model?: { id?: string; provider?: string }; thinkingLevel?: string };
-      } | undefined;
-      expect(last?.session?.model).toMatchObject({ provider: "provider-a", id: "shared-id" });
-      expect(last?.session?.thinkingLevel).toBe("high");
+      await expect(desktopController.application.query({ kind: "session_snapshot", target })).resolves.toMatchObject({
+        ok: true,
+        value: { session: { model: { provider: "provider-a", id: "shared-id" }, thinkingLevel: "high" } },
+      });
     } finally {
       await desktopController.dispose();
     }

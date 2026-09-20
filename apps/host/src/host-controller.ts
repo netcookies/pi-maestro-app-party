@@ -15,8 +15,9 @@ import { DesktopBrokerProjectedRegistry } from "./plugin/desktop-broker-host-ipc
 import { DesktopControlGatewayService } from "./control/desktop-control-gateway.js";
 import { readSettingsOverview, updateSettingsJson } from "./maestro-settings.js";
 import { VersionDetector, type ComponentVersions } from "./version-detector.js";
+import { searchInJsonl } from "./jsonl-pager.js";
 import { EventLog } from "./event-log.js";
-import { existsSync, readFileSync } from "node:fs";
+import { readFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -52,7 +53,6 @@ export class HostController {
   private readonly sessionTargets = new Map<string, SessionTargetIdentity>();
   private readonly pendingDesktopModels = new Map<string, DesktopPluginModel>();
   private readonly pendingDesktopThinking = new Map<string, string>();
-  private readonly desktopReaderAttachInFlight = new Map<string, Promise<void>>();
   private readonly detachedReaderDisposals = new Set<Promise<void>>();
   private readonly pendingDesktopAsks = new Map<string, { target: DesktopPluginTarget; request: DesktopAskRequest; event: Extract<HostEvent, { type: "extension_ui_request" }>; timer: ReturnType<typeof setTimeout> }>();
   private readonly projectedDesktopTargets = new Map<string, DesktopPluginTarget>();
@@ -208,40 +208,7 @@ export class HostController {
       if (thinkingChanged) this.syncDesktopThinking(record.target, record.thinkingLevel, true);
       if (record.summary) this.syncDesktopSessionSummary(record.target, record.summary);
       else this.publishDesktopSummary(record.target, { reset: true, runtimeStatus: record.runtimeStatus, activeSince: null });
-      this.ensureDesktopReader(record.target);
     }
-  }
-
-  private ensureDesktopReader(target: DesktopPluginTarget): void {
-    if (this.disposed) return;
-    const key = targetKey(target);
-    if (this.desktopReaderAttachInFlight.has(key)) return;
-    const task = this.attachDesktopReader(target).finally(() => {
-      if (this.desktopReaderAttachInFlight.get(key) === task) this.desktopReaderAttachInFlight.delete(key);
-    });
-    this.desktopReaderAttachInFlight.set(key, task);
-  }
-
-  private async attachDesktopReader(target: DesktopPluginTarget): Promise<void> {
-    if (this.disposed) return;
-    const entry = this.sessionDirectory.resolve(target);
-    if (!entry || entry.kind !== "desktop" || entry.runner || !entry.sessionFile || !existsSync(entry.sessionFile)) return;
-    try {
-      await this.openSession({ cwd: target.normalizedCwd, mode: "create", target });
-    } catch {
-      return;
-    }
-    if (this.disposed) {
-      const runner = this.sessionDirectory.resolve(target)?.runner;
-      if (runner) await runner.dispose();
-      return;
-    }
-    const runner = this.sessionDirectory.resolve(target)?.runner;
-    if (!runner) return;
-    for (const item of runner.snapshot().timeline) {
-      this.emitToListeners(this.eventLog.record({ type: "timeline_item", sessionId: target.sessionId, item, target }));
-    }
-    this.emitToListeners(this.eventLog.record({ type: "session_updated", session: runner.state, target }));
   }
 
   get desktopGateway(): DesktopControlGatewayService {
@@ -489,9 +456,10 @@ export class HostController {
       throw new Error("target_mismatch");
     }
     const sessionFile = request.target ? projectedSessionFile : request.sessionFile;
-    if (request.target && requestedEntry?.kind === "desktop" && (!sessionFile || !existsSync(sessionFile))) {
-      // A live Plugin may advertise its future JSONL path before the first record creates the file.
-      // Keep the exact target selectable and controllable without opening a new Host-owned session.
+    if (request.target && requestedEntry?.kind === "desktop") {
+      // Desktop JSONL is a read-only projection. Do not open it through the Pi SDK here:
+      // SessionManager.open eagerly materializes the complete conversation. Bounded JSONL
+      // paging is handled by SessionQueryService, while commands still use the Broker.
       this.sessionTargets.set(request.target.sessionId, request.target);
       return { id: request.target.sessionId };
     }
@@ -571,8 +539,15 @@ export class HostController {
     if (!runner) {
       if (entry?.kind !== "desktop") throw new Error("target_unavailable");
       switch (operation.kind) {
-        case "load_more_history": return { items: [], hasMore: false, totalEntries: 0, historyAvailable: false };
-        case "search_history": return { matches: [], totalEntries: 0, historyAvailable: false };
+        case "load_more_history": {
+          const result = await this.sessionQueryService.history(operation.target, operation.count);
+          return result.value ?? { items: [], hasMore: false, totalEntries: 0, historyAvailable: false };
+        }
+        case "search_history": {
+          const entry = this.sessionDirectory.resolve(operation.target);
+          if (entry?.sessionFile) return searchInJsonl(entry.sessionFile, operation.keyword, operation.maxResults);
+          return { matches: [], totalEntries: 0, historyAvailable: false };
+        }
         case "list_models":
         case "list_skills": return [];
         default: throw new Error("target_unavailable");
@@ -595,7 +570,13 @@ export class HostController {
     if (!resolvedTarget || resolvedTarget.sessionId !== sessionId) return false;
     const entry = this.sessionDirectory.resolve(resolvedTarget);
     const runner = entry?.runner;
-    if (!runner || this.sessions.get(sessionId) !== runner) return false;
+    if (!runner) {
+      if (entry?.kind === "desktop") {
+        this.sessionTargets.delete(sessionId);
+        return true;
+      }
+      return false;
+    }
     this.sessions.delete(sessionId);
     const attachedEntries = this.sessionDirectory.list()
       .filter((entry) => entry.identity.sessionId === sessionId && entry.runner === runner);
@@ -651,13 +632,12 @@ export class HostController {
     this.stopMaestroPoll();
     for (const pending of this.pendingDesktopAsks.values()) clearTimeout(pending.timer);
     this.pendingDesktopAsks.clear();
-    await Promise.allSettled([...this.desktopReaderAttachInFlight.values(), ...this.detachedReaderDisposals]);
+    await Promise.allSettled([...this.detachedReaderDisposals]);
     for (const runner of this.sessions.values()) {
       await runner.dispose();
     }
     this.sessions.clear();
     this.sessionTargets.clear();
-    this.desktopReaderAttachInFlight.clear();
     this.projectedDesktopTargets.clear();
     for (const target of this.sessionDirectory.list()) this.sessionDirectory.unregister(target.identity);
     this.desktopPluginRegistry.clear();

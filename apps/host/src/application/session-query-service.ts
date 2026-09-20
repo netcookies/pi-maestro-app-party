@@ -2,6 +2,7 @@ import { normalize } from "node:path";
 import type { HostSessionList, HostSessionSummary, JsonValue, MonitorState, OperationStatus, SessionPresentation, SessionRuntimeStatus, SessionSnapshot, TimelineItem } from "@maestro-mobile/shared";
 import type { SessionDirectory, SessionDirectoryTarget, SessionTargetIdentity } from "../control/SessionDirectory.js";
 import type { UsageTotals } from "../usage-reader.js";
+import { replayPageBeforeJsonl, replayTailFromJsonl } from "../jsonl-pager.js";
 
 export interface SessionListSource {
   listSessions(cwd?: string): Promise<unknown[]>;
@@ -146,6 +147,8 @@ function summaryForTarget(
 }
 
 export class SessionQueryService {
+  private readonly desktopHistory = new Map<string, { cursor: number; totalEntries: number }>();
+
   constructor(
     private readonly source: SessionListSource,
     private readonly directory: SessionDirectory,
@@ -297,6 +300,14 @@ export class SessionQueryService {
       if (entry.kind !== "desktop") return { ok: false, status: "failed", error: { code: "session_readonly_or_unavailable" }, revision: this.directory.revision };
       const runtimeStatus = runtimeStatusForTarget(entry);
       const updatedAt = entry.lastActivityAt ?? new Date(this.now()).toISOString();
+      let timeline: TimelineItem[] = [];
+      let hasMoreHistory = false;
+      if (entry.sessionFile) {
+        const page = await replayTailFromJsonl(entry.sessionFile, 80);
+        timeline = page.items;
+        hasMoreHistory = page.hasMore;
+        this.desktopHistory.set(targetIdentityKey(entry.identity), { cursor: page.cursor, totalEntries: page.totalEntries });
+      }
       return {
         ok: true,
         value: {
@@ -313,10 +324,10 @@ export class SessionQueryService {
             ...(entry.thinkingLevel ? { thinkingLevel: entry.thinkingLevel } : {}),
             presentation: entry.presentation ?? readonlyPresentation(this.directory.revision),
           },
-          timeline: [],
+          timeline,
           nextSeq: 0,
-          historyAvailable: false,
-          hasMoreHistory: false,
+          historyAvailable: Boolean(entry.sessionFile),
+          hasMoreHistory,
         },
         revision: this.directory.revision,
       };
@@ -339,6 +350,13 @@ export class SessionQueryService {
     const entry = this.directory.resolve(target);
     if (!entry) return { ok: false, status: "unknown", error: { code: "target_unavailable" }, revision: this.directory.revision };
     if (!entry.runner) {
+      if (entry.kind === "desktop" && entry.sessionFile) {
+        const key = targetIdentityKey(entry.identity);
+        const cursor = this.desktopHistory.get(key)?.cursor ?? (await replayTailFromJsonl(entry.sessionFile, 80)).cursor;
+        const page = await replayPageBeforeJsonl(entry.sessionFile, cursor, count ?? 100);
+        this.desktopHistory.set(key, { cursor: page.cursor, totalEntries: page.totalEntries });
+        return { ok: true, value: { items: page.items, hasMore: page.hasMore, totalEntries: page.totalEntries, historyAvailable: true }, revision: this.directory.revision };
+      }
       if (entry.kind === "desktop") return { ok: true, value: { items: [], hasMore: false, totalEntries: 0, historyAvailable: false }, revision: this.directory.revision };
       return { ok: false, status: "failed", error: { code: "session_readonly_or_unavailable" }, revision: this.directory.revision };
     }

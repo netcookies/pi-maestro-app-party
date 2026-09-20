@@ -483,8 +483,15 @@ export class SdkSessionRunner implements SessionRunner {
   }
 
   private handleSessionEvent(event: unknown): void {
+    const type = event && typeof event === "object" && "type" in event
+      ? (event as { type?: unknown }).type
+      : undefined;
     const jsonEvent = toJsonValue(event);
-    this.emit(this.eventLog.record({ type: "raw_event", sessionId: this.id, event: sanitizeForClient(jsonEvent) }));
+    // message_update carries the complete accumulated text on every token. It is projected
+    // below as a bounded delta, but retaining every full update in replay history is quadratic.
+    if (type !== "message_update") {
+      this.emit(this.eventLog.record({ type: "raw_event", sessionId: this.id, event: sanitizeForClient(jsonEvent) }));
+    }
 
     // P1-1：将 assistant/thinking/toolResult 消息实时投影为 timeline，
     // 否则 live 会话中客户端只能看到用户消息（重连后才能从 jsonl 重放看到回复）。

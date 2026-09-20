@@ -37,11 +37,19 @@ describe("EventLog", () => {
     expect(log.eventsSince(2)).toHaveLength(0);
   });
 
-  it("limits max entries", () => {
-    const smallLog = new EventLog(3);
-    for (let i = 0; i < 5; i++) {
-      smallLog.record(makeEvent({ type: "host_status", status: String(i) }));
-    }
-    expect(smallLog.all.length).toBe(3);
+  it("limits retained bytes as well as entry count", () => {
+    const smallLog = new EventLog(100, 100);
+    smallLog.record(makeEvent({ type: "host_status", status: "a".repeat(70) }));
+    smallLog.record(makeEvent({ type: "host_status", status: "b" }));
+    expect(smallLog.all).toHaveLength(1);
+    expect(smallLog.all[0].status).toBe("b");
+  });
+
+  it("does not retain one event larger than the byte budget", () => {
+    const smallLog = new EventLog(100, 10);
+    const event = smallLog.record(makeEvent({ type: "host_status", status: "large" }));
+    expect(event.seq).toBe(1);
+    expect(smallLog.all).toEqual([]);
+    expect(smallLog.nextSequence).toBe(2);
   });
 });

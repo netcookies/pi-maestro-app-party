@@ -305,6 +305,20 @@ describe("P1-1: live 会话 timeline 投影", () => {
     await runner.dispose();
   });
 
+  it("message_update 不把累积全文写入 raw_event replay", async () => {
+    const runtime = makeRuntime(path);
+    const runner = await openRunner(runtime);
+
+    runtime.emitUpdate("assistant", "第一段", 1756800100000);
+    runtime.emitUpdate("assistant", "第一段第二段", 1756800100000);
+
+    expect(events.filter((event) => event.type === "raw_event")).toHaveLength(0);
+    expect(events.filter((event) => event.type === "timeline_delta").length).toBeGreaterThanOrEqual(1);
+    expect(events.findLast((event) => event.type === "session_updated")).toBeDefined();
+
+    await runner.dispose();
+  });
+
   it("user 消息不重复投影（recordUserMessage 已覆盖）", async () => {
     const runtime = makeRuntime(path);
     const runner = await openRunner(runtime);
