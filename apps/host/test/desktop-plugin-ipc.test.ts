@@ -85,6 +85,37 @@ describe("DesktopPlugin IPC and gateway", () => {
     expect(executions).toBe(1);
   });
 
+  it("forwards readerless model and skill queries to the exact target", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "maestro-plugin-query-"));
+    server = new DesktopPluginIpcServer({ socketPath: join(dir, "plugin.sock"), secret: "test-secret" });
+    await server.start();
+    client = new DesktopPluginIpcClient({
+      socketPath: join(dir, "plugin.sock"),
+      secret: "test-secret",
+      target,
+      capabilities: ["list_models", "list_skills"],
+      onRequest: async (request) => ({
+        type: "desktop_plugin_result" as const,
+        requestId: request.requestId,
+        operation: request.operation.type,
+        status: "observed" as const,
+        result: request.operation.type === "list_models"
+          ? [{ provider: "provider-a", id: "model-a", name: "Model A", reasoning: true, vision: false }]
+          : [{ name: "review", description: "Review changes" }],
+      }),
+    });
+    await client.connect();
+    await waitFor(() => server?.registry.resolve(target) !== undefined);
+
+    const gateway = new DesktopControlGatewayService(server.registry);
+    await expect(gateway.query(target, "list_models")).resolves.toEqual([
+      { provider: "provider-a", id: "model-a", name: "Model A", reasoning: true, vision: false },
+    ]);
+    await expect(gateway.query(target, "list_skills")).resolves.toEqual([
+      { name: "review", description: "Review changes" },
+    ]);
+    await expect(gateway.query({ ...target, processGeneration: "stale" }, "list_models")).resolves.toEqual([]);
+  });
   it("rejects bad secrets without taking down the server", async () => {
     const dir = await mkdtemp(join(tmpdir(), "maestro-plugin-auth-"));
     server = new DesktopPluginIpcServer({ socketPath: join(dir, "plugin.sock"), secret: "right-secret" });

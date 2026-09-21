@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import type {
   DesktopAskResponse,
   DesktopAskResult,
@@ -114,6 +115,25 @@ export class DesktopControlGatewayService implements DesktopControlGateway {
     });
   }
 
+  query(target: SessionTargetIdentity, operation: "list_models" | "list_skills"): Promise<unknown> {
+    const desktopTarget: DesktopPluginTarget = {
+      sessionId: target.sessionId,
+      endpointId: target.endpointId,
+      normalizedCwd: target.normalizedCwd,
+      processGeneration: target.processGeneration,
+    };
+    const requestId = `query:${randomUUID()}`;
+    const registration = this.registry.resolve(desktopTarget);
+    if (!registration || !this.registry.hasCapability(desktopTarget, operation)) return Promise.resolve([]);
+    return registration.transport.request({
+      type: "desktop_plugin_request",
+      requestId,
+      commandId: requestId,
+      deadlineAt: this.now() + this.deadlineMs,
+      target: desktopTarget,
+      operation: { type: operation },
+    }).then((response) => response.status === "observed" && response.result !== undefined ? response.result : []).catch(() => []);
+  }
   answerAsk(target: SessionTargetIdentity, requestId: string, toolCallId: string, response: ExtensionUiResponse): Promise<CommandResult> {
     const scope = JSON.stringify(["ask_response", target.sessionId, target.endpointId, target.normalizedCwd, target.processGeneration, toolCallId]);
     const receipt = this.ledger.run(requestId, scope, async () => {

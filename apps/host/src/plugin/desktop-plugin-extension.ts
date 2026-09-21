@@ -286,6 +286,29 @@ export function createDesktopPluginExtension(options: DesktopPluginExtensionOpti
         abort: () => {
           ctx.abort();
         },
+        listModels: () => {
+          const registry = ctx.modelRegistry;
+          const all = registry.getAll();
+          const available = typeof registry.getAvailable === "function" ? registry.getAvailable() : all;
+          console.error(`[maestro-mobile] list_models all=${all.length} available=${available.length} hasCurrent=${Boolean(ctx.model)}`);
+          // getAvailable() 可能因异步 auth snapshot 暂时为空；当前已绑定模型仍是安全的单项候选。
+          const models = available.length > 0 ? available : (ctx.model ? [ctx.model] : []);
+          return models.flatMap((candidate) => {
+            const model = modelInfo(candidate);
+            return model ? [model] : [];
+          });
+        },
+        listSkills: () => {
+          const commands = pi.getCommands();
+          console.error(`[maestro-mobile] list_skills commands=${commands.length} skills=${commands.filter((command) => command.source === "skill").length}`);
+          return commands.flatMap((command) => {
+            if (command.source !== "skill" || typeof command.name !== "string" || !command.name.startsWith("skill:")) return [];
+            return [{
+              name: command.name.slice("skill:".length),
+              ...(typeof command.description === "string" ? { description: command.description } : {}),
+            }];
+          });
+        },
         getAllTools: () => pi.getAllTools(),
       };
       latestModel = modelInfo(ctx.model);

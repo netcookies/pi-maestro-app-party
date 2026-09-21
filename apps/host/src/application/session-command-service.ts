@@ -22,6 +22,7 @@ export interface CommandResult extends OperationReceipt {
 
 export interface DesktopControlGateway {
   execute(command: SessionCommand): Promise<CommandResult>;
+  query(target: SessionTargetIdentity, operation: "list_models" | "list_skills"): Promise<unknown>;
 }
 
 function commandScope(command: SessionCommand): string {

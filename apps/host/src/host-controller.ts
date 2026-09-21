@@ -1,4 +1,4 @@
-import type { HostEvent, SessionSnapshot, ExtensionUiResponse, DesktopAskRequest, DesktopPluginModel, DesktopPluginRuntimeStatus, DesktopPluginSessionSummary, SessionSummaryPatch } from "@maestro-mobile/shared";
+import type { HostEvent, SessionSnapshot, ExtensionUiResponse, DesktopAskRequest, DesktopPluginModel, DesktopPluginRuntimeStatus, DesktopPluginSessionSummary, SessionSummaryPatch, TimelineItem } from "@maestro-mobile/shared";
 import type { DesktopPluginTarget } from "@maestro-mobile/shared";
 import type { RuntimeFactory, SessionRunner, OpenSessionRequest, HostEventListener } from "./types.js";
 import { SdkSessionRunner } from "./session-runner.js";
@@ -16,6 +16,7 @@ import { DesktopControlGatewayService } from "./control/desktop-control-gateway.
 import { readSettingsOverview, updateSettingsJson } from "./maestro-settings.js";
 import { VersionDetector, type ComponentVersions } from "./version-detector.js";
 import { searchInJsonl } from "./jsonl-pager.js";
+import { JsonlTailWatcher } from "./jsonl-tail-watcher.js";
 import { EventLog } from "./event-log.js";
 import { readFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
@@ -23,6 +24,11 @@ import { fileURLToPath } from "node:url";
 
 function targetKey(target: DesktopPluginTarget): string {
   return [target.sessionId, target.endpointId, target.normalizedCwd, target.processGeneration].join("\u0000");
+}
+
+function timelineContentKey(item: TimelineItem): string {
+  const { id: _id, ...content } = item;
+  return JSON.stringify(content);
 }
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -54,6 +60,8 @@ export class HostController {
   private readonly pendingDesktopModels = new Map<string, DesktopPluginModel>();
   private readonly pendingDesktopThinking = new Map<string, string>();
   private readonly detachedReaderDisposals = new Set<Promise<void>>();
+  private readonly desktopTailWatchers = new Map<string, { sessionFile: string; watcher: JsonlTailWatcher }>();
+  private readonly desktopReplayRefreshes = new Map<string, { timer: ReturnType<typeof setTimeout>; refreshing: boolean; replayQueued: boolean; pendingItems: TimelineItem[] }>();
   private readonly pendingDesktopAsks = new Map<string, { target: DesktopPluginTarget; request: DesktopAskRequest; event: Extract<HostEvent, { type: "extension_ui_request" }>; timer: ReturnType<typeof setTimeout> }>();
   private readonly projectedDesktopTargets = new Map<string, DesktopPluginTarget>();
   private readonly sessionCommandService: SessionCommandService;
@@ -202,8 +210,7 @@ export class HostController {
       this.projectedDesktopTargets.set(key, { ...record.target });
       if (modelChanged) {
         this.pendingDesktopModels.delete(key);
-        this.sessionDirectory.updateDesktopModel(record.target, record.model as DesktopPluginModel);
-        this.sessionDirectory.resolve(record.target)?.runner?.syncExternalModel?.(record.model as DesktopPluginModel);
+        this.syncDesktopModel(record.target, record.model);
       }
       if (thinkingChanged) this.syncDesktopThinking(record.target, record.thinkingLevel, true);
       if (record.summary) this.syncDesktopSessionSummary(record.target, record.summary);
@@ -223,6 +230,7 @@ export class HostController {
       ...(registration.model ? { model: registration.model } : {}),
       ...(registration.thinkingLevel ? { thinkingLevel: registration.thinkingLevel } : {}),
     });
+    this.ensureDesktopTailWatcher(target, registration.sessionFile);
   }
 
   getSessionTarget(sessionId: string): SessionTargetIdentity | undefined {
@@ -238,11 +246,18 @@ export class HostController {
     return matches.length === 1 ? { ...matches[0].identity } : undefined;
   }
 
-  syncDesktopModel(target: DesktopPluginTarget, model: DesktopPluginModel): void {
+  syncDesktopModel(target: DesktopPluginTarget, model: DesktopPluginModel | undefined): void {
     // The event may arrive before Mobile opens the session: remember it per exact target.
-    this.pendingDesktopModels.set(targetKey(target), model);
+    const key = targetKey(target);
+    if (model === undefined) this.pendingDesktopModels.delete(key);
+    else this.pendingDesktopModels.set(key, model);
     this.sessionDirectory.updateDesktopModel(target, model);
-    this.sessionDirectory.resolve(target)?.runner?.syncExternalModel?.(model);
+    const runner = this.sessionDirectory.resolve(target)?.runner;
+    if (runner) {
+      runner.syncExternalModel?.(model);
+      return;
+    }
+    this.publishDesktopSessionUpdated(target);
   }
 
   syncDesktopThinking(target: DesktopPluginTarget, level: string | undefined, force = false): void {
@@ -256,11 +271,7 @@ export class HostController {
       current.runner.syncExternalThinking?.(level);
       return;
     }
-    void this.sessionQueryService.snapshot(target).then((snapshot) => {
-      const latest = this.sessionDirectory.resolve(target);
-      if (!snapshot.ok || !snapshot.value || !latest || latest.runner || latest.thinkingLevel !== level) return;
-      this.emitToListeners(this.eventLog.record({ type: "session_updated", session: snapshot.value.session, target }));
-    });
+    this.publishDesktopSessionUpdated(target);
   }
 
   syncDesktopRuntimeStatus(target: DesktopPluginTarget, runtimeStatus: DesktopPluginRuntimeStatus): void {
@@ -275,6 +286,142 @@ export class HostController {
 
   syncDesktopSessionSummary(target: DesktopPluginTarget, summary: DesktopPluginSessionSummary): void {
     this.publishDesktopSummary(target, summary);
+  }
+
+  private async publishDesktopSessionUpdated(target: DesktopPluginTarget, includeTimeline = false): Promise<SessionSnapshot | undefined> {
+    try {
+      const snapshot = await this.sessionQueryService.snapshot(target);
+      if (!snapshot.ok || !snapshot.value || !this.sessionDirectory.resolve(target)) return undefined;
+      this.emitToListeners(this.eventLog.record({
+        type: "session_updated",
+        session: snapshot.value.session,
+        target,
+      }));
+      if (includeTimeline) {
+        this.emitToListeners(this.eventLog.record({
+          type: "timeline_snapshot",
+          sessionId: target.sessionId,
+          items: snapshot.value.timeline,
+          target,
+        }));
+      }
+      return snapshot.value;
+    } catch {
+      // A target may disconnect while its projection event is being materialized.
+      return undefined;
+    }
+  }
+
+  private emitDesktopTailItems(target: DesktopPluginTarget, items: TimelineItem[]): void {
+    for (const item of items) {
+      this.emitToListeners(this.eventLog.record({
+        type: "timeline_item",
+        sessionId: target.sessionId,
+        target,
+        item,
+      }));
+    }
+  }
+
+  private startDesktopReplayRefresh(target: DesktopPluginTarget, refresh: { timer: ReturnType<typeof setTimeout>; refreshing: boolean; replayQueued: boolean; pendingItems: TimelineItem[] }): void {
+    refresh.refreshing = true;
+    void this.publishDesktopSessionUpdated(target, true).then((snapshot) => {
+      const key = targetKey(target);
+      const latest = this.desktopReplayRefreshes.get(key);
+      if (!latest || latest !== refresh) return;
+      if (latest.replayQueued) {
+        latest.replayQueued = false;
+        latest.refreshing = false;
+        latest.timer = setTimeout(() => this.startDesktopReplayRefresh(target, latest), 100);
+        latest.timer.unref?.();
+        return;
+      }
+      if (snapshot) {
+        const available = new Map<string, number>();
+        for (const item of snapshot.timeline) {
+          const itemKey = timelineContentKey(item);
+          available.set(itemKey, (available.get(itemKey) ?? 0) + 1);
+        }
+        latest.pendingItems = latest.pendingItems.filter((item) => {
+          const itemKey = timelineContentKey(item);
+          const count = available.get(itemKey) ?? 0;
+          if (count <= 0) return true;
+          available.set(itemKey, count - 1);
+          return false;
+        });
+      }
+      this.emitDesktopTailItems(target, latest.pendingItems);
+      this.desktopReplayRefreshes.delete(key);
+    });
+  }
+
+  private scheduleDesktopReplayRefresh(target: DesktopPluginTarget): void {
+    const key = targetKey(target);
+    const current = this.desktopReplayRefreshes.get(key);
+    if (current) {
+      if (current.refreshing) current.replayQueued = true;
+      return;
+    }
+    const refresh = {
+      timer: setTimeout(() => this.startDesktopReplayRefresh(target, refresh), 100),
+      refreshing: false,
+      replayQueued: false,
+      pendingItems: [] as TimelineItem[],
+    };
+    refresh.timer.unref?.();
+    this.desktopReplayRefreshes.set(key, refresh);
+  }
+
+  private publishDesktopTailItems(target: DesktopPluginTarget, items: TimelineItem[]): void {
+    const refresh = this.desktopReplayRefreshes.get(targetKey(target));
+    if (!refresh) {
+      this.emitDesktopTailItems(target, items);
+      return;
+    }
+    refresh.pendingItems.push(...items);
+  }
+
+  private ensureDesktopTailWatcher(target: DesktopPluginTarget, sessionFile?: string): void {
+    const key = targetKey(target);
+    const current = this.desktopTailWatchers.get(key);
+    if (!sessionFile) {
+      if (current) this.disposeDesktopTailWatcher(target);
+      return;
+    }
+    if (current?.sessionFile === sessionFile && !current.watcher.disposed) return;
+    if (current) this.disposeDesktopTailWatcher(target);
+
+    const watcher = new JsonlTailWatcher(sessionFile, (items, appendedEntries, replayed, replaySettled) => {
+      if (this.disposed || !this.sessionDirectory.resolve(target)) return;
+      if (replayed) {
+        if (replaySettled) this.scheduleDesktopReplayRefresh(target);
+        return;
+      }
+      if (appendedEntries === 0) return;
+      this.publishDesktopTailItems(target, items);
+    });
+    this.desktopTailWatchers.set(key, { sessionFile, watcher });
+    void watcher.start().catch(() => {
+      if (this.desktopTailWatchers.get(key)?.watcher === watcher) this.desktopTailWatchers.delete(key);
+    });
+  }
+
+  private cancelDesktopReplayRefresh(target: DesktopPluginTarget): void {
+    const refresh = this.desktopReplayRefreshes.get(targetKey(target));
+    if (!refresh) return;
+    clearTimeout(refresh.timer);
+    this.desktopReplayRefreshes.delete(targetKey(target));
+  }
+
+  private disposeDesktopTailWatcher(target: DesktopPluginTarget): void {
+    this.cancelDesktopReplayRefresh(target);
+    const key = targetKey(target);
+    const entry = this.desktopTailWatchers.get(key);
+    if (!entry) return;
+    this.desktopTailWatchers.delete(key);
+    const disposal = entry.watcher.dispose();
+    this.detachedReaderDisposals.add(disposal);
+    void disposal.finally(() => this.detachedReaderDisposals.delete(disposal));
   }
 
   onDesktopAskRequest(target: DesktopPluginTarget, request: DesktopAskRequest): void {
@@ -328,6 +475,7 @@ export class HostController {
   unregisterDesktopTarget(target: DesktopPluginTarget): void {
     // A reconnect may replace the registration before the old socket closes.
     if (this.desktopPluginRegistry.resolve(target)) return;
+    this.disposeDesktopTailWatcher(target);
     const entry = this.sessionDirectory.resolve(target);
     if (!entry) return;
     for (const [id, pending] of this.pendingDesktopAsks) {
@@ -549,7 +697,7 @@ export class HostController {
           return { matches: [], totalEntries: 0, historyAvailable: false };
         }
         case "list_models":
-        case "list_skills": return [];
+        case "list_skills": return this.desktopControlGateway.query(operation.target, operation.kind);
         default: throw new Error("target_unavailable");
       }
     }
@@ -632,6 +780,12 @@ export class HostController {
     this.stopMaestroPoll();
     for (const pending of this.pendingDesktopAsks.values()) clearTimeout(pending.timer);
     this.pendingDesktopAsks.clear();
+    for (const refresh of this.desktopReplayRefreshes.values()) clearTimeout(refresh.timer);
+    this.desktopReplayRefreshes.clear();
+    for (const target of this.desktopTailWatchers.keys()) {
+      const [sessionId, endpointId, normalizedCwd, processGeneration] = target.split("\u0000");
+      this.disposeDesktopTailWatcher({ sessionId, endpointId, normalizedCwd, processGeneration });
+    }
     await Promise.allSettled([...this.detachedReaderDisposals]);
     for (const runner of this.sessions.values()) {
       await runner.dispose();

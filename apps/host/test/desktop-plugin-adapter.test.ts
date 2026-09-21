@@ -259,6 +259,29 @@ describe("DesktopPiSessionAdapter", () => {
     expect(adapter.getCapabilities()).toContain("set_thinking");
   });
 
+  it("returns live model and skill lists through negotiated read operations", async () => {
+    const adapter = new DesktopPiSessionAdapter({
+      prompt: async () => {},
+      steer: async () => {},
+      followUp: async () => {},
+      abort: () => {},
+      setModel: async () => true,
+      setThinking: () => {},
+      listModels: () => [{ provider: "provider-a", id: "model-a", name: "Model A", reasoning: true, vision: false }],
+      listSkills: () => [{ name: "review", description: "Review changes" }],
+      getAllTools: () => [],
+    }, target);
+
+    expect(adapter.getCapabilities()).toEqual(expect.arrayContaining(["list_models", "list_skills"]));
+    await expect(adapter.execute(request({ type: "list_models" }))).resolves.toMatchObject({
+      status: "observed",
+      result: [{ provider: "provider-a", id: "model-a", name: "Model A", reasoning: true, vision: false }],
+    });
+    await expect(adapter.execute(request({ type: "list_skills" }))).resolves.toMatchObject({
+      status: "observed",
+      result: [{ name: "review", description: "Review changes" }],
+    });
+  });
   it("reports model_change_failed when Pi rejects the selected model", async () => {
     const adapter = new DesktopPiSessionAdapter({
       prompt: async () => {},

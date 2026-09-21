@@ -1,4 +1,4 @@
-import type { DesktopAskRequest, DesktopAskResponse, DesktopPluginCapability, DesktopPluginRequest, DesktopPluginResult, DesktopPluginTarget, JsonValue } from "@maestro-mobile/shared";
+import type { DesktopAskRequest, DesktopAskResponse, DesktopPluginCapability, DesktopPluginModel, DesktopPluginRequest, DesktopPluginResult, DesktopPluginTarget, JsonValue } from "@maestro-mobile/shared";
 import { DesktopFlowAskAdapter } from "./desktop-flow-ask-adapter.js";
 
 export interface DesktopPiSessionApi {
@@ -9,6 +9,8 @@ export interface DesktopPiSessionApi {
   getAllTools(): readonly { name?: string }[];
   setModel(provider: string | undefined, modelId: string): Promise<boolean>;
   setThinking(level: string): void;
+  listModels?(): DesktopPluginModel[];
+  listSkills?(): { name: string; description?: string }[];
 }
 
 /** 投递失败的错误码；Host/移动端据此区分「未投递」与「插件异常」。 */
@@ -53,7 +55,12 @@ export class DesktopPiSessionAdapter {
   ) {
     this.target = { ...target };
     this.ask = ask;
-    this.capabilities = ["prompt", "steer", "follow_up", "abort", "set_model", "set_thinking", ...(ask.supported ? ["ask-user-question" as const] : [])];
+    this.capabilities = [
+      "prompt", "steer", "follow_up", "abort", "set_model", "set_thinking",
+      ...(api.listModels ? ["list_models" as const] : []),
+      ...(api.listSkills ? ["list_skills" as const] : []),
+      ...(ask.supported ? ["ask-user-question" as const] : []),
+    ];
   }
 
   getCapabilities(): DesktopPluginCapability[] {
@@ -101,6 +108,20 @@ export class DesktopPiSessionAdapter {
       if (operation === "follow_up") {
         await this.api.followUp(request.operation.message);
         return { type: "desktop_plugin_result", requestId: request.requestId, operation, status: "accepted" };
+      }
+      if (operation === "list_models") {
+        const result = this.api.listModels?.() ?? [];
+        return {
+          type: "desktop_plugin_result",
+          requestId: request.requestId,
+          operation,
+          status: "observed",
+          result: result.map(({ provider, id, name, reasoning, vision }) => ({ provider, id, name, reasoning, vision })),
+        };
+      }
+      if (operation === "list_skills") {
+        const result = this.api.listSkills?.() ?? [];
+        return { type: "desktop_plugin_result", requestId: request.requestId, operation, status: "observed", result };
       }
       if (operation === "set_model") {
         const changed = await this.api.setModel(request.operation.provider, request.operation.modelId);

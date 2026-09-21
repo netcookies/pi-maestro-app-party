@@ -9,7 +9,7 @@ import { DesktopPluginRegistry } from "../src/plugin/desktop-plugin-registry.js"
 import { createDesktopPluginExtension } from "../src/plugin/desktop-plugin-extension.js";
 
 /** 最小假 Pi API/ctx：只保真 extension 实际使用的成员，避免用宽泛 mock 掩盖真实调用。 */
-function fakePi(options: { models: { provider: string; id: string; name: string }[]; model?: unknown; configuredAuth?: boolean }) {
+function fakePi(options: { models: { provider: string; id: string; name: string }[]; availableModels?: { provider: string; id: string; name: string }[]; skills?: { name: string; description?: string }[]; model?: unknown; configuredAuth?: boolean }) {
   const handlers = new Map<string, ((event: unknown, ctx: unknown) => unknown)[]>();
   const setModelCalls: unknown[] = [];
   const setThinkingCalls: string[] = [];
@@ -24,6 +24,7 @@ function fakePi(options: { models: { provider: string; id: string; name: string 
       sent.push({ content, options: sendOptions });
     },
     getAllTools: () => [],
+    getCommands: () => (options.skills ?? []).map((skill) => ({ name: `skill:${skill.name}`, description: skill.description, source: "skill" })),
     setModel: async (model: unknown) => {
       setModelCalls.push(model);
       return true;
@@ -50,6 +51,7 @@ function fakePi(options: { models: { provider: string; id: string; name: string 
     modelRegistry: {
       find: (provider: string, id: string) => options.models.find((m) => m.provider === provider && m.id === id),
       getAll: () => options.models,
+      getAvailable: () => options.availableModels ?? options.models,
       hasConfiguredAuth: () => options.configuredAuth ?? true,
     },
     isIdle: () => true,
@@ -107,7 +109,12 @@ describe("Desktop Plugin extension (TUI side)", () => {
     });
     await server.start();
 
-    const fake = fakePi({ models: [{ provider: "provider-b", id: "shared-id", name: "Model B" }] });
+    const fake = fakePi({
+      models: [{ provider: "provider-b", id: "shared-id", name: "Model B" }],
+      availableModels: [],
+      model: { provider: "provider-b", id: "shared-id", name: "Model B", reasoning: false, input: ["text", "image"] },
+      skills: [{ name: "review", description: "Review changes" }],
+    });
     const extension = createDesktopPluginExtension({ socketPath: join(dir, "plugin.sock"), secret: "test-secret" });
     extension(fake.pi as never);
     fake.emit("session_start", { type: "session_start", reason: "startup" });
@@ -119,6 +126,8 @@ describe("Desktop Plugin extension (TUI side)", () => {
     expect(registry.list()[0].sessionFile).toBe("/sessions/tui-session.jsonl");
     expect(registry.hasCapability(target, "set_model")).toBe(true);
     expect(registry.hasCapability(target, "set_thinking")).toBe(true);
+    expect(registry.hasCapability(target, "list_models")).toBe(true);
+    expect(registry.hasCapability(target, "list_skills")).toBe(true);
 
     fake.emit("agent_start", { type: "agent_start" });
     await waitFor(() => runtimeStatuses.at(-1) === "running");
@@ -127,6 +136,12 @@ describe("Desktop Plugin extension (TUI side)", () => {
 
     // Host → TUI: 必须命中 provider/id 并用同一个进程的 API 切换模型
     const gateway = new DesktopControlGatewayService(registry);
+    await expect(gateway.query(target, "list_models")).resolves.toEqual([
+      { provider: "provider-b", id: "shared-id", name: "Model B", reasoning: false, vision: true },
+    ]);
+    await expect(gateway.query(target, "list_skills")).resolves.toEqual([
+      { name: "review", description: "Review changes" },
+    ]);
     const result = await gateway.execute({ requestId: "ext-set-model", target: target as DesktopPluginTarget, kind: "set_model", provider: "provider-b", modelId: "shared-id" });
     expect(result).toMatchObject({ status: "observed" });
     expect(fake.setModelCalls).toEqual([{ provider: "provider-b", id: "shared-id", name: "Model B" }]);
@@ -156,6 +171,30 @@ describe("Desktop Plugin extension (TUI side)", () => {
     });
     await waitFor(() => received.some((model) => model.provider === "provider-b"));
     expect(received.at(-1)).toEqual({ provider: "provider-b", id: "shared-id", name: "Model B", reasoning: false, vision: true });
+  });
+
+  it("lists the bound model when Pi has no available or catalog snapshot", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "maestro-ext-model-fallback-"));
+    const registry = new DesktopPluginRegistry();
+    server = new DesktopPluginIpcServer({
+      socketPath: join(dir, "plugin.sock"),
+      secret: "test-secret",
+      registry,
+    });
+    await server.start();
+
+    const fake = fakePi({
+      models: [],
+      availableModels: [],
+      model: { provider: "provider-live", id: "live-model", name: "Live model", reasoning: true, input: ["text", "image"] },
+    });
+    createDesktopPluginExtension({ socketPath: join(dir, "plugin.sock"), secret: "test-secret" })(fake.pi as never);
+    fake.emit("session_start", { type: "session_start", reason: "startup" });
+
+    await waitFor(() => registry.list().length > 0);
+    await expect(new DesktopControlGatewayService(registry).query(registry.list()[0].target, "list_models")).resolves.toEqual([
+      { provider: "provider-live", id: "live-model", name: "Live model", reasoning: true, vision: true },
+    ]);
   });
 
   it("shuts down an in-flight connection setup without creating a zombie client", async () => {

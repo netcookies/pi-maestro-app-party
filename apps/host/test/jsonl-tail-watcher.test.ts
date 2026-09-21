@@ -64,6 +64,23 @@ describe("JsonlTailWatcher (AC1, AC2, AC5)", () => {
     await watcher.dispose();
   });
 
+  it("skips history when a registered session file is materialized after watcher start", async () => {
+    const { filePath } = await makeFixture([]);
+    await rm(filePath);
+    const received: TimelineItem[] = [];
+    const watcher = new JsonlTailWatcher(filePath, (items) => received.push(...items), { pollIntervalMs: 50 });
+    await watcher.start();
+
+    await writeFile(filePath, JSON.stringify({ type: "message", message: { role: "user", content: "materialized history" } }) + "\n", "utf8");
+    await watcher.checkNewContent();
+    expect(received.at(-1)?.text).toBe("materialized history");
+
+    await appendFile(filePath, JSON.stringify({ type: "message", message: { role: "assistant", content: "live append" } }) + "\n", "utf8");
+    await watcher.checkNewContent();
+    expect(received.at(-1)?.text).toBe("live append");
+    await watcher.dispose();
+  });
+
   it("AC2: 严格生命周期管理——dispose() 必须释放底层 FileHandle 并注销定时器", async () => {
     const { filePath } = await makeFixture([]);
     const received: TimelineItem[] = [];
@@ -168,6 +185,25 @@ describe("JsonlTailWatcher (AC1, AC2, AC5)", () => {
     expect(received).toHaveLength(1);
     expect(received[0].text).toBe("跨块流式文本");
 
+    await watcher.dispose();
+  });
+
+  it("bounds an unterminated oversized line and resumes after its delimiter", async () => {
+    const { filePath } = await makeFixture([]);
+    const received: TimelineItem[] = [];
+    const watcher = new JsonlTailWatcher(filePath, (items) => received.push(...items), { pollIntervalMs: 50, maxChunkBytes: 32, maxLineBytes: 128 });
+    await watcher.start();
+
+    const oversized = "x".repeat(2_000);
+    await appendFile(filePath, oversized + "\n", "utf8");
+    while (watcher.offset < Buffer.byteLength(oversized + "\n")) await watcher.checkNewContent();
+    expect(received).toHaveLength(0);
+    expect((watcher as unknown as { carry: string }).carry).toBe("");
+
+    const valid = JSON.stringify({ type: "message", message: { role: "assistant", content: "after overflow" } }) + "\n";
+    await appendFile(filePath, valid, "utf8");
+    while (watcher.offset < Buffer.byteLength(oversized + "\n" + valid)) await watcher.checkNewContent();
+    expect(received.at(-1)?.text).toBe("after overflow");
     await watcher.dispose();
   });
 

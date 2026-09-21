@@ -18,6 +18,8 @@ export interface JsonlTailWatcherOptions {
   pollIntervalMs?: number;
   /** 单次读取最大字节数，默认 64KB */
   maxChunkBytes?: number;
+  /** 单条 JSONL 行的最大 UTF-8 字节数，超过后丢弃到下一个换行。 */
+  maxLineBytes?: number;
   /** 测试注入的当前时间函数 */
   now?: () => number;
 }
@@ -26,11 +28,15 @@ export class JsonlTailWatcher {
   private readonly pollIntervalMs: number;
   private readonly maxChunkBytes: number;
   private readonly now: () => number;
+  private readonly maxLineBytes: number;
 
   private currentOffset = 0;
-  /** 截断重写的字节属于重放；读过该 offset 前不计为 append。 */
-  private suppressAppendCountUntilOffset = 0;
   private carry = "";
+  private droppingOversizedLine = false;
+  private fileIdentity: string | null = null;
+  private replayPending = false;
+  private replayObservedSize = 0;
+  private replayStablePolls = 0;
   private fileHandle: FileHandle | null = null;
   private pollTimer: NodeJS.Timeout | null = null;
   private isDisposed = false;
@@ -39,12 +45,13 @@ export class JsonlTailWatcher {
 
   constructor(
     private readonly filePath: string,
-    private readonly onItems: (items: TimelineItem[], appendedEntries: number) => void,
+    private readonly onItems: (items: TimelineItem[], appendedEntries: number, replayed: boolean, replaySettled: boolean) => void,
     options: JsonlTailWatcherOptions = {},
   ) {
     this.pollIntervalMs = options.pollIntervalMs ?? 250;
     this.maxChunkBytes = options.maxChunkBytes ?? 65_536;
     this.now = options.now ?? Date.now;
+    this.maxLineBytes = options.maxLineBytes ?? 1_048_576;
   }
 
   /**
@@ -56,9 +63,10 @@ export class JsonlTailWatcher {
       const fileStat = await stat(this.filePath);
       if (fileStat.isFile()) {
         this.currentOffset = fileStat.size;
+        this.fileIdentity = `${fileStat.dev}:${fileStat.ino}`;
       }
     } catch {
-      // 文件若尚不存在，初始 offset 为 0，等待外部首次写入
+      // 文件若尚不存在，保持 offset=0；首次物化后的内容属于 watcher 注册后的增量。
       this.currentOffset = 0;
     }
 
@@ -97,6 +105,8 @@ export class JsonlTailWatcher {
     }
 
     this.carry = "";
+    this.droppingOversizedLine = false;
+    this.replayPending = false;
   }
 
   get offset(): number {
@@ -125,16 +135,38 @@ export class JsonlTailWatcher {
       if (!fileStat.isFile()) return;
 
       const newSize = fileStat.size;
+      const identity = `${fileStat.dev}:${fileStat.ino}`;
+      const identityChanged = this.fileIdentity !== null && identity !== this.fileIdentity;
+      if (this.fileIdentity === null || identityChanged) this.fileIdentity = identity;
 
-      // 异常截断保护（例如 compact 导致文件缩小重写）：重置游标从头开始。
-      // 重写后的内容不是「尾部追加」，不能再推进历史分页的 appendedEntries。
-      const resetFromStart = newSize < this.currentOffset;
+      // Compact can truncate in place or atomically replace the file. Close the old
+      // handle before replaying so subsequent reads follow the current inode.
+      const resetFromStart = newSize < this.currentOffset || identityChanged;
       if (resetFromStart) {
         this.currentOffset = 0;
-        this.suppressAppendCountUntilOffset = newSize;
+        this.replayPending = true;
+        this.replayObservedSize = newSize;
+        this.replayStablePolls = 0;
         this.carry = "";
+        this.droppingOversizedLine = false;
+        if (this.fileHandle) {
+          const handle = this.fileHandle;
+          this.fileHandle = null;
+          await handle.close().catch(() => {});
+        }
+      } else if (this.replayPending && newSize !== this.replayObservedSize) {
+        this.replayObservedSize = newSize;
+        this.replayStablePolls = 0;
       }
 
+      if (this.replayPending && newSize === this.currentOffset) {
+        this.replayStablePolls += 1;
+        if (this.replayStablePolls >= 2) {
+          this.replayPending = false;
+          this.onItems([], 0, true, true);
+        }
+        return;
+      }
       if (newSize === this.currentOffset) {
         return; // 无新内容
       }
@@ -158,8 +190,7 @@ export class JsonlTailWatcher {
       if (bytesRead > 0) {
         this.currentOffset += bytesRead;
         const chunkStr = buffer.toString("utf8", 0, bytesRead);
-        this.processChunk(chunkStr, readOffset >= this.suppressAppendCountUntilOffset);
-        if (this.currentOffset >= this.suppressAppendCountUntilOffset) this.suppressAppendCountUntilOffset = 0;
+        this.processChunk(chunkStr, !this.replayPending);
       }
     } catch {
       // 读错误时安全释放句柄，下次轮询重新尝试 open
@@ -175,10 +206,25 @@ export class JsonlTailWatcher {
   }
 
   private processChunk(chunk: string, countAppends = true): void {
-    const combined = this.carry + chunk;
-    const lines = combined.split("\n");
-    // 最后一个元素若没有换行符则作为未完成的残行继续缓存
-    this.carry = lines.pop() ?? "";
+    let combined = this.carry + chunk;
+    let lines = combined.split("\n");
+    let remainder = lines.pop() ?? "";
+
+    if (this.droppingOversizedLine) {
+      const newline = combined.indexOf("\n");
+      if (newline < 0) return;
+      this.droppingOversizedLine = false;
+      combined = combined.slice(newline + 1);
+      lines = combined.split("\n");
+      remainder = lines.pop() ?? "";
+    }
+
+    if (Buffer.byteLength(remainder, "utf8") > this.maxLineBytes) {
+      this.carry = "";
+      this.droppingOversizedLine = true;
+    } else {
+      this.carry = remainder;
+    }
 
     const newItems: TimelineItem[] = [];
     let appendedEntries = 0;
@@ -201,7 +247,7 @@ export class JsonlTailWatcher {
     }
 
     if ((newItems.length > 0 || appendedEntries > 0) && !this.isDisposed) {
-      this.onItems(newItems, appendedEntries);
+      this.onItems(newItems, appendedEntries, !countAppends, false);
     }
   }
 

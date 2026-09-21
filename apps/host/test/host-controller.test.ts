@@ -2,7 +2,7 @@ import { describe, expect, it, beforeEach, afterEach, vi } from "vitest";
 import { HostController } from "../src/host-controller.js";
 import { MaestroStateReader } from "../src/maestro-state.js";
 import type { DesktopPluginTransport } from "../src/plugin/desktop-plugin-registry.js";
-import { mkdir, rm, writeFile } from "node:fs/promises";
+import { mkdir, rm, writeFile, appendFile } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { randomUUID } from "node:crypto";
@@ -257,6 +257,60 @@ describe("HostController", () => {
     })));
   });
 
+  it("streams appended readerless Desktop JSONL items to the exact open target", async () => {
+    const sessionFile = join(tmpDir, "desktop-session-live.jsonl");
+    await writeFile(sessionFile, JSON.stringify({ type: "message", message: { role: "user", content: "before", timestamp: 1756800000000 } }) + "\n");
+    const target = { sessionId: "desktop-live", endpointId: "desktop-endpoint", normalizedCwd: "/work/app", processGeneration: "live-generation" };
+    const sibling = { ...target, endpointId: "other-endpoint", processGeneration: "other-generation" };
+    const transport: DesktopPluginTransport = { request: vi.fn(), close: vi.fn() };
+    const registration = { target, sessionFile, capabilities: ["prompt"] as const, runtimeStatus: "idle" as const, transport };
+    const siblingRegistration = { target: sibling, sessionFile, capabilities: ["prompt"] as const, runtimeStatus: "idle" as const, transport };
+
+    controller.desktopPlugins.register(registration);
+    controller.desktopPlugins.register(siblingRegistration);
+    controller.applyDesktopProjection([registration, siblingRegistration]);
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    events = [];
+
+    await appendFile(sessionFile, JSON.stringify({ type: "message", message: { role: "assistant", content: "live", timestamp: 1756800100000 } }) + "\n");
+    await vi.waitFor(() => expect(events).toContainEqual(expect.objectContaining({
+      type: "timeline_item",
+      sessionId: target.sessionId,
+      target,
+      item: expect.objectContaining({ text: "live" }),
+    })), { timeout: 1_500, interval: 50 });
+    expect(events.filter((event) => (event as { type?: string; target?: unknown }).type === "timeline_item" && (event as { target?: unknown }).target === target)).toHaveLength(1);
+    expect(events.filter((event) => (event as { type?: string; target?: unknown }).type === "timeline_item" && (event as { target?: unknown }).target === sibling)).toHaveLength(1);
+  });
+
+  it("replaces readerless timeline after compact without emitting replay items", async () => {
+    const sessionFile = join(tmpDir, "desktop-session-compact.jsonl");
+    await writeFile(sessionFile, JSON.stringify({ type: "message", message: { role: "assistant", content: "old history ".repeat(100) } }) + "\n");
+    const target = { sessionId: "desktop-compact", endpointId: "desktop-endpoint", normalizedCwd: "/work/app", processGeneration: "compact-generation" };
+    const transport: DesktopPluginTransport = { request: vi.fn(), close: vi.fn() };
+    const registration = { target, sessionFile, capabilities: ["prompt"] as const, runtimeStatus: "idle" as const, transport };
+    controller.desktopPlugins.register(registration);
+    controller.applyDesktopProjection([registration]);
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    events = [];
+
+    await writeFile(sessionFile, JSON.stringify({ type: "message", message: { role: "assistant", content: "compact summary" } }) + "\n");
+    await vi.waitFor(() => expect(events).toContainEqual(expect.objectContaining({
+      type: "timeline_snapshot",
+      target,
+      items: [expect.objectContaining({ text: "compact summary" })],
+    })), { timeout: 1_500, interval: 50 });
+    expect(events.some((event) => (event as { type?: string }).type === "timeline_item")).toBe(false);
+
+    events = [];
+    await writeFile(sessionFile, "");
+    await vi.waitFor(() => expect(events).toContainEqual(expect.objectContaining({
+      type: "timeline_snapshot",
+      target,
+      items: [],
+    })), { timeout: 1_500, interval: 50 });
+  });
+
   it("keeps projected Desktop targets readerless for open and snapshot", async () => {
     const sessionFile = join(tmpDir, "desktop-session-materialized.jsonl");
     const runtime = makeRuntime("desktop-session-materialized", "/work/app", sessionFile);
@@ -498,6 +552,7 @@ describe("HostController", () => {
         totalEntries: 0,
       });
       await expect(desktopController.application.sessionOperation({ kind: "list_skills", target })).resolves.toEqual([]);
+      await expect(desktopController.application.sessionOperation({ kind: "list_models", target })).resolves.toEqual([]);
       await expect(desktopController.application.command({ requestId: "live-prompt", target, kind: "prompt", message: "hello" })).resolves.toMatchObject({ status: "observed" });
       expect(request).toHaveBeenCalledTimes(1);
     } finally {
