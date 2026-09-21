@@ -2,6 +2,37 @@
 
 本文件记录 Maestro Mobile 的显著变更。格式基于 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)。
 
+## [0.5.0] — 2026-09-21
+
+### 测试
+
+- 消除 readerless tail 投影用例的轮询相位竞态
+- 对齐会话创建守卫并补守卫用例
+
+### 修复
+
+- 锁死手机端会话创建并修复扩展 footer 状态
+- scope default session listing to project root
+- prevent Desktop session memory exhaustion
+- 纠正 Pi 与 Host 真实版本探测优先级，精准识别窗口沉降状态
+
+### 新增
+
+- unify detail controls and project timeline snapshots
+- serve readerless model/skill queries and project Desktop JSONL tails
+- add readerless model/skill queries and timeline snapshot
+- 完善工作台与桌面会话交互
+- 引入单例 Desktop Broker 与会话控制闭环
+- 扩展桌面会话控制与状态同步协议
+- 打通 TUI 模型双向同步并对齐投递语义
+- 打通桌面TUI窗口的中断停止链路，会话卡片格3名正言顺回归Prompt Cache真实命中率
+- 会话结束使用蓝色指示灯，历史无窗口会话禁止输入，活跃Tab覆盖绿蓝黄可交互窗口
+- 完善桌面窗口在线就绪状态表达与会话详情顶栏状态徽标
+
+### 其他
+
+- 更新桌面集成文档与实机验收
+
 ## [0.4.0] — 2026-09-15
 
 ### 文档
