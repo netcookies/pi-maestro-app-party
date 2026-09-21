@@ -21,6 +21,8 @@ export interface OpenSessionRequest {
  * 与 pi-mobile/apps/host 同源（参考实现），保证与桌面 TUI 共享同一份会话文件
  */
 export class PiSdkRuntimeFactory implements RuntimeFactory {
+  constructor(private readonly projectRoot = process.cwd()) {}
+
   async createRuntime(request: OpenSessionRequest): Promise<MobileAgentRuntime> {
     const sessionManager = createSessionManager(request);
     const createRuntime: CreateAgentSessionRuntimeFactory = async ({ cwd, sessionManager: sm, sessionStartEvent }) => {
@@ -58,7 +60,7 @@ export class PiSdkRuntimeFactory implements RuntimeFactory {
   }
 
   async listSessions(cwd?: string): Promise<SessionInfo[]> {
-    return cwd ? SessionManager.list(cwd) : SessionManager.listAll();
+    return SessionManager.list(cwd ?? this.projectRoot);
   }
 }
 

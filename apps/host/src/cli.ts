@@ -200,7 +200,7 @@ async function main(): Promise<void> {
 
   console.log(`[maestro-mobile] starting on ${cli.host}:${cli.port} (project: ${cli.projectRoot})`);
 
-  const runtimeFactory = new PiSdkRuntimeFactory();
+  const runtimeFactory = new PiSdkRuntimeFactory(cli.projectRoot);
   const maestroReader = new MaestroStateReader({ projectRoot: cli.projectRoot });
   const projection = new DesktopBrokerProjectedRegistry();
   const controller = new HostController(runtimeFactory, maestroReader, projection);
