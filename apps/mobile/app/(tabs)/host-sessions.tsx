@@ -184,7 +184,12 @@ export default function HostSessionsScreen() {
       await loadSessionHistory(opened.sessionId, opened.targetKey);
       router.push(routeForOpenedSession(opened));
     } catch (error) {
-      setError(error instanceof Error ? error.message : "打开会话失败");
+      // 会话创建已锁死：无 exact target 的历史会话（以及 mode:create）会被 Host 拒绝。
+      // 原样抛错误码会让用户只看到 "session_creation_disabled"，这里给出可读原因。
+      const raw = error instanceof Error ? error.message : "";
+      setError(raw === "session_creation_disabled"
+        ? "该会话未在桌面端运行，手机端暂不支持新建或打开历史会话"
+        : raw || "打开会话失败");
     } finally {
       setOpening(null);
     }

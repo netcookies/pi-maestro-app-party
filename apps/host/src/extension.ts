@@ -311,6 +311,12 @@ async function readToken(): Promise<string> {
 const STATUS_KEY = "maestro-mobile";
 let statusCtx: ExtensionContext | null = null;
 
+/**
+ * 绿色圆点：footer 只做 dim 包裹、不清洗 ANSI，因此扩展需自带颜色（同 setWorkingIndicator 约定）。
+ * 用前景色而非背景色，保证在任意终端主题下都能与相邻 dim 文本区分。
+ */
+const STATUS_DOT_RUNNING = "\u001b[32m●\u001b[39m";
+
 /** 刷新 footer status：● maestro-mobile :4739 · N 窗口（未运行时清除） */
 async function refreshStatus(): Promise<void> {
   try {
@@ -323,14 +329,20 @@ async function refreshStatus(): Promise<void> {
     }
     let windows = 0;
     try {
-      const r = await fetch(`http://127.0.0.1:${port}/api/workspace-telemetry`);
+      const token = await readToken();
+      const r = await fetch(`http://127.0.0.1:${port}/api/workspace-telemetry`, {
+        signal: AbortSignal.timeout(800),
+        ...(token ? { headers: { Authorization: `Bearer ${token}` } } : {}),
+      });
       if (r.ok) {
-        const d = (await r.json()) as { aliveCount?: number };
-        windows = d.aliveCount ?? 0;
+        // monitor 投影的实际形状是 { state: { windows: [...] } }；
+        // 此前读顶层 aliveCount 恒为 undefined，窗口数永远显示 0。
+        const d = (await r.json()) as { state?: { windows?: unknown[] } };
+        windows = Array.isArray(d.state?.windows) ? d.state.windows.length : 0;
       }
     } catch { /* 探测失败按 0 显示 */ }
     // setStatus 嵌入 footer 状态栏（与 EVOL/relay 同一行），不再占独立行
-    statusCtx?.ui?.setStatus(STATUS_KEY, `● maestro-mobile :${port} · ${windows} 窗口`);
+    statusCtx?.ui?.setStatus(STATUS_KEY, `${STATUS_DOT_RUNNING} maestro-mobile :${port} · ${windows} 窗口`);
   } catch {
     // 扩展 status 刷新是后台辅助任务，无论因 ctx 销毁、无 UI 或网络异常，绝不得拉崩宿主进程
   }

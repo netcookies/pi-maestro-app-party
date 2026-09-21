@@ -925,6 +925,16 @@ export class MobileHostServer {
           break;
         }
         case "open_session": {
+          // 会话创建已锁死（保留实现，暂不接入）：无 exact target 的请求一律 fail closed。
+          // 覆盖两条会凭空造出 Host runner 的路径：
+          //  1) mode:"create" 在任意 cwd 新建会话文件；
+          //  2) 历史会话（SessionDirectory 无条目、list_host_sessions 不发 target）
+          //     会被 SdkSessionRunner.open 打开并附着 runner，使只读历史变成可写。
+          // 带 exact target 的请求（TUI 已注册的 Desktop target）仍走原有早退，不创建 runner。
+          if (!isSessionTargetIdentity(command.target)) {
+            this.sendUnavailable(client, command, "session_creation_disabled");
+            break;
+          }
           const opened = await this.controller.application.openSession({
             cwd: command.cwd,
             mode: command.mode,
