@@ -35,9 +35,6 @@ if (Platform.OS === "android" && UIManager.setLayoutAnimationEnabledExperimental
 const LOAD_MORE_ID = "__load_more__";
 type ListRow = TimelineItem | { id: typeof LOAD_MORE_ID; __virtual: true };
 
-// 全局模型列表内存缓存，跨会话秒级复用
-let cachedModelsList: { id: string; provider: string; name: string; reasoning: boolean; vision: boolean }[] = [];
-
 function modelIdOf(value: unknown): string | undefined {
   if (typeof value === "string" && value.length > 0) return value;
   if (typeof value !== "object" || value === null) return undefined;
@@ -56,7 +53,7 @@ function modelNameOf(value: unknown): string | undefined {
 export default function SessionScreen() {
   const { id, targetKey } = useLocalSearchParams<{ id: string; targetKey?: string }>();
   const router = useRouter();
-  const { state, sendPrompt, sendAbort, answerDialog, cancelDialog, loadSessionHistory, loadMoreHistory, searchHistory, listModels, setModel, setThinking, listSkills, compactSession, isConnected, connectionState, lastError, clearError: dispatchLocalError } = useHost();
+  const { state, sendPrompt, sendAbort, answerDialog, cancelDialog, loadSessionHistory, loadMoreHistory, searchHistory, setThinking, listSkills, compactSession, isConnected, connectionState, lastError, clearError: dispatchLocalError } = useHost();
   const { theme } = useTheme();
   const { t } = useI18n();
   const cfg = getConfig();
@@ -92,6 +89,22 @@ export default function SessionScreen() {
       setActiveViewingSession(null);
     };
   }, [id, targetKey, loadSessionHistory]);
+
+  const openModelPicker = () => {
+    const curId = modelIdOf(session?.model) ?? currentModelId ?? "";
+    router.push({
+      pathname: "/model-select",
+      params: {
+        id: id ?? "",
+        currentModelId: curId,
+        ...(targetKey ? { targetKey } : {}),
+      },
+    });
+  };
+
+  const openThinkingPicker = () => setActionSheetType("think");
+  const openPlanPicker = () => setActionSheetType("plan");
+  const openCompactPicker = () => setActionSheetType("compact_confirm");
 
   // 技能请求必须跟随协议连接状态重试；冷启动时的一次失败不能永久留下空抽屉。
   useEffect(() => {
@@ -599,16 +612,7 @@ export default function SessionScreen() {
         
         {/* 右侧：当前模型 Badge，点击进入独立全屏“模型选择”子页面 */}
         <TouchableOpacity
-          onPress={() => {
-            const curId = modelIdOf(session?.model) ?? currentModelId ?? "";
-            router.push({
-              pathname: "/model-select",
-              params: {
-                id: id ?? "",
-                currentModelId: curId,
-              },
-            });
-          }}
+          onPress={openModelPicker}
           style={styles.modelHeaderBtn}
           accessibilityRole="button"
           accessibilityLabel={t.selectModel}
@@ -807,7 +811,7 @@ export default function SessionScreen() {
       {/* 投递失败必须可见：消息未送达时不能只保留草稿而不告知用户 */}
       {lastError ? (
         <TouchableOpacity
-          onPress={() => dispatchLocalError(null)}
+          onPress={() => dispatchLocalError()}
           accessibilityRole="button"
           accessibilityLabel={t.close}
           style={{ paddingHorizontal: 20, paddingBottom: 6 }}
@@ -832,27 +836,20 @@ export default function SessionScreen() {
               setSending(false);
             }
           },
-          listModels: async () => (id ? listModels(id) : []),
           listSkills: async () => (id ? listSkills(id) : []),
-          setModel: async (modelId, provider) => {
-            const r = id ? await setModel(id, modelId, provider) : { ok: false, error: "no session" };
-            if (r.ok) setCurrentModelId(modelId);
-            return r;
-          },
-          setThinking: async (level) => (id ? setThinking(id, level) : { ok: false, error: "no session" }),
           pickImage: async () => {
             const picked = await pickImagesFromLibrary(1);
             return picked.length > 0 ? picked[0] : null;
           },
-          compact: async () => (id ? compactSession(id) : { ok: false, error: "no session" }),
+          openModelPicker,
+          openThinkingPicker,
+          openPlanPicker,
+          openCompactPicker,
           // T7：abort 能力来自服务端 presentation.control.canAbort，只读会话不提供终止
           abort: canAbort ? handleAbort : undefined,
         }}
         isStreaming={isStreaming}
         onAbort={canAbort ? handleAbort : undefined}
-        currentModel={currentModelId
-          ? (session?.model as { name?: string } | undefined)?.name ?? currentModelId
-          : (session?.model as { name?: string } | undefined)?.name}
         sending={sending || !isConnected}
         skills={availableSkills}
         disabled={!composerEnabled}

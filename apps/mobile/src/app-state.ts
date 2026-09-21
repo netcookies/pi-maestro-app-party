@@ -259,7 +259,7 @@ export function reduceEvent(state: AppState, event: AppAction, deps: AppStateDep
   const targetKey = "target" in event && event.target ? sessionTargetKey(event.target) : undefined;
   const projectionSessionId = event.type === "session_updated"
     ? event.session.id
-    : event.type === "timeline_item" || event.type === "timeline_delta"
+    : event.type === "timeline_item" || event.type === "timeline_snapshot" || event.type === "timeline_delta"
       ? event.sessionId
       : undefined;
   const previousTargetSeq = targetKey ? (state.targetEventSeq.get(targetKey) ?? 0) : state.eventSeq;
@@ -345,16 +345,16 @@ export function reduceEvent(state: AppState, event: AppAction, deps: AppStateDep
 
     case "session_summary_updated": {
       const key = sessionTargetKey(event.target);
-      const current = state.sessionSummaryPatches.get(key);
-      if (current && current.revision >= event.revision) return state;
+      const currentSummary = state.sessionSummaryPatches.get(key);
+      if (currentSummary && currentSummary.revision >= event.revision) return state;
       const sessionSummaryPatches = new Map(state.sessionSummaryPatches);
       // A reset starts a new projection epoch. Do not carry usage/context/messageCount
       // from the previous runtime into the terminal/reset patch; subsequent patches may
       // add fresh values back to this same target.
       const patch = event.patch.reset
         ? event.patch
-        : current
-          ? { ...current.patch, ...event.patch }
+        : currentSummary
+          ? { ...currentSummary.patch, ...event.patch }
           : event.patch;
       sessionSummaryPatches.set(key, {
         target: event.target,
@@ -366,7 +366,29 @@ export function reduceEvent(state: AppState, event: AppAction, deps: AppStateDep
         if (oldest === undefined) break;
         sessionSummaryPatches.delete(oldest);
       }
-      return withRevision({ ...state, sessionSummaryPatches }, event.revision);
+      let nextState = withRevision({ ...state, sessionSummaryPatches }, event.revision);
+      const activeTarget = nextState.activeSessionTargets.get(event.target.sessionId);
+      const currentSession = nextState.targetedSessions.get(key)
+        ?? (activeTarget === key ? nextState.sessions.get(event.target.sessionId) : undefined);
+      if (!currentSession) return nextState;
+
+      const session: SessionState = { ...currentSession };
+      if (patch.runtimeStatus !== undefined) {
+        session.runState = patch.runtimeStatus === "running" ? "streaming" : "idle";
+      }
+      if ((!event.patch.reset || event.patch.messageCount !== undefined) && patch.messageCount !== undefined) {
+        session.messageCount = patch.messageCount;
+      }
+      if (patch.lastActivityAt !== undefined) session.updatedAt = patch.lastActivityAt;
+
+      const targetedSessions = new Map(nextState.targetedSessions);
+      targetedSessions.set(key, session);
+      const sessions = new Map(nextState.sessions);
+      if (nextState.activeSessionTargets.get(event.target.sessionId) === key || !sessions.has(event.target.sessionId)) {
+        sessions.set(event.target.sessionId, session);
+      }
+      nextState = { ...nextState, sessions, targetedSessions };
+      return nextState;
     }
 
     case "session_updated": {
@@ -423,6 +445,18 @@ export function reduceEvent(state: AppState, event: AppAction, deps: AppStateDep
           })();
       timelines.set(key ?? event.sessionId, next);
       return key ? { ...state, targetedTimelines: timelines } : { ...state, timelines };
+    }
+
+    case "timeline_snapshot": {
+      const key = event.target ? sessionTargetKey(event.target) : undefined;
+      if (key) {
+        const targetedTimelines = new Map(state.targetedTimelines);
+        targetedTimelines.set(key, event.items);
+        return { ...state, targetedTimelines };
+      }
+      const timelines = new Map(state.timelines);
+      timelines.set(event.sessionId, event.items);
+      return { ...state, timelines };
     }
 
     case "timeline_delta": {

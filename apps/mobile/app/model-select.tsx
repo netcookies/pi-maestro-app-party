@@ -36,12 +36,12 @@ function hexToRgba(hex: string, alpha: number): string {
 }
 
 export default function ModelSelectScreen() {
-  const { id, currentModelId } = useLocalSearchParams<{ id: string; currentModelId?: string }>();
+  const { id, currentModelId, targetKey } = useLocalSearchParams<{ id: string; currentModelId?: string; targetKey?: string }>();
   const { state, listModels, setModel } = useHost();
   const { theme } = useTheme();
   const { t } = useI18n();
 
-  const session = id ? state.sessions.get(id) : undefined;
+  const session = (targetKey ? state.targetedSessions.get(targetKey) : undefined) ?? (id ? state.sessions.get(id) : undefined);
   const sessionModel = session?.model;
   const initialModelProvider = typeof sessionModel === "object" && sessionModel !== null && typeof (sessionModel as { provider?: unknown }).provider === "string"
     ? (sessionModel as { provider: string }).provider
@@ -155,7 +155,9 @@ export default function ModelSelectScreen() {
 
       {/* 搜索框 */}
       <View style={[styles.searchRow, { backgroundColor: theme.cardBg, borderColor: theme.border }]}>
-        <LineIcon name="search" size={16} color={theme.muted} style={{ marginLeft: 8 }} />
+        <View style={{ marginLeft: 8 }}>
+          <LineIcon name="search" size={16} color={theme.muted} />
+        </View>
         <TextInput
           style={[styles.searchInput, { color: theme.text }]}
           placeholder={t.tabSessions === "会话" ? "搜索模型名称或厂商 (Gemini, Claude, GPT...)" : "Search model name or provider..."}

@@ -105,6 +105,61 @@ describe("AppState reducer", () => {
     });
   });
 
+  it("projects exact-target runtime summaries into the active session detail", () => {
+    const target = { sessionId: "summary-session", endpointId: "desktop", normalizedCwd: "/work", processGeneration: "g1" };
+    const base: SessionState = {
+      id: target.sessionId, cwd: target.normalizedCwd, title: "Summary", runState: "idle",
+      messageCount: 1, pendingMessageCount: 0, updatedAt: "2026-01-01T00:00:00.000Z",
+    };
+    let state = reduceEvent(createInitialState(), { type: "__snapshot_load", session: base, items: [], seq: 0, target });
+    state = reduceEvent(state, {
+      type: "session_summary_updated",
+      target,
+      patch: { runtimeStatus: "running", messageCount: 2, lastActivityAt: "2026-01-01T00:00:01.000Z" },
+      revision: 1,
+      seq: 1,
+    });
+    const key = JSON.stringify([target.sessionId, target.endpointId, target.normalizedCwd, target.processGeneration]);
+    expect(state.targetedSessions.get(key)).toMatchObject({ runState: "streaming", messageCount: 2, updatedAt: "2026-01-01T00:00:01.000Z" });
+
+    state = reduceEvent(state, {
+      type: "session_summary_updated",
+      target,
+      patch: { runtimeStatus: "idle" },
+      revision: 2,
+      seq: 2,
+    });
+    expect(state.targetedSessions.get(key)?.runState).toBe("idle");
+
+    state = reduceEvent(state, {
+      type: "session_summary_updated",
+      target,
+      patch: { reset: true, runtimeStatus: "idle" },
+      revision: 3,
+      seq: 3,
+    });
+    expect(state.targetedSessions.get(key)).toMatchObject({ runState: "idle", messageCount: 2 });
+  });
+
+  it("does not clone a sibling session when an unloaded exact target emits a summary", () => {
+    const loaded = { sessionId: "summary-sibling", endpointId: "desktop-1", normalizedCwd: "/work", processGeneration: "g1" };
+    const sibling = { ...loaded, endpointId: "desktop-2", processGeneration: "g2" };
+    const base: SessionState = {
+      id: loaded.sessionId, cwd: loaded.normalizedCwd, title: "Loaded", runState: "idle",
+      messageCount: 4, pendingMessageCount: 0, updatedAt: "2026-01-01T00:00:00.000Z",
+    };
+    let state = reduceEvent(createInitialState(), { type: "__snapshot_load", session: base, items: [], seq: 0, target: loaded });
+    state = reduceEvent(state, {
+      type: "session_summary_updated",
+      target: sibling,
+      patch: { runtimeStatus: "running", messageCount: 9 },
+      revision: 1,
+      seq: 1,
+    });
+    expect(state.targetedSessions.has(JSON.stringify([sibling.sessionId, sibling.endpointId, sibling.normalizedCwd, sibling.processGeneration]))).toBe(false);
+    expect(state.sessions.get(loaded.sessionId)?.messageCount).toBe(4);
+  });
+
   it("keeps targeted timelines and event sequences separate for sibling endpoints", () => {
     const first = { sessionId: "same", endpointId: "desktop-1", normalizedCwd: "/work", processGeneration: "g1" };
     const second = { ...first, endpointId: "desktop-2", processGeneration: "g2" };
@@ -113,6 +168,25 @@ describe("AppState reducer", () => {
     state = reduceEvent(state, { type: "timeline_item", sessionId: "same", target: second, item: { id: "item", kind: "assistant", text: "second", createdAt: "" }, seq: 1 });
     state = reduceEvent(state, { type: "timeline_delta", sessionId: "same", target: first, itemId: "item", delta: " stale", seq: 1 });
     expect([...state.targetedTimelines.values()].map((items) => items[0]?.text).sort()).toEqual(["first", "second"]);
+  });
+
+  it("replaces only the exact target timeline after a readerless replay", () => {
+    const first = { sessionId: "replay", endpointId: "desktop-1", normalizedCwd: "/work", processGeneration: "g1" };
+    const second = { ...first, endpointId: "desktop-2", processGeneration: "g2" };
+    let state = reduceEvent(createInitialState(), {
+      type: "timeline_item", sessionId: first.sessionId, target: first,
+      item: { id: "old", kind: "assistant", text: "old", createdAt: "" }, seq: 1,
+    });
+    state = reduceEvent(state, {
+      type: "timeline_item", sessionId: second.sessionId, target: second,
+      item: { id: "sibling", kind: "assistant", text: "sibling", createdAt: "" }, seq: 1,
+    });
+    state = reduceEvent(state, {
+      type: "timeline_snapshot", sessionId: first.sessionId, target: first,
+      items: [{ id: "new", kind: "assistant", text: "new", createdAt: "" }], seq: 2,
+    });
+    expect(state.targetedTimelines.get(JSON.stringify([first.sessionId, first.endpointId, first.normalizedCwd, first.processGeneration]))?.map((item) => item.text)).toEqual(["new"]);
+    expect(state.targetedTimelines.get(JSON.stringify([second.sessionId, second.endpointId, second.normalizedCwd, second.processGeneration]))?.map((item) => item.text)).toEqual(["sibling"]);
   });
 
   it("rejects readonly snapshots after a newer target event", () => {

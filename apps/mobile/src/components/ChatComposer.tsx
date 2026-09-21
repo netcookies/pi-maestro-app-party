@@ -4,10 +4,8 @@
  * 功能：
  *  - 文字输入 + 发送
  *  - 图片附加（相册/相机 → base64 → 随 prompt 发送）
- *  - 模型选择（list_models → 选择 → set_model）
- *  - Plan/Act 模式切换（发送指令让 agent 调用 plan 工具）
  *  - skill 联想（/ 触发，显示可用 skill，快速输入 /skill:name）
- *  - 思考等级切换
+ *  - 详情页统一的模型、Plan、thinking 和 compact 控制
  */
 import React, { useState, useRef, useEffect } from "react";
 import {
@@ -23,18 +21,17 @@ import { hapticImpactMedium } from "../utils/haptics";
 export interface ComposerActions {
   send(text: string, images?: { data: string; mime: string }[]): Promise<void>;
   abort?(): Promise<void> | void;
-  listModels?(): Promise<{ id: string; provider: string; name: string; reasoning: boolean; vision: boolean }[]>;
   listSkills?(): Promise<{ name: string; description?: string }[]>;
-  setModel?(modelId: string, provider?: string): Promise<{ ok: boolean; error?: string }>;
-  setThinking?(level: string): Promise<{ ok: boolean; error?: string }>;
   pickImage?(): Promise<{ data: string; mime: string } | null>;
-  compact?(): Promise<{ ok: boolean; error?: string }>;
+  /** Detail-page-owned controls; fullscreen editing must use the same handlers. */
+  openModelPicker(): void;
+  openThinkingPicker(): void;
+  openPlanPicker(): void;
+  openCompactPicker(): void;
 }
 
 interface Props {
   actions: ComposerActions;
-  /** 当前模型显示 */
-  currentModel?: string;
   /** 发送中状态 */
   sending?: boolean;
   /** 会话是否正在流式运行（运行中展示旋转停止按钮） */
@@ -48,26 +45,19 @@ interface Props {
   disabled?: boolean;
 }
 
-const THINKING_LEVELS = ["off", "minimal", "low", "medium", "high", "xhigh", "max"];
-
-export function ChatComposer({ actions, currentModel, sending, isStreaming = false, onAbort, skills = [], placeholder, disabled = false }: Props) {
+export function ChatComposer({ actions, sending, isStreaming = false, onAbort, skills = [], placeholder, disabled = false }: Props) {
   const { theme } = useTheme();
   const { t } = useI18n();
   const insets = useSafeAreaInsets();
   const [text, setText] = useState("");
   const [images, setImages] = useState<{ data: string; mime: string }[]>([]);
-  const [showModels, setShowModels] = useState(false);
-  const [models, setModels] = useState<{ id: string; provider: string; name: string; reasoning: boolean; vision: boolean }[]>([]);
-  const [modelsLoading, setModelsLoading] = useState(false);
   const [showSkills, setShowSkills] = useState(false);
   const [skillsLoading, setSkillsLoading] = useState(false);
   const [loadedSkills, setLoadedSkills] = useState<(string | { name: string; description?: string })[]>(Array.isArray(skills) ? skills : []);
   const [skillQuery, setSkillQuery] = useState("");
-  const [showThinking, setShowThinking] = useState(false);
-  const [showPlanPicker, setShowPlanPicker] = useState(false);
   const [focused, setFocused] = useState(false);
   const [fullscreenEdit, setFullscreenEdit] = useState(false);
-  const [fsPanel, setFsPanel] = useState<null | "models" | "thinking" | "plan" | "skills">(null);
+  const [fsPanel, setFsPanel] = useState<null | "skills">(null);
 
   // 运行态 Spinning 进度环无限旋转动画
   const spinAnim = useRef(new Animated.Value(0)).current;
@@ -184,28 +174,6 @@ export function ChatComposer({ actions, currentModel, sending, isStreaming = fal
     }
   };
 
-  const openModels = async () => {
-    setShowModels(true);
-    if (models.length > 0) return;
-    setModelsLoading(true);
-    try {
-      const list = await actions.listModels?.() ?? [];
-      setModels(list);
-    } catch {
-      // P2-9：拉取失败不再抛未处理 rejection，清空列表并收起面板
-      setModels([]);
-      setShowModels(false);
-    } finally {
-      setModelsLoading(false);
-    }
-  };
-
-  // 全屏 Model 面板加载/重试共用
-  const loadModels = () => {
-    setModelsLoading(true);
-    actions.listModels?.().then(setModels).catch(() => {}).finally(() => setModelsLoading(false));
-  };
-
   const pickImage = async () => {
     try {
       const img = await actions.pickImage?.();
@@ -218,30 +186,11 @@ export function ChatComposer({ actions, currentModel, sending, isStreaming = fal
     }
   };
 
-  const [modelError, setModelError] = useState<string | null>(null);
-
-  const switchModel = async (id: string, provider?: string, closePanel?: () => void) => {
-    try {
-      const r = await actions.setModel?.(id, provider);
-      if (r && !r.ok) {
-        // P2-9：切换失败给出轻提示而非静默
-        setModelError(r.error ?? "切换失败");
-        setTimeout(() => setModelError(null), 3000);
-        return;
-      }
-      setShowModels(false);
-      closePanel?.();
-    } catch {
-      setModelError("切换失败（连接异常）");
-      setTimeout(() => setModelError(null), 3000);
-    }
+  const invokeDetailAction = (callback: () => void) => {
+    setFullscreenEdit(false);
+    setFsPanel(null);
+    callback();
   };
-
-  const planActions = [
-    { key: "plan", label: "进入 Plan 模式", prompt: "请调用 plan 工具（action: enter）进入 Plan 模式。" },
-    { key: "act", label: "退出到 Act 模式", prompt: "请调用 plan 工具（action: exit）退出到 Act 模式。" },
-    { key: "status", label: "查看 Plan 状态", prompt: "请调用 plan 工具（action: status）查看当前 Plan 状态。" },
-  ];
 
   return (
     <View style={[styles.container, { backgroundColor: theme.headerBg, borderTopColor: theme.border }]}>
@@ -312,7 +261,7 @@ export function ChatComposer({ actions, currentModel, sending, isStreaming = fal
               hitSlop={{ top: 9, bottom: 9, left: 9, right: 9 }}
               accessibilityRole="button"
               accessibilityLabel={t.expandFullscreen}
-              onPress={() => { setFullscreenEdit(true); void actions.listModels?.().then(setModels).catch(() => {}); }}
+              onPress={() => { setFullscreenEdit(true); }}
             >
               <LineIcon name="expand" size={13} color={theme.accent} strokeWidth={2.2} />
             </TouchableOpacity>
@@ -468,19 +417,23 @@ export function ChatComposer({ actions, currentModel, sending, isStreaming = fal
             ]}
           >
             <TouchableOpacity
-              onPress={() => { setFsPanel("models"); if (models.length === 0) loadModels(); }}
+              onPress={() => invokeDetailAction(actions.openModelPicker)}
               style={styles.fsToolBtn}
             >
               <LineIcon name="brain" size={18} color={theme.muted} />
               <Text style={[styles.toolLabel, { color: theme.muted }]}>Model</Text>
             </TouchableOpacity>
-            <TouchableOpacity onPress={() => setFsPanel("thinking")} style={styles.fsToolBtn}>
+            <TouchableOpacity onPress={() => invokeDetailAction(actions.openThinkingPicker)} style={styles.fsToolBtn}>
               <LineIcon name="bolt" size={18} color={theme.muted} />
               <Text style={[styles.toolLabel, { color: theme.muted }]}>Think</Text>
             </TouchableOpacity>
-            <TouchableOpacity onPress={() => setFsPanel("plan")} style={styles.fsToolBtn}>
+            <TouchableOpacity onPress={() => invokeDetailAction(actions.openPlanPicker)} style={styles.fsToolBtn}>
               <LineIcon name="plan" size={18} color={theme.muted} />
               <Text style={[styles.toolLabel, { color: theme.muted }]}>Plan</Text>
+            </TouchableOpacity>
+            <TouchableOpacity onPress={() => invokeDetailAction(actions.openCompactPicker)} style={styles.fsToolBtn}>
+              <LineIcon name="compress" size={18} color={theme.muted} />
+              <Text style={[styles.toolLabel, { color: theme.muted }]}>Compact</Text>
             </TouchableOpacity>
             <TouchableOpacity onPress={() => { setFsPanel("skills"); void loadSkills(); }} style={styles.fsToolBtn}>
               <Text style={[styles.slashText, { color: theme.accent }]}>/</Text>
@@ -581,69 +534,11 @@ export function ChatComposer({ actions, currentModel, sending, isStreaming = fal
                 ]}
               >
                 <View style={styles.modalHeader}>
-                  <Text style={[styles.modalTitle, { color: theme.text }]}>
-                    {fsPanel === "models" ? t.selectModel : fsPanel === "thinking" ? t.labelThinkLevel : fsPanel === "plan" ? t.planActMode : "Skills"}
-                  </Text>
+                  <Text style={[styles.modalTitle, { color: theme.text }]}>Skills</Text>
                   <TouchableOpacity onPress={closeFsPanel} accessibilityRole="button" accessibilityLabel={t.close}>
                     <LineIcon name="x" size={14} color={theme.muted} strokeWidth={2.2} />
                   </TouchableOpacity>
                 </View>
-                {fsPanel === "models" && (
-                  models.length === 0 ? (
-                    modelsLoading ? (
-                      <Text style={[styles.modalEmpty, { color: theme.muted }]}>{t.loadingSessions}</Text>
-                    ) : (
-                      <View>
-                        <Text style={[styles.modalEmpty, { color: theme.muted }]}>{t.tabSessions === "会话" ? "无法获取模型列表" : "Cannot fetch models"}</Text>
-                        <TouchableOpacity
-                          style={[styles.retryBtn, { borderColor: theme.border }]}
-                          accessibilityRole="button"
-                          accessibilityLabel={t.retryLoadModels}
-                          onPress={loadModels}
-                        >
-                          <Text style={[styles.retryText, { color: theme.accent }]}>{t.retry}</Text>
-                        </TouchableOpacity>
-                      </View>
-                    )
-                  ) : (
-                    <FlatList
-                      data={models}
-                      keyExtractor={(m) => `${m.provider}/${m.id}`}
-                      renderItem={({ item }) => (
-                        <TouchableOpacity
-                          style={[styles.modelItem, { borderBottomColor: theme.border }]}
-                          onPress={() => void switchModel(item.id, item.provider, closeFsPanel)}
-                        >
-                          <Text style={[styles.modelName, { color: theme.text }]}>{item.name}</Text>
-                          <View style={styles.modelMeta}>
-                            <Text style={[styles.modelProvider, { color: theme.muted }]}>{item.provider}</Text>
-                            {item.vision && <View style={styles.badgeRow}><LineIcon name="eye" size={12} color={theme.success} strokeWidth={2} /><Text style={[styles.modelBadge, { color: theme.success }]}> vision</Text></View>}
-                            {item.reasoning && <View style={styles.badgeRow}><LineIcon name="brain" size={12} color={theme.accent} strokeWidth={2} /><Text style={[styles.modelBadge, { color: theme.accent }]}> reasoning</Text></View>}
-                          </View>
-                        </TouchableOpacity>
-                      )}
-                      style={{ maxHeight: 360 }}
-                    />
-                  )
-                )}
-                {fsPanel === "thinking" && THINKING_LEVELS.map((lv) => (
-                  <TouchableOpacity
-                    key={lv}
-                    style={[styles.modelItem, { borderBottomColor: theme.border }]}
-                    onPress={async () => { await actions.setThinking?.(lv); closeFsPanel(); }}
-                  >
-                    <Text style={[styles.modelName, { color: theme.text }]}>{lv}</Text>
-                  </TouchableOpacity>
-                ))}
-                {fsPanel === "plan" && planActions.map((p) => (
-                  <TouchableOpacity
-                    key={p.key}
-                    style={[styles.modelItem, { borderBottomColor: theme.border }]}
-                    onPress={async () => { closeFsPanel(); await actions.send(p.prompt); }}
-                  >
-                    <Text style={[styles.modelName, { color: theme.text }]}>{p.label}</Text>
-                  </TouchableOpacity>
-                ))}
                 {fsPanel === "skills" && (
                   <TextInput
                     style={[styles.skillSearch, { backgroundColor: theme.inputBg, color: theme.text, borderColor: theme.border }]}
@@ -727,87 +622,6 @@ export function ChatComposer({ actions, currentModel, sending, isStreaming = fal
         </View>
       </Modal>
 
-      {/* 模型选择 Modal */}
-      <Modal visible={showModels} transparent animationType="slide" onRequestClose={() => setShowModels(false)}>
-        <View style={styles.modalOverlay}>
-          <View style={[styles.modalSheet, { backgroundColor: theme.cardBg, borderColor: theme.border }]}>
-            <View style={styles.modalHeader}>
-              <Text style={[styles.modalTitle, { color: theme.text }]}>{t.selectModel}</Text>
-              <TouchableOpacity onPress={() => setShowModels(false)} accessibilityRole="button" accessibilityLabel={t.close}><LineIcon name="x" size={14} color={theme.muted} strokeWidth={2.2} /></TouchableOpacity>
-            </View>
-            {modelError ? (
-              <Text style={[styles.modalEmpty, { color: theme.error }]}>{modelError}</Text>
-            ) : null}
-            {modelsLoading ? (
-              <Text style={[styles.modalEmpty, { color: theme.muted }]}>{t.loadingSessions}</Text>
-            ) : (
-              <FlatList
-                data={models}
-                keyExtractor={(m) => `${m.provider}/${m.id}`}
-                renderItem={({ item }) => (
-                  <TouchableOpacity
-                    style={[styles.modelItem, { borderBottomColor: theme.border }]}
-                    onPress={() => void switchModel(item.id, item.provider)}
-                  >
-                    <Text style={[styles.modelName, { color: theme.text }]}>{item.name}</Text>
-                    <View style={styles.modelMeta}>
-                      <Text style={[styles.modelProvider, { color: theme.muted }]}>{item.provider}</Text>
-                      {item.vision && <View style={styles.badgeRow}><LineIcon name="eye" size={12} color={theme.success} strokeWidth={2} /><Text style={[styles.modelBadge, { color: theme.success }]}> 视觉</Text></View>}
-                      {item.reasoning && <View style={styles.badgeRow}><LineIcon name="brain" size={12} color={theme.accent} strokeWidth={2} /><Text style={[styles.modelBadge, { color: theme.accent }]}> 推理</Text></View>}
-                    </View>
-                  </TouchableOpacity>
-                )}
-                style={{ maxHeight: 400 }}
-              />
-            )}
-          </View>
-        </View>
-      </Modal>
-
-      {/* 思考等级 Modal */}
-      <Modal visible={showThinking} transparent animationType="slide" onRequestClose={() => setShowThinking(false)}>
-        <View style={styles.modalOverlay}>
-          <View style={[styles.modalSheet, { backgroundColor: theme.cardBg, borderColor: theme.border }]}>
-            <View style={styles.modalHeader}>
-              <Text style={[styles.modalTitle, { color: theme.text }]}>{t.labelThinkLevel}</Text>
-              <TouchableOpacity onPress={() => setShowThinking(false)} accessibilityRole="button" accessibilityLabel={t.close}><LineIcon name="x" size={14} color={theme.muted} strokeWidth={2.2} /></TouchableOpacity>
-            </View>
-            {THINKING_LEVELS.map((lv) => (
-              <TouchableOpacity
-                key={lv}
-                style={[styles.modelItem, { borderBottomColor: theme.border }]}
-                onPress={async () => { await actions.setThinking?.(lv); setShowThinking(false); }}
-              >
-                <Text style={[styles.modelName, { color: theme.text }]}>{lv}</Text>
-              </TouchableOpacity>
-            ))}
-          </View>
-        </View>
-      </Modal>
-
-      {/* Plan 模式 Modal */}
-      <Modal visible={showPlanPicker} transparent animationType="slide" onRequestClose={() => setShowPlanPicker(false)}>
-        <View style={styles.modalOverlay}>
-          <View style={[styles.modalSheet, { backgroundColor: theme.cardBg, borderColor: theme.border }]}>
-            <View style={styles.modalHeader}>
-              <Text style={[styles.modalTitle, { color: theme.text }]}>{t.planActMode}</Text>
-              <TouchableOpacity onPress={() => setShowPlanPicker(false)} accessibilityRole="button" accessibilityLabel={t.close}><LineIcon name="x" size={14} color={theme.muted} strokeWidth={2.2} /></TouchableOpacity>
-            </View>
-            {planActions.map((p) => (
-              <TouchableOpacity
-                key={p.key}
-                style={[styles.modelItem, { borderBottomColor: theme.border }]}
-                onPress={async () => {
-                  setShowPlanPicker(false);
-                  await actions.send(p.prompt);
-                }}
-              >
-                <Text style={[styles.modelName, { color: theme.text }]}>{p.label}</Text>
-              </TouchableOpacity>
-            ))}
-          </View>
-        </View>
-      </Modal>
     </View>
   );
 }
