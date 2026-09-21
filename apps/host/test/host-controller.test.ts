@@ -273,14 +273,18 @@ describe("HostController", () => {
     events = [];
 
     await appendFile(sessionFile, JSON.stringify({ type: "message", message: { role: "assistant", content: "live", timestamp: 1756800100000 } }) + "\n");
-    await vi.waitFor(() => expect(events).toContainEqual(expect.objectContaining({
-      type: "timeline_item",
-      sessionId: target.sessionId,
-      target,
-      item: expect.objectContaining({ text: "live" }),
-    })), { timeout: 1_500, interval: 50 });
-    expect(events.filter((event) => (event as { type?: string; target?: unknown }).type === "timeline_item" && (event as { target?: unknown }).target === target)).toHaveLength(1);
-    expect(events.filter((event) => (event as { type?: string; target?: unknown }).type === "timeline_item" && (event as { target?: unknown }).target === sibling)).toHaveLength(1);
+    await vi.waitFor(() => {
+      expect(events).toContainEqual(expect.objectContaining({
+        type: "timeline_item",
+        sessionId: target.sessionId,
+        target,
+        item: expect.objectContaining({ text: "live" }),
+      }));
+      // 两个 target 各持独立 watcher，250ms 轮询相位不同：对端可能晚于本端一个周期。
+      // 两条断言必须同在 waitFor 内，否则单边断言会在慢负载下先于对端事件执行而偶发失败。
+      expect(events.filter((event) => (event as { type?: string; target?: unknown }).type === "timeline_item" && (event as { target?: unknown }).target === target)).toHaveLength(1);
+      expect(events.filter((event) => (event as { type?: string; target?: unknown }).type === "timeline_item" && (event as { target?: unknown }).target === sibling)).toHaveLength(1);
+    }, { timeout: 1_500, interval: 50 });
   });
 
   it("replaces readerless timeline after compact without emitting replay items", async () => {
