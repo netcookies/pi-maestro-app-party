@@ -32,7 +32,8 @@ function timelineContentKey(item: TimelineItem): string {
 }
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
-let hostPackageVersion = "0.4.0";
+// 读取失败时的占位：不能用具体版本号，否则发版后会谎报旧版本（见 release 契约版本漂移）。
+let hostPackageVersion = "0.0.0";
 try {
   const rawPkg = readFileSync(resolve(__dirname, "../package.json"), "utf8");
   const parsed = JSON.parse(rawPkg) as { version?: string };

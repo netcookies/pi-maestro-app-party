@@ -2,11 +2,14 @@ import { describe, expect, it, beforeEach, afterEach } from "vitest";
 import { MobileHostServer } from "../src/server/mobile-host-server.js";
 import { HostController } from "../src/host-controller.js";
 import { MaestroStateReader } from "../src/maestro-state.js";
-import { mkdir, rm, writeFile } from "node:fs/promises";
+import { mkdir, rm, writeFile, readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { randomUUID } from "node:crypto";
 import WebSocket from "ws";
+
+/** 版本断言必须跟 package.json 走：硬编码会在每次发版后失效（CI 构建即此失败）。 */
+const HOST_VERSION = (JSON.parse(await readFile(new URL("../package.json", import.meta.url), "utf8")) as { version: string }).version;
 
 function stubRuntimeFactory() {
   return {
@@ -79,7 +82,7 @@ describe("MobileHostServer", () => {
     const res = await fetch(`${ctx.url}/api/status`);
     expect(res.status).toBe(200);
     const body = (await res.json()) as { version: string; sessions: number };
-    expect(body.version).toBe("0.4.0");
+    expect(body.version).toBe(HOST_VERSION);
     expect(body.sessions).toBe(0);
   });
 
@@ -295,7 +298,7 @@ describe("MobileHostServer", () => {
       });
       ws.send(JSON.stringify({ id: "disabled-state", type: "get_maestro_state" }));
       await expect(reply).resolves.toEqual(expect.objectContaining({ ok: false, error: { code: "rollout_disabled" } }));
-      expect(disabled.server.getReleaseContract()).toEqual({ releaseVersion: "0.4.0", protocolVersion: 2, rolloutMode: "disabled" });
+      expect(disabled.server.getReleaseContract()).toEqual({ releaseVersion: HOST_VERSION, protocolVersion: 2, rolloutMode: "disabled" });
       ws.close();
     } finally {
       await disabled.server.close();
@@ -326,10 +329,12 @@ describe("MobileHostServer", () => {
 
   it("rejects a semver release mismatch during the v2 handshake", async () => {
     const ws = new WebSocket(`ws://127.0.0.1:${ctx.port}/ws`);
+    // 用与当前契约不同的版本作“不匹配”样本：硬编码具体版本会在发版后变成真版本，测试失效。
+    const mismatched = HOST_VERSION === "0.0.1" ? "0.0.2" : "0.0.1";
     const frame = await new Promise<{ type: string; code: string }>((resolve, reject) => {
       ws.once("message", (data) => resolve(JSON.parse(data.toString()) as { type: string; code: string }));
       ws.once("error", reject);
-      ws.once("open", () => ws.send(JSON.stringify({ ...protocolHello(), releaseVersion: "0.5.0" })));
+      ws.once("open", () => ws.send(JSON.stringify({ ...protocolHello(), releaseVersion: mismatched })));
     });
     expect(frame).toEqual(expect.objectContaining({ type: "protocol_error", code: "release_version_unsupported" }));
     ws.close();

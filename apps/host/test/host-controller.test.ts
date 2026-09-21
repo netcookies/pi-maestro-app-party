@@ -2,10 +2,13 @@ import { describe, expect, it, beforeEach, afterEach, vi } from "vitest";
 import { HostController } from "../src/host-controller.js";
 import { MaestroStateReader } from "../src/maestro-state.js";
 import type { DesktopPluginTransport } from "../src/plugin/desktop-plugin-registry.js";
-import { mkdir, rm, writeFile, appendFile } from "node:fs/promises";
+import { mkdir, rm, writeFile, appendFile, readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { randomUUID } from "node:crypto";
+
+/** 版本断言必须跟 package.json 走：硬编码会在每次发版后失效（CI 构建即此失败）。 */
+const HOST_VERSION = (JSON.parse(await readFile(new URL("../package.json", import.meta.url), "utf8")) as { version: string }).version;
 
 function makeRuntime(sessionId = "desktop-session", cwd = "/work/app", sessionFile?: string) {
   const subscribers = new Set<(event: unknown) => void>();
@@ -71,7 +74,7 @@ describe("HostController", () => {
   it("returns initial status", () => {
     const status = controller.getStatus();
     expect(status.ok).toBe(true);
-    expect(status.version).toBe("0.4.0");
+    expect(status.version).toBe(HOST_VERSION);
     expect(status.sessions).toBe(0);
     expect(status.uptimeMs).toBeGreaterThanOrEqual(0);
   });

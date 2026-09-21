@@ -2,11 +2,14 @@ import { describe, expect, it, beforeEach, afterEach } from "vitest";
 import { MobileHostServer } from "../src/server/mobile-host-server.js";
 import { HostController } from "../src/host-controller.js";
 import { MaestroStateReader } from "../src/maestro-state.js";
-import { mkdir, rm, writeFile } from "node:fs/promises";
+import { mkdir, rm, writeFile, readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { randomUUID } from "node:crypto";
 import WebSocket from "ws";
+
+/** 版本断言必须跟 package.json 走：硬编码会在每次发版后失效（CI 构建即此失败）。 */
+const HOST_VERSION = (JSON.parse(await readFile(new URL("../package.json", import.meta.url), "utf8")) as { version: string }).version;
 
 function stubRuntimeFactory() {
   return {
@@ -127,7 +130,7 @@ describe("P2-1: 初始推送契约", () => {
     expect(messages[0].type).toBe("host_status");
     expect(typeof messages[0].status).toBe("string");
     expect(messages[1].type).toBe("host_info");
-    expect(messages[1].info).toMatchObject({ ok: true, version: "0.4.0" });
+    expect(messages[1].info).toMatchObject({ ok: true, version: HOST_VERSION });
     ws.close();
   });
 });

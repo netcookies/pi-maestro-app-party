@@ -30,6 +30,8 @@ const PKG_FILES = [
 ];
 const APP_JSON_PATH = resolve(ROOT, "apps/mobile/app.json");
 const INFO_PLIST_PATH = resolve(ROOT, "apps/mobile/ios/MaestroMobile/Info.plist");
+/** release 契约版本常量：isCompatibleReleaseVersion 要求全等，漏同步会让 Host 拒绝新版手机端。 */
+const SHARED_RELEASE_PATH = resolve(ROOT, "packages/shared/src/release.ts");
 
 const args = process.argv.slice(2);
 const target = args[0];
@@ -106,7 +108,26 @@ if (readFileSync(APP_JSON_PATH, "utf8")) {
   console.log(`  ✓ 更新 apps/mobile/app.json`);
 }
 
-// 5. 更新 apps/mobile/ios/MaestroMobile/Info.plist
+// 5. 更新 packages/shared/src/release.ts 的 MOBILE_RELEASE_VERSION 常量
+//    必须与 package.json 同步：Host 用它作为 release 契约版本，而 isCompatibleReleaseVersion
+//    是「全等」比较，漂移会让新版手机端握手被拒（release_version_unsupported）。
+try {
+  const releaseSrc = readFileSync(SHARED_RELEASE_PATH, "utf8");
+  const updated = releaseSrc.replace(
+    /(export const MOBILE_RELEASE_VERSION = ")[^"]+(" as const;)/,
+    `$1${newVersion}$2`
+  );
+  if (updated === releaseSrc) {
+    console.warn(`  ! 未匹配 MOBILE_RELEASE_VERSION，请检查 packages/shared/src/release.ts`);
+  } else {
+    writeFileSync(SHARED_RELEASE_PATH, updated, "utf8");
+    console.log(`  ✓ 更新 packages/shared/src/release.ts (MOBILE_RELEASE_VERSION)`);
+  }
+} catch (err) {
+  console.warn(`  ! 更新 release.ts 警告: ${err.message}`);
+}
+
+// 6. 更新 apps/mobile/ios/MaestroMobile/Info.plist
 try {
   let plist = readFileSync(INFO_PLIST_PATH, "utf8");
   plist = plist.replace(

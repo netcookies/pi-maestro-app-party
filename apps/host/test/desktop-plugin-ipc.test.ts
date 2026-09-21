@@ -250,13 +250,14 @@ describe("DesktopPlugin IPC and gateway", () => {
 
   it("rejects a mismatched Plugin release before registry registration", async () => {
     const dir = await mkdtemp(join(tmpdir(), "maestro-plugin-release-"));
-    server = new DesktopPluginIpcServer({ socketPath: join(dir, "plugin.sock"), secret: "test-secret", releaseVersion: "0.4.0" });
+    // 两侧均为显式注入且互不相等：用非真实版本号，避免与 package.json 漂移后被误读。
+    server = new DesktopPluginIpcServer({ socketPath: join(dir, "plugin.sock"), secret: "test-secret", releaseVersion: "9.9.8" });
     await server.start();
     client = new DesktopPluginIpcClient({
       socketPath: join(dir, "plugin.sock"),
       secret: "test-secret",
       target,
-      releaseVersion: "0.5.0",
+      releaseVersion: "9.9.9",
       capabilities: ["abort"],
       onRequest: async () => ({ type: "desktop_plugin_result", requestId: "r", operation: "abort", status: "observed" }),
     });
