@@ -121,16 +121,9 @@ describe("Dual-Sync Integration (方案A: TUI <-> Mobile 实时同步与生命�
     const client = connectClient();
     await client.opened;
 
-    // 移动端打开会话
-    const openPromise = client.waitForEvent((e) => e.type === "command_result" && (e as { in_reply_to?: string }).in_reply_to === "cmd-open");
-    client.ws.send(JSON.stringify({
-      id: "cmd-open",
-      type: "open_session",
-      cwd: tmpDir,
-      mode: "continue",
-      sessionFile,
-    }));
-    await openPromise;
+    // 直接经 controller 建立 Host-owned runner：WS 侧 open_session 已锁死（无 exact target 一律拒绝），
+    // 本用例验证的是 runner 的 tail watcher 与事件广播，不是「手机端能否建会话」。
+    await controller.openSession({ cwd: tmpDir, mode: "continue", sessionFile });
 
     // 此时模拟桌面 TUI（进程外写入）向 JSONL 文件追加新回复
     const tuiMessageLine = JSON.stringify({
@@ -159,16 +152,8 @@ describe("Dual-Sync Integration (方案A: TUI <-> Mobile 实时同步与生命�
     const client = connectClient();
     await client.opened;
 
-    // 打开会话
-    const openPromise = client.waitForEvent((e) => e.type === "command_result" && (e as { in_reply_to?: string }).in_reply_to === "cmd-open");
-    client.ws.send(JSON.stringify({
-      id: "cmd-open",
-      type: "open_session",
-      cwd: tmpDir,
-      mode: "continue",
-      sessionFile,
-    }));
-    await openPromise;
+    // 同上：经 controller 建立会话，保留 tail watcher 生命周期断言
+    await controller.openSession({ cwd: tmpDir, mode: "continue", sessionFile });
 
     const runner = controller.getSession("sess-dual-1") as unknown as { tailWatcher: { disposed: boolean } | null };
     expect(runner.tailWatcher).not.toBeNull();
@@ -194,14 +179,7 @@ describe("Dual-Sync Integration (方案A: TUI <-> Mobile 实时同步与生命�
     const client = connectClient();
     await client.opened;
 
-    client.ws.send(JSON.stringify({
-      id: "cmd-open",
-      type: "open_session",
-      cwd: tmpDir,
-      mode: "continue",
-      sessionFile,
-    }));
-    await client.waitForEvent((e) => e.type === "command_result" && (e as { in_reply_to?: string }).in_reply_to === "cmd-open");
+    await controller.openSession({ cwd: tmpDir, mode: "continue", sessionFile });
 
     const runner = controller.getSession("sess-dual-1") as SessionRunner & { state: { runState: string } };
     // 模拟会话处于 streaming 运行状态

@@ -446,7 +446,8 @@ describe("command_result 关联 id（in_reply_to）", () => {
     { name: "session_not_found", cmd: { id: "ID-SEARCH", type: "search_history", sessionId: "missing", keyword: "x" } },
     { name: "unsupported_command", cmd: { id: "ID-UNS", type: "unsupported_xyz" } },
     { name: "invalid_command(缺 type)", cmd: { id: "ID-INVALID", cwd: "/tmp" } },
-    { name: "command_failed(处理中抛错)", cmd: { id: "ID-FAIL", type: "open_session", cwd: "/nope" } },
+    // open_session 无 exact target 时被新守卫 fail closed（不再进入 runtime 分支）
+    { name: "session_creation_disabled(无 exact target)", cmd: { id: "ID-FAIL", type: "open_session", cwd: "/nope" } },
   ];
   for (const c of errorCases) {
     it(`${c.name} 的错误响应必须回显 in_reply_to=${c.cmd.id}`, async () => {
@@ -522,11 +523,47 @@ describe("错误响应脱敏", () => {
     await conn.nextType("host_status");
 
     const reply = conn.nextType("command_result");
-    // open_session 走 stubRuntimeFactory 抛错 → 命中 command_failed 分支
-    conn.ws.send(JSON.stringify({ id: "e1", type: "open_session", cwd: "/Users/secret-user/some-project" }));
+    // 带伪造 exact target 的 open_session 会穿透创建守卫、进入 openSession 并抛错，
+    // 从而命中 command_failed 的路径脱敏分支（守卫本身只回错误码，不带 message）。
+    conn.ws.send(JSON.stringify({
+      id: "e1",
+      type: "open_session",
+      cwd: "/Users/secret-user/some-project",
+      target: {
+        sessionId: "sess-secret",
+        endpointId: "desktop-secret",
+        normalizedCwd: "/Users/secret-user/some-project",
+        processGeneration: "gen-secret",
+      },
+    }));
     const msg = await reply;
     const message = String((msg.error as { message?: string }).message ?? "");
     expect(message).not.toMatch(/\/Users\/|\\\\Users\\\\/);
+    conn.ws.close();
+  }, 10_000);
+
+  it("open_session 无 exact target 时 fail closed（会话创建已锁死）", async () => {
+    ctx = await createServer();
+    const conn = connect(ctx.port);
+    await conn.opened;
+    await conn.nextType("host_status");
+
+    // 两条会凭空造出 Host runner 的路径都必须被拒：
+    //  1) mode:"create" 在任意 cwd 新建会话；
+    //  2) 历史会话（无 target）被 SdkSessionRunner.open 打开并附着 runner。
+    const createReply = conn.nextType("command_result");
+    conn.ws.send(JSON.stringify({ id: "c1", type: "open_session", cwd: "/tmp", mode: "create" }));
+    const createMsg = await createReply;
+    expect(createMsg.ok).toBe(false);
+    expect((createMsg.error as { code?: string }).code).toBe("session_creation_disabled");
+    expect(ctx.controller.getSession("sess-dual-1")).toBeUndefined();
+
+    const historyReply = conn.nextType("command_result");
+    conn.ws.send(JSON.stringify({ id: "h1", type: "open_session", cwd: "/tmp", sessionFile: "/tmp/history.jsonl" }));
+    const historyMsg = await historyReply;
+    expect(historyMsg.ok).toBe(false);
+    expect((historyMsg.error as { code?: string }).code).toBe("session_creation_disabled");
+
     conn.ws.close();
   }, 10_000);
 });
