@@ -523,6 +523,8 @@ export type HostEvent =
    * 客户端契约：若 timeline 中已存在相同 id 的条目则替换，否则追加。
    */
   | { type: "timeline_item"; sessionId: string; item: TimelineItem; target?: SessionTargetIdentity; seq: number }
+  /** Exact-target bounded timeline replacement used after readerless JSONL rewrites. */
+  | { type: "timeline_snapshot"; sessionId: string; items: TimelineItem[]; target?: SessionTargetIdentity; seq: number }
   /**
    * 流式增量：message_update 期间按同一稳定 itemId 发出（可节流）。
    * 客户端契约：已存在该 id 的条目则追加文本；尚不存在时可忽略（终态由 timeline_item 补齐）。
@@ -642,6 +644,9 @@ export function isHostEvent(value: unknown): value is HostEvent {
         && value.revision >= 0;
     case "timeline_item":
       return isString(value.sessionId) && isRecord(value.item)
+        && (value.target === undefined || isSessionTargetIdentity(value.target));
+    case "timeline_snapshot":
+      return isString(value.sessionId) && Array.isArray(value.items) && value.items.every(isRecord)
         && (value.target === undefined || isSessionTargetIdentity(value.target));
     case "timeline_delta":
       return isString(value.sessionId) && isString(value.itemId) && isString(value.delta)

@@ -91,10 +91,22 @@ describe("Desktop Plugin IPC protocol", () => {
       operation: { type: "set_thinking", level: "high" },
     })).toBe(true);
     expect(isDesktopPluginClientFrame({
-      type: "desktop_plugin_event",
-      event: "model_select",
-      model: { provider: "provider-b", id: "shared-id", name: "Model B", reasoning: true, vision: false },
+      type: "desktop_plugin_request",
+      requestId: "request-list-models",
+      commandId: "command-list-models",
+      deadlineAt: Date.now() + 1000,
+      target,
+      operation: { type: "list_models" },
     })).toBe(true);
+    expect(isDesktopPluginClientFrame({
+      type: "desktop_plugin_request",
+      requestId: "request-list-skills",
+      commandId: "command-list-skills",
+      deadlineAt: Date.now() + 1000,
+      target,
+      operation: { type: "list_skills" },
+    })).toBe(true);
+
     expect(isDesktopPluginClientFrame({
       type: "desktop_plugin_event",
       event: "thinking_level_select",
@@ -133,7 +145,7 @@ describe("Desktop Plugin IPC protocol", () => {
     const record = {
       target,
       sessionFile: "/sessions/session-1.jsonl",
-      capabilities: ["prompt", "abort", "set_thinking"],
+      capabilities: ["prompt", "abort", "set_thinking", "list_models", "list_skills"],
       thinkingLevel: "medium",
       runtimeStatus: "idle" as const,
       summary: { runtimeStatus: "idle" as const, messageCount: 2 },
@@ -208,6 +220,19 @@ describe("Desktop Plugin IPC protocol", () => {
         operation: { type: "abort" },
       },
     })).toBe(true);
+    for (const operation of [{ type: "list_models" as const }, { type: "list_skills" as const }]) {
+      expect(isDesktopHostToBrokerFrame({
+        type: "desktop_broker_command",
+        request: {
+          type: "desktop_plugin_request",
+          requestId: `request-${operation.type}`,
+          commandId: `command-${operation.type}`,
+          deadlineAt: Date.now() + 1000,
+          target,
+          operation,
+        },
+      })).toBe(true);
+    }
     expect(isDesktopHostToBrokerFrame({
       type: "desktop_broker_command",
       request: {
