@@ -113,14 +113,13 @@ if (readFileSync(APP_JSON_PATH, "utf8")) {
 //    是「全等」比较，漂移会让新版手机端握手被拒（release_version_unsupported）。
 try {
   const releaseSrc = readFileSync(SHARED_RELEASE_PATH, "utf8");
-  const updated = releaseSrc.replace(
-    /(export const MOBILE_RELEASE_VERSION = ")[^"]+(" as const;)/,
-    `$1${newVersion}$2`
-  );
-  if (updated === releaseSrc) {
+  const pattern = /(export const MOBILE_RELEASE_VERSION = ")[^"]+(" as const;)/;
+  // 先判“能否匹配”再比结果：版本相同时替换结果与原串相等（幂等场景），
+  // 不能用 updated === releaseSrc 区分「未匹配」与「匹配但值未变」。
+  if (!pattern.test(releaseSrc)) {
     console.warn(`  ! 未匹配 MOBILE_RELEASE_VERSION，请检查 packages/shared/src/release.ts`);
   } else {
-    writeFileSync(SHARED_RELEASE_PATH, updated, "utf8");
+    writeFileSync(SHARED_RELEASE_PATH, releaseSrc.replace(pattern, `$1${newVersion}$2`), "utf8");
     console.log(`  ✓ 更新 packages/shared/src/release.ts (MOBILE_RELEASE_VERSION)`);
   }
 } catch (err) {
