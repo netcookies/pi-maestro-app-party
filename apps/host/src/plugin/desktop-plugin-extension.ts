@@ -4,7 +4,7 @@ import { join, normalize } from "node:path";
 import { randomUUID } from "node:crypto";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import type { ImageContent, Model, TextContent } from "@earendil-works/pi-ai";
-import type { DesktopPluginEvent, DesktopPluginModel, DesktopPluginRuntimeStatus, DesktopPluginSessionSummary, DesktopPluginTarget, DesktopAskRequest } from "@maestro-mobile/shared";
+import type { DesktopPluginEvent, DesktopPluginModel, DesktopPluginRuntimeStatus, DesktopPluginSessionSummary, DesktopPluginTarget, DesktopAskRequest, JsonValue } from "@maestro-mobile/shared";
 import { DesktopPluginIpcClient } from "./desktop-plugin-ipc.js";
 import {
   beginDesktopPluginRuntimeRecord,
@@ -12,6 +12,12 @@ import {
   updateDesktopPluginRuntimeRecord,
 } from "./desktop-plugin-runtime-state.js";
 import { DesktopPiSessionAdapter, deliveryFailure } from "./desktop-pi-session-adapter.js";
+import {
+  registerFlowAskTransport,
+  type FlowAskAnswer,
+  type FlowAskTransport,
+  type FlowAskTransportResult,
+} from "./flow-ask-transport.js";
 
 const DEFAULT_SOCKET_PATH = join(homedir(), ".pi", "maestro-mobile", "ipc", "desktop-plugin.sock");
 const DEFAULT_SECRET_PATH = join(homedir(), ".pi", "maestro-mobile-ipc-secret");
@@ -72,6 +78,41 @@ async function resolveSecret(options: DesktopPluginExtensionOptions): Promise<st
   }
 }
 
+function askCorrelationKey(requestId: string, toolCallId: string): string {
+  return JSON.stringify([requestId, toolCallId]);
+}
+
+function desktopAskRequestFromFlow(request: Parameters<FlowAskTransport["open"]>[0]): DesktopAskRequest | undefined {
+  let questions: JsonValue[];
+  try {
+    questions = JSON.parse(JSON.stringify(request.questions)) as JsonValue[];
+  } catch {
+    return undefined;
+  }
+  if (!Array.isArray(questions)) return undefined;
+  return {
+    type: "desktop_ask_request",
+    requestId: `question:${request.toolCallId}`,
+    toolCallId: request.toolCallId,
+    questions,
+    deadlineAt: Date.now() + 120_000,
+  };
+}
+
+function flowResultFromDesktopResponse(response: unknown): FlowAskTransportResult {
+  if (typeof response !== "object" || response === null) return { status: "cancelled" };
+  const value = response as { cancelled?: unknown; value?: unknown };
+  if (value.cancelled === true || typeof value.value !== "string") return { status: "cancelled" };
+  try {
+    const parsed = JSON.parse(value.value) as { answers?: unknown };
+    return Array.isArray(parsed?.answers)
+      ? { status: "answered", answers: parsed.answers as FlowAskAnswer[] }
+      : { status: "cancelled" };
+  } catch {
+    return { status: "cancelled" };
+  }
+}
+
 export function createDesktopPluginExtension(options: DesktopPluginExtensionOptions = {}) {
   return function desktopPluginExtension(pi: ExtensionAPI): void {
     let client: DesktopPluginIpcClient | undefined;
@@ -94,7 +135,17 @@ export function createDesktopPluginExtension(options: DesktopPluginExtensionOpti
     let latestUsage: DesktopPluginSessionSummary["usage"];
     let latestContext: DesktopPluginSessionSummary["context"];
     let runtimeGenerationToken: string | undefined;
-    const pendingAskRequests = new Map<string, DesktopAskRequest>();
+    interface PendingAsk {
+      request: DesktopAskRequest;
+      generation: number;
+      adapter: DesktopPiSessionAdapter;
+      resolve(result: FlowAskTransportResult): void;
+      removeAbortListener?: () => void;
+      sentGeneration?: number;
+    }
+    const pendingAskRequests = new Map<string, PendingAsk>();
+    const retiredAskKeys = new Set<string>();
+    let unregisterFlowAskTransport: (() => void) | undefined;
     const updateRuntime = (patch: Parameters<typeof updateDesktopPluginRuntimeRecord>[1]): void => {
       if (runtimeGenerationToken) updateDesktopPluginRuntimeRecord(runtimeGenerationToken, patch);
     };
@@ -113,6 +164,74 @@ export function createDesktopPluginExtension(options: DesktopPluginExtensionOpti
     const isCurrentSession = (generation: number, sessionAdapter: DesktopPiSessionAdapter): boolean => (
       !stopping && sessionGeneration === generation && adapter === sessionAdapter
     );
+
+    const rememberRetiredAsk = (key: string): void => {
+      retiredAskKeys.add(key);
+      while (retiredAskKeys.size > 128) retiredAskKeys.delete(retiredAskKeys.values().next().value!);
+    };
+
+    const settlePendingAsk = (key: string, result: FlowAskTransportResult): void => {
+      const pending = pendingAskRequests.get(key);
+      if (!pending) {
+        rememberRetiredAsk(key);
+        return;
+      }
+      pendingAskRequests.delete(key);
+      pending.removeAbortListener?.();
+      rememberRetiredAsk(key);
+      pending.resolve(result);
+    };
+
+    const flowAskTransport: FlowAskTransport = {
+      open(request) {
+        const sessionAdapter = adapter;
+        const generation = sessionGeneration;
+        if (stopping || !sessionAdapter || !isCurrentSession(generation, sessionAdapter)) return undefined;
+        if (!sessionAdapter.getCapabilities().includes("ask-user-question")) return undefined;
+        const desktopRequest = desktopAskRequestFromFlow(request);
+        if (!desktopRequest) return undefined;
+        const key = askCorrelationKey(desktopRequest.requestId, desktopRequest.toolCallId);
+        if (pendingAskRequests.has(key)) return undefined;
+
+        let resolvePromise!: (result: FlowAskTransportResult) => void;
+        const promise = new Promise<FlowAskTransportResult>((resolve) => {
+          resolvePromise = resolve;
+        });
+        const pending: PendingAsk = {
+          request: desktopRequest,
+          generation,
+          adapter: sessionAdapter,
+          resolve: resolvePromise,
+        };
+        const onAbort = () => settlePendingAsk(key, { status: "cancelled" });
+        request.signal.addEventListener("abort", onAbort, { once: true });
+        pending.removeAbortListener = () => request.signal.removeEventListener("abort", onAbort);
+        pendingAskRequests.set(key, pending);
+        if (request.signal.aborted) onAbort();
+
+        void (async () => {
+          try {
+            const attempt = connectionAttempt?.promise;
+            if (attempt) await attempt;
+            if (pendingAskRequests.get(key) !== pending) return;
+            if (!client || !isCurrentSession(generation, sessionAdapter)) {
+              settlePendingAsk(key, { status: "cancelled" });
+              return;
+            }
+            if (pending.sentGeneration === generation) return;
+            pending.sentGeneration = generation;
+            await client.sendAskRequest(desktopRequest);
+          } catch {
+            settlePendingAsk(key, { status: "cancelled" });
+          }
+        })();
+
+        return {
+          promise,
+          cancel: () => settlePendingAsk(key, { status: "cancelled" }),
+        };
+      },
+    };
 
     const scheduleReconnect = (generation = sessionGeneration): void => {
       if (stopping || generation !== sessionGeneration || reconnectTimer || client?.isConnected) return;
@@ -156,16 +275,19 @@ export function createDesktopPluginExtension(options: DesktopPluginExtensionOpti
             capabilities: sessionAdapter.getCapabilities(),
             onRequest: (request) => sessionAdapter.execute(request),
             onAskResponse: async (response) => {
-              try {
-                await sessionAdapter.answerAsk(response);
-              } finally {
-                // A rejected/expired answer must also retire the Plugin-side pending ask.
-                if (isCurrentSession(generation, sessionAdapter)) pendingAskRequests.delete(response.toolCallId);
+              const key = askCorrelationKey(response.requestId, response.toolCallId);
+              if (pendingAskRequests.has(key)) {
+                settlePendingAsk(key, flowResultFromDesktopResponse(response.response));
+                return;
               }
+              if (retiredAskKeys.delete(key)) return;
+              // 兼容仍走旧 Desktop Ask 文件桥的非 Flow 请求。
+              await sessionAdapter.answerAsk(response);
             },
             onDisconnected: () => {
               if (client !== candidate) return;
               client = undefined;
+              for (const key of [...pendingAskRequests.keys()]) settlePendingAsk(key, { status: "cancelled" });
               if (!isCurrentSession(generation, sessionAdapter)) return;
               updateRuntime({ pluginBroker: "disconnected", error: "desktop plugin disconnected" });
               scheduleReconnect(generation);
@@ -204,16 +326,18 @@ export function createDesktopPluginExtension(options: DesktopPluginExtensionOpti
             abandonCandidate(candidate);
             return;
           }
-          for (const [toolCallId, request] of pendingAskRequests) {
+          for (const [key, pending] of pendingAskRequests) {
             if (!isCurrentSession(generation, sessionAdapter)) {
               abandonCandidate(candidate);
               return;
             }
-            if (request.deadlineAt <= Date.now()) {
-              pendingAskRequests.delete(toolCallId);
+            if (pending.request.deadlineAt <= Date.now()) {
+              settlePendingAsk(key, { status: "cancelled" });
               continue;
             }
-            await candidate.sendAskRequest(request).catch(() => undefined);
+            if (pending.sentGeneration === generation) continue;
+            pending.sentGeneration = generation;
+            await candidate.sendAskRequest(pending.request).catch(() => undefined);
           }
         } catch (error) {
           if (candidate) abandonCandidate(candidate);
@@ -239,7 +363,10 @@ export function createDesktopPluginExtension(options: DesktopPluginExtensionOpti
       const staleClient = client;
       client = undefined;
       staleClient?.close();
-      pendingAskRequests.clear();
+      for (const key of [...pendingAskRequests.keys()]) settlePendingAsk(key, { status: "cancelled" });
+      retiredAskKeys.clear();
+      unregisterFlowAskTransport?.();
+      unregisterFlowAskTransport = registerFlowAskTransport(flowAskTransport);
       const target: DesktopPluginTarget = {
         sessionId: ctx.sessionManager.getSessionId(),
         endpointId: options.endpointId ?? `desktop-${randomUUID()}`,
@@ -403,14 +530,6 @@ export function createDesktopPluginExtension(options: DesktopPluginExtensionOpti
       publishRuntimeStatus("idle");
     });
 
-    pi.on("tool_call", (event) => {
-      const askRequest = adapter?.observeToolCall({ toolCallId: event.toolCallId, toolName: event.toolName, input: event.input });
-      if (askRequest) {
-        pendingAskRequests.set(askRequest.toolCallId, askRequest);
-        void client?.sendAskRequest(askRequest).catch(() => undefined);
-      }
-    });
-
     pi.on("session_shutdown", async () => {
       const shutdownGeneration = sessionGeneration;
       const shutdownAdapter = adapter;
@@ -420,7 +539,10 @@ export function createDesktopPluginExtension(options: DesktopPluginExtensionOpti
       stopping = true;
       sessionGeneration += 1;
       adapter = undefined;
-      pendingAskRequests.clear();
+      for (const key of [...pendingAskRequests.keys()]) settlePendingAsk(key, { status: "cancelled" });
+      unregisterFlowAskTransport?.();
+      unregisterFlowAskTransport = undefined;
+      retiredAskKeys.clear();
       if (reconnectTimer) {
         clearTimeout(reconnectTimer);
         reconnectTimer = undefined;
