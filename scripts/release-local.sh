@@ -71,6 +71,9 @@ fi
 
 # ── iOS ────────────────────────────────────────────────────────────────
 if [[ "$SKIP_IOS" == false ]]; then
+  note "安装 iOS Pods"
+  (cd "$REPO_ROOT/apps/mobile/ios" && \
+    RUBYOPT="-r$PWD/cocoapods_pathname_workaround.rb" pod install --repo-update) || die "Pod 安装失败"
   note "构建未签名 IPA"
   (cd "$REPO_ROOT/apps/mobile/ios" && xcodebuild -workspace MaestroMobile.xcworkspace \
     -scheme MaestroMobile -configuration Release -sdk iphoneos -derivedDataPath build \

@@ -8,7 +8,6 @@ on:
   push:
     tags:
       - "maestro-mobile-v*"
-  workflow_dispatch: {}
 
 permissions:
   contents: write
@@ -66,7 +65,11 @@ jobs:
           # Trusted Publisher OIDC：包 Publishing access 已允许 trusted-publisher tokens（免 2FA 全自动）
           npm install -g npm@11
           npm --version
-          npm publish --provenance --access public
+          if npm view "pi-maestro-mobile@${{ steps.ver.outputs.version }}" version >/dev/null 2>&1; then
+            echo "pi-maestro-mobile@${{ steps.ver.outputs.version }} 已发布，跳过重复 publish"
+          else
+            npm publish --provenance --access public
+          fi
 
       # ── Android：签名 release APK（混淆 + 资源收缩已默认启用）──
       - name: Decode keystore
@@ -95,8 +98,9 @@ jobs:
       - name: Build unsigned iOS IPA
         working-directory: apps/mobile
         run: |
-          npx expo prebuild --platform ios --no-install || true
-          cd ios && pod install --repo-update
+          npx expo prebuild --platform ios --no-install
+          cd ios
+          RUBYOPT="-r$PWD/cocoapods_pathname_workaround.rb" pod install --repo-update
           xcodebuild -workspace MaestroMobile.xcworkspace -scheme MaestroMobile \
             -configuration Release -sdk iphoneos -derivedDataPath build \
             CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY="" | tail -3
