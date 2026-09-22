@@ -46,6 +46,7 @@ note "预检通过"
 # ── 同步版本号（package.json / app.json / iOS Info.plist）──────────────
 note "同步版本号为 v$VERSION"
 node "$REPO_ROOT/scripts/bump-version.mjs" "$VERSION"
+pnpm --filter @maestro-mobile/shared build
 
 # ── npm publish（host 包）───────────────────────────────────────────────
 if [[ "$SKIP_NPM" == false ]]; then
