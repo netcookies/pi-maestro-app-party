@@ -2,6 +2,16 @@
 
 本文件记录 Maestro Mobile 的显著变更。格式基于 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)。
 
+## [0.5.1] — 2026-09-23
+
+### 修复
+
+- synchronize TUI and Mobile lifecycle
+
+### 新增
+
+- integrate Flow Ask transport
+
 ## [0.5.0] — 2026-09-21
 
 ### 测试
