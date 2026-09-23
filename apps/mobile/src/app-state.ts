@@ -151,6 +151,10 @@ export interface LocalErrorEvent {
   message: string;
 }
 
+export interface DialogStateChangedEvent {
+  type: "__dialog_state_changed";
+}
+
 export interface RevisionEvent {
   type: "__revision";
   revision: number;
@@ -169,6 +173,7 @@ export type AppAction =
   | EventBatchEvent
   | DialogSendFailedEvent
   | LocalErrorEvent
+  | DialogStateChangedEvent
   | RevisionEvent
   | ConnectionResetEvent;
 
@@ -508,6 +513,9 @@ export function reduceEvent(state: AppState, event: AppAction, deps: AppStateDep
     case "__local_error":
       return { ...state, lastError: event.message };
 
+    case "__dialog_state_changed":
+      return queue ? { ...state, dialogs: queue.pendingDialogs } : state;
+
     default:
       return state;
   }
@@ -530,6 +538,7 @@ export function createAppActions(
     request: ExtensionUiRequest,
     target?: SessionTargetIdentity,
   ) => void,
+  onQueueChanged: () => void = () => undefined,
 ): AppActions {
   return {
     answerDialog(requestId, value) {
@@ -537,6 +546,7 @@ export function createAppActions(
       if (!entry) return;
       const response = buildDialogResponse(queue, requestId, value);
       if (response) {
+        onQueueChanged();
         responder(entry.request.sessionId, requestId, response, entry.request, entry.target);
       }
     },
@@ -545,6 +555,7 @@ export function createAppActions(
       if (!entry) return;
       const response = queue.cancel(requestId);
       if (response) {
+        onQueueChanged();
         responder(entry.request.sessionId, requestId, response, entry.request, entry.target);
       }
     },

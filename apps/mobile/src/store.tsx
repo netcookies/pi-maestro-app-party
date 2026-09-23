@@ -306,10 +306,10 @@ export function HostStoreProvider({ children }: { children: React.ReactNode }) {
   }, [getClient]);
 
   const openExistingSession = useCallback(async (session: HostSessionSummary): Promise<OpenedSession> => {
-    try {
+    const open = async (selected: HostSessionSummary): Promise<OpenedSession> => {
       const resolved = resolveOpenedSession(
-        session,
-        await getClient().sendCommand(buildOpenExistingSessionCommand(session)),
+        selected,
+        await getClient().sendCommand(buildOpenExistingSessionCommand(selected)),
       );
       if (resolved.target) {
         sessionTargetsRef.current.set(resolved.targetKey!, resolved.target);
@@ -319,8 +319,33 @@ export function HostStoreProvider({ children }: { children: React.ReactNode }) {
       }
       dispatch({ type: "__local_error", message: "" });
       return { sessionId: resolved.sessionId, ...(resolved.targetKey ? { targetKey: resolved.targetKey } : {}) };
+    };
+
+    try {
+      return await open(session);
     } catch (error) {
-      dispatch({ type: "__local_error", message: error instanceof Error ? error.message : String(error) });
+      const message = error instanceof Error ? error.message : String(error);
+      if (!message.includes("target_unavailable") || !session.target) {
+        dispatch({ type: "__local_error", message });
+        throw error;
+      }
+
+      // TUI 重启会生成新的 endpoint/processGeneration；列表卡片可能仍携带旧 target。
+      // 只在 Host 明确返回 target_unavailable 时按 sessionId 刷新一次 exact target，
+      // 不推断或放宽 Host 的四元组校验。
+      try {
+        const refreshed = await getClient().sendCommand({
+          type: "list_host_sessions",
+          sessionIds: [session.sessionId],
+        }) as HostSessionList;
+        const latest = refreshed.sessions.find((candidate) =>
+          candidate.target?.sessionId === session.sessionId && candidate.targetKey !== session.targetKey,
+        ) ?? refreshed.sessions.find((candidate) => candidate.target?.sessionId === session.sessionId);
+        if (latest?.target) return await open(latest);
+      } catch {
+        // 保留首次 target_unavailable，避免刷新失败覆盖根因。
+      }
+      dispatch({ type: "__local_error", message });
       throw error;
     }
   }, [getClient, dispatch]);
@@ -521,6 +546,7 @@ export function HostStoreProvider({ children }: { children: React.ReactNode }) {
               dispatch(event);
             });
         },
+        () => dispatch({ type: "__dialog_state_changed" }),
       ),
     // dispatch 是 useReducer 返回的稳定标识，列入依赖不改变 memo 生命周期
     [getClient, dispatch, targetForSession],

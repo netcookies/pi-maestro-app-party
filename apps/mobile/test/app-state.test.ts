@@ -408,6 +408,18 @@ describe("createAppActions", () => {
     expect(queue.get("r1")?.status).toBe("answered");
   });
 
+  it("answerDialog notifies the reducer to refresh the optimistic queue projection", () => {
+    const queue = new ExtensionUiQueue();
+    const request = { id: "r3", sessionId: "s1", method: "input" as const, title: "Name" };
+    queue.enqueue(request);
+    let state = reduceEvent(createInitialState(), { type: "extension_ui_request", request, seq: 1 } as HostEvent, { dialogQueue: queue });
+    const actions = createAppActions(queue, () => undefined, () => {
+      state = reduceEvent(state, { type: "__dialog_state_changed" }, { dialogQueue: queue });
+    });
+    actions.answerDialog("r3", "Alice");
+    expect(state.dialogs).toEqual([]);
+  });
+
   it("cancelDialog sends cancel response", () => {
     let responded = false;
     const queue = new ExtensionUiQueue();

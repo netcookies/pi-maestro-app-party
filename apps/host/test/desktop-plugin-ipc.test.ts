@@ -336,6 +336,34 @@ describe("DesktopPlugin IPC and gateway", () => {
     await client.sendAskRequest({ type: "desktop_ask_request", requestId: "question:call_a|fc_b", toolCallId: "call_a|fc_b", questions: [{ question: "Continue?" }], deadlineAt: Date.now() + 1000 });
     await expect(answer).resolves.toEqual({ toolCallId: "call_a|fc_b", selected: ["yes"] });
   });
+  it("forwards an exact ask cancellation to the server", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "maestro-plugin-ask-cancel-"));
+    let cancelled: DesktopAskResult | undefined;
+    let resolveCancelled: ((value: DesktopAskResult) => void) | undefined;
+    const cancellation = new Promise<DesktopAskResult>((resolve) => { resolveCancelled = resolve; });
+    server = new DesktopPluginIpcServer({
+      socketPath: join(dir, "plugin.sock"),
+      secret: "test-secret",
+      onAskResponse: (_target, response) => {
+        cancelled = { type: "desktop_ask_result", requestId: response.requestId, toolCallId: response.toolCallId, status: response.response.cancelled ? "accepted" : "failed" };
+        resolveCancelled?.(cancelled);
+      },
+    });
+    await server.start();
+    client = new DesktopPluginIpcClient({
+      socketPath: join(dir, "plugin.sock"),
+      secret: "test-secret",
+      target,
+      capabilities: ["ask-user-question"],
+      onRequest: async (request) => ({ type: "desktop_plugin_result", requestId: request.requestId, operation: request.operation.type, status: "observed" }),
+    });
+    await client.connect();
+    const request = { type: "desktop_ask_request" as const, requestId: "question:cancel", toolCallId: "call_cancel", questions: [{ question: "Cancel?" }], deadlineAt: Date.now() + 1000 };
+    await client.sendAskRequest(request);
+    await client.sendAskCancellation(request);
+    await expect(cancellation).resolves.toEqual({ type: "desktop_ask_result", requestId: "question:cancel", toolCallId: "call_cancel", status: "accepted" });
+  });
+
   it("turns a rejected async ask answer into a correlated failed receipt", async () => {
     const dir = await mkdtemp(join(tmpdir(), "maestro-plugin-ask-rejected-"));
     let receipt: Promise<DesktopAskResult> | undefined;

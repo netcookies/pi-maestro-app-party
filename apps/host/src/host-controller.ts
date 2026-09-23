@@ -1,4 +1,4 @@
-import type { HostEvent, SessionSnapshot, ExtensionUiResponse, DesktopAskRequest, DesktopPluginModel, DesktopPluginRuntimeStatus, DesktopPluginSessionSummary, SessionSummaryPatch, TimelineItem } from "@maestro-mobile/shared";
+import type { HostEvent, SessionSnapshot, ExtensionUiResponse, DesktopAskRequest, DesktopAskResponse, DesktopPluginModel, DesktopPluginRuntimeStatus, DesktopPluginSessionSummary, SessionSummaryPatch, TimelineItem } from "@maestro-mobile/shared";
 import type { DesktopPluginTarget } from "@maestro-mobile/shared";
 import type { RuntimeFactory, SessionRunner, OpenSessionRequest, HostEventListener } from "./types.js";
 import { SdkSessionRunner } from "./session-runner.js";
@@ -446,6 +446,16 @@ export class HostController {
     }) as Extract<HostEvent, { type: "extension_ui_request" }>;
     this.pendingDesktopAsks.set(id, { target: { ...target }, request, event, timer });
     this.emitToListeners(event);
+  }
+
+  onDesktopAskCancelled(target: DesktopPluginTarget, response: DesktopAskResponse): void {
+    if (response.response.cancelled !== true) return;
+    const pendingEntry = [...this.pendingDesktopAsks.entries()].find(([_, candidate]) =>
+      targetKey(candidate.target) === targetKey(target) && candidate.request.requestId === response.requestId && candidate.request.toolCallId === response.toolCallId,
+    );
+    if (!pendingEntry) return;
+    const [id] = pendingEntry;
+    this.clearDesktopAsk(id);
   }
 
   pendingDesktopAskEvents(): HostEvent[] {

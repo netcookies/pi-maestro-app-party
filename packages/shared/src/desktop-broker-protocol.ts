@@ -115,6 +115,12 @@ export interface DesktopBrokerAskResult {
   result: DesktopAskResult;
 }
 
+export interface DesktopBrokerAskCancel {
+  type: "desktop_broker_ask_cancel";
+  target: DesktopPluginTarget;
+  response: DesktopAskResponse;
+}
+
 export interface DesktopBrokerPing {
   type: "desktop_broker_ping";
   nonce: string;
@@ -162,6 +168,7 @@ export type DesktopBrokerToHostFrame =
   | DesktopBrokerCommandResult
   | DesktopBrokerAskRequest
   | DesktopBrokerAskResult
+  | DesktopBrokerAskCancel
   | DesktopBrokerPong
   | DesktopBrokerError;
 
@@ -208,6 +215,8 @@ export function isDesktopBrokerToHostFrame(value: unknown): value is DesktopBrok
       return isDesktopPluginTarget(value.target) && isDesktopAskRequest(value.request);
     case "desktop_broker_ask_result":
       return isDesktopPluginTarget(value.target) && isDesktopAskResult(value.result);
+    case "desktop_broker_ask_cancel":
+      return isDesktopPluginTarget(value.target) && isDesktopAskResponse(value.response) && value.response.response.cancelled === true;
     case "desktop_broker_pong":
       return stringFields(value, "nonce");
     case "desktop_broker_error":

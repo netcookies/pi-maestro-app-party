@@ -44,9 +44,10 @@ describe("ask wizard source selection", () => {
     expect(active).toMatchObject({ requestId: "request-1", dismissIds: ["request-1", "tool-call-1"] });
   });
 
-  it("suppresses both projections after either paired ID is dismissed", () => {
+  it("suppresses the direct projection only when its own ID is dismissed", () => {
     expect(selectActiveAskWizard([timelineAsk()], direct(), new Set(["request-1"]))).toBeNull();
-    expect(selectActiveAskWizard([timelineAsk()], direct(), new Set(["tool-call-1"]))).toBeNull();
+    expect(selectActiveAskWizard([timelineAsk()], direct(), new Set(["tool-call-1"]))).not.toBeNull();
+    expect(selectActiveAskWizard([], direct(), new Set(["request-1"]))).toBeNull();
   });
 
   it("does not suppress a new direct ask when an unrelated timeline ask was dismissed", () => {

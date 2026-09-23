@@ -19,7 +19,7 @@ import { LineIcon } from "../../src/components/LineIcon";
 import { PulsingDot } from "../../src/components/PulsingDot";
 import { SpringCard } from "../../src/components/SpringCard";
 import { useI18n, formatRelativeTime } from "../../src/i18n";
-import type { HostSessionSummary } from "@maestro-mobile/shared";
+import { sessionTargetKey, type HostSessionSummary } from "@maestro-mobile/shared";
 import {
   beginFilterRequest,
   createFilterState,
@@ -66,12 +66,20 @@ export default function HostSessionsScreen() {
   const lastRequestedCursorRef = useRef<string | undefined>(undefined);
   const [error, setError] = useState<string | null>(null);
   const [opening, setOpening] = useState<string | null>(null);
+  const refreshedUnknownPatchRef = useRef(new Map<string, number>());
 
-  // Host summary 事件只 patch 当前已加载行；不重拉列表，也不扫描历史会话。
+  // Host summary 事件只 patch 当前已加载行；注销的 exact target 必须从列表移除，
+  // 否则用户会继续点到已关闭 TUI 的 stale card。
   useEffect(() => {
     if (state.sessionSummaryPatches.size === 0 || sessionsRef.current.length === 0) return;
     let next = sessionsRef.current;
     for (const update of state.sessionSummaryPatches.values()) {
+      if (update.patch.reset && update.patch.runtimeStatus === "sleeping") {
+        const key = sessionTargetKey(update.target);
+        const filtered = next.filter((session) => session.targetKey !== key);
+        if (filtered.length !== next.length) next = filtered;
+        continue;
+      }
       const patched = patchHostSessionSummary(next, update.target, update.patch, update.revision);
       if (patched.some((session, index) => session !== next[index])) next = patched;
     }
@@ -134,6 +142,19 @@ export default function HostSessionsScreen() {
   useEffect(() => {
     void loadFirstPage();
   }, [loadFirstPage, filterState.generation]);
+
+  useEffect(() => {
+    if (!isConnected || state.sessionSummaryPatches.size === 0 || firstPageInFlightRef.current) return;
+    for (const update of state.sessionSummaryPatches.values()) {
+      if (update.patch.reset) continue;
+      const key = sessionTargetKey(update.target);
+      const loaded = sessionsRef.current.some((session) => session.targetKey === key);
+      if (loaded || refreshedUnknownPatchRef.current.get(key) === update.revision) continue;
+      refreshedUnknownPatchRef.current.set(key, update.revision);
+      void loadFirstPage(true);
+      break;
+    }
+  }, [isConnected, loadFirstPage, state.sessionSummaryPatches]);
 
   const loadMore = useCallback(async () => {
     const current = filterStateRef.current;

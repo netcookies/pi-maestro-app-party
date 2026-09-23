@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import net from "node:net";
 import type {
   DesktopAskRequest,
+  DesktopAskResponse,
   DesktopAskResult,
   DesktopBrokerAskResult,
   DesktopBrokerToHostFrame,
@@ -89,6 +90,14 @@ export class DesktopBroker {
         timer.unref?.();
         this.pendingAsks.set(key, { target: { ...target }, request, timer });
         this.emit({ type: "desktop_broker_ask_request", target, request });
+      },
+      onAskResponse: (target, response) => {
+        if (response.response.cancelled !== true) return;
+        const key = this.askKey(target, response.requestId);
+        const pending = this.pendingAsks.get(key);
+        if (!pending || pending.request.toolCallId !== response.toolCallId) return;
+        this.clearAsk(key);
+        this.emit({ type: "desktop_broker_ask_cancel", target: { ...target }, response });
       },
     });
   }

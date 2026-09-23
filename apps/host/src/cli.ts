@@ -211,6 +211,7 @@ async function main(): Promise<void> {
     projection,
     onProjection: (records) => controller.applyDesktopProjection(records),
     onAskRequest: (target, request) => controller.onDesktopAskRequest(target, request),
+    onAskCancel: (target, response) => controller.onDesktopAskCancelled(target, response),
   });
   controller.setDesktopBrokerLinkHealth(() => brokerHost.isConnected, () => brokerHost.isFlapping);
   const supervisor = new DesktopBrokerSupervisor({

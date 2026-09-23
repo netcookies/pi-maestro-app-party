@@ -182,6 +182,20 @@ export function createDesktopPluginExtension(options: DesktopPluginExtensionOpti
       pending.resolve(result);
     };
 
+    const cancelPendingAsk = (key: string): void => {
+      const pending = pendingAskRequests.get(key);
+      if (!pending) {
+        rememberRetiredAsk(key);
+        return;
+      }
+      if (pending.sentGeneration !== undefined && client && isCurrentSession(pending.generation, pending.adapter)) {
+        void client.sendAskCancellation(pending.request).catch((error: unknown) => {
+          console.error(`[maestro-mobile] Ask cancellation failed: ${error instanceof Error ? error.message : String(error)}`);
+        });
+      }
+      settlePendingAsk(key, { status: "cancelled" });
+    };
+
     const flowAskTransport: FlowAskTransport = {
       open(request) {
         const sessionAdapter = adapter;
@@ -203,7 +217,7 @@ export function createDesktopPluginExtension(options: DesktopPluginExtensionOpti
           adapter: sessionAdapter,
           resolve: resolvePromise,
         };
-        const onAbort = () => settlePendingAsk(key, { status: "cancelled" });
+        const onAbort = () => cancelPendingAsk(key);
         request.signal.addEventListener("abort", onAbort, { once: true });
         pending.removeAbortListener = () => request.signal.removeEventListener("abort", onAbort);
         pendingAskRequests.set(key, pending);
@@ -228,7 +242,7 @@ export function createDesktopPluginExtension(options: DesktopPluginExtensionOpti
 
         return {
           promise,
-          cancel: () => settlePendingAsk(key, { status: "cancelled" }),
+          cancel: () => cancelPendingAsk(key),
         };
       },
     };

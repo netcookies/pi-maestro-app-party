@@ -342,6 +342,7 @@ export interface DesktopBrokerHostIpcOptions {
   projection?: DesktopBrokerProjectedRegistry;
   onProjection?: DesktopBrokerProjectionListener;
   onAskRequest?: (target: DesktopPluginTarget, request: Extract<DesktopBrokerToHostFrame, { type: "desktop_broker_ask_request" }>["request"]) => void;
+  onAskCancel?: (target: DesktopPluginTarget, response: Extract<DesktopBrokerToHostFrame, { type: "desktop_broker_ask_cancel" }>["response"]) => void;
   onDisconnected?: () => void;
 }
 
@@ -506,6 +507,9 @@ export class DesktopBrokerHostIpc {
     }
     if (frame.type === "desktop_broker_ask_request") {
       this.options.onAskRequest?.(frame.target, frame.request);
+    }
+    if (frame.type === "desktop_broker_ask_cancel") {
+      this.options.onAskCancel?.(frame.target, frame.response);
     }
   }
 

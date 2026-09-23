@@ -253,6 +253,7 @@ export default function SessionScreen() {
   // 待处理单项交互弹窗：优先本地直通 dialog
   const activeAskDialog = useMemo(() => {
     if (activeAskWizard) return null; // 存在问答向导时优先展示向导
+    if (directDialog && dismissedAskIds.has(directDialog.request.id)) return null;
     if (directDialog) {
       return {
         request: directDialog.request,
@@ -261,7 +262,7 @@ export default function SessionScreen() {
     }
 
     return null;
-  }, [activeAskWizard, directDialog]);
+  }, [activeAskWizard, directDialog, dismissedAskIds]);
 
   // T7：composer/abort/edit 能力完全来自服务端 presentation.control（不再由 PID/name/window 推断）
   const control = session?.presentation?.control;
@@ -275,7 +276,8 @@ export default function SessionScreen() {
   // 否则仅记录已忽略状态（只读会话无法回传答案）。
   const handleAnswerWizard = async (answers: AskAnswer[]) => {
     if (!activeAskWizard) return;
-    markAsksDismissed(activeAskWizard.dismissIds);
+    const dismissIds = activeAskWizard.dismissIds.filter((id) => id !== activeAskWizard.requestId);
+    if (dismissIds.length > 0) markAsksDismissed(dismissIds);
 
     const payload = buildAskWizardPayload(answers);
     if (activeAskWizard.requestId) {
@@ -285,7 +287,8 @@ export default function SessionScreen() {
 
   const handleCancelWizard = () => {
     if (!activeAskWizard) return;
-    markAsksDismissed(activeAskWizard.dismissIds);
+    const dismissIds = activeAskWizard.dismissIds.filter((id) => id !== activeAskWizard.requestId);
+    if (dismissIds.length > 0) markAsksDismissed(dismissIds);
     if (activeAskWizard.requestId) cancelDialog(activeAskWizard.requestId);
   };
 

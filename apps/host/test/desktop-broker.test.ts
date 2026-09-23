@@ -181,6 +181,26 @@ describe("DesktopBroker", () => {
     expect(broker.registry.revision).toBe(1);
   });
 
+  it("propagates a Plugin Ask cancellation to Host and clears Broker state", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "maestro-broker-ask-cancel-"));
+    const frames: DesktopBrokerToHostFrame[] = [];
+    broker = new DesktopBroker({ pluginSocketPath: join(dir, "plugin.sock"), secret: "secret", brokerInstanceId: "broker-cancel", onFrame: (frame) => frames.push(frame) });
+    await broker.start();
+    client = new DesktopPluginIpcClient({
+      socketPath: join(dir, "plugin.sock"), secret: "secret", target, capabilities: ["ask-user-question"],
+      onRequest: async (request) => ({ type: "desktop_plugin_result", requestId: request.requestId, operation: request.operation.type, status: "observed" }),
+    });
+    await client.connect();
+    await waitFor(() => broker?.registry.resolve(target) !== undefined);
+    const request = { type: "desktop_ask_request" as const, requestId: "ask-cancel", toolCallId: "tool-cancel", questions: [{ question: "Cancel?" }], deadlineAt: Date.now() + 1000 };
+    await client.sendAskRequest(request);
+    await waitFor(() => broker?.pendingAskFrames().length === 1);
+    await client.sendAskCancellation(request);
+    await waitFor(() => frames.some((frame) => frame.type === "desktop_broker_ask_cancel"));
+    expect(frames).toContainEqual(expect.objectContaining({ type: "desktop_broker_ask_cancel", target, response: expect.objectContaining({ requestId: "ask-cancel", toolCallId: "tool-cancel", response: { id: "ask-cancel", cancelled: true } }) }));
+    expect(broker.pendingAskFrames()).toHaveLength(0);
+  });
+
   it("routes Plugin rejection as a correlated failed Host receipt", async () => {
     const dir = await mkdtemp(join(tmpdir(), "maestro-broker-ask-rejected-"));
     const frames: DesktopBrokerToHostFrame[] = [];

@@ -49,6 +49,7 @@ export interface DesktopPluginIpcServerOptions {
   onRuntimeStatus?: (target: DesktopPluginTarget, event: Extract<DesktopPluginEvent, { event: "runtime_status" }>) => void;
   onSessionSummary?: (target: DesktopPluginTarget, event: Extract<DesktopPluginEvent, { event: "session_summary" }>) => void;
   onAskRequest?: (target: DesktopPluginTarget, request: DesktopAskRequest) => void;
+  onAskResponse?: (target: DesktopPluginTarget, response: DesktopAskResponse) => void;
   onDisconnected?: (target: DesktopPluginTarget) => void;
 }
 
@@ -353,6 +354,14 @@ export class DesktopPluginIpcServer {
         this.sendError(connection, "invalid_frame", undefined);
         return;
       }
+      if (raw && typeof raw === "object" && (raw as { type?: unknown }).type === "desktop_ask_response") {
+        if (isDesktopPluginClientFrame(raw) && raw.type === "desktop_ask_response" && target) {
+          this.options.onAskResponse?.(target, validateDesktopPluginClientFrame(raw) as DesktopAskResponse);
+          return;
+        }
+        this.sendError(connection, "invalid_frame", undefined);
+        return;
+      }
       if (raw && typeof raw === "object" && (raw as { type?: unknown }).type === "desktop_ask_result") {
         if (isDesktopPluginClientFrame(raw) && raw.type === "desktop_ask_result") {
           transport?.handleAskResult(validateDesktopPluginClientFrame(raw) as DesktopAskResult);
@@ -634,6 +643,18 @@ export class DesktopPluginIpcClient {
     await this.connect();
     if (this.closed || !this.connection) throw new Error("desktop plugin disconnected");
     this.connection.send(request);
+  }
+
+  async sendAskCancellation(request: DesktopAskRequest): Promise<void> {
+    await this.connect();
+    if (this.closed || !this.connection) throw new Error("desktop plugin disconnected");
+    const response: DesktopAskResponse = {
+      type: "desktop_ask_response",
+      requestId: request.requestId,
+      toolCallId: request.toolCallId,
+      response: { id: request.requestId, cancelled: true },
+    };
+    this.connection.send(response);
   }
 
   close(): void {
