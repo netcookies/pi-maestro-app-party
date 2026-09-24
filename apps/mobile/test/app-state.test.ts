@@ -41,6 +41,50 @@ describe("AppState reducer", () => {
     expect(state.dialogs).toEqual([]);
   });
 
+  it("stores authoritative execution summaries by exact target and ignores stale revisions", () => {
+    const first = { sessionId: "execution", endpointId: "endpoint-a", normalizedCwd: "/work", processGeneration: "generation-1" };
+    const sibling = { ...first, endpointId: "endpoint-b", processGeneration: "generation-2" };
+    const summary = (target: typeof first, revision: number, workspaceId: string) => ({
+      target, revision, todos: [], teammate: { running: 0, total: 0, agents: [] },
+      workspace: { workspaceId }, backgroundJobs: [],
+    });
+    let state = createInitialState();
+    state = reduceEvent(state, { type: "session_execution_updated", summary: summary(first, 2, "first"), seq: 1 });
+    state = reduceEvent(state, { type: "session_execution_updated", summary: summary(sibling, 1, "sibling"), seq: 1 });
+    state = reduceEvent(state, { type: "session_execution_updated", summary: summary(first, 1, "stale"), seq: 2 });
+    expect(state.sessionExecutionSummaries.get(JSON.stringify([first.sessionId, first.endpointId, first.normalizedCwd, first.processGeneration]))?.workspace?.workspaceId).toBe("first");
+    expect(state.sessionExecutionSummaries.get(JSON.stringify([sibling.sessionId, sibling.endpointId, sibling.normalizedCwd, sibling.processGeneration]))?.workspace?.workspaceId).toBe("sibling");
+  });
+
+  it("fails closed without an exact session target and selects only the current target", async () => {
+    const { selectExecutionSummaryForSession } = await import("../src/session-execution");
+    const first = { sessionId: "execution-select", endpointId: "endpoint-a", normalizedCwd: "/work", processGeneration: "generation-1" };
+    const sibling = { ...first, endpointId: "endpoint-b", processGeneration: "generation-2" };
+    const summary = { target: first, revision: 1, todos: [], teammate: { running: 0, total: 0, agents: [] }, backgroundJobs: [] };
+    let state = createInitialState();
+    expect(selectExecutionSummaryForSession(state, JSON.stringify([first.sessionId, first.endpointId, first.normalizedCwd, first.processGeneration]))).toBeUndefined();
+    state = reduceEvent(state, { type: "session_execution_updated", summary, seq: 1 });
+    expect(selectExecutionSummaryForSession(state, JSON.stringify([sibling.sessionId, sibling.endpointId, sibling.normalizedCwd, sibling.processGeneration]))).toBeUndefined();
+    expect(selectExecutionSummaryForSession(state, JSON.stringify([first.sessionId, first.endpointId, first.normalizedCwd, first.processGeneration]))).toBe(summary);
+  });
+
+  it("routes a targeted session_error into only that session timeline", () => {
+    const target = { sessionId: "error-session", endpointId: "desktop-a", normalizedCwd: "/work", processGeneration: "g1" };
+    const sibling = { ...target, endpointId: "desktop-b", processGeneration: "g2" };
+    let state = createInitialState();
+    state = reduceEvent(state, {
+      type: "session_error",
+      sessionId: target.sessionId,
+      target,
+      error: { source: "provider", code: "bad_response_status_code", message: "openai_error", httpStatus: 400 },
+      seq: 9,
+    });
+    const key = JSON.stringify([target.sessionId, target.endpointId, target.normalizedCwd, target.processGeneration]);
+    const siblingKey = JSON.stringify([sibling.sessionId, sibling.endpointId, sibling.normalizedCwd, sibling.processGeneration]);
+    expect(state.targetedTimelines.get(key)?.[0]).toMatchObject({ error: { httpStatus: 400 }, status: "failed" });
+    expect(state.targetedTimelines.has(siblingKey)).toBe(false);
+  });
+
   it("handles host_status event", () => {
     const state = reduceEvent(createInitialState(), {
       type: "host_status",

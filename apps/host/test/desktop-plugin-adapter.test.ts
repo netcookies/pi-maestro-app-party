@@ -194,6 +194,17 @@ describe("DesktopPiSessionAdapter", () => {
     expect(ask.pendingCount).toBe(0);
   });
 
+  it("preserves structured details from a plugin command exception", async () => {
+    const adapter = new DesktopPiSessionAdapter({
+      prompt: async () => { throw Object.assign(new Error('provider API error (400): {"message":"bad request","type":"provider_error","code":"bad_request"}'), { status: 400, provider: "provider-x" }); },
+      steer: async () => {}, followUp: async () => {}, abort: () => {}, getAllTools: () => [],
+    }, target);
+    const result = await adapter.execute(request({ type: "prompt", message: "hello" }));
+    expect(result).toMatchObject({ status: "failed", error: { code: "plugin_command_failed", message: "bad request", details: {
+      source: "extension", provider: "provider-x", httpStatus: 400, type: "provider_error", message: "bad request",
+    } } });
+  });
+
   it("reports accepted instead of observed for fire-and-forget user delivery", async () => {
     const adapter = new DesktopPiSessionAdapter({
       prompt: async () => {},
@@ -203,9 +214,7 @@ describe("DesktopPiSessionAdapter", () => {
       getAllTools: () => [],
     }, target);
 
-    await expect(adapter.execute(request({ type: "prompt", message: "hello" }))).resolves.toMatchObject({
-      status: "accepted",
-    });
+    await expect(adapter.execute(request({ type: "prompt", message: "hello" }))).resolves.toMatchObject({ status: "accepted" });
   });
   it("reports accepted for steer and follow-up fire-and-forget delivery", async () => {
     const adapter = new DesktopPiSessionAdapter({

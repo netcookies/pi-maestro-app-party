@@ -1,5 +1,6 @@
 import type { DesktopAskRequest, DesktopAskResponse, DesktopPluginCapability, DesktopPluginModel, DesktopPluginRequest, DesktopPluginResult, DesktopPluginTarget, JsonValue } from "@maestro-mobile/shared";
 import { DesktopFlowAskAdapter } from "./desktop-flow-ask-adapter.js";
+import { normalizeHostError } from "../host-error.js";
 
 export interface DesktopPiSessionApi {
   prompt(message: string, images?: unknown[]): Promise<void>;
@@ -135,7 +136,10 @@ export class DesktopPiSessionAdapter {
       }
       return { type: "desktop_plugin_result", requestId: request.requestId, operation, status: "observed" };
     } catch (error) {
-      return { type: "desktop_plugin_result", requestId: request.requestId, operation, status: "failed", error: { code: errorCodeOf(error), message: error instanceof Error ? error.message : undefined } };
+      const normalized = normalizeHostError(error, "extension");
+      return { type: "desktop_plugin_result", requestId: request.requestId, operation, status: "failed", error: {
+        code: errorCodeOf(error), message: normalized.message, details: normalized,
+      } };
     }
   }
 

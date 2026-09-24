@@ -1,4 +1,5 @@
-import type { JsonValue, OperationReceipt, OperationStatus } from "@maestro-mobile/shared";
+import type { HostError, JsonValue, OperationReceipt, OperationStatus } from "@maestro-mobile/shared";
+import { normalizeHostError } from "../host-error.js";
 import { IdempotencyLedger } from "../control/idempotency-ledger.js";
 import type { SessionDirectory, SessionTargetIdentity } from "../control/SessionDirectory.js";
 
@@ -16,7 +17,7 @@ export interface SessionCommand {
 }
 
 export interface CommandResult extends OperationReceipt {
-  error?: { code: string; message?: string };
+  error?: { code: string; message?: string; details?: HostError };
   result?: JsonValue;
 }
 
@@ -33,7 +34,7 @@ function result(
   command: SessionCommand,
   revision: number,
   status: OperationStatus,
-  error?: { code: string; message?: string },
+  error?: { code: string; message?: string; details?: HostError },
 ): CommandResult {
   return {
     requestId: command.requestId,
@@ -64,8 +65,9 @@ export class SessionCommandService {
         try {
           const response = await this.desktopGateway.execute(command);
           return { ...response, requestId: command.requestId, operation: command.kind, revision: this.directory.revision };
-        } catch {
-          return result(command, this.directory.revision, "unknown", { code: "desktop_confirmation_unavailable" });
+        } catch (error) {
+          const details = normalizeHostError(error, "transport");
+          return result(command, this.directory.revision, "unknown", { code: details.code, message: details.message, details });
         }
       }
 
@@ -87,8 +89,9 @@ export class SessionCommandService {
           if (!changed.ok) return result(command, this.directory.revision, "failed", { code: changed.error ?? "thinking_change_failed" });
         } else await runner.abort();
         return result(command, this.directory.revision, "observed");
-      } catch {
-        return result(command, this.directory.revision, "failed", { code: "host_command_failed" });
+      } catch (error) {
+        const details = normalizeHostError(error, "command");
+        return result(command, this.directory.revision, "failed", { code: details.code, message: details.message, details });
       }
     });
   }

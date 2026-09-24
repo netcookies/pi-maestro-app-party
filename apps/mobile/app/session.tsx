@@ -12,7 +12,7 @@ import { LineIcon } from "../src/components/LineIcon";
 import { useI18n } from "../src/i18n";
 import { hapticImpactLight, hapticImpactMedium, hapticNotificationSuccess } from "../src/utils/haptics";
 import { SafeAreaView, useSafeAreaInsets } from "react-native-safe-area-context";
-import { sessionTargetKey, type TimelineItem } from "@maestro-mobile/shared";
+import { sessionTargetKey } from "@maestro-mobile/shared";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { ExtensionUiDialog } from "../src/components/ExtensionUiDialog";
 import { AskWizardDialog, type AskAnswer } from "../src/components/AskWizardDialog";
@@ -20,11 +20,15 @@ import { selectActiveAskWizard, buildAskWizardPayload } from "../src/ask-wizard"
 import { setActiveViewingSession } from "../src/notifications";
 import { InlineImage } from "../src/components/InlineImage";
 import { CollapsibleTool } from "../src/components/CollapsibleTool";
+import { SessionErrorBlock } from "../src/components/SessionErrorBlock";
 import { ChatMarkdown } from "../src/components/chat/ChatMarkdown";
 import { splitImageSegments } from "../src/image-paths";
 import { ChatComposer } from "../src/components/ChatComposer";
 import { pickImagesFromLibrary } from "../src/image-picker";
+import { selectExecutionSummaryForSession, executionTodoCounts } from "../src/session-execution";
 import { SpringBottomSheet } from "../src/components/SpringBottomSheet";
+import { buildTimelineRows, type TimelineRow } from "../src/timeline-rows";
+import { ToolCallGroup } from "../src/components/ToolCallGroup";
 
 // Android 需显式开启 LayoutAnimation（模块加载时一次性开启，置于组件外）
 if (Platform.OS === "android" && UIManager.setLayoutAnimationEnabledExperimental) {
@@ -33,7 +37,7 @@ if (Platform.OS === "android" && UIManager.setLayoutAnimationEnabledExperimental
 
 /** 加载更早按钮的虚拟行 id（独立于 TimelineItem 类型，不再 as 欺骗） */
 const LOAD_MORE_ID = "__load_more__";
-type ListRow = TimelineItem | { id: typeof LOAD_MORE_ID; __virtual: true };
+type ListRow = TimelineRow | { type: "load_more"; id: typeof LOAD_MORE_ID };
 
 function modelIdOf(value: unknown): string | undefined {
   if (typeof value === "string" && value.length > 0) return value;
@@ -57,8 +61,22 @@ export default function SessionScreen() {
   const { theme } = useTheme();
   const { t } = useI18n();
   const cfg = getConfig();
-  const session = (targetKey ? state.targetedSessions.get(targetKey) : undefined) ?? state.sessions.get(id ?? "");
+  const session = targetKey
+    ? state.targetedSessions.get(targetKey)
+    : state.sessions.get(id ?? "");
   const insets = useSafeAreaInsets();
+
+  const [executionDetailsOpen, setExecutionDetailsOpen] = useState(false);
+  const [detailsExpanded, setDetailsExpanded] = useState(false);
+  const detailLimit = detailsExpanded ? 20 : 5;
+  const executionSummary = selectExecutionSummaryForSession(state, targetKey);
+  const executionTodoCount = executionSummary ? executionTodoCounts(executionSummary) : null;
+  const executionJobs = executionSummary?.backgroundJobs ?? [];
+  const executionDetails = executionSummary ? [
+    { title: `Todo (${executionSummary.todos.length})`, items: executionSummary.todos.map((item) => `${item.subject} · ${item.status}`), count: executionSummary.todos.length },
+    { title: `Teammate (${executionSummary.teammate.agents.length})`, items: executionSummary.teammate.agents.map((item) => `${item.name} · ${item.status}`), count: executionSummary.teammate.agents.length },
+    { title: `Background (${executionJobs.length})`, items: executionJobs.map((item) => `${item.label ?? item.id} · ${item.status}`), count: executionJobs.length },
+  ] : [];
 
   // 统一的 FAB（回到底部向下箭头）显示状态判定逻辑
   const updateFabState = useCallback((y: number, contentH: number, viewH: number) => {
@@ -211,7 +229,14 @@ export default function SessionScreen() {
   };
 
   const styles = useMemo(() => makeStyles(theme), [theme]);
-  const timeline = (targetKey ? state.targetedTimelines.get(targetKey) : undefined) ?? state.timelines.get(id ?? "") ?? [];
+  const timeline = targetKey
+    ? (state.targetedTimelines.get(targetKey) ?? [])
+    : (state.timelines.get(id ?? "") ?? []);
+  const timelineRows = useMemo(() => buildTimelineRows(timeline), [timeline]);
+  const renderedRows = useMemo<ListRow[]>(
+    () => hasMore ? [{ type: "load_more", id: LOAD_MORE_ID }, ...timelineRows] : timelineRows,
+    [hasMore, timelineRows],
+  );
   const [dismissedAskIds, setDismissedAskIds] = useState<Set<string>>(new Set());
 
   // 恢复已忽略或已完成的 ask 交互 ID，重启 app 后不重复弹出
@@ -464,8 +489,7 @@ export default function SessionScreen() {
   }, []);
 
   const renderItem = ({ item, index }: { item: ListRow; index: number }) => {
-    // 虚拟行：顶部“加载更早”按钮（参与正常 cell 测量，避免 header 高度错乱）
-    if (item.id === LOAD_MORE_ID) {
+    if (item.type === "load_more") {
       return hasMore ? (
         <View style={styles.loadMoreWrap}>
           {loadingMore ? (
@@ -478,7 +502,10 @@ export default function SessionScreen() {
         </View>
       ) : null;
     }
-    const timelineItem = item as TimelineItem;
+    if (item.type === "tool_group") {
+      return <ToolCallGroup items={item.items} status={item.status} invocationCount={item.invocationCount} />;
+    }
+    const timelineItem = item.item;
     const isUser = timelineItem.kind === "user";
     const isTool = timelineItem.kind === "tool";
     const isThinking = timelineItem.kind === "thinking";
@@ -490,6 +517,14 @@ export default function SessionScreen() {
       : timelineItem.text;
     const segments = splitImageSegments(displayText);
     const hasImages = imagePaths.length > 0 || segments.some((s) => s.type === "image");
+
+    if (timelineItem.error) {
+      return (
+        <View style={[styles.bubble, styles.bubbleAgent, { borderColor: theme.error, borderWidth: 1 }]}>
+          <SessionErrorBlock error={timelineItem.error} fallbackText={timelineItem.text} />
+        </View>
+      );
+    }
 
     // tool 消息：折叠/展开/全屏卡片（图片路径由 InlineImage 在展开区显示）
     if (isTool) {
@@ -514,7 +549,7 @@ export default function SessionScreen() {
       );
     }
 
-    const isLastAssistant = isAssistant && sending && typeof index === "number" && index === timeline.length - 1;
+    const isLastAssistant = isAssistant && sending && typeof index === "number" && index === renderedRows.length - 1;
 
     // 非 tool：普通气泡（长按呼出文本自由选择抽屉，右下角提供一键复制）
     return (
@@ -574,11 +609,11 @@ export default function SessionScreen() {
               accessibilityLabel={t.labelFastCopy}
             >
               <LineIcon
-                name={copiedId === item.id ? "check" : "copy"}
+                name={copiedId === timelineItem.id ? "check" : "copy"}
                 size={14}
-                color={copiedId === item.id ? theme.success : theme.dim ?? theme.muted}
+                color={copiedId === timelineItem.id ? theme.success : theme.dim ?? theme.muted}
               />
-              {copiedId === item.id && (
+              {copiedId === timelineItem.id && (
                 <Text style={[styles.copySuccessText, { color: theme.success }]}>{t.tabSessions === "会话" ? "已复制" : "Copied"}</Text>
               )}
             </TouchableOpacity>
@@ -627,6 +662,22 @@ export default function SessionScreen() {
           <LineIcon name="chevronDown" size={11} color={theme.accent} />
         </TouchableOpacity>
       </View>
+      {executionSummary && (
+        <ScrollView horizontal showsHorizontalScrollIndicator={false} style={[styles.executionChips, { borderBottomColor: theme.border }]} contentContainerStyle={styles.executionChipsContent}>
+          <TouchableOpacity onPress={() => setExecutionDetailsOpen(true)} style={[styles.executionChip, { backgroundColor: theme.cardBg, borderColor: theme.border }]} accessibilityRole="button" accessibilityLabel={`Todo ${executionTodoCount?.done ?? 0} of ${executionTodoCount?.total ?? 0}`}>
+            <Text style={[styles.executionChipText, { color: theme.text }]} numberOfLines={1}>Todo {executionTodoCount?.done ?? 0}/{executionTodoCount?.total ?? 0}</Text>
+          </TouchableOpacity>
+          <TouchableOpacity onPress={() => setExecutionDetailsOpen(true)} style={[styles.executionChip, { backgroundColor: theme.cardBg, borderColor: theme.border }]} accessibilityRole="button" accessibilityLabel={`Teammate ${executionSummary.teammate.running} running of ${executionSummary.teammate.total}`}>
+            <Text style={[styles.executionChipText, { color: theme.text }]} numberOfLines={1}>Teammate {executionSummary.teammate.running}/{executionSummary.teammate.total}</Text>
+          </TouchableOpacity>
+          {executionSummary.workspace && <TouchableOpacity onPress={() => setExecutionDetailsOpen(true)} style={[styles.executionChip, { backgroundColor: theme.cardBg, borderColor: theme.border }]} accessibilityRole="button" accessibilityLabel={`Workspace ${executionSummary.workspace.label ?? executionSummary.workspace.workspaceId ?? ""}`}>
+            <Text style={[styles.executionChipText, { color: theme.text }]} numberOfLines={1}>Workspace {executionSummary.workspace.label ?? executionSummary.workspace.workspaceId ?? "—"}</Text>
+          </TouchableOpacity>}
+          <TouchableOpacity onPress={() => setExecutionDetailsOpen(true)} style={[styles.executionChip, { backgroundColor: theme.cardBg, borderColor: theme.border }]} accessibilityRole="button" accessibilityLabel={`Background jobs ${executionJobs.length}`}>
+            <Text style={[styles.executionChipText, { color: theme.text }]} numberOfLines={1}>Bg {executionJobs.length}</Text>
+          </TouchableOpacity>
+        </ScrollView>
+      )}
 
       {/* 搜索条 */}
       {searchOpen && (
@@ -681,8 +732,8 @@ export default function SessionScreen() {
 
       <FlatList
         ref={listRef}
-        data={hasMore ? ([{ id: LOAD_MORE_ID, __virtual: true }] as ListRow[]).concat(timeline) : (timeline as ListRow[])}
-        keyExtractor={(item) => item.id}
+        data={renderedRows}
+        keyExtractor={(item) => item.type === "load_more" ? item.id : item.type === "tool_group" ? `tool-group:${item.id}` : item.item.id}
         renderItem={renderItem}
         ListEmptyComponent={
           <View style={styles.emptyWrap}>
@@ -792,6 +843,7 @@ export default function SessionScreen() {
           {showFab ? (
             <TouchableOpacity
               style={[styles.fab, { backgroundColor: theme.accent }]}
+              accessibilityRole="button"
               accessibilityLabel={t.labelScrollToBottom}
               hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}
               onPress={() => {
@@ -875,6 +927,29 @@ export default function SessionScreen() {
           onCancel={handleCancelAsk}
         />
       )}
+
+      <SpringBottomSheet
+        visible={executionDetailsOpen && Boolean(executionSummary)}
+        onClose={() => setExecutionDetailsOpen(false)}
+        contentHeight={Math.min(640, 180 + executionDetails.reduce((n, section) => n + Math.min(detailsExpanded ? 20 : 5, section.items.length) * 42, 0))}
+      >
+        {executionSummary && <View style={{ gap: 12 }}>
+          <View style={styles.sheetHeader}>
+            <Text style={[styles.sheetTitle, { color: theme.text }]}>Session execution</Text>
+            <TouchableOpacity onPress={() => setExecutionDetailsOpen(false)} accessibilityRole="button" accessibilityLabel={t.close}><LineIcon name="x" size={16} color={theme.muted} /></TouchableOpacity>
+          </View>
+          <Text style={[styles.sheetDesc, { color: theme.muted }]}>{isConnected ? `Revision ${executionSummary.revision}` : "Disconnected · showing last received summary"}</Text>
+          {executionDetails.map((section) => <View key={section.title} style={{ gap: 4 }}>
+            <Text style={[styles.sheetOptionText, { color: theme.accent }]}>{section.title}</Text>
+            {section.items.slice(0, detailLimit).map((item, index) => <Text key={`${section.title}-${index}`} style={[styles.sheetDesc, { color: theme.text }]} numberOfLines={2}>{item}</Text>)}
+            {section.items.length > detailLimit ? (
+              <TouchableOpacity onPress={() => setDetailsExpanded(true)} accessibilityRole="button" accessibilityLabel={`查看全部 ${Math.min(20, section.items.length)} 条 ${section.title}`}>
+                <Text style={[styles.sheetDesc, { color: theme.accent }]}>查看全部 {Math.min(20, section.items.length)} 条</Text>
+              </TouchableOpacity>
+            ) : null}
+          </View>)}
+        </View>}
+      </SpringBottomSheet>
 
       {/* 底部物理弹簧 ActionSheet: 思考等级、计划模式、Compact 二次确认 */}
       <SpringBottomSheet
@@ -1082,6 +1157,10 @@ export default function SessionScreen() {
 
 function makeStyles(theme: ReturnType<typeof useTheme>["theme"]) {
   return StyleSheet.create({
+    executionChips: { flexGrow: 0, maxHeight: 42, borderBottomWidth: StyleSheet.hairlineWidth },
+    executionChipsContent: { alignItems: "center", gap: 7, paddingHorizontal: MIUIX_SPACE.md, paddingVertical: 6 },
+    executionChip: { borderWidth: StyleSheet.hairlineWidth, borderRadius: MIUIX_RADIUS.pill, paddingHorizontal: 10, paddingVertical: 5, maxWidth: 190 },
+    executionChipText: { fontSize: MIUIX_TYPE.footnote2, fontWeight: "600" },
     container: { flex: 1, backgroundColor: theme.bg },
     header: {
       flexDirection: "row",

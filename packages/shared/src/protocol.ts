@@ -121,6 +121,23 @@ export interface ProtocolErrorFrame {
   supportedVersion: MobileProtocolVersion;
 }
 
+export interface HostError {
+  /** Stable source/provider code when supplied by the producer. */
+  code: string;
+  /** Human-readable, sanitized message. */
+  message: string;
+  source: "model" | "provider" | "command" | "transport" | "extension" | "protocol" | "tool";
+  /** Only present when the producer supplied an explicit HTTP status. */
+  httpStatus?: number;
+  provider?: string;
+  model?: string;
+  type?: string;
+  retryable?: boolean;
+  requestId?: string;
+  /** Bounded, sanitized diagnostic fields; secrets and raw response bodies are excluded. */
+  details?: JsonValue;
+}
+
 export interface CommandResult {
   type: "command_result";
   in_reply_to: string;
@@ -128,7 +145,7 @@ export interface CommandResult {
   status: OperationStatus;
   revision: number;
   result?: JsonValue;
-  error?: { code: string; message?: string };
+  error?: { code: string; message?: string; details?: HostError };
 }
 
 export type HostFrame = HostEvent | ProtocolReady | ProtocolErrorFrame | CommandResult;
@@ -145,6 +162,7 @@ export interface TimelineItem {
   toolArgs?: JsonValue;
   toolResult?: JsonValue;
   isError?: boolean;
+  error?: HostError;
   status?: "running" | "completed" | "failed";
   /** Host-cache absolute image paths; raw image bytes never travel in timeline events. */
   images?: string[];
@@ -279,6 +297,34 @@ export interface LiveSessionList {
   liveCount: number;
 }
 
+export interface BackgroundJobSummary {
+  id: string;
+  status: "queued" | "running" | "completed" | "failed" | "cancelled" | "unknown";
+  label?: string;
+  startedAt?: string;
+  finishedAt?: string;
+  progress?: number;
+  error?: HostError;
+}
+
+/** Session-scoped execution data. The target is mandatory to prevent heuristic attribution. */
+export interface SessionExecutionSummary {
+  target: SessionTargetIdentity;
+  revision: number;
+  todos: MonitorTodoSummary[];
+  teammate: {
+    running: number;
+    total: number;
+    agents: TeammateAgentState[];
+  };
+  workspace?: {
+    label?: string;
+    workspaceId?: string;
+    ownerId?: string;
+  };
+  backgroundJobs: BackgroundJobSummary[];
+}
+
 /** Teammate/Monitor 合同：workspace owner 运行时状态（pi-maestro-teammate 持久化） */
 export interface WorkspaceOwnerState {
   workspaceId: string;
@@ -395,7 +441,7 @@ export interface TeammateAgentsFacet {
   revision: string;
   data: {
     agents: TeammateAgentState[];
-    backgroundJobs: JsonValue[];
+    backgroundJobs: BackgroundJobSummary[];
     contextPressure?: JsonValue;
   };
 }
@@ -531,7 +577,9 @@ export type HostEvent =
    */
   | { type: "timeline_delta"; sessionId: string; itemId: string; delta: string; target?: SessionTargetIdentity; seq: number }
   | { type: "raw_event"; sessionId: string; event: JsonValue; target?: SessionTargetIdentity; seq: number }
-  | { type: "command_error"; sessionId: string; command: string; message: string; target?: SessionTargetIdentity; seq: number }
+  | { type: "command_error"; sessionId: string; command: string; message: string; error?: HostError; target?: SessionTargetIdentity; seq: number }
+  | { type: "session_error"; sessionId: string; error: HostError; target?: SessionTargetIdentity; seq: number }
+  | { type: "session_execution_updated"; summary: SessionExecutionSummary; seq: number }
   | { type: "extension_ui_request"; sessionId: string; request: ExtensionUiRequest; target?: SessionTargetIdentity; seq: number }
   | { type: "extension_ui_cleared"; sessionId: string; requestId: string; target?: SessionTargetIdentity; seq: number }
   | { type: "maestro_state"; state: MaestroState; seq: number }
@@ -656,7 +704,13 @@ export function isHostEvent(value: unknown): value is HostEvent {
         && (value.target === undefined || isSessionTargetIdentity(value.target));
     case "command_error":
       return isString(value.sessionId) && isString(value.command) && isString(value.message)
+        && (value.error === undefined || isHostError(value.error))
         && (value.target === undefined || isSessionTargetIdentity(value.target));
+    case "session_error":
+      return isString(value.sessionId) && isHostError(value.error)
+        && (value.target === undefined || (isSessionTargetIdentity(value.target) && value.target.sessionId === value.sessionId));
+    case "session_execution_updated":
+      return isSessionExecutionSummary(value.summary);
     case "extension_ui_request":
       return isString(value.sessionId) && isRecord(value.request)
         && (value.target === undefined || isSessionTargetIdentity(value.target));
@@ -746,7 +800,11 @@ export function isHostFrame(value: unknown): value is HostFrame {
   }
   if (value.type === "command_result") {
     return isString(value.in_reply_to) && typeof value.ok === "boolean"
-      && isOperationStatus(value.status) && isFiniteNumber(value.revision);
+      && isOperationStatus(value.status) && isFiniteNumber(value.revision)
+      && (value.error === undefined || (isRecord(value.error)
+        && isString(value.error.code)
+        && optionalString(value.error.message)
+        && (value.error.details === undefined || isHostError(value.error.details))));
   }
   return false;
 }
@@ -768,6 +826,63 @@ function isOperationStatus(value: unknown): value is OperationStatus {
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+export function isHostError(value: unknown): value is HostError {
+  if (!isRecord(value) || !isString(value.code) || !isString(value.message)) return false;
+  if (value.source !== "model" && value.source !== "provider" && value.source !== "command"
+    && value.source !== "transport" && value.source !== "extension" && value.source !== "protocol"
+    && value.source !== "tool") return false;
+  if (value.httpStatus !== undefined
+    && (!isFiniteNumber(value.httpStatus) || !Number.isInteger(value.httpStatus) || value.httpStatus < 100 || value.httpStatus > 599)) return false;
+  if (value.provider !== undefined && !isString(value.provider)) return false;
+  if (value.model !== undefined && !isString(value.model)) return false;
+  if (value.type !== undefined && !isString(value.type)) return false;
+  if (value.retryable !== undefined && typeof value.retryable !== "boolean") return false;
+  if (value.requestId !== undefined && !isString(value.requestId)) return false;
+  return value.details === undefined || isRecord(value.details);
+}
+
+export function isBackgroundJobSummary(value: unknown): value is BackgroundJobSummary {
+  if (!isRecord(value) || !isString(value.id)) return false;
+  if (value.status !== "queued" && value.status !== "running" && value.status !== "completed"
+    && value.status !== "failed" && value.status !== "cancelled" && value.status !== "unknown") return false;
+  if (value.label !== undefined && !isString(value.label)) return false;
+  if (value.startedAt !== undefined && !isString(value.startedAt)) return false;
+  if (value.finishedAt !== undefined && !isString(value.finishedAt)) return false;
+  if (value.progress !== undefined && (!isFiniteNumber(value.progress) || value.progress < 0 || value.progress > 1)) return false;
+  return value.error === undefined || isHostError(value.error);
+}
+
+function isSessionExecutionSummary(value: unknown): value is SessionExecutionSummary {
+  if (!isRecord(value) || !isSessionTargetIdentity(value.target) || !isFiniteNumber(value.revision) || value.revision < 0
+    || !Array.isArray(value.todos) || !value.todos.every(isMonitorTodoSummary)
+    || !isRecord(value.teammate) || !isFiniteNumber(value.teammate.running) || value.teammate.running < 0
+    || !Number.isInteger(value.teammate.running) || !isFiniteNumber(value.teammate.total) || value.teammate.total < 0
+    || !Number.isInteger(value.teammate.total) || value.teammate.running > value.teammate.total
+    || !Array.isArray(value.teammate.agents) || !value.teammate.agents.every(isTeammateAgentState)
+    || !Array.isArray(value.backgroundJobs) || !value.backgroundJobs.every(isBackgroundJobSummary)) return false;
+  if (value.workspace !== undefined && (!isRecord(value.workspace)
+    || (value.workspace.label !== undefined && !isString(value.workspace.label))
+    || (value.workspace.workspaceId !== undefined && !isString(value.workspace.workspaceId))
+    || (value.workspace.ownerId !== undefined && !isString(value.workspace.ownerId))
+    || ![value.workspace.label, value.workspace.workspaceId, value.workspace.ownerId].some(isString))) return false;
+  return true;
+}
+
+function isMonitorTodoSummary(value: unknown): value is MonitorTodoSummary {
+  return isRecord(value) && isString(value.id) && isString(value.subject) && isString(value.status)
+    && isFiniteNumber(value.updatedAt) && (value.assigneeLabel === undefined || isString(value.assigneeLabel));
+}
+
+function isTeammateAgentState(value: unknown): value is TeammateAgentState {
+  if (!isRecord(value)) return false;
+  const hasIdentity = [value.correlationId, value.name, value.agent].some(isString);
+  return hasIdentity && isString(value.status)
+    && [value.correlationId, value.name, value.agent, value.status, value.phase]
+    .every((field) => field === undefined || isString(field))
+    && (value.outputTail === undefined || isStringArray(value.outputTail))
+    && (value.pendingInteractions === undefined || (isFiniteNumber(value.pendingInteractions) && value.pendingInteractions >= 0));
 }
 
 export function isSessionTargetIdentity(value: unknown): value is SessionTargetIdentity {

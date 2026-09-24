@@ -1,11 +1,12 @@
 import type {
   ExtensionUiResponse,
   JsonValue,
+  HostError,
   OperationStatus,
   SessionRuntimeStatus,
   SessionSummaryPatch,
 } from "./protocol.js";
-import { isSessionSummaryPatch } from "./protocol.js";
+import { isSessionSummaryPatch, isHostError } from "./protocol.js";
 
 /**
  * Bump only for a breaking wire change. Additive events require ready.supportedEvents negotiation.
@@ -167,7 +168,7 @@ export interface DesktopPluginResult {
   operation: string;
   status: Extract<OperationStatus, "accepted" | "observed" | "failed" | "unknown">;
   result?: JsonValue;
-  error?: { code: string; message?: string };
+  error?: { code: string; message?: string; details?: HostError };
 }
 
 export interface DesktopPluginError {
@@ -233,7 +234,8 @@ export function isDesktopPluginResult(value: unknown): value is DesktopPluginRes
     && stringFields(value, "requestId", "operation")
     && (value.status === "accepted" || value.status === "observed" || value.status === "failed" || value.status === "unknown")
     && (value.result === undefined || isJsonValue(value.result))
-    && (value.error === undefined || (isRecord(value.error) && typeof value.error.code === "string" && (value.error.message === undefined || typeof value.error.message === "string")));
+    && (value.error === undefined || (isRecord(value.error) && typeof value.error.code === "string" && (value.error.message === undefined || typeof value.error.message === "string")
+      && (value.error.details === undefined || isHostError(value.error.details))));
 }
 export function isDesktopAskResult(value: unknown): value is DesktopAskResult {
   return isRecord(value)

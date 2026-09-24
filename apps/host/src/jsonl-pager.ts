@@ -18,6 +18,7 @@
 import { open } from "node:fs/promises";
 import type { TimelineItem, JsonValue } from "@maestro-mobile/shared";
 import { imageBlocksFromContent, materializeImages } from "./image-cache.js";
+import { normalizeHostError } from "./host-error.js";
 
 export interface PageResult {
   items: TimelineItem[];
@@ -264,7 +265,10 @@ function parseMessageLineItems(
   }
   if (role === "assistant" || role === "system") {
     const items: TimelineItem[] = [];
-    if (text) items.push({ id: `replay-assistant-${index}`, kind: "assistant", text, createdAt });
+    if (role === "assistant" && (msg.stopReason === "error" || typeof msg.errorMessage === "string")) {
+      const error = normalizeHostError(typeof msg.errorMessage === "string" ? msg.errorMessage : text || "Provider error");
+      items.push({ id: `replay-assistant-${index}`, kind: "assistant", text: error.message, createdAt, error, status: "failed" });
+    } else if (text) items.push({ id: `replay-assistant-${index}`, kind: "assistant", text, createdAt });
     for (const callItem of toolCallItems(msg.content, createdAt, seenToolResults, index)) {
       items.push(callItem);
     }

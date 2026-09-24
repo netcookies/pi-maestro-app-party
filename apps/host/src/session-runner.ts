@@ -15,6 +15,7 @@ import { readSessionUsage } from "./usage-reader.js";
 import { MobileExtensionUiBridge } from "./mobile-ui-context.js";
 import { imageBlocksFromContent, materializeImages } from "./image-cache.js";
 import { JsonlTailWatcher } from "./jsonl-tail-watcher.js";
+import { normalizeHostError } from "./host-error.js";
 
 const HISTORY_PAGE_SIZE = 80;
 /**
@@ -622,9 +623,16 @@ export class SdkSessionRunner implements SessionRunner {
     const id = this.ensureLiveId(message);
     if (!id) return undefined;
     const text = extractText(message.content);
-    if (!text) return undefined;
+    if (!text && message.stopReason !== "error" && typeof message.errorMessage !== "string") return undefined;
     this.lastSentText.delete(id);
-    return { id, kind, text, createdAt: timestamp };
+    const item: TimelineItem = { id, kind, text, createdAt: timestamp };
+    if (kind === "assistant" && (message.stopReason === "error" || typeof message.errorMessage === "string")) {
+      const error = normalizeHostError(typeof message.errorMessage === "string" ? message.errorMessage : text || "Provider error");
+      item.text = error.message;
+      item.error = error;
+      item.status = "failed";
+    }
+    return item;
   }
 
   /** 终态条目按 id 替换（同一消息更新时避免重复） */

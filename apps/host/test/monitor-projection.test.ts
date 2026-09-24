@@ -32,6 +32,28 @@ describe("inspectWindowExecutionState & projectWindow", () => {
     expect(projected.facets[0]).toMatchObject({ target: { identity: { ownerNonce: "restart-2" } } });
   });
 
+  it("projects only bounded, approved background job fields", () => {
+    const projected = projectWindow(makeOwner({
+      backgroundJobs: [
+        { id: "job-1", status: "running", label: "Build", command: "secret command", token: "do-not-project" },
+        { id: "job-2", status: "failed", name: "Test", progress: 2 },
+        { status: "running", label: "missing id" },
+      ],
+    }));
+    expect(projected.facets[0]?.data.backgroundJobs).toEqual([
+      { id: "job-1", status: "running" },
+      { id: "job-2", status: "failed" },
+    ]);
+    expect(projected.todos).toEqual([]);
+  });
+
+  it("does not attach workspace telemetry to an exact session target without an authoritative mapping", () => {
+    const projected = projectWindow(makeOwner());
+    expect(projected.target).toBeUndefined();
+    expect(projected.sessionId).toBe("sess-12345678-abcd");
+    expect(projected.identity).not.toHaveProperty("processGeneration");
+  });
+
   it("does not keep an ask after agent_end", () => {
     const projected = projectWindow(makeOwner({
       mainProgress: {

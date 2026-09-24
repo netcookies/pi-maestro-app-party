@@ -5,7 +5,7 @@
  *  - outputTail 截断至有界行数/宽度，避免 WS 广播无界数据
  *  - 变更检测使用稳定键（不含 ageMs/observedAt 等时间派生字段）
  */
-import type { HostEvent, MonitorState, MonitorWindowSummary, SessionRuntimeStatus, TeammateAgentState, TeammateAgentsFacet, WorkspaceOwnerState, WorkspaceTelemetryState } from "@maestro-mobile/shared";
+import type { BackgroundJobSummary, HostEvent, MonitorState, MonitorWindowSummary, SessionRuntimeStatus, TeammateAgentState, TeammateAgentsFacet, WorkspaceOwnerState, WorkspaceTelemetryState } from "@maestro-mobile/shared";
 import { projectOwnerPresentation } from "./application/session-visibility.js";
 
 /** outputTail 广播上限：每 agent 最多 8 行、每行 200 字符 */
@@ -21,6 +21,26 @@ function truncateTail(lines: unknown): string[] | undefined {
     .slice(-OUTPUT_TAIL_MAX_LINES)
     .map((l) => String(l).slice(0, OUTPUT_TAIL_MAX_CHARS));
   return tail.length > 0 ? tail : undefined;
+}
+
+function projectBackgroundJob(value: unknown): BackgroundJobSummary | null {
+  if (typeof value !== "object" || value === null) return null;
+  const d = value as Record<string, unknown>;
+  const id = typeof d.id === "string" ? d.id : "";
+  if (!id) return null;
+  const rawStatus = typeof d.status === "string" ? d.status : "unknown";
+  const status: BackgroundJobSummary["status"] = rawStatus === "queued" || rawStatus === "running"
+    || rawStatus === "completed" || rawStatus === "failed" || rawStatus === "cancelled"
+    ? rawStatus
+    : "unknown";
+  return { id, status };
+}
+
+function projectBackgroundJobs(values: unknown): BackgroundJobSummary[] {
+  if (!Array.isArray(values)) return [];
+  return values.slice(0, 8)
+    .map(projectBackgroundJob)
+    .filter((job): job is BackgroundJobSummary => job !== null);
 }
 
 function projectAgent(a: unknown): TeammateAgentState | null {
@@ -210,7 +230,7 @@ export function projectWindow(o: WorkspaceOwnerState): MonitorWindowSummary {
     revision: `${o.ownerId}:${o.ownerNonce ?? ""}:${o.sessionId}`,
     data: {
       agents,
-      backgroundJobs: Array.isArray(o.backgroundJobs) ? o.backgroundJobs.slice(0, 8) : [],
+      backgroundJobs: projectBackgroundJobs(o.backgroundJobs),
       contextPressure: o.contextPressure,
     },
   };

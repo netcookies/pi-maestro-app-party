@@ -12,6 +12,7 @@ import type {
 import { IdempotencyLedger } from "../control/idempotency-ledger.js";
 import type { SessionCommand, CommandResult, DesktopControlGateway } from "../application/session-command-service.js";
 import type { SessionTargetIdentity } from "../control/SessionDirectory.js";
+import { normalizeHostError } from "../host-error.js";
 const DEFAULT_GATEWAY_DEADLINE_MS = 2_000;
 
 interface DesktopPluginRegistryLike {
@@ -109,8 +110,9 @@ export class DesktopControlGatewayService implements DesktopControlGateway {
           ...(response.error ? { error: response.error } : {}),
         };
       } catch (error) {
-        const code = error instanceof Error && error.message.includes("deadline") ? "deadline_exceeded" : "desktop_confirmation_unavailable";
-        return { requestId: command.requestId, operation: command.kind, status: "unknown", revision: this.registry.revision, error: { code } };
+        const details = normalizeHostError(error, "transport");
+        const code = error instanceof Error && error.message.includes("deadline") ? "deadline_exceeded" : details.code;
+        return { requestId: command.requestId, operation: command.kind, status: "unknown", revision: this.registry.revision, error: { code, message: details.message, details } };
       }
     });
   }

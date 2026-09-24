@@ -221,6 +221,16 @@ describe("P1-1: live 会话 timeline 投影", () => {
     await runner.dispose();
   });
 
+  it("projects assistant provider errors as structured failed timeline items", async () => {
+    const runtime = makeRuntime(path);
+    const runner = await openRunner(runtime);
+    runtime.emit("assistant", "Error: my-sub2api-opencode API error (400): {\"message\":\"openai_error\",\"type\":\"bad_response_status_code\",\"code\":\"bad_response_status_code\"}", 1756800100001, { stopReason: "error", errorMessage: "Error: my-sub2api-opencode API error (400): {\"message\":\"openai_error\",\"type\":\"bad_response_status_code\",\"code\":\"bad_response_status_code\"}" });
+    expect(runner.snapshot().timeline.at(-1)).toMatchObject({
+      kind: "assistant", text: "openai_error", status: "failed",
+      error: { source: "provider", provider: "my-sub2api-opencode", httpStatus: 400, type: "bad_response_status_code", code: "bad_response_status_code" },
+    });
+    await runner.dispose();
+  });
   it("preserves the exact directory presentation in subsequent session updates", async () => {
     const runtime = makeRuntime(path);
     const runner = await openRunner(runtime);

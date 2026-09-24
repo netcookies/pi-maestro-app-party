@@ -1,6 +1,9 @@
 import { describe, expect, it } from "vitest";
 import {
   isHostEvent,
+  isHostFrame,
+  isBackgroundJobSummary,
+  isSessionTargetIdentity,
   isClientCommand,
   type HostEvent,
   type ClientCommand,
@@ -39,6 +42,39 @@ describe("protocol", () => {
       target: { sessionId: "s1", endpointId: "e1", normalizedCwd: "/work/app", processGeneration: "g1" },
       patch: { messageCount: -1 }, revision: 2, seq: 1,
     })).toBe(false);
+  });
+
+  it("accepts legacy command errors and validates additive structured errors", () => {
+    expect(isHostEvent({ type: "command_error", sessionId: "s1", command: "prompt", message: "failed", seq: 1 })).toBe(true);
+    const error = {
+      code: "bad_response_status_code",
+      type: "bad_response_status_code",
+      message: "openai_error",
+      source: "provider",
+      provider: "my-sub2api-opencode",
+      httpStatus: 400,
+    };
+    expect(isHostEvent({ type: "session_error", sessionId: "s1", target: { sessionId: "s1", endpointId: "e1", normalizedCwd: "/work", processGeneration: "g1" }, error, seq: 2 })).toBe(true);
+    expect(isHostEvent({ type: "session_error", sessionId: "s1", error: { ...error, httpStatus: 99 }, seq: 2 })).toBe(false);
+    expect(isHostEvent({ type: "session_error", sessionId: "s1", target: { sessionId: "other", endpointId: "e1", normalizedCwd: "/work", processGeneration: "g1" }, error, seq: 2 })).toBe(false);
+    expect(isHostFrame({ type: "command_result", in_reply_to: "c1", ok: false, status: "failed", revision: 1, error: { code: "provider_error", details: error } })).toBe(true);
+  });
+
+  it("requires complete target identity for session execution summaries", () => {
+    const summary = {
+      target: { sessionId: "s1", endpointId: "e1", normalizedCwd: "/work", processGeneration: "g1" },
+      revision: 1,
+      todos: [],
+      teammate: { running: 1, total: 1, agents: [{ agent: "planner", status: "running" }] },
+      workspace: { label: "@main·7c268c" },
+      backgroundJobs: [{ id: "bg1", status: "running" }],
+    };
+    expect(isSessionTargetIdentity(summary.target)).toBe(true);
+    expect(isHostEvent({ type: "session_execution_updated", summary, seq: 1 })).toBe(true);
+    expect(isHostEvent({ type: "session_execution_updated", summary: { ...summary, target: { sessionId: "s1", endpointId: "e1", normalizedCwd: "/work" } }, seq: 1 })).toBe(false);
+    expect(isHostEvent({ type: "session_execution_updated", summary: { ...summary, teammate: { running: 1, total: 1, agents: [{}] } }, seq: 1 })).toBe(false);
+    expect(isHostEvent({ type: "session_execution_updated", summary: { ...summary, workspace: {} }, seq: 1 })).toBe(false);
+    expect(isBackgroundJobSummary({ id: "bg1", status: "running", progress: 1.1 })).toBe(false);
   });
 
   it("rejects malformed HostEvent", () => {

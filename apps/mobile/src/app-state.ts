@@ -15,15 +15,17 @@ import type {
   SessionPresentation,
   SessionSummaryPatch,
   SessionTargetIdentity,
+  SessionExecutionSummary,
   TimelineItem,
   ExtensionUiRequest,
   ExtensionUiResponse,
 } from "@maestro-mobile/shared";
 import { ExtensionUiQueue, type DialogEntry } from "./extension-ui-queue";
 import { parseHostStatusMeta, type HostStatusMeta } from "./host-status";
-import { sessionTargetKey } from "@maestro-mobile/shared";
+import { sessionTargetKey, isSessionTargetIdentity } from "@maestro-mobile/shared";
 
 export const MAX_SESSION_SUMMARY_PATCHES = 256;
+export const MAX_SESSION_EXECUTION_SUMMARIES = 256;
 
 export interface AppState {
   connectionStatus: string;
@@ -36,6 +38,8 @@ export interface AppState {
   targetedSessions: Map<string, SessionState>;
   /** Latest exact-target card patches; retained so a later list load can apply them. */
   sessionSummaryPatches: Map<string, { target: SessionTargetIdentity; patch: SessionSummaryPatch; revision: number }>;
+  /** Authoritative session execution summaries, keyed by the complete target identity. */
+  sessionExecutionSummaries: Map<string, SessionExecutionSummary>;
   timelines: Map<string, TimelineItem[]>;
   targetedTimelines: Map<string, TimelineItem[]>;
   maestro: MaestroState | null;
@@ -65,6 +69,7 @@ export function createInitialState(): AppState {
     activeSessionTargets: new Map(),
     targetedSessions: new Map(),
     sessionSummaryPatches: new Map(),
+    sessionExecutionSummaries: new Map(),
     timelines: new Map(),
     targetedTimelines: new Map(),
     maestro: null,
@@ -261,7 +266,11 @@ export function reduceEvent(state: AppState, event: AppAction, deps: AppStateDep
     };
   }
   const eventSeq = "seq" in event && typeof event.seq === "number" ? event.seq : undefined;
-  const targetKey = "target" in event && event.target ? sessionTargetKey(event.target) : undefined;
+  const targetKey = "target" in event && event.target && isSessionTargetIdentity(event.target)
+    ? sessionTargetKey(event.target)
+    : event.type === "session_execution_updated" && isSessionTargetIdentity(event.summary?.target)
+      ? sessionTargetKey(event.summary.target)
+      : undefined;
   const projectionSessionId = event.type === "session_updated"
     ? event.session.id
     : event.type === "timeline_item" || event.type === "timeline_snapshot" || event.type === "timeline_delta"
@@ -346,6 +355,23 @@ export function reduceEvent(state: AppState, event: AppAction, deps: AppStateDep
       // Host 连接后独立推送 getStatus() 元数据；与 host_status 的对象载荷同一解析路径
       const meta = parseHostStatusMeta(event.info);
       return meta ? { ...state, hostStatusMeta: meta } : state;
+    }
+
+    case "session_execution_updated": {
+      const summary = event.summary;
+      if (!summary || !isSessionTargetIdentity(summary.target)
+        || !Number.isFinite(summary.revision) || summary.revision < 0) return state;
+      const key = sessionTargetKey(summary.target);
+      const current = state.sessionExecutionSummaries.get(key);
+      if (current && current.revision >= summary.revision) return state;
+      const sessionExecutionSummaries = new Map(state.sessionExecutionSummaries);
+      sessionExecutionSummaries.set(key, summary);
+      while (sessionExecutionSummaries.size > MAX_SESSION_EXECUTION_SUMMARIES) {
+        const oldest = sessionExecutionSummaries.keys().next().value as string | undefined;
+        if (oldest === undefined) break;
+        sessionExecutionSummaries.delete(oldest);
+      }
+      return { ...state, sessionExecutionSummaries };
     }
 
     case "session_summary_updated": {
@@ -504,6 +530,25 @@ export function reduceEvent(state: AppState, event: AppAction, deps: AppStateDep
       // 后续一次失败的 resend 就能把它 reopen 回来（S_CONFIRM RV-001）。
       queue.drop(event.requestId, event.target);
       return { ...state, dialogs: queue.pendingDialogs };
+    }
+
+    case "session_error": {
+      if (!event.target) return { ...state, lastError: event.error.message };
+      const key = sessionTargetKey(event.target);
+      const timelines = new Map(state.targetedTimelines);
+      const items = timelines.get(key) ?? [];
+      const item: TimelineItem = {
+        id: `session-error-${event.seq}`,
+        kind: "assistant",
+        text: event.error.message,
+        createdAt: new Date().toISOString(),
+        error: event.error,
+        isError: true,
+        status: "failed",
+      };
+      const existing = items.findIndex((candidate) => candidate.id === item.id);
+      timelines.set(key, existing >= 0 ? items.map((candidate, index) => index === existing ? item : candidate) : [...items, item]);
+      return { ...state, targetedTimelines: timelines };
     }
 
     case "command_error":
