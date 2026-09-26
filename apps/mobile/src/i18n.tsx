@@ -184,6 +184,23 @@ export interface I18nDictionary {
   sendMessage: string;
   planActMode: string;
   retryLoadModels: string;
+  planConfirmTitle: string;
+  planReviewTitle: string;
+  planRevision: string;
+  planCancel: string;
+  planEditor: string;
+  planDiscussionInput: string;
+  planDiscussionPlaceholder: string;
+  planSaveEdit: string;
+  planSendDiscussion: string;
+  planBackPreview: string;
+  planActionExecute: string;
+  planActionModify: string;
+  planActionContinue: string;
+  planActionRefine: string;
+  planActionRollback: string;
+  planActionExit: string;
+  planActionClose: string;
 }
 
 export const DICTIONARIES: Record<Language, I18nDictionary> = {
@@ -366,6 +383,23 @@ export const DICTIONARIES: Record<Language, I18nDictionary> = {
     sendMessage: "发送消息",
     planActMode: "Plan / Act 模式",
     retryLoadModels: "重试加载模型列表",
+    planConfirmTitle: "确认计划",
+    planReviewTitle: "审阅计划",
+    planRevision: "版本",
+    planCancel: "取消计划",
+    planEditor: "计划编辑器",
+    planDiscussionInput: "计划讨论内容",
+    planDiscussionPlaceholder: "输入反馈或问题，继续讨论当前计划",
+    planSaveEdit: "保存编辑",
+    planSendDiscussion: "发送讨论",
+    planBackPreview: "返回预览",
+    planActionExecute: "执行计划",
+    planActionModify: "查看 / 修改计划",
+    planActionContinue: "继续讨论",
+    planActionRefine: "评审并优化",
+    planActionRollback: "回滚到历史草稿",
+    planActionExit: "退出计划模式",
+    planActionClose: "关闭",
   },
   en: {
     tabWorkbench: "Workbench",
@@ -546,6 +580,23 @@ export const DICTIONARIES: Record<Language, I18nDictionary> = {
     sendMessage: "Send message",
     planActMode: "Plan / Act Mode",
     retryLoadModels: "Retry loading models",
+    planConfirmTitle: "Confirm Plan",
+    planReviewTitle: "Review Plan",
+    planRevision: "Revision",
+    planCancel: "Cancel Plan",
+    planEditor: "Plan editor",
+    planDiscussionInput: "Plan discussion",
+    planDiscussionPlaceholder: "Enter feedback or a question about the current Plan",
+    planSaveEdit: "Save Changes",
+    planSendDiscussion: "Send Discussion",
+    planBackPreview: "Back to Preview",
+    planActionExecute: "Execute Plan",
+    planActionModify: "View / Modify Plan",
+    planActionContinue: "Continue Discussion",
+    planActionRefine: "Review & Refine",
+    planActionRollback: "Rollback to Draft",
+    planActionExit: "Exit Plan Mode",
+    planActionClose: "Close",
   },
 };
 

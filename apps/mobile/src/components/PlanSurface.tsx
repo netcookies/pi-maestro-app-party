@@ -11,6 +11,8 @@ import {
 } from "react-native";
 import type { DesktopPlanRequest, DesktopPlanResponse, SessionTargetIdentity } from "@maestro-mobile/shared";
 import { useTheme } from "../theme";
+import { useI18n, type I18nDictionary } from "../i18n";
+import { normalizePlanAction } from "../plan-actions";
 
 interface Props {
   request: DesktopPlanRequest;
@@ -20,19 +22,22 @@ interface Props {
   onCancel: (request: DesktopPlanRequest, target: SessionTargetIdentity) => void;
 }
 
-function actionLabel(action: string): string {
+function actionLabel(action: string, t: I18nDictionary): string {
   switch (action) {
-    case "execute": return "执行计划";
-    case "modify": return "编辑计划";
-    case "discuss": return "继续讨论";
-    case "accept": return "接受";
-    case "reject": return "拒绝";
+    case "execute": return t.planActionExecute;
+    case "modify": return t.planActionModify;
+    case "continue": return t.planActionContinue;
+    case "refine": return t.planActionRefine;
+    case "rollback": return t.planActionRollback;
+    case "exit-plan": return t.planActionExit;
+    case "close": return t.planActionClose;
     default: return action;
   }
 }
 
 export function PlanSurface({ request, target, initialDraft, onResponse, onCancel }: Props) {
   const { theme } = useTheme();
+  const { t } = useI18n();
   const [draft, setDraft] = useState(initialDraft ?? request.markdown);
   const [discussion, setDiscussion] = useState("");
   const [editing, setEditing] = useState(request.kind === "review");
@@ -44,7 +49,7 @@ export function PlanSurface({ request, target, initialDraft, onResponse, onCance
 
   const actions = useMemo(() => {
     const available = request.availableActions.length > 0 ? request.availableActions : ["execute"];
-    return [...new Set(available)];
+    return [...new Set(available.map(normalizePlanAction))];
   }, [request.availableActions]);
 
   const submit = (response: DesktopPlanResponse): void => {
@@ -72,7 +77,7 @@ export function PlanSurface({ request, target, initialDraft, onResponse, onCance
       requestId: request.requestId,
       kind: request.kind,
       status: "decision",
-      decision: { action: "discuss", discussion: discussion.trim() },
+      decision: { action: "continue", discussion: discussion.trim() },
     });
   };
 
@@ -95,14 +100,14 @@ export function PlanSurface({ request, target, initialDraft, onResponse, onCance
         <View style={[styles.surface, { backgroundColor: theme.cardBg ?? theme.bg, borderColor: theme.border }]}>
           <View style={styles.header}>
             <View style={styles.headerText}>
-              <Text style={[styles.title, { color: theme.text }]}>{request.kind === "review" ? "审阅计划" : "确认计划"}</Text>
-              <Text style={[styles.meta, { color: theme.muted }]} numberOfLines={1}>{request.pathLabel} · revision {request.revision}</Text>
+              <Text style={[styles.title, { color: theme.text }]}>{request.kind === "review" ? t.planReviewTitle : t.planConfirmTitle}</Text>
+              <Text style={[styles.meta, { color: theme.muted }]} numberOfLines={1}>{request.pathLabel} · {t.planRevision} {request.revision}</Text>
             </View>
             <TouchableOpacity
               onPress={() => onCancel(request, target)}
               disabled={submitting}
               accessibilityRole="button"
-              accessibilityLabel="取消计划"
+              accessibilityLabel={t.planCancel}
               style={styles.closeButton}
             >
               <Text style={[styles.close, { color: theme.muted }]}>×</Text>
@@ -123,7 +128,7 @@ export function PlanSurface({ request, target, initialDraft, onResponse, onCance
               editable={!submitting}
               textAlignVertical="top"
               style={[styles.editor, { color: theme.text, borderColor: theme.border, backgroundColor: theme.inputBg }]}
-              accessibilityLabel="计划编辑器"
+              accessibilityLabel={t.planEditor}
             />
           ) : null}
 
@@ -133,11 +138,11 @@ export function PlanSurface({ request, target, initialDraft, onResponse, onCance
               value={discussion}
               onChangeText={setDiscussion}
               editable={!submitting}
-              placeholder="输入要继续讨论的内容"
+              placeholder={t.planDiscussionPlaceholder}
               placeholderTextColor={theme.muted}
               textAlignVertical="top"
               style={[styles.editor, { color: theme.text, borderColor: theme.border, backgroundColor: theme.inputBg }]}
-              accessibilityLabel="计划讨论内容"
+              accessibilityLabel={t.planDiscussionInput}
             />
           ) : null}
 
@@ -149,7 +154,7 @@ export function PlanSurface({ request, target, initialDraft, onResponse, onCance
                 style={[styles.primary, { backgroundColor: theme.accent, opacity: submitting || draft.trim().length === 0 ? 0.45 : 1 }]}
                 accessibilityRole="button"
               >
-                {submitting ? <ActivityIndicator color="#FFFFFF" /> : <Text style={styles.primaryText}>保存编辑</Text>}
+                {submitting ? <ActivityIndicator color="#FFFFFF" /> : <Text style={styles.primaryText}>{t.planSaveEdit}</Text>}
               </TouchableOpacity>
             ) : discussing ? (
               <TouchableOpacity
@@ -158,24 +163,24 @@ export function PlanSurface({ request, target, initialDraft, onResponse, onCance
                 style={[styles.primary, { backgroundColor: theme.accent, opacity: submitting || discussion.trim().length === 0 ? 0.45 : 1 }]}
                 accessibilityRole="button"
               >
-                <Text style={styles.primaryText}>发送讨论</Text>
+                <Text style={styles.primaryText}>{t.planSendDiscussion}</Text>
               </TouchableOpacity>
             ) : (
               actions.map((action) => (
                 <TouchableOpacity
                   key={action}
-                  onPress={() => action === "modify" ? setEditing(true) : action === "discuss" ? setDiscussing(true) : submitDecision(action)}
+                  onPress={() => action === "modify" ? setEditing(true) : action === "continue" ? setDiscussing(true) : submitDecision(action)}
                   disabled={submitting}
                   style={[styles.action, { borderColor: theme.border, backgroundColor: theme.inputBg, opacity: submitting ? 0.5 : 1 }]}
                   accessibilityRole="button"
                 >
-                  <Text style={[styles.actionText, { color: theme.text }]}>{actionLabel(action)}</Text>
+                  <Text style={[styles.actionText, { color: theme.text }]}>{actionLabel(action, t)}</Text>
                 </TouchableOpacity>
               ))
             )}
             {(editing || discussing) ? (
               <TouchableOpacity onPress={() => { setEditing(false); setDiscussing(false); }} disabled={submitting} style={styles.backButton}>
-                <Text style={[styles.backText, { color: theme.muted }]}>返回预览</Text>
+                <Text style={[styles.backText, { color: theme.muted }]}>{t.planBackPreview}</Text>
               </TouchableOpacity>
             ) : null}
           </View>
