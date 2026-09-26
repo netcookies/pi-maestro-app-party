@@ -19,6 +19,7 @@ import type {
   ExecutionProjection,
 } from "@maestro-mobile/shared";
 import { isCompatibleReleaseVersion, MOBILE_PROTOCOL_VERSION, MOBILE_RELEASE_VERSION } from "@maestro-mobile/shared";
+import { fetchWithTimeout } from "./fetch-with-timeout";
 
 export type ConnectionState = "connecting" | "connected" | "disconnected" | "reconnecting";
 
@@ -344,7 +345,7 @@ export class HostClient {
   private async verifyAuthFailure(): Promise<void> {
     try {
       const httpBase = this.options.url.replace(/^wss:\/\//, "https://").replace(/^ws:\/\//, "http://").replace(/\/ws$/, "").replace(/\/$/, "");
-      const res = await fetch(`${httpBase}/api/health`, { signal: AbortSignal.timeout(3_000) });
+      const res = await fetchWithTimeout(`${httpBase}/api/health`, {}, 3_000);
       if (this.closed || this.state === "connected") return;
       if (res.status === 401) {
         this.authFailed = true;

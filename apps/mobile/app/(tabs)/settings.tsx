@@ -22,6 +22,8 @@ import { useTabSwipe } from "../../src/hooks/useTabSwipe";
 import { useI18n } from "../../src/i18n";
 import { PulsingDot } from "../../src/components/PulsingDot";
 import AsyncStorage from "@react-native-async-storage/async-storage";
+import { fetchWithTimeout } from "../../src/fetch-with-timeout";
+import { parseHostEndpoint } from "../../src/host-endpoint";
 import { HOST_CONN_KEY, persistPairedHost } from "../../src/paired-hosts";
 import { getNotificationSettings, setNotificationSettings } from "../../src/notifications";
 
@@ -87,17 +89,15 @@ export default function SettingsScreen() {
     setCodeBusy(true);
     setCodeError(null);
     try {
-      const port = "4739";
-      const res = await fetch(`http://${trimmedHost}:${port}/api/pair-short?code=${encodeURIComponent(trimmedCode)}`, {
-        signal: AbortSignal.timeout(5000),
-      });
+      const { host, port } = parseHostEndpoint(trimmedHost);
+      const res = await fetchWithTimeout(`http://${host}:${port}/api/pair-short?code=${encodeURIComponent(trimmedCode)}`, {}, 5000);
       if (!res.ok) {
         throw new Error(res.status === 404 ? "配对码无效或已过期，请在 PC 重新执行 /maestro-mobile qr" : `Host 响应错误: ${res.status}`);
       }
       const data = (await res.json()) as { token?: string; ips?: string[]; port?: number };
       const finalToken = data.token ?? "";
       const finalPort = data.port ?? 4739;
-      const finalWsUrl = `ws://${trimmedHost}:${finalPort}/ws`;
+      const finalWsUrl = `ws://${host}:${finalPort}/ws`;
       await persistPairedHost({
         name: `${trimmedHost}:${finalPort}`,
         hostUrl: finalWsUrl,

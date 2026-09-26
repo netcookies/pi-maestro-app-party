@@ -15,6 +15,8 @@ import { useHost } from "../store";
 import { LineIcon } from "./LineIcon";
 import { MiuixSwitch } from "./MiuixSwitch";
 import { useI18n } from "../i18n";
+import { fetchWithTimeout } from "../fetch-with-timeout";
+import { parseHostEndpoint } from "../host-endpoint";
 import { loadPairedHosts, savePairedHosts, rememberRemovedHost, forgetRemovedHost, type PairedHost } from "../paired-hosts";
 
 export function HostConnectCard({ hostUrl, token, onHostUrlChange, onTokenChange }: {
@@ -93,13 +95,13 @@ export function HostConnectCard({ hostUrl, token, onHostUrlChange, onTokenChange
     setCodeError(null);
     setCodeBusy(true);
     try {
-      const host = codeHost.trim();
-      const res = await fetch(`http://${host}:4739/api/pair-short?code=${encodeURIComponent(codeValue)}`, { signal: AbortSignal.timeout(4000) });
+      const { host, port } = parseHostEndpoint(codeHost);
+      const res = await fetchWithTimeout(`http://${host}:${port}/api/pair-short?code=${encodeURIComponent(codeValue)}`, {}, 4000);
       if (!res.ok) throw new Error(res.status === 404 ? "配对码无效或已过期，请在 PC 重新执行 /maestro-mobile qr" : `host 返回 ${res.status}`);
       const d = (await res.json()) as { token: string; ips: string[]; port: number };
       const ip = (d.ips ?? [])[0] ?? host;
       setCodeInputVisible(false);
-      handlePaired({ hostUrl: `ws://${ip}:${d.port ?? 4739}/ws`, token: d.token, displayHost: `${ip}:${d.port ?? 4739}` });
+      handlePaired({ hostUrl: `ws://${ip}:${d.port ?? port}/ws`, token: d.token, displayHost: `${ip}:${d.port ?? port}` });
     } catch (e) {
       setCodeError(e instanceof Error ? e.message : "换取失败，请检查 PC 地址与网络");
     } finally {
