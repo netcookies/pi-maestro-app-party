@@ -91,6 +91,7 @@ export class WorkspaceTelemetryReader {
             agents: Array.isArray(d.agents) ? (d.agents as JsonValue[]) : [],
             settled: Array.isArray(d.settled) ? (d.settled as JsonValue[]) : [],
             backgroundJobs: Array.isArray(d.backgroundJobs) ? (d.backgroundJobs as JsonValue[]) : [],
+            todos: Array.isArray(d.todos) ? (d.todos as JsonValue[]) : [],
             alive: ageMs < this.staleMs,
             ageMs,
           });

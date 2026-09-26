@@ -30,6 +30,8 @@ const HOST_PROTOCOL_CAPABILITIES: ProtocolCapability[] = [
   "extension_ui",
   "monitor_read",
   "session_filter",
+  "execution_projection_read",
+  "plan",
 ];
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -92,6 +94,7 @@ interface ClientSocket {
   heartbeatMisses: number;
   /** Protocol v2 hello 完成后才允许接收命令和发送业务事件。 */
   handshaken: boolean;
+  capabilities: ProtocolCapability[];
 }
 
 /**
@@ -162,7 +165,7 @@ export class MobileHostServer {
         ws.close(1013, "too many connections");
         return;
       }
-      const client: ClientSocket = { id: crypto.randomUUID(), ws, inflight: 0, closing: false, droppedFrames: 0, lastDropLogAt: 0, slowSince: 0, heartbeatMisses: 0, handshaken: false };
+      const client: ClientSocket = { id: crypto.randomUUID(), ws, inflight: 0, closing: false, droppedFrames: 0, lastDropLogAt: 0, slowSince: 0, heartbeatMisses: 0, handshaken: false, capabilities: [] };
       this.clients.add(client);
       // 故障隔离到连接粒度（本 run 主根因）：此前无 error listener，超限/非法帧的 error 事件直接变
       // uncaughtException → cli fatal() → 整个 host 退出（单手机一帧崩掉所有客户端）。现在只断该连接，
@@ -230,6 +233,8 @@ export class MobileHostServer {
       // 终态由 timeline_item 补齐」。其余事件无 server 侧重放保证，一律 required（宁断不默丢）。
       const delivery = event.type === "timeline_delta" ? "best_effort" : "required";
       for (const client of [...this.clients]) {
+        if (event.type.endsWith("_projection_updated") && !client.capabilities.includes("execution_projection_read")) continue;
+        if (event.type.startsWith("desktop_plan_") && !client.capabilities.includes("plan")) continue;
         this.sendFrame(client, payload, delivery, event.type);
       }
     });
@@ -285,6 +290,7 @@ export class MobileHostServer {
       return;
     }
     client.handshaken = true;
+    client.capabilities = hello.capabilities;
     this.sendFrame(client, {
       type: "protocol_ready",
       protocolVersion: 2,
@@ -298,6 +304,9 @@ export class MobileHostServer {
     this.sendFrame(client, { type: "host_info", info: this.controller.getStatus(), seq: 0 }, "required", "host_info");
     if (this.rolloutMode !== "disabled") {
       for (const event of this.controller.pendingDesktopAskEvents()) this.sendFrame(client, event, "required", event.type);
+      if (hello.capabilities.includes("plan")) {
+        for (const event of this.controller.pendingDesktopPlanEvents()) this.sendFrame(client, event, "required", event.type);
+      }
     }
   }
 
@@ -715,9 +724,7 @@ export class MobileHostServer {
   }
 
   private targetForCommand(command: { sessionId: string; target?: unknown }): SessionTargetIdentity | undefined {
-    if (command.target !== undefined) return isSessionTargetIdentity(command.target) ? command.target : undefined;
-    // Host-owned targets are exact directory entries; this does not infer a cwd/PID/owner.
-    return this.controller.getSessionTarget(command.sessionId);
+    return command.target !== undefined && isSessionTargetIdentity(command.target) ? command.target : undefined;
   }
 
   private scopedRequestId(client: ClientSocket, command: ClientCommand, target: SessionTargetIdentity): string {
@@ -896,16 +903,9 @@ export class MobileHostServer {
           this.sendApplicationResult(client, command, result);
           break;
         }
-        case "compact": {
-          const target = this.targetForCommand(command);
-          if (!target) { this.sendUnavailable(client, command, "target_unavailable"); break; }
-          this.sendAck(client, command, await this.controller.application.sessionOperation({ kind: "compact", target, customInstructions: command.customInstructions }));
-          break;
-        }
+        case "compact":
         case "rename_session": {
-          const target = this.targetForCommand(command);
-          if (!target) { this.sendUnavailable(client, command, "target_unavailable"); break; }
-          this.sendAck(client, command, await this.controller.application.sessionOperation({ kind: "rename_session", target, name: command.name }));
+          this.sendUnavailable(client, command, "unsupported_command");
           break;
         }
 
@@ -925,32 +925,11 @@ export class MobileHostServer {
           break;
         }
         case "open_session": {
-          // 会话创建已锁死（保留实现，暂不接入）：无 exact target 的请求一律 fail closed。
-          // 覆盖两条会凭空造出 Host runner 的路径：
-          //  1) mode:"create" 在任意 cwd 新建会话文件；
-          //  2) 历史会话（SessionDirectory 无条目、list_host_sessions 不发 target）
-          //     会被 SdkSessionRunner.open 打开并附着 runner，使只读历史变成可写。
-          // 带 exact target 的请求（TUI 已注册的 Desktop target）仍走原有早退，不创建 runner。
-          if (!isSessionTargetIdentity(command.target)) {
-            this.sendUnavailable(client, command, "session_creation_disabled");
-            break;
-          }
-          const opened = await this.controller.application.openSession({
-            cwd: command.cwd,
-            mode: command.mode,
-            sessionFile: command.sessionFile,
-            target: command.target,
-          });
-          const target = this.controller.getSessionTarget(opened.id);
-          this.sendAck(client, command, { sessionId: opened.id, ...(target ? { target } : {}) });
+          this.sendUnavailable(client, command, "session_creation_disabled");
           break;
         }
         case "close_session": {
-          const target = this.targetForCommand(command);
-          if (!target || !this.controller.directory.resolve(target)) { this.sendUnavailable(client, command, "target_unavailable"); break; }
-          const closed = await this.controller.application.closeSession(command.sessionId, target);
-          if (!closed) this.sendUnavailable(client, command, "session_not_found");
-          else this.sendAck(client, command, { closed: true });
+          this.sendUnavailable(client, command, "session_close_disabled");
           break;
         }
         case "prompt": {
@@ -1007,6 +986,15 @@ export class MobileHostServer {
           else this.sendError(client, "request_not_found", undefined, command.id);
           break;
         }
+        case "desktop_plan_response": {
+          if (!client.capabilities.includes("plan")) { this.sendUnavailable(client, command, "capability_mismatch"); break; }
+          const target = this.targetForCommand(command);
+          if (!target || !this.controller.directory.resolve(target, "plan")) { this.sendUnavailable(client, command, "target_unavailable"); break; }
+          const ok = await this.controller.respondToDesktopPlan(command.sessionId, command.requestId, command.response, target);
+          if (ok) this.sendAck(client, command, {});
+          else this.sendError(client, "request_not_found", undefined, command.id);
+          break;
+        }
         case "get_maestro_state": {
           this.sendAck(client, command, await this.controller.application.readMaestroState());
           break;
@@ -1014,6 +1002,15 @@ export class MobileHostServer {
         case "get_monitor_state": {
           const monitor = await this.controller.application.query({ kind: "monitor" });
           this.sendAck(client, command, monitor);
+          break;
+        }
+        case "get_execution_projections": {
+          if (!client.capabilities.includes("execution_projection_read")) {
+            this.sendUnavailable(client, command, "capability_mismatch");
+            break;
+          }
+          const snapshot = await this.controller.readMonitorSnapshot();
+          this.sendAck(client, command, { projections: snapshot.projections, revision: snapshot.revision });
           break;
         }
         case "get_snapshot": {

@@ -13,22 +13,26 @@ import {
   type ExtensionUiRequest,
   type HostEvent,
   type HostSessionList,
-  type HostSessionSummary,
   type MonitorState,
   type SessionTargetIdentity,
   type TimelineItem,
   type SessionUsageSummary,
+  type ExecutionProjection,
+  type DesktopPlanResponse,
 } from "@maestro-mobile/shared";
-import { buildOpenExistingSessionCommand, HostClient, type ConnectionState } from "./host-client";
+import { HostClient, type ConnectionState } from "./host-client";
+
 import { isServerSessionPresentation, filterSessionsByVisibility } from "./host-session-pagination";
 import { ExtensionUiQueue } from "./extension-ui-queue";
+import { PlanQueue } from "./plan-queue";
 import { describeSendFailure } from "./delivery-error";
-import { monitorStateFromCommandResult } from "./monitor-data";
-import { resolveOpenedSession, type OpenedSession } from "./session-navigation";
+import { monitorStateFromCommandResult, executionProjectionsFromCommandResult } from "./monitor-data";
+
 import {
   createInitialState,
   reduceEvent,
   createAppActions,
+  createPlanActions,
   type AppState,
   type AppAction,
   type DialogSendFailedEvent,
@@ -43,12 +47,10 @@ export interface HostStoreValue {
   token?: string;
   connect(url: string, token?: string): void;
   disconnect(): void;
-  openSession(cwd: string): Promise<string>;
-  openExistingSession(session: HostSessionSummary): Promise<OpenedSession>;
-  /** 关闭 host 上的会话 runner（P2-4：避免重复 open 泄漏旧实例） */
-  closeSession(sessionId: string): Promise<void>;
+
   listHostSessions(options?: { cwd?: string; limit?: number; cursor?: string; query?: string; sessionIds?: string[]; latestForCwds?: string[] }): Promise<HostSessionList>;
   refreshMonitor(): Promise<MonitorState>;
+  refreshExecutionProjections(): Promise<ExecutionProjection[]>;
   loadSessionHistory(sessionId: string, targetKey?: string): Promise<void>;
   loadMoreHistory(sessionId: string, count?: number): Promise<{ items: TimelineItem[]; hasMore: boolean; totalEntries: number }>;
   searchHistory(sessionId: string, keyword: string, maxResults?: number, previewLength?: number): Promise<{ matches: { index: number; text: string; kind: string }[]; totalEntries: number }>;
@@ -60,13 +62,14 @@ export interface HostStoreValue {
   updateMaestroSettings(patch: Record<string, unknown>): Promise<{ ok: boolean; error?: string }>;
   setModel(sessionId: string, modelId: string, provider?: string): Promise<{ ok: boolean; error?: string }>;
   setThinking(sessionId: string, level: string): Promise<{ ok: boolean; error?: string }>;
-  compactSession(sessionId: string, customInstructions?: string): Promise<{ ok: boolean; error?: string }>;
-  renameSession(sessionId: string, name: string): Promise<{ ok: boolean; error?: string }>;
+
   sendPrompt(sessionId: string, message: string, images?: { data: string; mime: string }[]): Promise<void>;
   sendSteer(sessionId: string, message: string): Promise<void>;
   sendAbort(sessionId: string): Promise<void>;
   answerDialog(requestId: string, value: string | string[]): void;
   cancelDialog(requestId: string): void;
+  respondPlan(requestId: string, response: DesktopPlanResponse, target?: SessionTargetIdentity): void;
+  cancelPlan(requestId: string, target?: SessionTargetIdentity): void;
   lastError: string | null;
   /** 清除本地错误提示（可关闭横幅）；只影响本地提示，不影响 host 事件流。 */
   clearError(): void;
@@ -88,6 +91,7 @@ function isSnapshotProjectionEvent(event: HostEvent): boolean {
 
 export function HostStoreProvider({ children }: { children: React.ReactNode }) {
   const queueRef = useRef(new ExtensionUiQueue());
+  const planQueueRef = useRef(new PlanQueue());
   const clientRef = useRef<HostClient | null>(null);
   const [connectionState, setConnectionState] = useState<ConnectionState>("disconnected");
   const [hostUrl, setHostUrl] = useState<string>("");
@@ -121,6 +125,9 @@ export function HostStoreProvider({ children }: { children: React.ReactNode }) {
     flushBufferedEvents();
   }, [flushBufferedEvents]);
   const dispatchBuffered = useCallback((event: HostEvent) => {
+    if ("target" in event && event.target && isSessionTargetIdentity(event.target)) {
+      sessionTargetsRef.current.set(sessionTargetKey(event.target), event.target);
+    }
     if ("target" in event && event.target && isSnapshotProjectionEvent(event)) {
       const pendingSnapshot = snapshotEventBuffersRef.current.get(sessionTargetKey(event.target));
       if (pendingSnapshot) {
@@ -156,7 +163,7 @@ export function HostStoreProvider({ children }: { children: React.ReactNode }) {
 
   const [state, dispatch] = useReducer(
     // action 类型必须是 reducer 实际接受的 union；之前窄化为 HostEvent 使所有内部事件都要 as never 强转
-    (s: AppState, e: AppAction) => reduceEvent(s, e, { dialogQueue: queueRef.current }),
+    (s: AppState, e: AppAction) => reduceEvent(s, e, { dialogQueue: queueRef.current, planQueue: planQueueRef.current }),
     undefined,
     createInitialState,
   );
@@ -172,12 +179,14 @@ export function HostStoreProvider({ children }: { children: React.ReactNode }) {
 
   const targetForSession = useCallback((sessionId: string, targetKey?: string): SessionTargetIdentity | undefined => {
     const key = targetKey ?? activeTargetKeysRef.current.get(sessionId);
-    return key ? sessionTargetsRef.current.get(key) : undefined;
+    const target = key ? sessionTargetsRef.current.get(key) : undefined;
+    return target?.sessionId === sessionId ? target : undefined;
   }, []);
 
-  const targetOptions = useCallback((sessionId: string): { target?: SessionTargetIdentity } => {
+  const targetOptions = useCallback((sessionId: string): { target: SessionTargetIdentity } => {
     const target = targetForSession(sessionId);
-    return target ? { target } : {};
+    if (!target) throw new Error(`Exact session target is required for ${sessionId}`);
+    return { target };
   }, [targetForSession]);
 
   const beginSnapshotBuffer = useCallback((target: SessionTargetIdentity | undefined, generation: number): string | undefined => {
@@ -229,10 +238,21 @@ export function HostStoreProvider({ children }: { children: React.ReactNode }) {
         }
         // P2-2：断线重连成功后，为重连前活动的会话补拉 snapshot（代次号防陈旧响应覆盖新状态）
         if (s === "connected") {
+          void client.getExecutionProjections()
+            .then((result) => {
+              for (const projection of executionProjectionsFromCommandResult(result)) {
+                if (projection.source === "todo") dispatch({ type: "todo_projection_updated", projection, seq: 0 });
+                else if (projection.source === "teammate") dispatch({ type: "teammate_projection_updated", projection, seq: 0 });
+                else if (projection.source === "workspace") dispatch({ type: "workspace_window_projection_updated", projection, seq: 0 });
+                else dispatch({ type: "background_job_projection_updated", projection, seq: 0 });
+              }
+            })
+            .catch(() => undefined);
           const sessionId = activeSessionRef.current;
           if (sessionId && client.isConnected) {
             const generation = ++reloadGenerationRef.current;
             const target = targetForSession(sessionId);
+            if (!target) return;
             const snapshotBufferKey = beginSnapshotBuffer(target, generation);
             void client
               .getSnapshot(sessionId, target)
@@ -241,7 +261,7 @@ export function HostStoreProvider({ children }: { children: React.ReactNode }) {
                   releaseSnapshotBuffer(snapshotBufferKey, generation);
                   return;
                 }
-                dispatch({ type: "__snapshot_load", session: snapshot.session, items: snapshot.timeline, seq: snapshot.nextSeq, ...(typeof snapshot.wireSeq === "number" ? { wireSeq: snapshot.wireSeq } : {}), ...(target ? { target } : {}) });
+                dispatch({ type: "__snapshot_load", session: snapshot.session, items: snapshot.timeline, seq: snapshot.nextSeq, ...(typeof snapshot.wireSeq === "number" ? { wireSeq: snapshot.wireSeq } : {}), target });
                 releaseSnapshotBuffer(snapshotBufferKey, generation, snapshot.wireSeq);
               })
               .catch(() => releaseSnapshotBuffer(snapshotBufferKey, generation));
@@ -258,9 +278,11 @@ export function HostStoreProvider({ children }: { children: React.ReactNode }) {
     clientRef.current?.close();
     clientRef.current = null;
     queueRef.current.clearAll();
+    planQueueRef.current.clearAll();
     activeSessionRef.current = null;
     sessionTargetsRef.current.clear();
     activeTargetKeysRef.current.clear();
+    dispatch({ type: "__connection_reset" });
     setConnectionState("disconnected");
   }, [clearBufferedEvents]);
 
@@ -293,73 +315,6 @@ export function HostStoreProvider({ children }: { children: React.ReactNode }) {
     })();
   }, [connect]);
 
-  const openSession = useCallback(async (cwd: string): Promise<string> => {
-    const result = await getClient().sendCommand({ type: "open_session", cwd, mode: "create" });
-    const r = result as { sessionId?: string; target?: unknown };
-    if (!r.sessionId) throw new Error("Invalid open session response");
-    if (isSessionTargetIdentity(r.target)) {
-      const key = sessionTargetKey(r.target);
-      sessionTargetsRef.current.set(key, r.target);
-      activeTargetKeysRef.current.set(r.sessionId, key);
-    }
-    return r.sessionId;
-  }, [getClient]);
-
-  const openExistingSession = useCallback(async (session: HostSessionSummary): Promise<OpenedSession> => {
-    const open = async (selected: HostSessionSummary): Promise<OpenedSession> => {
-      const resolved = resolveOpenedSession(
-        selected,
-        await getClient().sendCommand(buildOpenExistingSessionCommand(selected)),
-      );
-      if (resolved.target) {
-        sessionTargetsRef.current.set(resolved.targetKey!, resolved.target);
-        activeTargetKeysRef.current.set(resolved.sessionId, resolved.targetKey!);
-      } else {
-        activeTargetKeysRef.current.delete(resolved.sessionId);
-      }
-      dispatch({ type: "__local_error", message: "" });
-      return { sessionId: resolved.sessionId, ...(resolved.targetKey ? { targetKey: resolved.targetKey } : {}) };
-    };
-
-    try {
-      return await open(session);
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      if (!message.includes("target_unavailable") || !session.target) {
-        dispatch({ type: "__local_error", message });
-        throw error;
-      }
-
-      // TUI 重启会生成新的 endpoint/processGeneration；列表卡片可能仍携带旧 target。
-      // 只在 Host 明确返回 target_unavailable 时按 sessionId 刷新一次 exact target，
-      // 不推断或放宽 Host 的四元组校验。
-      try {
-        const refreshed = await getClient().sendCommand({
-          type: "list_host_sessions",
-          sessionIds: [session.sessionId],
-        }) as HostSessionList;
-        const latest = refreshed.sessions.find((candidate) =>
-          candidate.target?.sessionId === session.sessionId && candidate.targetKey !== session.targetKey,
-        ) ?? refreshed.sessions.find((candidate) => candidate.target?.sessionId === session.sessionId);
-        if (latest?.target) return await open(latest);
-      } catch {
-        // 保留首次 target_unavailable，避免刷新失败覆盖根因。
-      }
-      dispatch({ type: "__local_error", message });
-      throw error;
-    }
-  }, [getClient, dispatch]);
-
-  const closeSession = useCallback(async (sessionId: string): Promise<void> => {
-    try {
-      await getClient().sendCommand({ type: "close_session", sessionId, ...targetOptions(sessionId) });
-      sessionTargetsRef.current.delete(activeTargetKeysRef.current.get(sessionId) ?? "");
-      activeTargetKeysRef.current.delete(sessionId);
-    } catch {
-      // 会话可能已不存在，忽略
-    }
-  }, [getClient, targetOptions]);
-
   const listHostSessions = useCallback(async (options: { cwd?: string; limit?: number; cursor?: string; query?: string; sessionIds?: string[]; latestForCwds?: string[] } = {}): Promise<HostSessionList> => {
     const result = await getClient().sendCommand({ type: "list_host_sessions", ...options });
     const list = result as HostSessionList;
@@ -390,6 +345,22 @@ export function HostStoreProvider({ children }: { children: React.ReactNode }) {
       throw error;
     }
   }, [getClient, dispatch]);
+
+  const refreshExecutionProjections = useCallback(async (): Promise<ExecutionProjection[]> => {
+    try {
+      const projections = executionProjectionsFromCommandResult(await getClient().getExecutionProjections());
+      for (const projection of projections) {
+        if (projection.source === "todo") dispatch({ type: "todo_projection_updated", projection, seq: 0 });
+        else if (projection.source === "teammate") dispatch({ type: "teammate_projection_updated", projection, seq: 0 });
+        else if (projection.source === "workspace") dispatch({ type: "workspace_window_projection_updated", projection, seq: 0 });
+        else dispatch({ type: "background_job_projection_updated", projection, seq: 0 });
+      }
+      return projections;
+    } catch (error) {
+      dispatch({ type: "__local_error", message: error instanceof Error ? error.message : String(error) });
+      throw error;
+    }
+  }, [dispatch, getClient]);
 
   const clearError = useCallback(() => {
     dispatch({ type: "__local_error", message: "" });
@@ -472,16 +443,6 @@ export function HostStoreProvider({ children }: { children: React.ReactNode }) {
     }
   }, [dispatch, getClient, targetOptions]);
 
-  const compactSession = useCallback(async (sessionId: string, customInstructions?: string) => {
-    const result = await getClient().sendCommand({ type: "compact", sessionId, ...targetOptions(sessionId), customInstructions });
-    return result as { ok: boolean; error?: string };
-  }, [getClient, targetOptions]);
-
-  const renameSession = useCallback(async (sessionId: string, name: string) => {
-    const result = await getClient().sendCommand({ type: "rename_session", sessionId, ...targetOptions(sessionId), name });
-    return result as { ok: boolean; error?: string };
-  }, [getClient, targetOptions]);
-
   const sendSteer = useCallback(async (sessionId: string, message: string) => {
     await getClient().sendCommand({ type: "steer", sessionId, ...targetOptions(sessionId), message });
   }, [getClient, targetOptions]);
@@ -491,11 +452,15 @@ export function HostStoreProvider({ children }: { children: React.ReactNode }) {
   }, [getClient, targetOptions]);
 
   const loadSessionHistory = useCallback(async (sessionId: string, targetKey?: string): Promise<void> => {
-    // 记录活动会话：断线重连成功后自动补拉 snapshot（P2-2）
+    const target = targetForSession(sessionId, targetKey);
+    if (!target) {
+      const error = new Error(`Exact session target is required for ${sessionId}`);
+      dispatch({ type: "__local_error", message: error.message });
+      throw error;
+    }
+    if (targetKey) activeTargetKeysRef.current.set(sessionId, targetKey);
     activeSessionRef.current = sessionId;
-    if (targetKey && targetForSession(sessionId, targetKey)) activeTargetKeysRef.current.set(sessionId, targetKey);
     const generation = ++reloadGenerationRef.current;
-    const target = targetForSession(sessionId);
     const snapshotBufferKey = beginSnapshotBuffer(target, generation);
     try {
       const snapshot = await getClient().getSnapshot(sessionId, target);
@@ -514,7 +479,8 @@ export function HostStoreProvider({ children }: { children: React.ReactNode }) {
 
   const loadMoreHistory = useCallback(async (sessionId: string, count?: number): Promise<{ items: TimelineItem[]; hasMore: boolean; totalEntries: number }> => {
     const target = targetForSession(sessionId);
-    const result = await getClient().sendCommand({ type: "load_more_history", sessionId, ...(target ? { target } : {}), count });
+    if (!target) throw new Error(`Exact session target is required for ${sessionId}`);
+    const result = await getClient().sendCommand({ type: "load_more_history", sessionId, target, count });
     const r = result as { items: TimelineItem[]; hasMore: boolean; totalEntries: number };
     if (r.items?.length > 0) {
       dispatch({ type: "__history_prepend", sessionId, items: r.items, seq: 0, ...(target ? { target } : {}) });
@@ -532,8 +498,13 @@ export function HostStoreProvider({ children }: { children: React.ReactNode }) {
       createAppActions(
         queueRef.current,
         (sessionId, requestId, response, request, requestTarget) => {
+          const target = requestTarget;
+          if (!target || target.sessionId !== sessionId) {
+            dispatch({ type: "__local_error", message: `Exact session target is required for ask response ${requestId}` });
+            return;
+          }
           void getClient()
-            .respondExtensionUi(sessionId, requestId, response, requestTarget ?? targetForSession(sessionId))
+            .respondExtensionUi(sessionId, requestId, response, target)
             // ISS-20260910 review F-001：不得静默吞掉。弹窗只在 request/cleared 两个事件时重投影，
             // 而 host 的 cleared 依赖它收到本响应 ⇒ 断连时弹窗永不消失、用户答案丢失且无提示。
             // 走本地内部事件（不冒充 host 事件流的 error 帧，避开其必填 seq 语义）把弹窗重新入队并写 lastError。
@@ -552,6 +523,17 @@ export function HostStoreProvider({ children }: { children: React.ReactNode }) {
     [getClient, dispatch, targetForSession],
   );
 
+  const planActions = useMemo(
+    () =>
+      createPlanActions(
+        planQueueRef.current,
+        (sessionId, requestId, response, target) => getClient().respondDesktopPlan(sessionId, requestId, response, target),
+        () => dispatch({ type: "__plan_state_changed" }),
+        (message) => dispatch({ type: "__local_error", message }),
+      ),
+    [getClient, dispatch],
+  );
+
   const answerDialog = useCallback(
     (requestId: string, value: string | string[]) => actions.answerDialog(requestId, value),
     [actions],
@@ -559,6 +541,15 @@ export function HostStoreProvider({ children }: { children: React.ReactNode }) {
   const cancelDialog = useCallback(
     (requestId: string) => actions.cancelDialog(requestId),
     [actions],
+  );
+
+  const cancelPlan = useCallback(
+    (requestId: string, target?: SessionTargetIdentity) => planActions.cancelPlan(requestId, target),
+    [planActions],
+  );
+  const respondPlan = useCallback(
+    (requestId: string, response: DesktopPlanResponse, target?: SessionTargetIdentity) => planActions.respondPlan(requestId, response, target),
+    [planActions],
   );
 
   const value = useMemo<HostStoreValue>(
@@ -570,11 +561,9 @@ export function HostStoreProvider({ children }: { children: React.ReactNode }) {
       token,
       connect,
       disconnect,
-      openSession,
-      openExistingSession,
-      closeSession,
       listHostSessions,
       refreshMonitor,
+      refreshExecutionProjections,
       loadSessionHistory,
       loadMoreHistory,
       searchHistory,
@@ -585,17 +574,18 @@ export function HostStoreProvider({ children }: { children: React.ReactNode }) {
       fetchSessionUsage,
       setModel,
       setThinking,
-      compactSession,
-      renameSession,
       sendPrompt,
       sendSteer,
       sendAbort,
       answerDialog,
       cancelDialog,
+      respondPlan,
+      cancelPlan,
       lastError: state.lastError,
       clearError,
     }),
-    [state, connectionState, hostUrl, token, connect, disconnect, openSession, openExistingSession, closeSession, listHostSessions, refreshMonitor, loadSessionHistory, loadMoreHistory, searchHistory, listModels, listSkills, getMaestroSettings, updateMaestroSettings, fetchSessionUsage, setModel, setThinking, compactSession, renameSession, sendPrompt, sendSteer, sendAbort, answerDialog, cancelDialog, clearError],
+    [state, connectionState, hostUrl, token, connect, disconnect, listHostSessions, refreshMonitor, refreshExecutionProjections, loadSessionHistory, loadMoreHistory, searchHistory, listModels, listSkills, getMaestroSettings, updateMaestroSettings, fetchSessionUsage, setModel, setThinking, sendPrompt, sendSteer, sendAbort, answerDialog, cancelDialog, respondPlan, cancelPlan, clearError],
+
   );
 
   return <HostStoreContext.Provider value={value}>{children}</HostStoreContext.Provider>;

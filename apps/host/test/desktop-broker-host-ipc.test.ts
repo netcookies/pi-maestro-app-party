@@ -225,7 +225,7 @@ describe("DesktopBrokerHostIpc", () => {
   it("projects Broker records into the Host session directory through the existing controller path", async () => {
     const projection = new DesktopBrokerProjectedRegistry();
     const controller = new HostController(
-      { createRuntime: async () => { throw new Error("not used"); }, listSessions: async () => [] },
+      { listSessions: async () => [] },
       undefined,
       projection,
     );
@@ -255,7 +255,7 @@ describe("DesktopBrokerHostIpc", () => {
         },
       });
       controller.applyDesktopProjection([record(target)]);
-      expect(controller.directory.resolve(target)?.sessionFile).toBeUndefined();
+      expect(controller.directory.resolve(target)?.sessionFile).toBe("/sessions/session-1.jsonl");
       projection.clear();
       controller.applyDesktopProjection([]);
       expect(controller.directory.resolve(target)).toBeUndefined();

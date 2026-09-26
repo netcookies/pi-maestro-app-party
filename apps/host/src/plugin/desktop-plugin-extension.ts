@@ -4,7 +4,7 @@ import { join, normalize } from "node:path";
 import { randomUUID } from "node:crypto";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import type { ImageContent, Model, TextContent } from "@earendil-works/pi-ai";
-import type { DesktopPluginEvent, DesktopPluginModel, DesktopPluginRuntimeStatus, DesktopPluginSessionSummary, DesktopPluginTarget, DesktopAskRequest, JsonValue } from "@maestro-mobile/shared";
+import type { DesktopPluginEvent, DesktopPluginModel, DesktopPluginRuntimeStatus, DesktopPluginSessionSummary, DesktopPluginTarget, DesktopAskRequest, DesktopPlanResponse, JsonValue } from "@maestro-mobile/shared";
 import { DesktopPluginIpcClient } from "./desktop-plugin-ipc.js";
 import {
   beginDesktopPluginRuntimeRecord,
@@ -18,6 +18,11 @@ import {
   type FlowAskTransport,
   type FlowAskTransportResult,
 } from "./flow-ask-transport.js";
+import {
+  registerFlowPlanTransport,
+  createDesktopPlanTransport,
+  type DesktopPlanTransport,
+} from "./flow-plan-transport.js";
 
 const DEFAULT_SOCKET_PATH = join(homedir(), ".pi", "maestro-mobile", "ipc", "desktop-plugin.sock");
 const DEFAULT_SECRET_PATH = join(homedir(), ".pi", "maestro-mobile-ipc-secret");
@@ -146,6 +151,9 @@ export function createDesktopPluginExtension(options: DesktopPluginExtensionOpti
     const pendingAskRequests = new Map<string, PendingAsk>();
     const retiredAskKeys = new Set<string>();
     let unregisterFlowAskTransport: (() => void) | undefined;
+    let planTransport: DesktopPlanTransport | undefined;
+    let unregisterFlowPlanTransport: (() => void) | undefined;
+
     const updateRuntime = (patch: Parameters<typeof updateDesktopPluginRuntimeRecord>[1]): void => {
       if (runtimeGenerationToken) updateDesktopPluginRuntimeRecord(runtimeGenerationToken, patch);
     };
@@ -290,13 +298,15 @@ export function createDesktopPluginExtension(options: DesktopPluginExtensionOpti
             onRequest: (request) => sessionAdapter.execute(request),
             onAskResponse: async (response) => {
               const key = askCorrelationKey(response.requestId, response.toolCallId);
+              if (retiredAskKeys.has(key)) return;
               if (pendingAskRequests.has(key)) {
                 settlePendingAsk(key, flowResultFromDesktopResponse(response.response));
                 return;
               }
-              if (retiredAskKeys.delete(key)) return;
-              // 兼容仍走旧 Desktop Ask 文件桥的非 Flow 请求。
               await sessionAdapter.answerAsk(response);
+            },
+            onPlanResponse: async (response: DesktopPlanResponse) => {
+              if (!planTransport?.handleResponse(response)) throw new Error("unknown_plan_response");
             },
             onDisconnected: () => {
               if (client !== candidate) return;
@@ -336,6 +346,11 @@ export function createDesktopPluginExtension(options: DesktopPluginExtensionOpti
               type: "desktop_plugin_event", event: "thinking_level_select", level: latestThinkingLevel,
             }).catch(() => undefined);
           }
+          if (!isCurrentSession(generation, sessionAdapter)) {
+            abandonCandidate(candidate);
+            return;
+          }
+          await planTransport?.resendPending(candidate);
           if (!isCurrentSession(generation, sessionAdapter)) {
             abandonCandidate(candidate);
             return;
@@ -381,12 +396,22 @@ export function createDesktopPluginExtension(options: DesktopPluginExtensionOpti
       retiredAskKeys.clear();
       unregisterFlowAskTransport?.();
       unregisterFlowAskTransport = registerFlowAskTransport(flowAskTransport);
+      planTransport?.cancelAll();
+      unregisterFlowPlanTransport?.();
+      unregisterFlowPlanTransport = undefined;
       const target: DesktopPluginTarget = {
         sessionId: ctx.sessionManager.getSessionId(),
         endpointId: options.endpointId ?? `desktop-${randomUUID()}`,
         normalizedCwd: normalize(ctx.cwd),
         processGeneration: options.processGeneration ?? randomUUID(),
       };
+      planTransport = createDesktopPlanTransport({
+        getClient: () => client,
+        isCurrent: (request) => !stopping
+          && request.sessionId === target.sessionId
+          && normalize(request.cwd) === target.normalizedCwd,
+      });
+      unregisterFlowPlanTransport = registerFlowPlanTransport(planTransport);
       // `sendUserMessage` 返回 void 且失败被 SDK 吞进 emitError（调用方无法 catch），
       // 因此在此提前执行投递预检，用带 code 的抛错把它变成可观测结果。
       // 无条件预检（不判 isIdle）是安全的：能进入流式状态的会话必然已有可用模型与凭据，
@@ -556,7 +581,9 @@ export function createDesktopPluginExtension(options: DesktopPluginExtensionOpti
       for (const key of [...pendingAskRequests.keys()]) settlePendingAsk(key, { status: "cancelled" });
       unregisterFlowAskTransport?.();
       unregisterFlowAskTransport = undefined;
-      retiredAskKeys.clear();
+      planTransport?.cancelAll();
+      unregisterFlowPlanTransport?.();
+      unregisterFlowPlanTransport = undefined;
       if (reconnectTimer) {
         clearTimeout(reconnectTimer);
         reconnectTimer = undefined;

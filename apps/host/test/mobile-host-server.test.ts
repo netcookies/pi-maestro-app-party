@@ -11,13 +11,8 @@ import WebSocket from "ws";
 /** 版本断言必须跟 package.json 走：硬编码会在每次发版后失效（CI 构建即此失败）。 */
 const HOST_VERSION = (JSON.parse(await readFile(new URL("../package.json", import.meta.url), "utf8")) as { version: string }).version;
 
-function stubRuntimeFactory() {
-  return {
-    createRuntime: async () => {
-      throw new Error("Not implemented in test");
-    },
-    listSessions: async () => [],
-  };
+function sessionCatalog() {
+  return { listSessions: async () => [] };
 }
 
 function protocolHello() {
@@ -51,7 +46,7 @@ async function createTestServer(token?: string, options: ConstructorParameters<t
   const tmpDir = join(tmpdir(), `maestro-server-test-${randomUUID()}`);
   await mkdir(tmpDir, { recursive: true });
   const reader = new MaestroStateReader({ projectRoot: tmpDir });
-  const controller = new HostController(stubRuntimeFactory(), reader);
+  const controller = new HostController(sessionCatalog(), reader);
   const server = new MobileHostServer(controller, { ...(token ? { token } : {}), ...options });
   await server.listen(0, "127.0.0.1");
   const port = server.address().port;
@@ -267,6 +262,26 @@ describe("MobileHostServer", () => {
     ws.close();
   });
 
+  it("returns the compatibility rejection for a legacy close_session command", async () => {
+    const ws = await connectV2(ctx.url);
+    const reply = await new Promise<{ ok: boolean; status: string; error: { code: string } }>((resolve, reject) => {
+      ws.on("message", function handler(data) {
+        const msg = JSON.parse(data.toString()) as { type: string; ok: boolean; status: string; error: { code: string } };
+        if (msg.type !== "command_result") return;
+        ws.off("message", handler);
+        resolve(msg);
+      });
+      ws.once("error", reject);
+      ws.send(JSON.stringify({ id: "legacy-close", type: "close_session", sessionId: "session-a" }));
+    });
+    expect(reply).toMatchObject({
+      ok: false,
+      status: "unknown",
+      error: { code: "session_close_disabled" },
+    });
+    ws.close();
+  });
+
   it("broadcasts maestro_state events to websocket clients", async () => {
     const ws = await connectV2(ctx.url);
 
@@ -317,7 +332,7 @@ describe("MobileHostServer", () => {
           if (msg.type === "command_result") resolve(msg);
         });
       });
-      ws.send(JSON.stringify({ id: "shadow-prompt", type: "prompt", sessionId: "missing", message: "no-op" }));
+      ws.send(JSON.stringify({ id: "shadow-prompt", type: "prompt", sessionId: "missing", target: { sessionId: "missing", endpointId: "desktop", normalizedCwd: ctx.tmpDir, processGeneration: "generation-1" }, message: "no-op" }));
       await expect(reply).resolves.toEqual(expect.objectContaining({ ok: true, status: "observed", result: { rolloutMode: "shadow", operation: "prompt" } }));
       ws.close();
     } finally {
@@ -355,104 +370,6 @@ describe("MobileHostServer", () => {
     expect(msg.ok).toBe(false);
     expect(msg.error.code).toBe("unsupported_command");
     ws.close();
-  });
-
-  it("prompt command routes only to matching session TUI and never pollutes monitor session", async () => {
-    let runnerPromptCalled = false;
-    const workerRunner = {
-      id: "sess-worker-1",
-      state: {
-        id: "sess-worker-1", cwd: ctx.tmpDir, title: "Worker Task", runState: "idle",
-        messageCount: 0, pendingMessageCount: 0, updatedAt: "",
-      },
-      hasMoreHistory: false,
-      snapshot: () => ({ session: workerRunner.state, timeline: [], nextSeq: 0, hasMoreHistory: false }),
-      eventsSince: () => [],
-      loadMoreHistory: async () => ({ items: [], hasMore: false, totalEntries: 0 }),
-      searchHistory: async () => ({ matches: [], totalEntries: 0 }),
-      prompt: async () => { runnerPromptCalled = true; },
-      steer: async () => {},
-      followUp: async () => {},
-      abort: async () => {},
-      respondToExtensionUi: () => false,
-      dispose: async () => {},
-    };
-
-    (ctx.controller as unknown as { directory: { registerHostRunner: (runner: typeof workerRunner) => unknown } }).directory.registerHostRunner(workerRunner);
-
-    // 模拟 telemetry 中同一个 cwd 下有一个活跃的 monitor 窗口和一个离线的 worker 窗口
-    const fakeOwners = [
-      {
-        workspaceId: "ws-test",
-        normalizedCwd: ctx.tmpDir,
-        ownerId: "owner-monitor-62ebda",
-        ownerNonce: "nonce-mon",
-        pid: 1001,
-        sessionId: "sess-monitor-control",
-        publishedAt: 2000,
-        alive: true,
-        ageMs: 10,
-        contextPressure: 50,
-        agents: [],
-        settled: [],
-        backgroundJobs: [],
-      },
-    ];
-
-    (ctx.controller as unknown as { telemetryReader: { read: () => Promise<{ owners: typeof fakeOwners }> } }).telemetryReader = {
-      read: async () => ({ owners: fakeOwners }),
-    };
-
-    // 发送 prompt 给 sess-worker-1
-    const ws = await connectV2(ctx.url);
-    await new Promise<void>((resolve, reject) => {
-      ws.send(JSON.stringify({ type: "prompt", sessionId: "sess-worker-1", message: "这是给Worker的任务", id: "cmd-prompt-1" }));
-      ws.on("message", (data) => {
-        const msg = JSON.parse(data.toString()) as { type: string; ok: boolean; result?: { injectedToTui: boolean } };
-        if (msg.type === "command_result") {
-          expect(msg.ok).toBe(true);
-          expect(msg.result?.injectedToTui).toBeUndefined();
-          expect(runnerPromptCalled).toBe(true);
-          ws.close();
-          resolve();
-        }
-      });
-      ws.on("error", reject);
-    });
-  });
-
-  it("handles abort command: calls runner.abort when session is in host memory", async () => {
-    let abortCalled = false;
-    const runner = {
-      id: "sess-host-run",
-      state: { id: "sess-host-run", cwd: ctx.tmpDir, title: "Host Run", runState: "streaming", messageCount: 1, pendingMessageCount: 0, updatedAt: "" },
-      hasMoreHistory: false,
-      snapshot: () => ({ session: runner.state, timeline: [], nextSeq: 0, hasMoreHistory: false }),
-      eventsSince: () => [],
-      loadMoreHistory: async () => ({ items: [], hasMore: false, totalEntries: 0 }),
-      searchHistory: async () => ({ matches: [], totalEntries: 0 }),
-      prompt: async () => {},
-      steer: async () => {},
-      followUp: async () => {},
-      abort: async () => { abortCalled = true; },
-      respondToExtensionUi: () => false,
-      dispose: async () => {},
-    };
-    (ctx.controller as unknown as { directory: { registerHostRunner: (runner: typeof runner) => unknown } }).directory.registerHostRunner(runner);
-
-    const ws = await connectV2(ctx.url);
-    await new Promise<void>((resolve, reject) => {
-      ws.send(JSON.stringify({ type: "abort", sessionId: "sess-host-run", id: "cmd-abort-1" }));
-      ws.on("message", (raw) => {
-        const d = JSON.parse(raw.toString());
-        if (d.type === "command_result" && d.in_reply_to === "cmd-abort-1") {
-          expect(abortCalled).toBe(true);
-          ws.close();
-          resolve();
-        }
-      });
-      ws.on("error", reject);
-    });
   });
 
   it("forwards readerless Desktop asks to Mobile and routes exact-target answers", async () => {
@@ -519,7 +436,7 @@ describe("MobileHostServer", () => {
   it("returns target unavailable for an unregistered desktop session", async () => {
     const ws = await connectV2(ctx.url);
     await new Promise<void>((resolve, reject) => {
-      ws.send(JSON.stringify({ type: "abort", sessionId: "sess-desktop-tui-1", id: "cmd-abort-2" }));
+      ws.send(JSON.stringify({ type: "abort", sessionId: "sess-desktop-tui-1", target: { sessionId: "sess-desktop-tui-1", endpointId: "desktop", normalizedCwd: ctx.tmpDir, processGeneration: "generation-1" }, id: "cmd-abort-2" }));
       ws.on("message", (raw) => {
         const d = JSON.parse(raw.toString());
         if (d.type === "command_result" && d.in_reply_to === "cmd-abort-2") {

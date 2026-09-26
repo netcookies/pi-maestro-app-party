@@ -194,7 +194,7 @@ export function createChatMarkdownStyles(theme: AppTheme) {
       borderRadius: 6,
       marginVertical: 8,
       overflow: "hidden",
-      minWidth: 0,
+      alignSelf: "flex-start",
     },
     thead: {
       backgroundColor: isDark ? "rgba(255,255,255,0.06)" : "rgba(0,0,0,0.04)",
@@ -215,14 +215,18 @@ export function createChatMarkdownStyles(theme: AppTheme) {
       fontWeight: "700",
       color: theme.text,
       fontSize: 13,
-      flex: 1,
+      flexGrow: 0,
+      flexShrink: 0,
+      minWidth: 120,
     },
     td: {
       paddingHorizontal: 8,
       paddingVertical: 6,
       color: theme.text,
       fontSize: 13,
-      flex: 1,
+      flexGrow: 0,
+      flexShrink: 0,
+      minWidth: 120,
     },
   });
 }

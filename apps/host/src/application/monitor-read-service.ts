@@ -1,9 +1,11 @@
-import type { MonitorState, WorkspaceTelemetryState } from "@maestro-mobile/shared";
-import { projectMonitorWindows, telemetryStableKeyFromWindows } from "../monitor-projection.js";
+import { randomUUID } from "node:crypto";
+import type { ExecutionProjection, MonitorState, WorkspaceTelemetryState } from "@maestro-mobile/shared";
+import { projectExecutionProjections, projectMonitorWindows, telemetryStableKeyFromWindows } from "../monitor-projection.js";
 import type { WorkspaceTelemetryReader } from "../workspace-telemetry.js";
 
 export interface MonitorReadSnapshot {
   state: MonitorState;
+  projections: ExecutionProjection[];
   stableKey: string;
   revision: number;
 }
@@ -17,6 +19,8 @@ export type MonitorTelemetrySource = Pick<WorkspaceTelemetryReader, "read"> | ((
 export class MonitorReadService {
   private lastStableKey: string | undefined;
   private revision = 0;
+  private readonly epoch = randomUUID();
+
 
   private readChain: Promise<void> = Promise.resolve();
 
@@ -43,6 +47,7 @@ export class MonitorReadService {
         }
         resolveResult({
           state: { ...state, revision: this.revision },
+          projections: projectExecutionProjections(telemetry, this.epoch, this.revision),
           stableKey,
           revision: this.revision,
         });

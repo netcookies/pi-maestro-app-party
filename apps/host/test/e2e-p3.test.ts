@@ -11,42 +11,12 @@ import { join } from "node:path";
 /**
  * P3 端到端集成测试（真实 WebSocket 传输）
  *
- * 场景 1（ask 闭环）：runner 的 bridge 触发 ctx.select
- *   → extension_ui_request 事件 → server 广播 → WS 客户端收到
- *   → 客户端发送 extension_ui_response 命令 → bridge resolve → select 返回答案
- *
+ * 场景 1（disabled lifecycle）：open_session 在没有 exact Desktop target 时确定性拒绝
  * 场景 2（maestro 状态流）：host 轮询 flow-schedule → maestro_state 推送到 WS 客户端
  */
 
-// 可控的 fake Pi SDK 会话
-function makeFakeRuntime() {
-  const subscribers = new Set<(e: unknown) => void>();
-  const session = {
-    sessionId: "sess-fake-1",
-    sessionName: "fake",
-    cwd: "/tmp",
-    messages: [] as unknown[],
-    pendingMessageCount: 0,
-    isStreaming: false,
-    isCompacting: false,
-    model: undefined,
-    thinkingLevel: undefined,
-    prompt: async () => undefined,
-    steer: async () => undefined,
-    followUp: async () => undefined,
-    abort: async () => undefined,
-    subscribe: (fn: (e: unknown) => void) => {
-      subscribers.add(fn);
-      return () => subscribers.delete(fn);
-    },
-    bindExtensions: async () => undefined,
-  };
-  return {
-    session,
-    cwd: "/tmp",
-    dispose: async () => undefined,
-    runtime: { session, cwd: "/tmp", dispose: async () => undefined },
-  };
+function sessionCatalog() {
+  return { listSessions: async () => [] };
 }
 
 describe("P3 E2E: host ↔ mobile over WebSocket", () => {
@@ -54,16 +24,11 @@ describe("P3 E2E: host ↔ mobile over WebSocket", () => {
   let server: MobileHostServer;
   let port: number;
   let tmpDir: string;
-  let fakeRuntime: ReturnType<typeof makeFakeRuntime>;
 
   beforeAll(async () => {
     tmpDir = await mkdtemp(join(tmpdir(), "e2e-maestro-"));
-    fakeRuntime = makeFakeRuntime();
     const reader = new MaestroStateReader({ projectRoot: tmpDir });
-    controller = new HostController({
-      createRuntime: async () => fakeRuntime.runtime,
-      listSessions: async () => [],
-    }, reader);
+    controller = new HostController(sessionCatalog(), reader);
     server = new MobileHostServer(controller, {});
     await server.listen(0, "127.0.0.1");
     port = server.address().port;
@@ -90,51 +55,19 @@ describe("P3 E2E: host ↔ mobile over WebSocket", () => {
     });
   }
 
-  it("场景1: ask 闭环 — select 弹窗经 WS 到达客户端并可应答", async () => {
-    // 打开会话（使用 fake runtime）
-    const runner = await controller.openSession({ cwd: "/tmp", mode: "create" });
-    expect(runner.id).toBe("sess-fake-1");
-
+  it("场景1: open_session 无 exact target 时确定性拒绝", async () => {
     const ws = await connectClient();
-    const received: HostEvent[] = [];
-    ws.on("message", (data) => {
-      const msg = JSON.parse(data.toString()) as HostEvent;
-      received.push(msg);
+    const reply = new Promise<Record<string, unknown>>((resolve) => {
+      ws.on("message", (data) => {
+        const frame = JSON.parse(data.toString()) as Record<string, unknown>;
+        if (frame.type === "command_result" && frame.in_reply_to === "disabled-open") resolve(frame);
+      });
     });
-
-    // host 侧模拟 maestro 调用 ask（ctx.select）
-    const selectPromise = runner.bridge.createContext().select("选择模型", ["Claude", "GPT", "Gemini"]);
-
-    // 等待 extension_ui_request 到达客户端
-    await new Promise<void>((resolve) => {
-      const check = () => {
-        if (received.some((e) => e.type === "extension_ui_request")) resolve();
-        else setTimeout(check, 20);
-      };
-      check();
-    });
-
-    const reqEvent = received.find(
-      (e): e is Extract<HostEvent, { type: "extension_ui_request" }> =>
-        e.type === "extension_ui_request",
-    )!;
-    expect(reqEvent.request.method).toBe("select");
-    expect(reqEvent.request.options).toEqual(["Claude", "GPT", "Gemini"]);
-
-    // 客户端发送应答命令
-    const requestId = reqEvent.request.id;
-    ws.send(JSON.stringify({
-      id: `response-${requestId}`,
-      type: "extension_ui_response",
-      sessionId: "sess-fake-1",
-      requestId,
-      response: { id: requestId, value: "GPT" },
-    }));
-
-    const answer = await selectPromise;
-    expect(answer).toBe("GPT");
+    ws.send(JSON.stringify({ id: "disabled-open", type: "open_session", cwd: "/tmp", mode: "create" }));
+    await expect(reply).resolves.toMatchObject({ ok: false, error: { code: "session_creation_disabled" } });
     ws.close();
   });
+
 
   it("场景2: maestro_state 经 WS 推送到客户端", async () => {
     const ws = await connectClient();

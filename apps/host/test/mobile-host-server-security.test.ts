@@ -11,20 +11,15 @@ import WebSocket from "ws";
 /** 版本断言必须跟 package.json 走：硬编码会在每次发版后失效（CI 构建即此失败）。 */
 const HOST_VERSION = (JSON.parse(await readFile(new URL("../package.json", import.meta.url), "utf8")) as { version: string }).version;
 
-function stubRuntimeFactory() {
-  return {
-    createRuntime: async () => {
-      throw new Error("Not implemented in test");
-    },
-    listSessions: async () => [],
-  };
+function sessionCatalog() {
+  return { listSessions: async () => [] };
 }
 
 async function createTestServer(options: { token?: string; allowedOrigins?: string[] } = {}) {
   const tmpDir = join(tmpdir(), `maestro-server-test2-${randomUUID()}`);
   await mkdir(tmpDir, { recursive: true });
   const reader = new MaestroStateReader({ projectRoot: tmpDir });
-  const controller = new HostController(stubRuntimeFactory(), reader);
+  const controller = new HostController(sessionCatalog(), reader);
   const server = new MobileHostServer(controller, options);
   await server.listen(0, "127.0.0.1");
   const port = server.address().port;

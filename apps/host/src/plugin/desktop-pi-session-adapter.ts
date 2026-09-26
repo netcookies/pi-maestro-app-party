@@ -61,6 +61,7 @@ export class DesktopPiSessionAdapter {
       ...(api.listModels ? ["list_models" as const] : []),
       ...(api.listSkills ? ["list_skills" as const] : []),
       ...(ask.supported ? ["ask-user-question" as const] : []),
+      "plan",
     ];
   }
 

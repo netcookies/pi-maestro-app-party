@@ -5,6 +5,7 @@ import type { SessionDirectory, SessionTargetIdentity } from "../control/Session
 
 export type SessionCommandKind = "prompt" | "steer" | "follow_up" | "abort" | "set_model" | "set_thinking";
 
+
 export interface SessionCommand {
   requestId: string;
   target: SessionTargetIdentity;
@@ -58,40 +59,16 @@ export class SessionCommandService {
       const target = this.directory.resolve(command.target, command.kind);
       if (!target) return result(command, this.directory.revision, "unknown", { code: "target_unavailable" });
 
-      if (target.kind === "desktop") {
-        if (!this.desktopGateway) {
-          return result(command, this.directory.revision, "unknown", { code: "desktop_gateway_unavailable" });
-        }
-        try {
-          const response = await this.desktopGateway.execute(command);
-          return { ...response, requestId: command.requestId, operation: command.kind, revision: this.directory.revision };
-        } catch (error) {
-          const details = normalizeHostError(error, "transport");
-          return result(command, this.directory.revision, "unknown", { code: details.code, message: details.message, details });
-        }
+      if (target.kind !== "desktop") return result(command, this.directory.revision, "unknown", { code: "target_unavailable" });
+      if (!this.desktopGateway) {
+        return result(command, this.directory.revision, "unknown", { code: "desktop_gateway_unavailable" });
       }
-
-      const runner = target.runner;
-      if (!runner) return result(command, this.directory.revision, "unknown", { code: "host_runner_unavailable" });
       try {
-        if (command.kind === "prompt") {
-          if (runner.state.runState === "streaming") await runner.steer(command.message ?? "");
-          else await runner.prompt(command.message ?? "", undefined, command.images);
-        } else if (command.kind === "steer") await runner.steer(command.message ?? "");
-        else if (command.kind === "follow_up") await runner.followUp(command.message ?? "");
-        else if (command.kind === "set_model") {
-          if (!command.modelId || typeof runner.setModel !== "function") throw new Error("model_unavailable");
-          const changed = await runner.setModel(command.modelId, command.provider);
-          if (!changed.ok) return result(command, this.directory.revision, "failed", { code: changed.error ?? "model_change_failed" });
-        } else if (command.kind === "set_thinking") {
-          if (!command.level || typeof runner.setThinking !== "function") throw new Error("thinking_unavailable");
-          const changed = runner.setThinking(command.level);
-          if (!changed.ok) return result(command, this.directory.revision, "failed", { code: changed.error ?? "thinking_change_failed" });
-        } else await runner.abort();
-        return result(command, this.directory.revision, "observed");
+        const response = await this.desktopGateway.execute(command);
+        return { ...response, requestId: command.requestId, operation: command.kind, revision: this.directory.revision };
       } catch (error) {
-        const details = normalizeHostError(error, "command");
-        return result(command, this.directory.revision, "failed", { code: details.code, message: details.message, details });
+        const details = normalizeHostError(error, "transport");
+        return result(command, this.directory.revision, "unknown", { code: details.code, message: details.message, details });
       }
     });
   }

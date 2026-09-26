@@ -2,6 +2,8 @@ import { normalize } from "node:path";
 import type {
   DesktopAskResponse,
   DesktopAskResult,
+  DesktopPlanResponse,
+  DesktopPlanResult,
   DesktopBrokerDeltaMutation,
   DesktopBrokerTargetRecord,
   DesktopPluginCapability,
@@ -20,6 +22,7 @@ import {
 export interface DesktopPluginTransport {
   request(request: DesktopPluginRequest): Promise<DesktopPluginResult>;
   answerAsk?(response: DesktopAskResponse): Promise<DesktopAskResult>;
+  answerPlan?(response: DesktopPlanResponse): Promise<DesktopPlanResult>;
   close(): void;
 }
 export interface DesktopPluginRegistration {

@@ -41,6 +41,26 @@ describe("AppState reducer", () => {
     expect(state.dialogs).toEqual([]);
   });
 
+  it("stores independent execution projections by exact target and orders by epoch/revision", () => {
+    const target = { workspaceId: "ws-1", ownerId: "owner-1", ownerNonce: "nonce-1", endpointId: "sess-1" };
+    const projection = (epoch: string, revision: number, subject: string) => ({
+      schemaVersion: 1 as const,
+      source: "todo" as const,
+      scope: "owner" as const,
+      target,
+      epoch,
+      revision,
+      observedAt: "2026-01-01T00:00:00.000Z",
+      snapshot: true as const,
+      data: { items: [{ id: "todo-1", subject, status: "pending", updatedAt: revision }] },
+    });
+    let state = createInitialState();
+    state = reduceEvent(state, { type: "todo_projection_updated", projection: projection("nonce-1", 2, "new"), seq: 1 });
+    state = reduceEvent(state, { type: "todo_projection_updated", projection: projection("nonce-1", 1, "stale"), seq: 2 });
+    expect([...state.todoProjections.values()][0]?.data.items[0]?.subject).toBe("new");
+    state = reduceEvent(state, { type: "todo_projection_updated", projection: projection("nonce-2", 1, "restarted"), seq: 3 });
+    expect([...state.todoProjections.values()][0]?.data.items[0]?.subject).toBe("restarted");
+  });
   it("stores authoritative execution summaries by exact target and ignores stale revisions", () => {
     const first = { sessionId: "execution", endpointId: "endpoint-a", normalizedCwd: "/work", processGeneration: "generation-1" };
     const sibling = { ...first, endpointId: "endpoint-b", processGeneration: "generation-2" };

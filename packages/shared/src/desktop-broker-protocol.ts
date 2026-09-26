@@ -2,6 +2,10 @@ import type {
   DesktopAskRequest,
   DesktopAskResponse,
   DesktopAskResult,
+  DesktopPlanRequest,
+  DesktopPlanResponse,
+  DesktopPlanResult,
+  DesktopPlanCancel,
   DesktopPluginCapability,
   DesktopPluginEvent,
   DesktopPluginModel,
@@ -18,6 +22,10 @@ import {
   isDesktopPluginSessionSummary,
   isDesktopPluginTarget,
   isDesktopAskResult,
+  isDesktopPlanRequest,
+  isDesktopPlanResponse,
+  isDesktopPlanResult,
+  isDesktopPlanCancel,
   isExtensionUiResponse,
 } from "./desktop-plugin-protocol.js";
 import type { JsonValue } from "./protocol.js";
@@ -121,6 +129,30 @@ export interface DesktopBrokerAskCancel {
   response: DesktopAskResponse;
 }
 
+export interface DesktopBrokerPlanRequest {
+  type: "desktop_broker_plan_request";
+  target: DesktopPluginTarget;
+  request: DesktopPlanRequest;
+}
+
+export interface DesktopBrokerPlanResponse {
+  type: "desktop_broker_plan_response";
+  target: DesktopPluginTarget;
+  response: DesktopPlanResponse;
+}
+
+export interface DesktopBrokerPlanResult {
+  type: "desktop_broker_plan_result";
+  target: DesktopPluginTarget;
+  result: DesktopPlanResult;
+}
+
+export interface DesktopBrokerPlanCancel {
+  type: "desktop_broker_plan_cancel";
+  target: DesktopPluginTarget;
+  cancel: DesktopPlanCancel;
+}
+
 export interface DesktopBrokerPing {
   type: "desktop_broker_ping";
   nonce: string;
@@ -130,7 +162,6 @@ export interface DesktopBrokerPong {
   type: "desktop_broker_pong";
   nonce: string;
 }
-
 export type DesktopBrokerErrorCode =
   | "authentication_failed"
   | "protocol_version_unsupported"
@@ -169,6 +200,10 @@ export type DesktopBrokerToHostFrame =
   | DesktopBrokerAskRequest
   | DesktopBrokerAskResult
   | DesktopBrokerAskCancel
+  | DesktopBrokerPlanRequest
+  | DesktopBrokerPlanResponse
+  | DesktopBrokerPlanResult
+  | DesktopBrokerPlanCancel
   | DesktopBrokerPong
   | DesktopBrokerError;
 
@@ -176,6 +211,7 @@ export type DesktopHostToBrokerFrame =
   | DesktopBrokerReady
   | DesktopBrokerCommand
   | DesktopBrokerAskResponse
+  | DesktopBrokerPlanResponse
   | DesktopBrokerPing
   | DesktopBrokerError;
 
@@ -215,8 +251,16 @@ export function isDesktopBrokerToHostFrame(value: unknown): value is DesktopBrok
       return isDesktopPluginTarget(value.target) && isDesktopAskRequest(value.request);
     case "desktop_broker_ask_result":
       return isDesktopPluginTarget(value.target) && isDesktopAskResult(value.result);
+    case "desktop_broker_plan_result":
+      return isDesktopPluginTarget(value.target) && isDesktopPlanResult(value.result);
     case "desktop_broker_ask_cancel":
       return isDesktopPluginTarget(value.target) && isDesktopAskResponse(value.response) && value.response.response.cancelled === true;
+    case "desktop_broker_plan_request":
+      return isDesktopPluginTarget(value.target) && isDesktopPlanRequest(value.request);
+    case "desktop_broker_plan_response":
+      return isDesktopPluginTarget(value.target) && isDesktopPlanResponse(value.response);
+    case "desktop_broker_plan_cancel":
+      return isDesktopPluginTarget(value.target) && isDesktopPlanCancel(value.cancel);
     case "desktop_broker_pong":
       return stringFields(value, "nonce");
     case "desktop_broker_error":
@@ -237,6 +281,8 @@ export function isDesktopHostToBrokerFrame(value: unknown): value is DesktopHost
       return isDesktopPluginRequest(value.request);
     case "desktop_broker_ask_response":
       return isDesktopPluginTarget(value.target) && isDesktopAskResponse(value.response);
+    case "desktop_broker_plan_response":
+      return isDesktopPluginTarget(value.target) && isDesktopPlanResponse(value.response);
     case "desktop_broker_ping":
       return stringFields(value, "nonce");
     case "desktop_broker_error":
@@ -320,7 +366,7 @@ function isDesktopBrokerError(value: unknown): value is DesktopBrokerError {
 }
 
 function isDesktopPluginCapabilityArray(value: unknown): value is DesktopPluginCapability[] {
-  return Array.isArray(value) && value.every((item) => item === "prompt" || item === "steer" || item === "follow_up" || item === "abort" || item === "set_model" || item === "set_thinking" || item === "list_models" || item === "list_skills" || item === "ask-user-question");
+  return Array.isArray(value) && value.every((item) => item === "prompt" || item === "steer" || item === "follow_up" || item === "abort" || item === "set_model" || item === "set_thinking" || item === "list_models" || item === "list_skills" || item === "ask-user-question" || item === "plan");
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

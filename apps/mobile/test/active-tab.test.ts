@@ -32,7 +32,7 @@ function session(runtimeStatus: SessionRuntimeStatus, mode: SessionControlMode):
 
 describe("Current session filtering", () => {
   const statuses: SessionRuntimeStatus[] = ["running", "idle", "sleeping", "history"];
-  const modes: SessionControlMode[] = ["host", "desktop_plugin", "readonly"];
+  const modes: SessionControlMode[] = ["desktop_plugin", "readonly"];
 
   it.each(statuses.flatMap((runtimeStatus) => modes.map((mode) => ({ runtimeStatus, mode }))))(
     "derives $runtimeStatus + $mode from the runtime and visibility axes",

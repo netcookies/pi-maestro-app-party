@@ -4,7 +4,8 @@ import { validateHostEvent, validateClientCommand, validateJsonSerializable } fr
 describe("validation", () => {
   it("accepts well-formed events and commands", () => {
     expect(() => validateHostEvent({ type: "host_status", status: "idle", seq: 1 })).not.toThrow();
-    expect(() => validateClientCommand({ type: "abort", sessionId: "s1" })).not.toThrow();
+    const target = { sessionId: "s1", endpointId: "desktop-1", normalizedCwd: "/work", processGeneration: "generation-1" };
+    expect(() => validateClientCommand({ type: "abort", sessionId: "s1", target })).not.toThrow();
   });
 
   it("rejects malformed inputs", () => {
@@ -26,19 +27,22 @@ describe("validation", () => {
  */
 describe("validateClientCommand 的 id 类型校验（ISS-003）", () => {
   it("字符串 id 合法（现有客户端形态：cmd-N）", () => {
-    expect(() => validateClientCommand({ type: "abort", sessionId: "s1", id: "cmd-7" })).not.toThrow();
+    const target = { sessionId: "s1", endpointId: "desktop-1", normalizedCwd: "/work", processGeneration: "generation-1" };
+    expect(() => validateClientCommand({ type: "abort", sessionId: "s1", target, id: "cmd-7" })).not.toThrow();
   });
 
   it("无 id 仍合法（向后兼容：id 不在 ClientCommand 类型联合中）", () => {
-    expect(() => validateClientCommand({ type: "abort", sessionId: "s1" })).not.toThrow();
-    expect(() => validateClientCommand({ type: "abort", sessionId: "s1", id: undefined })).not.toThrow();
+    const target = { sessionId: "s1", endpointId: "desktop-1", normalizedCwd: "/work", processGeneration: "generation-1" };
+    expect(() => validateClientCommand({ type: "abort", sessionId: "s1", target })).not.toThrow();
+    expect(() => validateClientCommand({ type: "abort", sessionId: "s1", target, id: undefined })).not.toThrow();
   });
 
   it("数值 id 被拒且文案指明是 id 问题（服务端据此回 invalid_command，不再挂 30s）", () => {
     // 旧行为：数值 id 被服务端盲目回显 → 客户端 in_reply_to 归一为 "" → 匹配不到 → 挂 30s
     let err: Error | undefined;
+    const target = { sessionId: "s1", endpointId: "desktop-1", normalizedCwd: "/work", processGeneration: "generation-1" };
     try {
-      validateClientCommand({ type: "abort", sessionId: "s1", id: 42 });
+      validateClientCommand({ type: "abort", sessionId: "s1", target, id: 42 });
     } catch (e) {
       err = e as Error;
     }
@@ -48,8 +52,9 @@ describe("validateClientCommand 的 id 类型校验（ISS-003）", () => {
   });
 
   it("其它非字符串 id（null/对象/布尔）一律被拒", () => {
+    const target = { sessionId: "s1", endpointId: "desktop-1", normalizedCwd: "/work", processGeneration: "generation-1" };
     for (const bad of [null, {}, true, ["x"]]) {
-      expect(() => validateClientCommand({ type: "abort", sessionId: "s1", id: bad })).toThrow(/id must be a string/);
+      expect(() => validateClientCommand({ type: "abort", sessionId: "s1", target, id: bad })).toThrow(/id must be a string/);
     }
   });
 

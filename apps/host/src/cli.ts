@@ -14,7 +14,8 @@
 import { HostController } from "./host-controller.js";
 import { MobileHostServer } from "./server/mobile-host-server.js";
 import { MaestroStateReader } from "./maestro-state.js";
-import { PiSdkRuntimeFactory } from "./pi/pi-sdk-runtime.js";
+import { PiSessionCatalog } from "./pi/pi-sdk-runtime.js";
+
 import { randomBytes } from "node:crypto";
 import { readFile, writeFile, unlink, mkdir, chmod } from "node:fs/promises";
 import { homedir } from "node:os";
@@ -200,10 +201,12 @@ async function main(): Promise<void> {
 
   console.log(`[maestro-mobile] starting on ${cli.host}:${cli.port} (project: ${cli.projectRoot})`);
 
-  const runtimeFactory = new PiSdkRuntimeFactory(cli.projectRoot);
+  const sessionCatalog = new PiSessionCatalog(cli.projectRoot);
+
   const maestroReader = new MaestroStateReader({ projectRoot: cli.projectRoot });
   const projection = new DesktopBrokerProjectedRegistry();
-  const controller = new HostController(runtimeFactory, maestroReader, projection);
+  const controller = new HostController(sessionCatalog, maestroReader, projection);
+
   const desktopSecret = await loadOrCreateIpcSecret();
   const brokerHost = new DesktopBrokerHostIpc({
     socketPath: BROKER_HOST_SOCKET,
@@ -212,6 +215,8 @@ async function main(): Promise<void> {
     onProjection: (records) => controller.applyDesktopProjection(records),
     onAskRequest: (target, request) => controller.onDesktopAskRequest(target, request),
     onAskCancel: (target, response) => controller.onDesktopAskCancelled(target, response),
+    onPlanRequest: (target, request) => controller.onDesktopPlanRequest(target, request),
+    onPlanCancel: (target, cancel) => controller.onDesktopPlanCancelled(target, cancel),
   });
   controller.setDesktopBrokerLinkHealth(() => brokerHost.isConnected, () => brokerHost.isFlapping);
   const supervisor = new DesktopBrokerSupervisor({

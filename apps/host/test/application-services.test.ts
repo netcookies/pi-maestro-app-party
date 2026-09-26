@@ -1,5 +1,4 @@
 import { describe, expect, it, vi } from "vitest";
-import type { SessionRunner } from "../src/types.js";
 import { SessionDirectory, type SessionTargetIdentity } from "../src/control/SessionDirectory.js";
 import { SessionCommandService } from "../src/application/session-command-service.js";
 import { SessionQueryService } from "../src/application/session-query-service.js";
@@ -7,79 +6,7 @@ import { ApplicationCommandRouter } from "../src/application/application-command
 import { MonitorQueryService } from "../src/application/monitor-query-service.js";
 import { MonitorReadService } from "../src/application/monitor-read-service.js";
 
-function fakeRunner(id = "session-1", cwd = "/work/app") {
-  const calls = { prompt: 0, steer: 0, followUp: 0, abort: 0 };
-  const state = {
-    id,
-    cwd,
-    title: "Test session",
-    runState: "idle" as const,
-    messageCount: 2,
-    pendingMessageCount: 0,
-    updatedAt: "2026-01-01T00:00:00.000Z",
-  };
-  const runner = {
-    id,
-    state,
-    hasMoreHistory: false,
-    snapshot: () => ({ session: state, timeline: [], nextSeq: 1 }),
-    eventsSince: () => [],
-    loadMoreHistory: async () => ({ items: [], hasMore: false, totalEntries: 0 }),
-    searchHistory: async () => ({ matches: [], totalEntries: 0 }),
-    prompt: async () => { calls.prompt += 1; },
-    steer: async () => { calls.steer += 1; },
-    followUp: async () => { calls.followUp += 1; },
-    abort: async () => { calls.abort += 1; },
-    getUsage: async () => ({ entries: 1, input: 1, output: 2, cacheRead: 0, cacheWrite: 0, reasoning: 0, totalTokens: 3, cost: 0 }),
-    respondToExtensionUi: () => false,
-    dispose: async () => {},
-  } as SessionRunner;
-  return { runner, calls };
-}
-
 describe("SessionDirectory", () => {
-  it("resolves only the complete target identity and replaces stale runner presentation", () => {
-    const directory = new SessionDirectory();
-    const { runner } = fakeRunner();
-    runner.state.presentation = {
-      role: "session",
-      visibility: "session_list",
-      control: {
-        mode: "readonly",
-        canPrompt: false,
-        canSteer: false,
-        canFollowUp: false,
-        canAbort: false,
-        canAnswerAsk: false,
-      },
-      revision: 99,
-    };
-    const identity = directory.registerHostRunner(runner);
-
-    expect(directory.resolve(identity, "abort")?.runner).toBe(runner);
-    expect(runner.state.presentation).toMatchObject({
-      control: { mode: "host", canPrompt: true, canAbort: true },
-    });
-    expect(directory.resolve({ ...identity, normalizedCwd: "/work/other" }, "abort")).toBeUndefined();
-    expect(directory.resolve({ ...identity, processGeneration: "stale" }, "abort")).toBeUndefined();
-    expect(directory.resolve(identity, "ask")).toBeUndefined();
-  });
-
-  it("does not attach a Host runner when the Desktop cwd differs", () => {
-    const directory = new SessionDirectory();
-    const { runner } = fakeRunner("desktop-session", "/work/app");
-    const target: SessionTargetIdentity = {
-      sessionId: "desktop-session",
-      endpointId: "desktop-endpoint",
-      normalizedCwd: "/work/other",
-      processGeneration: "generation-1",
-    };
-    directory.register({ identity: target, kind: "desktop", capabilities: ["abort"] });
-
-    expect(directory.attachRunner(target, runner)).toBe(false);
-    expect(directory.resolve(target)?.runner).toBeUndefined();
-  });
-
   it("projects real Desktop Plugin capabilities instead of readonly", () => {
     const directory = new SessionDirectory();
     const identity = directory.registerDesktopTarget({
@@ -117,20 +44,6 @@ describe("SessionDirectory", () => {
 });
 
 describe("SessionCommandService", () => {
-  it("executes Host abort through runner.abort exactly once for duplicate requests", async () => {
-    const directory = new SessionDirectory();
-    const { runner, calls } = fakeRunner();
-    const target = directory.registerHostRunner(runner);
-    const service = new SessionCommandService(directory);
-    const command = { requestId: "req-1", target, kind: "abort" as const };
-
-    const [first, second] = await Promise.all([service.execute(command), service.execute(command)]);
-
-    expect(first.status).toBe("observed");
-    expect(second).toEqual(first);
-    expect(calls.abort).toBe(1);
-  });
-
   it("does not reuse a request across Desktop generations", async () => {
     const directory = new SessionDirectory();
     const gateway = vi.fn(async (command: { target: SessionTargetIdentity }) => ({
@@ -150,8 +63,7 @@ describe("SessionCommandService", () => {
 
   it("returns unknown for an unavailable exact target and a missing Desktop gateway", async () => {
     const directory = new SessionDirectory();
-    const { runner } = fakeRunner();
-    const target = directory.registerHostRunner(runner);
+    const target: SessionTargetIdentity = { sessionId: "same", endpointId: "desktop", normalizedCwd: "/work/app", processGeneration: "generation" };
     const service = new SessionCommandService(directory);
     const stale: SessionTargetIdentity = { ...target, processGeneration: "stale" };
 
@@ -160,7 +72,6 @@ describe("SessionCommandService", () => {
       error: { code: "target_unavailable" },
     });
 
-    directory.unregister(target);
     directory.register({ identity: target, kind: "desktop", capabilities: ["abort"] });
     await expect(service.execute({ requestId: "desktop", target, kind: "abort" })).resolves.toMatchObject({
       status: "unknown",
@@ -384,6 +295,7 @@ describe("SessionQueryService", () => {
             canFollowUp: true,
             canAbort: false,
             canAnswerAsk: true,
+            canPlan: false,
           },
           revision: 1,
         },
@@ -514,20 +426,19 @@ describe("SessionQueryService", () => {
     expect(page2.hasMore).toBe(false);
   });
 
-  it("serves snapshots and usage only through an exact Host target", async () => {
+  it("serves snapshots and usage only through an exact Desktop target", async () => {
     const directory = new SessionDirectory();
-    const { runner } = fakeRunner();
-    const target = directory.registerHostRunner(runner);
+    const target = directory.registerDesktopTarget({
+      sessionId: "desktop-session",
+      endpointId: "desktop-endpoint",
+      normalizedCwd: "/work/app",
+      processGeneration: "generation-1",
+    }, ["abort"]);
     const service = new SessionQueryService({ listSessions: async () => [] }, directory);
 
     await expect(service.snapshot(target)).resolves.toMatchObject({
       ok: true,
-      value: {
-        session: {
-          id: "session-1",
-          presentation: { control: { mode: "host", canPrompt: true, canAbort: true } },
-        },
-      },
+      value: { session: { id: "desktop-session", presentation: { control: { mode: "desktop_plugin", canAbort: true } } } },
     });
     await expect(service.usage({ ...target, normalizedCwd: "/wrong" })).resolves.toMatchObject({
       ok: false,
@@ -538,19 +449,12 @@ describe("SessionQueryService", () => {
 
   it("projects the exact Desktop target presentation into a snapshot", async () => {
     const directory = new SessionDirectory();
-    const { runner } = fakeRunner("desktop-session");
-    const target: SessionTargetIdentity = {
+    const target: SessionTargetIdentity = directory.registerDesktopTarget({
       sessionId: "desktop-session",
       endpointId: "desktop-endpoint",
       normalizedCwd: "/work/app",
       processGeneration: "generation-1",
-    };
-    directory.register({
-      identity: target,
-      kind: "desktop",
-      capabilities: ["prompt", "abort", "ask"],
-      runner,
-    });
+    }, ["prompt", "abort", "ask-user-question"]);
     const service = new SessionQueryService({ listSessions: async () => [] }, directory);
 
     await expect(service.snapshot(target)).resolves.toMatchObject({
@@ -558,14 +462,7 @@ describe("SessionQueryService", () => {
       value: {
         session: {
           id: "desktop-session",
-          presentation: {
-            control: {
-              mode: "desktop_plugin",
-              canPrompt: true,
-              canAbort: true,
-              canAnswerAsk: true,
-            },
-          },
+          presentation: { control: { mode: "desktop_plugin", canPrompt: true, canAbort: true, canAnswerAsk: true } },
         },
       },
     });

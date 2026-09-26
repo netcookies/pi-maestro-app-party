@@ -8,14 +8,17 @@ import { PulsingDot } from "../../src/components/PulsingDot";
 import { SpringCard } from "../../src/components/SpringCard";
 import { useI18n } from "../../src/i18n";
 import { monitorWindowKey, monitorWindows } from "../../src/monitor-data";
-import type { MonitorWindowSummary } from "@maestro-mobile/shared";
+import type { MonitorTodoSummary, MonitorWindowSummary } from "@maestro-mobile/shared";
 
 export default function MonitorScreen({ active = true }: { active?: boolean }) {
   const { state, isConnected, refreshMonitor } = useHost();
   const { theme } = useTheme();
   const { t } = useI18n();
   const styles = useMemo(() => makeStyles(theme), [theme]);
-  const windows = useMemo(() => monitorWindows(state.monitor), [state.monitor]);
+  const windows = useMemo(() => {
+    const projected = [...state.workspaceWindowProjections.values()].flatMap((projection) => projection.data.windows);
+    return projected.length > 0 ? projected.filter((window) => window.presentation?.visibility === "monitor_tab") : monitorWindows(state.monitor);
+  }, [state.monitor, state.workspaceWindowProjections]);
   const [expandedKey, setExpandedKey] = useState<string | null>(null);
   const [refreshing, setRefreshing] = useState(false);
 
@@ -57,9 +60,17 @@ export default function MonitorScreen({ active = true }: { active?: boolean }) {
           keyExtractor={monitorWindowKey}
           renderItem={({ item }) => {
             const key = monitorWindowKey(item);
+            const identity = item.identity;
+            const ownerProjectionKey = (source: string) => JSON.stringify([source, identity.workspaceId, identity.ownerId, identity.ownerNonce, identity.endpointId]);
+            const todos = state.todoProjections.get(ownerProjectionKey("todo"))?.data.items ?? item.todos;
+            const agents = state.teammateProjections.get(ownerProjectionKey("teammate"))?.data.agents ?? [];
+            const jobs = state.backgroundJobProjections.get(ownerProjectionKey("background-job"))?.data.jobs ?? [];
             return (
               <MonitorCard
                 window={item}
+                todos={todos}
+                agentCount={agents.length}
+                jobCount={jobs.length}
                 expanded={expandedKey === key}
                 theme={theme}
                 styles={styles}
@@ -77,8 +88,11 @@ export default function MonitorScreen({ active = true }: { active?: boolean }) {
   );
 }
 
-function MonitorCard({ window, expanded, theme, styles, t, onPress }: {
+function MonitorCard({ window, todos, agentCount, jobCount, expanded, theme, styles, t, onPress }: {
   window: MonitorWindowSummary;
+  todos: MonitorTodoSummary[];
+  agentCount: number;
+  jobCount: number;
   expanded: boolean;
   theme: ReturnType<typeof useTheme>["theme"];
   styles: ReturnType<typeof makeStyles>;
@@ -102,6 +116,7 @@ function MonitorCard({ window, expanded, theme, styles, t, onPress }: {
         <Text style={[styles.detailText, { color: theme.muted }]}>{window.runtimeStatus}</Text>
         <Text style={[styles.detailText, { color: theme.muted }]}>{window.lifecycle}</Text>
         <Text style={[styles.detailText, { color: theme.accent }]}>{window.workStatus}</Text>
+        <Text style={[styles.detailText, { color: theme.muted }]}>T {todos.length} · A {agentCount} · J {jobCount}</Text>
       </View>
       <View style={styles.capabilities}>
         <Capability label={t.promptCapability} enabled={control?.canPrompt === true} theme={theme} />
@@ -124,7 +139,7 @@ function MonitorCard({ window, expanded, theme, styles, t, onPress }: {
               <Text style={[styles.noticeText, { color: theme.text }]}>{item.message}</Text>
             </View>
           ))}
-          {window.todos.map((todo) => (
+          {todos.map((todo) => (
             <View key={todo.id} style={styles.todoRow}>
               <LineIcon name={todo.status === "completed" ? "check" : "plan"} size={14} color={todo.status === "completed" ? theme.success : theme.muted} />
               <Text style={[styles.todoSubject, { color: theme.text }]} numberOfLines={2}>{todo.subject}</Text>

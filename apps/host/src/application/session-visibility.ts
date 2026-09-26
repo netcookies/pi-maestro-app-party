@@ -27,6 +27,7 @@ export function projectOwnerPresentation(
       canFollowUp: false,
       canAbort: false,
       canAnswerAsk: false,
+      canPlan: false,
     },
     // Owner heartbeat timestamps must not become a presentation revision.
     revision: 0,

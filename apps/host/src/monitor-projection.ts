@@ -5,7 +5,24 @@
  *  - outputTail 截断至有界行数/宽度，避免 WS 广播无界数据
  *  - 变更检测使用稳定键（不含 ageMs/observedAt 等时间派生字段）
  */
-import type { BackgroundJobSummary, HostEvent, MonitorState, MonitorWindowSummary, SessionRuntimeStatus, TeammateAgentState, TeammateAgentsFacet, WorkspaceOwnerState, WorkspaceTelemetryState } from "@maestro-mobile/shared";
+import type {
+  BackgroundJobSummary,
+  HostEvent,
+  MonitorState,
+  MonitorWindowSummary,
+  SessionRuntimeStatus,
+  TeammateAgentState,
+  TeammateAgentsFacet,
+  WorkspaceOwnerState,
+  WorkspaceTelemetryState,
+  MonitorTodoSummary,
+  OwnerProjectionTarget,
+  ExecutionProjection,
+  WorkspaceWindowProjection,
+  TodoProjection,
+  TeammateProjection,
+  BackgroundJobProjection,
+} from "@maestro-mobile/shared";
 import { projectOwnerPresentation } from "./application/session-visibility.js";
 
 /** outputTail 广播上限：每 agent 最多 8 行、每行 200 字符 */
@@ -43,19 +60,46 @@ function projectBackgroundJobs(values: unknown): BackgroundJobSummary[] {
     .filter((job): job is BackgroundJobSummary => job !== null);
 }
 
+function projectTodos(values: unknown): MonitorTodoSummary[] {
+  if (!Array.isArray(values)) return [];
+  return values.slice(0, 32).flatMap((value): MonitorTodoSummary[] => {
+    if (typeof value !== "object" || value === null) return [];
+    const d = value as Record<string, unknown>;
+    if (typeof d.id !== "string" || !d.id || typeof d.subject !== "string" || !d.subject || typeof d.status !== "string") return [];
+    return [{
+      id: d.id,
+      subject: d.subject.slice(0, 512),
+      status: d.status,
+      ...(typeof d.assigneeLabel === "string" ? { assigneeLabel: d.assigneeLabel.slice(0, 128) } : {}),
+      updatedAt: typeof d.updatedAt === "number" && Number.isFinite(d.updatedAt) ? d.updatedAt : 0,
+    }];
+  });
+}
+
+
 function projectAgent(a: unknown): TeammateAgentState | null {
   if (typeof a !== "object" || a === null) return null;
   const d = a as Record<string, unknown>;
+  const correlationId = typeof d.correlationId === "string" ? d.correlationId : undefined;
+  const name = typeof d.name === "string" ? d.name : undefined;
+  const agent = typeof d.agent === "string" ? d.agent : undefined;
+  const status = typeof d.status === "string" ? d.status : undefined;
+  if ((!correlationId && !name && !agent) || !status) return null;
+  const pendingInteractions = typeof d.pendingInteractions === "number"
+    && Number.isFinite(d.pendingInteractions) && d.pendingInteractions >= 0
+    ? d.pendingInteractions
+    : undefined;
   return {
-    correlationId: typeof d.correlationId === "string" ? d.correlationId : undefined,
-    name: typeof d.name === "string" ? d.name : undefined,
-    agent: typeof d.agent === "string" ? d.agent : undefined,
-    status: typeof d.status === "string" ? d.status : undefined,
-    phase: typeof d.phase === "string" ? d.phase : undefined,
+    ...(correlationId ? { correlationId } : {}),
+    ...(name ? { name } : {}),
+    ...(agent ? { agent } : {}),
+    status,
+    ...(typeof d.phase === "string" ? { phase: d.phase } : {}),
     outputTail: truncateTail(d.outputTail),
-    pendingInteractions: typeof d.pendingInteractions === "number" ? d.pendingInteractions : undefined,
+    ...(pendingInteractions !== undefined ? { pendingInteractions } : {}),
   };
 }
+
 
 interface ProgressEvent {
   kind: string;
@@ -234,6 +278,7 @@ export function projectWindow(o: WorkspaceOwnerState): MonitorWindowSummary {
       contextPressure: o.contextPressure,
     },
   };
+  const todos = projectTodos(o.todos);
   const { pendingAsk, attentionMessage } = extractPendingAsk(o.mainProgress);
   const attention: MonitorWindowSummary["attention"] = [];
   if (attentionMessage) {
@@ -256,7 +301,7 @@ export function projectWindow(o: WorkspaceOwnerState): MonitorWindowSummary {
     status: execState.status,
     lifecycle: execState.lifecycle,
     workStatus: execState.workStatus,
-    todos: [],
+    todos,
     attention,
     facets: [facet],
     ...(pendingAsk ? { pendingAsk } : {}),
@@ -276,6 +321,72 @@ export function projectMonitorState(t: WorkspaceTelemetryState): MonitorState {
   };
 }
 
+export function projectExecutionProjections(t: WorkspaceTelemetryState, epoch: string, revision: number): ExecutionProjection[] {
+  const observedAt = t.observedAt;
+  const windows = projectMonitorWindows(t);
+  const windowsByWorkspace = new Map<string, MonitorWindowSummary[]>();
+  for (const window of windows) {
+    const group = windowsByWorkspace.get(window.identity.workspaceId) ?? [];
+    group.push(window);
+    windowsByWorkspace.set(window.identity.workspaceId, group);
+  }
+
+  const ownerProjections = t.owners.flatMap((owner): ExecutionProjection[] => {
+    // ownerNonce identifies the owner incarnation. Without it, an old snapshot
+    // cannot be safely ordered against a later owner using the same ownerId.
+    if (!owner.ownerId || !owner.sessionId || !owner.ownerNonce) return [];
+    const target: OwnerProjectionTarget = {
+      workspaceId: owner.workspaceId,
+      ownerId: owner.ownerId,
+      ownerNonce: owner.ownerNonce,
+      endpointId: owner.sessionId,
+    };
+    const window = projectWindow(owner);
+    const teammateFacet = window.facets.find((facet) => facet.kind === "teammate-agents");
+    const data = teammateFacet?.data;
+    return [
+      { schemaVersion: 1, source: "todo", scope: "owner", target, epoch: target.ownerNonce, revision, observedAt, snapshot: true, data: { items: window.todos } },
+      { schemaVersion: 1, source: "teammate", scope: "owner", target, epoch: target.ownerNonce, revision, observedAt, snapshot: true, data: { agents: data?.agents ?? [] } },
+      { schemaVersion: 1, source: "background-job", scope: "owner", target, epoch: target.ownerNonce, revision, observedAt, snapshot: true, data: { jobs: data?.backgroundJobs ?? [] } },
+    ];
+  });
+
+  const workspaceProjections: WorkspaceWindowProjection[] = [...windowsByWorkspace.entries()]
+    .filter(([workspaceId]) => workspaceId.length > 0)
+    .map(([workspaceId, workspaceWindows]) => ({
+      schemaVersion: 1,
+      source: "workspace",
+      scope: "workspace",
+      target: { workspaceId },
+      epoch,
+      revision,
+      observedAt,
+      snapshot: true,
+      data: { windows: workspaceWindows },
+    }));
+
+  return [...ownerProjections, ...workspaceProjections];
+}
+
+type ExecutionProjectionEvent =
+  | { type: "todo_projection_updated"; projection: TodoProjection }
+  | { type: "teammate_projection_updated"; projection: TeammateProjection }
+  | { type: "workspace_window_projection_updated"; projection: WorkspaceWindowProjection }
+  | { type: "background_job_projection_updated"; projection: BackgroundJobProjection };
+
+/** Generate category-specific events from the canonical workspace owner snapshot. */
+export function executionProjectionEvents(projections: readonly ExecutionProjection[]): ExecutionProjectionEvent[] {
+  return projections.map((projection): ExecutionProjectionEvent => {
+    switch (projection.source) {
+      case "todo": return { type: "todo_projection_updated", projection };
+      case "teammate": return { type: "teammate_projection_updated", projection };
+      case "workspace": return { type: "workspace_window_projection_updated", projection };
+      case "background-job": return { type: "background_job_projection_updated", projection };
+    }
+  });
+}
+
+
 export function telemetryStableKeyFromWindows(windows: readonly MonitorWindowSummary[]): string {
   const projected = [...windows].sort((a, b) =>
     a.identity.ownerId < b.identity.ownerId ? -1 : a.identity.ownerId > b.identity.ownerId ? 1 : 0,
@@ -283,12 +394,14 @@ export function telemetryStableKeyFromWindows(windows: readonly MonitorWindowSum
   return JSON.stringify(projected);
 }
 
+
+
 /** 稳定变更键不含时间派生字段，保持旧 API 供其他调用方使用。 */
 export function telemetryStableKey(t: WorkspaceTelemetryState): string {
   return telemetryStableKeyFromWindows(projectMonitorWindows(t));
 }
 
-/** 从 monitor_state 构造 HostEvent（供 controller emit） */
+
 export function monitorStateEvent(state: MonitorState): HostEvent {
   return { type: "monitor_state", state } as HostEvent;
 }

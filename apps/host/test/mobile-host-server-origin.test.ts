@@ -32,7 +32,7 @@ async function makeServer(options: { allowedOrigins?: string[] } = {}, boundHost
   const tmpDir = join(tmpdir(), `maestro-origin-${randomUUID()}`);
   await mkdir(tmpDir, { recursive: true });
   const controller = new HostController(
-    { createRuntime: async () => { throw new Error("Not implemented in test"); }, listSessions: async () => [] },
+    { listSessions: async () => [] },
     new MaestroStateReader({ projectRoot: tmpDir }),
   );
   const server = new MobileHostServer(controller, options);

@@ -1,4 +1,7 @@
 import type { MobileRolloutMode } from "./release.js";
+import type { DesktopPlanRequest, DesktopPlanResponse } from "./desktop-plugin-protocol.js";
+import { isDesktopPlanRequest, isDesktopPlanResponse } from "./desktop-plugin-protocol.js";
+
 
 /**
  * Maestro Mobile 共享协议类型
@@ -34,7 +37,9 @@ export type ProtocolCapability =
   | "desktop_plugin_control"
   | "extension_ui"
   | "monitor_read"
-  | "session_filter";
+  | "session_filter"
+  | "execution_projection_read"
+  | "plan";
 
 export type OperationStatus = "requested" | "accepted" | "observed" | "failed" | "unknown";
 
@@ -47,7 +52,7 @@ export interface OperationReceipt {
 
 export type SessionRole = "session" | "monitor";
 export type SessionVisibility = "session_list" | "monitor_tab" | "hidden";
-export type SessionControlMode = "host" | "desktop_plugin" | "readonly";
+export type SessionControlMode = "desktop_plugin" | "readonly";
 
 /** 稳定标识一个具体运行时端点；四个字段必须整体透传，不得由 cwd、时间或权限推断。 */
 export interface SessionTargetIdentity {
@@ -79,6 +84,7 @@ export interface SessionControl {
   canFollowUp: boolean;
   canAbort: boolean;
   canAnswerAsk: boolean;
+  canPlan: boolean;
 }
 
 /** Server-owned UI placement and control projection, orthogonal to runtimeStatus. */
@@ -338,12 +344,14 @@ export interface WorkspaceOwnerState {
   workspaceRole?: "session" | "monitor";
   publishedAt: number;
   mainActivityAt?: number;
-  contextPressure: JsonValue;
+  contextPressure?: JsonValue;
   mainLastSettle?: JsonValue;
   mainProgress?: JsonValue;
   agents: JsonValue[];
   settled: JsonValue[];
   backgroundJobs: JsonValue[];
+  /** Versioned pi-maestro-teammate root Todo snapshots, when published. */
+  todos?: JsonValue[];
   alive: boolean;
   ageMs: number;
 }
@@ -506,6 +514,40 @@ export interface MonitorState {
   revision?: number;
 }
 
+/** Exact workspace owner incarnation used by owner-scoped read projections. */
+export interface OwnerProjectionTarget {
+  workspaceId: string;
+  ownerId: string;
+  ownerNonce: string;
+  endpointId: string;
+}
+
+export interface WorkspaceProjectionTarget {
+  workspaceId: string;
+}
+
+/** Shared version/order metadata; each source retains its own payload contract. */
+export interface ExecutionProjectionEnvelope<Source extends string, Target, Data> {
+  schemaVersion: 1;
+  source: Source;
+  scope: "owner" | "workspace";
+  target: Target;
+  /** Runtime incarnation; owner projections use ownerNonce, workspace projections use Host epoch. */
+  epoch: string;
+  /** Host projection revision within epoch + source + target. */
+  revision: number;
+  observedAt: string;
+  /** Initial and reconnect payloads are complete snapshots for their exact scope. */
+  snapshot: true;
+  data: Data;
+}
+
+export type TodoProjection = ExecutionProjectionEnvelope<"todo", OwnerProjectionTarget, { items: MonitorTodoSummary[] }>;
+export type TeammateProjection = ExecutionProjectionEnvelope<"teammate", OwnerProjectionTarget, { agents: TeammateAgentState[] }>;
+export type WorkspaceWindowProjection = ExecutionProjectionEnvelope<"workspace", WorkspaceProjectionTarget, { windows: MonitorWindowSummary[] }>;
+export type BackgroundJobProjection = ExecutionProjectionEnvelope<"background-job", OwnerProjectionTarget, { jobs: BackgroundJobSummary[] }>;
+export type ExecutionProjection = TodoProjection | TeammateProjection | WorkspaceWindowProjection | BackgroundJobProjection;
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Extension UI（ask 弹窗协议）
 // ─────────────────────────────────────────────────────────────────────────────
@@ -580,8 +622,14 @@ export type HostEvent =
   | { type: "command_error"; sessionId: string; command: string; message: string; error?: HostError; target?: SessionTargetIdentity; seq: number }
   | { type: "session_error"; sessionId: string; error: HostError; target?: SessionTargetIdentity; seq: number }
   | { type: "session_execution_updated"; summary: SessionExecutionSummary; seq: number }
+  | { type: "todo_projection_updated"; projection: TodoProjection; seq: number }
+  | { type: "teammate_projection_updated"; projection: TeammateProjection; seq: number }
+  | { type: "workspace_window_projection_updated"; projection: WorkspaceWindowProjection; seq: number }
+  | { type: "background_job_projection_updated"; projection: BackgroundJobProjection; seq: number }
   | { type: "extension_ui_request"; sessionId: string; request: ExtensionUiRequest; target?: SessionTargetIdentity; seq: number }
   | { type: "extension_ui_cleared"; sessionId: string; requestId: string; target?: SessionTargetIdentity; seq: number }
+  | { type: "desktop_plan_request"; sessionId: string; request: DesktopPlanRequest; target: SessionTargetIdentity; seq: number }
+  | { type: "desktop_plan_cleared"; sessionId: string; requestId: string; kind?: "confirm" | "review"; target: SessionTargetIdentity; seq: number }
   | { type: "maestro_state"; state: MaestroState; seq: number }
   | { type: "monitor_state"; state: MonitorState; seq: number }
   | { type: "teammate_event"; scheduleId: string; dispatchId?: string; status: string; seq: number }
@@ -598,11 +646,12 @@ export interface ClientCommandMeta {
 
 export type TargetedSessionCommand = {
   sessionId: string;
-  /** Exact server-issued identity; legacy clients may omit it only while the target remains unambiguous. */
-  target?: SessionTargetIdentity;
+  /** New clients must provide the complete server-issued target; Host no longer infers by sessionId. */
+  target: SessionTargetIdentity;
 };
 
 export type ClientCommandPayload =
+  /** Deprecated compatibility envelope: Host always rejects it and never creates/attaches a session. */
   | { type: "open_session"; cwd: string; mode?: "create" | "continue"; sessionFile?: string; target?: SessionTargetIdentity }
   | { type: "list_host_sessions"; cwd?: string; limit?: number; cursor?: string; query?: string; sessionIds?: string[]; latestForCwds?: string[] }
   | ({ type: "load_more_history"; count?: number } & TargetedSessionCommand)
@@ -615,16 +664,21 @@ export type ClientCommandPayload =
   | ({ type: "set_thinking"; level: string } & TargetedSessionCommand)
   | ({ type: "compact"; customInstructions?: string } & TargetedSessionCommand)
   | ({ type: "rename_session"; name: string } & TargetedSessionCommand)
+  /** Deprecated compatibility envelope: Host never closes a session through this command. */
   | ({ type: "close_session" } & TargetedSessionCommand)
   | ({ type: "prompt"; message: string; images?: { data: string; mime: string }[] } & TargetedSessionCommand)
   | ({ type: "steer"; message: string } & TargetedSessionCommand)
   | ({ type: "follow_up"; message: string } & TargetedSessionCommand)
   | ({ type: "abort" } & TargetedSessionCommand)
   | ({ type: "extension_ui_response"; requestId: string; response: ExtensionUiResponse } & TargetedSessionCommand)
+  | ({ type: "extension_ui_response"; requestId: string; response: ExtensionUiResponse } & TargetedSessionCommand)
+  | ({ type: "desktop_plan_response"; requestId: string; response: DesktopPlanResponse } & TargetedSessionCommand)
   | ({ type: "get_snapshot" } & TargetedSessionCommand)
   | ({ type: "get_session_usage" } & TargetedSessionCommand)
   | { type: "get_maestro_state" }
   | { type: "get_monitor_state" }
+  /** Read-only complete category snapshots; not a combined canonical store. */
+  | { type: "get_execution_projections" }
   | { type: "ping" };
 
 export type ClientCommand = ClientCommandMeta & ClientCommandPayload;
@@ -711,12 +765,33 @@ export function isHostEvent(value: unknown): value is HostEvent {
         && (value.target === undefined || (isSessionTargetIdentity(value.target) && value.target.sessionId === value.sessionId));
     case "session_execution_updated":
       return isSessionExecutionSummary(value.summary);
+    case "todo_projection_updated":
+      return isTodoProjection(value.projection);
+    case "teammate_projection_updated":
+      return isTeammateProjection(value.projection);
+    case "workspace_window_projection_updated":
+      return isWorkspaceWindowProjection(value.projection);
+    case "background_job_projection_updated":
+      return isBackgroundJobProjection(value.projection);
     case "extension_ui_request":
       return isString(value.sessionId) && isRecord(value.request)
         && (value.target === undefined || isSessionTargetIdentity(value.target));
     case "extension_ui_cleared":
       return isString(value.sessionId) && isString(value.requestId)
         && (value.target === undefined || isSessionTargetIdentity(value.target));
+    case "extension_ui_request":
+      return isString(value.sessionId) && isRecord(value.request)
+        && (value.target === undefined || isSessionTargetIdentity(value.target));
+    case "extension_ui_cleared":
+      return isString(value.sessionId) && isString(value.requestId)
+        && (value.target === undefined || isSessionTargetIdentity(value.target));
+    case "desktop_plan_request":
+      return isString(value.sessionId) && isRecord(value.request)
+        && isDesktopPlanRequest(value.request) && isSessionTargetIdentity(value.target);
+    case "desktop_plan_cleared":
+      return isString(value.sessionId) && isString(value.requestId)
+        && (value.kind === undefined || value.kind === "confirm" || value.kind === "review")
+        && isSessionTargetIdentity(value.target);
     case "maestro_state":
       return isRecord(value.state);
     case "monitor_state":
@@ -735,6 +810,12 @@ export function isClientCommand(value: unknown): value is ClientCommand {
   if (!isRecord(value) || typeof value.type !== "string") return false;
   if (value.id !== undefined && !isString(value.id)) return false;
   if (value.target !== undefined && !isSessionTargetIdentity(value.target)) return false;
+  if (value.type !== "open_session" && value.type !== "close_session"
+    && value.type !== "list_host_sessions"
+    && value.type !== "get_maestro_settings" && value.type !== "get_maestro_state"
+    && value.type !== "get_execution_projections" && value.type !== "ping"
+    && value.type !== "update_maestro_settings"
+    && (value.target === undefined || !isSessionTargetIdentity(value.target))) return false;
   switch (value.type) {
     case "open_session":
       return isString(value.cwd) && optionalEnum(value.mode, "create", "continue") && optionalString(value.sessionFile);
@@ -744,6 +825,7 @@ export function isClientCommand(value: unknown): value is ClientCommand {
     case "get_maestro_settings":
     case "get_maestro_state":
     case "get_monitor_state":
+    case "get_execution_projections":
     case "ping":
       return true;
     case "load_more_history":
@@ -775,6 +857,13 @@ export function isClientCommand(value: unknown): value is ClientCommand {
       return isString(value.sessionId) && isString(value.message);
     case "extension_ui_response":
       return isString(value.sessionId) && isString(value.requestId) && isRecord(value.response);
+    case "extension_ui_response":
+      return isString(value.sessionId) && isString(value.requestId) && isRecord(value.response);
+    case "extension_ui_response":
+      return isString(value.sessionId) && isString(value.requestId) && isRecord(value.response);
+    case "desktop_plan_response":
+      return isString(value.sessionId) && isString(value.requestId)
+        && isDesktopPlanResponse(value.response) && isSessionTargetIdentity(value.target);
     default:
       return false;
   }
@@ -841,6 +930,63 @@ export function isHostError(value: unknown): value is HostError {
   if (value.retryable !== undefined && typeof value.retryable !== "boolean") return false;
   if (value.requestId !== undefined && !isString(value.requestId)) return false;
   return value.details === undefined || isRecord(value.details);
+}
+
+export function isExecutionProjection(value: unknown): value is ExecutionProjection {
+  return isTodoProjection(value) || isTeammateProjection(value)
+    || isWorkspaceWindowProjection(value) || isBackgroundJobProjection(value);
+}
+
+function isProjectionEnvelope(value: unknown, source: string, scope: "owner" | "workspace"): value is Record<string, unknown> {
+  return isRecord(value) && value.schemaVersion === 1 && value.source === source && value.scope === scope
+    && (scope === "owner" ? isOwnerProjectionTarget(value.target) : isWorkspaceProjectionTarget(value.target))
+    && isString(value.epoch) && isFiniteNumber(value.revision) && Number.isInteger(value.revision) && value.revision >= 0
+    && isString(value.observedAt) && value.snapshot === true && isRecord(value.data);
+}
+
+function isTodoProjection(value: unknown): value is TodoProjection {
+  return isProjectionEnvelope(value, "todo", "owner") && isRecord(value.data)
+    && Array.isArray(value.data.items) && value.data.items.every(isMonitorTodoSummary);
+}
+
+function isTeammateProjection(value: unknown): value is TeammateProjection {
+  return isProjectionEnvelope(value, "teammate", "owner") && isRecord(value.data)
+    && Array.isArray(value.data.agents) && value.data.agents.every(isTeammateAgentState);
+}
+
+function isWorkspaceWindowProjection(value: unknown): value is WorkspaceWindowProjection {
+  return isProjectionEnvelope(value, "workspace", "workspace") && isRecord(value.data)
+    && Array.isArray(value.data.windows) && value.data.windows.every(isMonitorWindowSummary);
+}
+
+function isBackgroundJobProjection(value: unknown): value is BackgroundJobProjection {
+  return isProjectionEnvelope(value, "background-job", "owner") && isRecord(value.data)
+    && Array.isArray(value.data.jobs) && value.data.jobs.every(isBackgroundJobSummary);
+}
+
+function isOwnerProjectionTarget(value: unknown): value is OwnerProjectionTarget {
+  return isRecord(value) && isString(value.workspaceId) && isString(value.ownerId)
+    && isString(value.ownerNonce) && value.ownerNonce.length > 0 && isString(value.endpointId);
+}
+
+function isWorkspaceProjectionTarget(value: unknown): value is WorkspaceProjectionTarget {
+  return isRecord(value) && isString(value.workspaceId);
+}
+
+function isMonitorWindowSummary(value: unknown): value is MonitorWindowSummary {
+  return isRecord(value) && isString(value.sessionId) && isString(value.endpointId)
+    && (value.runtimeStatus === "running" || value.runtimeStatus === "idle" || value.runtimeStatus === "sleeping" || value.runtimeStatus === "history")
+    && isRecord(value.identity) && isString(value.identity.workspaceId) && isString(value.identity.ownerId)
+    && isString(value.identity.ownerNonce) && isString(value.identity.endpointId)
+    && isString(value.status) && isString(value.lifecycle) && isString(value.workStatus)
+    && Array.isArray(value.todos) && value.todos.every(isMonitorTodoSummary)
+    && Array.isArray(value.attention) && value.attention.every(isMonitorAttentionSummary)
+    && Array.isArray(value.facets);
+}
+
+function isMonitorAttentionSummary(value: unknown): value is MonitorAttentionSummary {
+  return isRecord(value) && isString(value.code) && isString(value.message)
+    && (value.severity === "info" || value.severity === "warning" || value.severity === "error");
 }
 
 export function isBackgroundJobSummary(value: unknown): value is BackgroundJobSummary {

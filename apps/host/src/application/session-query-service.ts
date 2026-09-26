@@ -35,14 +35,24 @@ function asIso(value: unknown): string {
 function summaryOf(record: Record<string, unknown>): HostSessionSummary {
   const cwd = typeof record.cwd === "string" ? record.cwd : "";
   const title = String(record.firstMessage ?? record.title ?? "");
-  return {
-    id: String(record.id ?? ""),
+  const path = String(record.path ?? record.sessionFile ?? "");
+
+  const target: SessionTargetIdentity = {
     sessionId: String(record.id ?? ""),
     endpointId: "history",
+    normalizedCwd: cwd,
+    processGeneration: "persisted",
+  };
+  return {
+    id: target.sessionId,
+    sessionId: target.sessionId,
+    endpointId: target.endpointId,
+    target,
+    targetKey: targetIdentityKey(target),
     runtimeStatus: "history",
     cwd,
     cwdName: cwd.split("/").filter(Boolean).at(-1) ?? cwd,
-    path: String(record.path ?? record.sessionFile ?? ""),
+    path,
     title: title.length > 80 ? `${title.slice(0, 80)}…` : title,
     ...(typeof record.name === "string" && record.name ? { name: record.name } : {}),
     ...(typeof record.model === "string" ? { model: record.model } : {}),
@@ -85,6 +95,7 @@ function readonlyPresentation(revision: number): SessionPresentation {
       canFollowUp: false,
       canAbort: false,
       canAnswerAsk: false,
+      canPlan: false,
     },
     revision,
   };
@@ -92,11 +103,9 @@ function readonlyPresentation(revision: number): SessionPresentation {
 
 /** 已注册的 Desktop socket 即使尚未附着 Host reader，也属于活跃目标。 */
 function runtimeStatusForTarget(target: SessionDirectoryTarget): SessionRuntimeStatus {
-  if (target.kind === "desktop") return target.runtimeStatus ?? "idle";
-  const runState = target.runner?.state.runState;
-  if (!runState) return "history";
-  return runState === "idle" || runState === "error" ? "idle" : "running";
+  return target.kind === "desktop" ? target.runtimeStatus ?? "idle" : "history";
 }
+
 
 function presentationForTarget(
   target: SessionDirectoryTarget,
@@ -122,7 +131,6 @@ function summaryForTarget(
 ): HostSessionSummary {
   const cwd = target.identity.normalizedCwd;
   const cwdName = cwd.split("/").filter(Boolean).at(-1) ?? cwd;
-  const runnerState = target.runner?.state;
   return {
     ...base,
     id: target.identity.sessionId,
@@ -133,10 +141,10 @@ function summaryForTarget(
     runtimeStatus: runtimeStatusForTarget(target),
     cwd,
     cwdName,
-    path: target.sessionFile ?? base?.path ?? runnerState?.sessionFile ?? "",
-    title: base?.title || runnerState?.title || cwdName || target.identity.sessionId,
-    messageCount: target.messageCount ?? runnerState?.messageCount ?? base?.messageCount ?? 0,
-    updatedAt: target.lastActivityAt ?? runnerState?.updatedAt ?? base?.updatedAt ?? observedAt,
+    path: target.sessionFile ?? base?.path ?? "",
+    title: base?.title || cwdName || target.identity.sessionId,
+    messageCount: target.messageCount ?? base?.messageCount ?? 0,
+    updatedAt: target.lastActivityAt ?? base?.updatedAt ?? observedAt,
     presentation: presentationForTarget(target, revision, sourcePresentation),
     ...(target.activeSince ? { activeSince: target.activeSince } : {}),
     ...(target.lastActivityAt ? { lastActivityAt: target.lastActivityAt } : {}),
@@ -174,6 +182,10 @@ export class SessionQueryService {
     const projectCwds = options.projectCwds?.map((cwd) => normalize(cwd.trim())).filter(Boolean);
     const query = options.query?.trim().toLocaleLowerCase();
     const records = await this.source.listSessions(options.cwd);
+    for (const record of records) {
+      const summary = summaryOf(record as Record<string, unknown>);
+      if (summary.target && summary.path) this.directory.registerHistoryTarget(summary.target, summary.path);
+    }
     const monitorWindows = this.monitorState ? (await this.monitorState()).windows : [];
     const windowsBySessionId = new Map<string, typeof monitorWindows>();
     for (const window of monitorWindows) {
@@ -184,6 +196,7 @@ export class SessionQueryService {
     const observedAt = new Date(this.now()).toISOString();
     const directoryTargets = this.directory.list();
     const summaries = records.map((record) => summaryOf(record as Record<string, unknown>));
+
     const knownSessionIds = new Set(summaries.map((session) => session.sessionId));
     for (const window of monitorWindows) {
       if (knownSessionIds.has(window.sessionId)) continue;
@@ -296,51 +309,36 @@ export class SessionQueryService {
   async snapshot(target: SessionTargetIdentity): Promise<QueryResult<SessionSnapshot>> {
     const entry = this.directory.resolve(target);
     if (!entry) return { ok: false, status: "unknown", error: { code: "target_unavailable" }, revision: this.directory.revision };
-    if (!entry.runner) {
-      if (entry.kind !== "desktop") return { ok: false, status: "failed", error: { code: "session_readonly_or_unavailable" }, revision: this.directory.revision };
-      const runtimeStatus = runtimeStatusForTarget(entry);
-      const updatedAt = entry.lastActivityAt ?? new Date(this.now()).toISOString();
-      let timeline: TimelineItem[] = [];
-      let hasMoreHistory = false;
-      if (entry.sessionFile) {
-        const page = await replayTailFromJsonl(entry.sessionFile, 80);
-        timeline = page.items;
-        hasMoreHistory = page.hasMore;
-        this.desktopHistory.set(targetIdentityKey(entry.identity), { cursor: page.cursor, totalEntries: page.totalEntries });
-      }
-      return {
-        ok: true,
-        value: {
-          session: {
-            id: entry.identity.sessionId,
-            cwd: entry.identity.normalizedCwd,
-            title: entry.identity.normalizedCwd.split("/").filter(Boolean).at(-1) ?? entry.identity.sessionId,
-            runState: runtimeStatus === "running" ? "streaming" : "idle",
-            messageCount: entry.messageCount ?? 0,
-            pendingMessageCount: 0,
-            updatedAt,
-            ...(entry.sessionFile ? { sessionFile: entry.sessionFile } : {}),
-            ...(entry.model ? { model: structuredClone(entry.model) as unknown as JsonValue } : {}),
-            ...(entry.thinkingLevel ? { thinkingLevel: entry.thinkingLevel } : {}),
-            presentation: entry.presentation ?? readonlyPresentation(this.directory.revision),
-          },
-          timeline,
-          nextSeq: 0,
-          historyAvailable: Boolean(entry.sessionFile),
-          hasMoreHistory,
-        },
-        revision: this.directory.revision,
-      };
+    const runtimeStatus = runtimeStatusForTarget(entry);
+    const updatedAt = entry.lastActivityAt ?? new Date(this.now()).toISOString();
+    let timeline: TimelineItem[] = [];
+    let hasMoreHistory = false;
+    if (entry.sessionFile) {
+      const page = await replayTailFromJsonl(entry.sessionFile, 80);
+      timeline = page.items;
+      hasMoreHistory = page.hasMore;
+      this.desktopHistory.set(targetIdentityKey(entry.identity), { cursor: page.cursor, totalEntries: page.totalEntries });
     }
-    const snapshot = entry.runner.snapshot();
     return {
       ok: true,
       value: {
-        ...snapshot,
         session: {
-          ...snapshot.session,
+          id: entry.identity.sessionId,
+          cwd: entry.identity.normalizedCwd,
+          title: entry.identity.normalizedCwd.split("/").filter(Boolean).at(-1) ?? entry.identity.sessionId,
+          runState: runtimeStatus === "running" ? "streaming" : "idle",
+          messageCount: entry.messageCount ?? 0,
+          pendingMessageCount: 0,
+          updatedAt,
+          ...(entry.sessionFile ? { sessionFile: entry.sessionFile } : {}),
+          ...(entry.model ? { model: structuredClone(entry.model) as unknown as JsonValue } : {}),
+          ...(entry.thinkingLevel ? { thinkingLevel: entry.thinkingLevel } : {}),
           presentation: entry.presentation ?? readonlyPresentation(this.directory.revision),
         },
+        timeline,
+        nextSeq: 0,
+        historyAvailable: Boolean(entry.sessionFile),
+        hasMoreHistory,
       },
       revision: this.directory.revision,
     };
@@ -349,45 +347,32 @@ export class SessionQueryService {
   async history(target: SessionTargetIdentity, count?: number): Promise<QueryResult<{ items: TimelineItem[]; hasMore: boolean; totalEntries: number; historyAvailable?: boolean }>> {
     const entry = this.directory.resolve(target);
     if (!entry) return { ok: false, status: "unknown", error: { code: "target_unavailable" }, revision: this.directory.revision };
-    if (!entry.runner) {
-      if (entry.kind === "desktop" && entry.sessionFile) {
-        const key = targetIdentityKey(entry.identity);
-        const cursor = this.desktopHistory.get(key)?.cursor ?? (await replayTailFromJsonl(entry.sessionFile, 80)).cursor;
-        const page = await replayPageBeforeJsonl(entry.sessionFile, cursor, count ?? 100);
-        this.desktopHistory.set(key, { cursor: page.cursor, totalEntries: page.totalEntries });
-        return { ok: true, value: { items: page.items, hasMore: page.hasMore, totalEntries: page.totalEntries, historyAvailable: true }, revision: this.directory.revision };
-      }
-      if (entry.kind === "desktop") return { ok: true, value: { items: [], hasMore: false, totalEntries: 0, historyAvailable: false }, revision: this.directory.revision };
-      return { ok: false, status: "failed", error: { code: "session_readonly_or_unavailable" }, revision: this.directory.revision };
-    }
-    return { ok: true, value: await entry.runner.loadMoreHistory(count), revision: this.directory.revision };
+    if (!entry.sessionFile) return { ok: true, value: { items: [], hasMore: false, totalEntries: 0, historyAvailable: false }, revision: this.directory.revision };
+    const key = targetIdentityKey(entry.identity);
+    const cursor = this.desktopHistory.get(key)?.cursor ?? (await replayTailFromJsonl(entry.sessionFile, 80)).cursor;
+    const page = await replayPageBeforeJsonl(entry.sessionFile, cursor, count ?? 100);
+    this.desktopHistory.set(key, { cursor: page.cursor, totalEntries: page.totalEntries });
+    return { ok: true, value: { items: page.items, hasMore: page.hasMore, totalEntries: page.totalEntries, historyAvailable: true }, revision: this.directory.revision };
   }
 
   async usage(target: SessionTargetIdentity): Promise<QueryResult<UsageTotals>> {
     const entry = this.directory.resolve(target);
     if (!entry) return { ok: false, status: "unknown", error: { code: "target_unavailable" }, revision: this.directory.revision };
-    if (!entry.runner) {
-      if (entry.kind === "desktop") {
-        const usage = entry.usage;
-        return {
-          ok: true,
-          value: {
-            entries: 0,
-            input: usage?.input ?? 0,
-            output: usage?.output ?? 0,
-            cacheRead: usage?.cacheRead ?? 0,
-            cacheWrite: usage?.cacheWrite ?? 0,
-            reasoning: 0,
-            totalTokens: usage?.totalTokens ?? 0,
-            cost: usage?.cost ?? 0,
-          },
-          revision: this.directory.revision,
-        };
-      }
-      return { ok: false, status: "failed", error: { code: "session_readonly_or_unavailable" }, revision: this.directory.revision };
-    }
-    if (!entry.runner.getUsage) return { ok: false, status: "failed", error: { code: "usage_unavailable" }, revision: this.directory.revision };
-    return { ok: true, value: await entry.runner.getUsage(), revision: this.directory.revision };
+    const usage = entry.usage;
+    return {
+      ok: true,
+      value: {
+        entries: 0,
+        input: usage?.input ?? 0,
+        output: usage?.output ?? 0,
+        cacheRead: usage?.cacheRead ?? 0,
+        cacheWrite: usage?.cacheWrite ?? 0,
+        reasoning: 0,
+        totalTokens: usage?.totalTokens ?? 0,
+        cost: usage?.cost ?? 0,
+      },
+      revision: this.directory.revision,
+    };
   }
 
   private withPresentation(session: HostSessionSummary): HostSessionSummary {

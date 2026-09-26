@@ -12,10 +12,11 @@ import { LineIcon } from "../src/components/LineIcon";
 import { useI18n } from "../src/i18n";
 import { hapticImpactLight, hapticImpactMedium, hapticNotificationSuccess } from "../src/utils/haptics";
 import { SafeAreaView, useSafeAreaInsets } from "react-native-safe-area-context";
-import { sessionTargetKey } from "@maestro-mobile/shared";
+import { sessionTargetKey, type DesktopPlanResponse } from "@maestro-mobile/shared";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { ExtensionUiDialog } from "../src/components/ExtensionUiDialog";
 import { AskWizardDialog, type AskAnswer } from "../src/components/AskWizardDialog";
+import { PlanSurface } from "../src/components/PlanSurface";
 import { selectActiveAskWizard, buildAskWizardPayload } from "../src/ask-wizard";
 import { setActiveViewingSession } from "../src/notifications";
 import { InlineImage } from "../src/components/InlineImage";
@@ -57,19 +58,20 @@ function modelNameOf(value: unknown): string | undefined {
 export default function SessionScreen() {
   const { id, targetKey } = useLocalSearchParams<{ id: string; targetKey?: string }>();
   const router = useRouter();
-  const { state, sendPrompt, sendAbort, answerDialog, cancelDialog, loadSessionHistory, loadMoreHistory, searchHistory, setThinking, listSkills, compactSession, isConnected, connectionState, lastError, clearError: dispatchLocalError } = useHost();
+  const { state, sendPrompt, sendAbort, answerDialog, cancelDialog, respondPlan, cancelPlan, loadSessionHistory, loadMoreHistory, searchHistory, setThinking, listSkills, isConnected, connectionState, lastError, clearError: dispatchLocalError } = useHost();
   const { theme } = useTheme();
   const { t } = useI18n();
   const cfg = getConfig();
-  const session = targetKey
-    ? state.targetedSessions.get(targetKey)
-    : state.sessions.get(id ?? "");
   const insets = useSafeAreaInsets();
+  const selectedTargetKey = targetKey ?? state.activeSessionTargets.get(id ?? "");
+  const session = selectedTargetKey
+    ? state.targetedSessions.get(selectedTargetKey) ?? state.sessions.get(id ?? "")
+    : state.sessions.get(id ?? "");
 
   const [executionDetailsOpen, setExecutionDetailsOpen] = useState(false);
   const [detailsExpanded, setDetailsExpanded] = useState(false);
   const detailLimit = detailsExpanded ? 20 : 5;
-  const executionSummary = selectExecutionSummaryForSession(state, targetKey);
+  const executionSummary = selectExecutionSummaryForSession(state, selectedTargetKey);
   const executionTodoCount = executionSummary ? executionTodoCounts(executionSummary) : null;
   const executionJobs = executionSummary?.backgroundJobs ?? [];
   const executionDetails = executionSummary ? [
@@ -94,7 +96,7 @@ export default function SessionScreen() {
 
   // 优化项 1 落地：FloatingToolBar 状态回显与操作
   const [planMode, setPlanMode] = useState("YOLO");
-  const [actionSheetType, setActionSheetType] = useState<"think" | "plan" | "compact_confirm" | null>(null);
+  const [actionSheetType, setActionSheetType] = useState<"think" | "plan" | null>(null);
 
   // 确保配置加载与会话数据（冷启动直接进本页时）
   useEffect(() => {
@@ -122,7 +124,7 @@ export default function SessionScreen() {
 
   const openThinkingPicker = () => setActionSheetType("think");
   const openPlanPicker = () => setActionSheetType("plan");
-  const openCompactPicker = () => setActionSheetType("compact_confirm");
+  // Compact 由 Desktop TUI 自己控制；Host 不再提供进程内 session 控制入口。
 
   // 技能请求必须跟随协议连接状态重试；冷启动时的一次失败不能永久留下空抽屉。
   useEffect(() => {
@@ -229,8 +231,8 @@ export default function SessionScreen() {
   };
 
   const styles = useMemo(() => makeStyles(theme), [theme]);
-  const timeline = targetKey
-    ? (state.targetedTimelines.get(targetKey) ?? [])
+  const timeline = selectedTargetKey
+    ? (state.targetedTimelines.get(selectedTargetKey) ?? state.timelines.get(id ?? "") ?? [])
     : (state.timelines.get(id ?? "") ?? []);
   const timelineRows = useMemo(() => buildTimelineRows(timeline), [timeline]);
   const renderedRows = useMemo<ListRow[]>(
@@ -264,7 +266,7 @@ export default function SessionScreen() {
 
   const isCurrentDialog = useCallback((entry: { request: { sessionId: string }; target?: Parameters<typeof sessionTargetKey>[0]; status: string }) =>
     entry.request.sessionId === id && entry.status === "pending"
-      && (!targetKey || !entry.target || sessionTargetKey(entry.target) === targetKey), [id, targetKey]);
+      && (!selectedTargetKey || !entry.target || sessionTargetKey(entry.target) === selectedTargetKey), [id, selectedTargetKey]);
 
   const directDialog = useMemo(() => state.dialogs.find(isCurrentDialog), [state.dialogs, isCurrentDialog]);
 
@@ -289,7 +291,11 @@ export default function SessionScreen() {
     return null;
   }, [activeAskWizard, directDialog, dismissedAskIds]);
 
-  // T7：composer/abort/edit 能力完全来自服务端 presentation.control（不再由 PID/name/window 推断）
+  const activePlan = useMemo(() => state.planRequests.find((entry) => entry.sessionId === id
+    && entry.status === "pending"
+    && (!selectedTargetKey || sessionTargetKey(entry.target) === selectedTargetKey)),
+  [id, selectedTargetKey, state.planRequests]);
+
   const control = session?.presentation?.control;
   const canPrompt = control?.canPrompt === true;
   const canAbort = control?.canAbort === true;
@@ -331,7 +337,16 @@ export default function SessionScreen() {
     }
   };
 
+  const handlePlanResponse = (response: DesktopPlanResponse, target: Parameters<typeof sessionTargetKey>[0]) => {
+    respondPlan(response.requestId, response, target);
+  };
+
+  const handlePlanCancel = (request: { requestId: string }, target: Parameters<typeof sessionTargetKey>[0]) => {
+    cancelPlan(request.requestId, target);
+  };
+
   const fabBottom = insets.bottom + composerHeight + 16;
+
 
   // T7：运行态与可交互性完全来自会话状态与服务端 presentation.control，不再做窗口/PID/name 推断
   const isSessionStreaming = session?.runState === "streaming";
@@ -503,7 +518,11 @@ export default function SessionScreen() {
       ) : null;
     }
     if (item.type === "tool_group") {
-      return <ToolCallGroup items={item.items} status={item.status} invocationCount={item.invocationCount} />;
+      return (
+        <View style={styles.bubbleToolGroup}>
+          <ToolCallGroup items={item.items} status={item.status} invocationCount={item.invocationCount} />
+        </View>
+      );
     }
     const timelineItem = item.item;
     const isUser = timelineItem.kind === "user";
@@ -828,16 +847,7 @@ export default function SessionScreen() {
 
             <View style={[styles.pillDivider, { backgroundColor: theme.border }]} />
 
-            {/* 3. 上下文压缩 */}
-            <TouchableOpacity
-              style={styles.floatingToolBtnOnlyIcon}
-              onPress={() => setActionSheetType("compact_confirm")}
-              accessibilityRole="button"
-              accessibilityLabel={t.labelCompactContext}
-              hitSlop={{ top: 8, bottom: 8, left: 6, right: 8 }}
-            >
-              <LineIcon name="compactSqueeze" size={15} color={theme.muted} />
-            </TouchableOpacity>
+            {/* Desktop TUI 的 compact 由 TUI 自己控制；Mobile 不再触发 Host-owned session 操作。 */}
           </View>
 
           {showFab ? (
@@ -899,7 +909,6 @@ export default function SessionScreen() {
           openModelPicker,
           openThinkingPicker,
           openPlanPicker,
-          openCompactPicker,
           // T7：abort 能力来自服务端 presentation.control.canAbort，只读会话不提供终止
           abort: canAbort ? handleAbort : undefined,
         }}
@@ -911,6 +920,16 @@ export default function SessionScreen() {
         placeholder={composerPlaceholder}
       />
       </View>
+
+      {activePlan && (
+        <PlanSurface
+          request={activePlan.request}
+          target={activePlan.target}
+          initialDraft={activePlan.editedMarkdown}
+          onResponse={handlePlanResponse}
+          onCancel={handlePlanCancel}
+        />
+      )}
 
       {activeAskWizard && (
         <AskWizardDialog
@@ -951,7 +970,7 @@ export default function SessionScreen() {
         </View>}
       </SpringBottomSheet>
 
-      {/* 底部物理弹簧 ActionSheet: 思考等级、计划模式、Compact 二次确认 */}
+      {/* 底部物理弹簧 ActionSheet：思考等级与计划模式。 */}
       <SpringBottomSheet
         visible={Boolean(actionSheetType)}
         onClose={() => setActionSheetType(null)}
@@ -1024,36 +1043,6 @@ export default function SessionScreen() {
           </View>
         )}
 
-        {actionSheetType === "compact_confirm" && (
-          <View style={{ gap: 12 }}>
-            <View style={styles.sheetHeader}>
-              <Text style={[styles.sheetTitle, { color: theme.text }]}>{t.compactTitle}</Text>
-              <TouchableOpacity onPress={() => setActionSheetType(null)}>
-                <LineIcon name="x" size={16} color={theme.muted} />
-              </TouchableOpacity>
-            </View>
-            <Text style={[styles.sheetDesc, { color: theme.muted }]}>
-              {t.compactDesc}
-            </Text>
-            <View style={{ flexDirection: "row", gap: 10, marginTop: 4 }}>
-              <TouchableOpacity
-                style={[styles.confirmBtn, { backgroundColor: theme.buttonPrimary }]}
-                onPress={async () => {
-                  setActionSheetType(null);
-                  if (id) await compactSession(id);
-                }}
-              >
-                <Text style={styles.confirmBtnText}>{t.compactConfirm}</Text>
-              </TouchableOpacity>
-              <TouchableOpacity
-                style={[styles.cancelBtn, { borderColor: theme.border, backgroundColor: theme.inputBg }]}
-                onPress={() => setActionSheetType(null)}
-              >
-                <Text style={[styles.cancelBtnText, { color: theme.muted }]}>{t.cancel}</Text>
-              </TouchableOpacity>
-            </View>
-          </View>
-        )}
       </SpringBottomSheet>
 
       {/* 文本选择抽屉：长按消息呼出，手柄支持三档自由拖拽吸附（36% / 60% / 88%） */}
@@ -1242,14 +1231,11 @@ function makeStyles(theme: ReturnType<typeof useTheme>["theme"]) {
       flexShrink: 1,
       overflow: "hidden",
     },
-    bubbleTool: {
-      backgroundColor: "transparent",
+    bubbleToolGroup: {
       alignSelf: "flex-start",
-      maxWidth: "90%",
       width: "90%",
-      borderWidth: 0,
-      padding: 0,
-      marginBottom: 8,
+      maxWidth: "90%",
+      marginBottom: 10,
     },
     bubbleActionRow: {
       flexDirection: "row",

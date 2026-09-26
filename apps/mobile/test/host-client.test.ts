@@ -1,6 +1,5 @@
 import { describe, expect, it, beforeEach, afterEach, vi } from "vitest";
 import {
-  buildOpenExistingSessionCommand,
   calculateBackoffDelay,
   CommandConnectionLostError,
   HostClient,
@@ -56,44 +55,6 @@ describe("HostClient", () => {
   let client: HostClient;
   let events: HostEvent[];
   let fakeWs: ReturnType<typeof createFakeWs>;
-
-  it("omits an empty sessionFile when opening a live Desktop target", () => {
-    const target = {
-      sessionId: "s1",
-      endpointId: "desktop-1",
-      normalizedCwd: "/work/app",
-      processGeneration: "generation-1",
-    };
-
-    expect(buildOpenExistingSessionCommand({
-      id: "s1",
-      sessionId: "s1",
-      endpointId: "desktop-1",
-      runtimeStatus: "idle",
-      cwd: "/work/app",
-      cwdName: "app",
-      path: "",
-      title: "app",
-      messageCount: 0,
-      updatedAt: new Date(0).toISOString(),
-      target,
-    })).toEqual({ type: "open_session", cwd: "/work/app", target });
-  });
-
-  it("keeps a non-empty sessionFile when opening a persisted session", () => {
-    expect(buildOpenExistingSessionCommand({
-      id: "s1",
-      sessionId: "s1",
-      endpointId: "history",
-      runtimeStatus: "history",
-      cwd: "/work/app",
-      cwdName: "app",
-      path: "/sessions/s1.jsonl",
-      title: "app",
-      messageCount: 0,
-      updatedAt: new Date(0).toISOString(),
-    })).toEqual({ type: "open_session", cwd: "/work/app", sessionFile: "/sessions/s1.jsonl" });
-  });
 
   beforeEach(() => {
     events = [];
@@ -179,7 +140,11 @@ describe("HostClient", () => {
   it("rejects command on error response", async () => {
     client.connect();
     fakeWs._open();
-    const promise = client.sendCommand({ type: "close_session", sessionId: "s1" });
+    const promise = client.sendCommand({
+      type: "close_session",
+      sessionId: "s1",
+      target: { sessionId: "s1", endpointId: "desktop-1", normalizedCwd: "/work/app", processGeneration: "generation-1" },
+    });
     const sent = JSON.parse(fakeWs._sent[0]) as { id: string };
     fakeWs._message(JSON.stringify({
       type: "command_result",

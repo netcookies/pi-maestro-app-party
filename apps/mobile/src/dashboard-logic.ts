@@ -14,12 +14,14 @@ import type {
   MonitorState,
   MonitorAttentionSummary,
   MonitorWindowSummary,
+  SessionTargetIdentity,
 } from "@maestro-mobile/shared";
 
 /** extension-ui 队列中待处理弹窗的最小投影（解耦 DialogEntry 结构） */
 export interface PendingAskItem {
   requestId: string;
   sessionId: string;
+  target?: SessionTargetIdentity;
   method: string;
   title?: string;
   message?: string;
@@ -50,7 +52,7 @@ export interface DashboardMetrics {
   teammatesWorking: number;
   /** 可见的 teammate agent 总数 */
   teammatesTotal: number;
-  /** 等待处理 = 待处理 ask 弹窗 + monitor 告警 */
+  /** 等待处理 = 待处理 Ask + Monitor 告警 */
   waitingAsk: number;
   waitingAttention: number;
   waitingCount: number;

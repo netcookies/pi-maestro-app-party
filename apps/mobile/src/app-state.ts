@@ -19,8 +19,16 @@ import type {
   TimelineItem,
   ExtensionUiRequest,
   ExtensionUiResponse,
+  ExecutionProjection,
+  TodoProjection,
+  TeammateProjection,
+  WorkspaceWindowProjection,
+  BackgroundJobProjection,
+  DesktopPlanRequest,
+  DesktopPlanResponse,
 } from "@maestro-mobile/shared";
 import { ExtensionUiQueue, type DialogEntry } from "./extension-ui-queue";
+import { PlanQueue, type PlanEntry } from "./plan-queue";
 import { parseHostStatusMeta, type HostStatusMeta } from "./host-status";
 import { sessionTargetKey, isSessionTargetIdentity } from "@maestro-mobile/shared";
 
@@ -44,7 +52,13 @@ export interface AppState {
   targetedTimelines: Map<string, TimelineItem[]>;
   maestro: MaestroState | null;
   monitor: MonitorState | null;
+  /** Independent category snapshots; each map is keyed by exact projection target. */
+  todoProjections: Map<string, TodoProjection>;
+  teammateProjections: Map<string, TeammateProjection>;
+  workspaceWindowProjections: Map<string, WorkspaceWindowProjection>;
+  backgroundJobProjections: Map<string, BackgroundJobProjection>;
   dialogs: DialogEntry[];
+  planRequests: PlanEntry[];
   lastError: string | null;
   /** Latest Host-global wire sequence observed for each exact target. */
   targetEventSeq: Map<string, number>;
@@ -74,7 +88,12 @@ export function createInitialState(): AppState {
     targetedTimelines: new Map(),
     maestro: null,
     monitor: null,
+    todoProjections: new Map(),
+    teammateProjections: new Map(),
+    workspaceWindowProjections: new Map(),
+    backgroundJobProjections: new Map(),
     dialogs: [],
+    planRequests: [],
     lastError: null,
     targetEventSeq: new Map(),
     targetProjectionEventSeq: new Map(),
@@ -88,6 +107,7 @@ export function createInitialState(): AppState {
 
 export interface AppStateDeps {
   dialogQueue?: ExtensionUiQueue;
+  planQueue?: PlanQueue;
 }
 
 /** 内部事件：批量替换 timeline（App 打开会话后拉取 snapshot 触发） */
@@ -160,6 +180,10 @@ export interface DialogStateChangedEvent {
   type: "__dialog_state_changed";
 }
 
+export interface PlanStateChangedEvent {
+  type: "__plan_state_changed";
+}
+
 export interface RevisionEvent {
   type: "__revision";
   revision: number;
@@ -179,6 +203,7 @@ export type AppAction =
   | DialogSendFailedEvent
   | LocalErrorEvent
   | DialogStateChangedEvent
+  | PlanStateChangedEvent
   | RevisionEvent
   | ConnectionResetEvent;
 
@@ -204,6 +229,19 @@ function isSessionPresentation(value: unknown): value is SessionPresentation {
 function withRevision(state: AppState, revision: number | undefined): AppState {
   return revision !== undefined && revision > state.revision ? { ...state, revision } : state;
 }
+
+function projectionKey(projection: ExecutionProjection): string {
+  return projection.source === "workspace"
+    ? JSON.stringify([projection.source, projection.target.workspaceId])
+    : JSON.stringify([projection.source, projection.target.workspaceId, projection.target.ownerId, projection.target.ownerNonce, projection.target.endpointId]);
+}
+
+function acceptsProjection<T extends ExecutionProjection>(existing: T | undefined, next: T): boolean {
+  if (!existing) return true;
+  if (existing.epoch !== next.epoch) return true;
+  return next.revision > existing.revision;
+}
+
 
 /** 纯 reducer：处理一个 HostEvent，返回新状态（不可变更新）
  * 额外支持内部事件 __history_load（批量替换 timeline）/ __event_batch（H4 微批）/ __dialog_send_failed */
@@ -301,7 +339,11 @@ export function reduceEvent(state: AppState, event: AppAction, deps: AppStateDep
   if (event.type === "__connection_reset") {
     queue?.clearAll();
     const fresh = createInitialState();
-    return { ...fresh, connectionStatus: state.connectionStatus };
+    return {
+      ...fresh,
+      connectionStatus: state.connectionStatus,
+      planRequests: deps.planQueue?.pendingPlans ?? [],
+    };
   }
   if (event.type === "__revision") {
     return withRevision(state, revisionOf(event.revision));
@@ -513,6 +555,42 @@ export function reduceEvent(state: AppState, event: AppAction, deps: AppStateDep
       return withRevision({ ...state, monitor }, revision);
     }
 
+    case "todo_projection_updated": {
+      const key = projectionKey(event.projection);
+      const existing = state.todoProjections.get(key);
+      if (!acceptsProjection(existing, event.projection)) return state;
+      const todoProjections = new Map(state.todoProjections);
+      todoProjections.set(key, event.projection);
+      return { ...state, todoProjections };
+    }
+
+    case "teammate_projection_updated": {
+      const key = projectionKey(event.projection);
+      const existing = state.teammateProjections.get(key);
+      if (!acceptsProjection(existing, event.projection)) return state;
+      const teammateProjections = new Map(state.teammateProjections);
+      teammateProjections.set(key, event.projection);
+      return { ...state, teammateProjections };
+    }
+
+    case "workspace_window_projection_updated": {
+      const key = projectionKey(event.projection);
+      const existing = state.workspaceWindowProjections.get(key);
+      if (!acceptsProjection(existing, event.projection)) return state;
+      const workspaceWindowProjections = new Map(state.workspaceWindowProjections);
+      workspaceWindowProjections.set(key, event.projection);
+      return { ...state, workspaceWindowProjections };
+    }
+
+    case "background_job_projection_updated": {
+      const key = projectionKey(event.projection);
+      const existing = state.backgroundJobProjections.get(key);
+      if (!acceptsProjection(existing, event.projection)) return state;
+      const backgroundJobProjections = new Map(state.backgroundJobProjections);
+      backgroundJobProjections.set(key, event.projection);
+      return { ...state, backgroundJobProjections };
+    }
+
     case "extension_ui_request": {
       if (!queue) return state;
       queue.enqueue(event.request, event.target);
@@ -530,6 +608,19 @@ export function reduceEvent(state: AppState, event: AppAction, deps: AppStateDep
       // 后续一次失败的 resend 就能把它 reopen 回来（S_CONFIRM RV-001）。
       queue.drop(event.requestId, event.target);
       return { ...state, dialogs: queue.pendingDialogs };
+    }
+
+    case "desktop_plan_request": {
+      if (!deps.planQueue) return state;
+      deps.planQueue.enqueue(event.sessionId, event.request, event.target);
+      return { ...state, planRequests: deps.planQueue.pendingPlans };
+    }
+
+    case "desktop_plan_cleared": {
+      if (!deps.planQueue) return state;
+      if (event.kind) deps.planQueue.drop(event.requestId, event.kind, event.target);
+      else deps.planQueue.dropAny(event.requestId, event.target);
+      return { ...state, planRequests: deps.planQueue.pendingPlans };
     }
 
     case "session_error": {
@@ -561,6 +652,10 @@ export function reduceEvent(state: AppState, event: AppAction, deps: AppStateDep
     case "__dialog_state_changed":
       return queue ? { ...state, dialogs: queue.pendingDialogs } : state;
 
+    case "__plan_state_changed":
+      return deps.planQueue ? { ...state, planRequests: deps.planQueue.pendingPlans } : state;
+
+
     default:
       return state;
   }
@@ -570,6 +665,52 @@ export interface AppActions {
   answerDialog(requestId: string, value: string | string[]): void;
   cancelDialog(requestId: string): void;
 }
+
+export interface PlanActions {
+  respondPlan(requestId: string, response: DesktopPlanResponse, target?: SessionTargetIdentity): void;
+  cancelPlan(requestId: string, target?: SessionTargetIdentity): void;
+}
+
+export function createPlanActions(
+  queue: PlanQueue,
+  responder: (
+    sessionId: string,
+    requestId: string,
+    response: DesktopPlanResponse,
+    target: SessionTargetIdentity,
+  ) => void | Promise<unknown>,
+  onQueueChanged: () => void = () => undefined,
+  onSendFailed: (message: string) => void = () => undefined,
+): PlanActions {
+  const send = (entry: PlanEntry, response: DesktopPlanResponse): void => {
+    queue.answer(entry.request.requestId, entry.request.kind, response, entry.target);
+    onQueueChanged();
+    Promise.resolve()
+      .then(() => responder(entry.sessionId, entry.request.requestId, response, entry.target))
+      .catch((error: unknown) => {
+      queue.reopen(entry.request.requestId, entry.request.kind, entry.target);
+      onQueueChanged();
+      onSendFailed(error instanceof Error ? error.message : `Plan response send failed (${entry.request.requestId})`);
+    });
+  };
+  return {
+    respondPlan(requestId, response, target) {
+      const entry = queue.get(requestId, response.kind, target);
+      if (entry?.status === "pending") send(entry, response);
+    },
+    cancelPlan(requestId, target) {
+      const entry = queue.get(requestId, "confirm", target) ?? queue.get(requestId, "review", target);
+      if (!entry || entry.status !== "pending") return;
+      send(entry, {
+        type: "desktop_plan_response",
+        requestId,
+        kind: entry.request.kind,
+        status: "cancelled",
+      });
+    },
+  };
+}
+
 
 export function createAppActions(
   queue: ExtensionUiQueue,

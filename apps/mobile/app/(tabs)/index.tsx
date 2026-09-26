@@ -23,7 +23,7 @@ import {
   deriveDashboardMetrics,
   type PendingAskItem,
 } from "../../src/dashboard-logic";
-import type { SessionUsageSummary } from "@maestro-mobile/shared";
+import { sessionTargetKey, type SessionUsageSummary } from "@maestro-mobile/shared";
 
 /** 2x2 指标卡定义 */
 type MetricCard = { value: string; label: string };
@@ -38,14 +38,16 @@ function formatTokens(n: number): string {
 
 export default function DashboardScreen() {
   const router = useRouter();
-  const { state, isConnected, connectionState, fetchSessionUsage, loadSessionHistory, cancelDialog } = useHost();
+  const { state, isConnected, connectionState, fetchSessionUsage, loadSessionHistory, cancelDialog, cancelPlan } = useHost();
   const { theme } = useTheme();
   const { t } = useI18n();
   const styles = React.useMemo(() => makeStyles(theme), [theme]);
   const [currentAskIndex, setCurrentAskIndex] = useState(0);
   const [openingAsk, setOpeningAsk] = useState(false);
+  const [currentPlanIndex, setCurrentPlanIndex] = useState(0);
+  const [openingPlan, setOpeningPlan] = useState(false);
 
-  // Dashboard deliberately contains overview, Ask, attention, and connection state only.
+  // Dashboard deliberately contains overview, Ask/Plan attention, and connection state only.
 
   // 已打开会话的 usage（仅第一个可控会话作为代表；usage 协议是会话级）
   const [usage, setUsage] = React.useState<SessionUsageSummary | null>(null);
@@ -75,6 +77,7 @@ export default function DashboardScreen() {
       .map((d) => ({
         requestId: d.request.id,
         sessionId: d.request.sessionId,
+        ...(d.target ? { target: d.target } : {}),
         method: d.request.method,
         title: d.request.title,
         message: d.request.message,
@@ -82,6 +85,8 @@ export default function DashboardScreen() {
 
     return list;
   }, [state.dialogs]);
+
+  const pendingPlans = React.useMemo(() => state.planRequests.filter((entry) => entry.status === "pending"), [state.planRequests]);
 
   const metrics = React.useMemo(
     () => deriveDashboardMetrics({ monitor: state.monitor, maestro: state.maestro, pendingAsks }, new Date()),
@@ -232,7 +237,12 @@ export default function DashboardScreen() {
         {pendingAsks.length > 0 && pendingAsks[currentAskIndex] && (
           <TouchableOpacity
             activeOpacity={0.92}
-            onPress={() => router.push({ pathname: "/session", params: { id: pendingAsks[currentAskIndex].sessionId } })}
+            onPress={() => {
+              const ask = pendingAsks[currentAskIndex];
+              if (!ask?.target) return;
+              const targetKey = sessionTargetKey(ask.target);
+              router.push({ pathname: "/session", params: { id: ask.sessionId, targetKey } });
+            }}
             style={[styles.askCard, { backgroundColor: theme.secondaryContainer ?? theme.cardBg, borderColor: theme.warning }]}
           >
             <View style={styles.askHeader}>
@@ -282,10 +292,12 @@ export default function DashboardScreen() {
                   if (targetAsk) {
                     setOpeningAsk(true);
                     try {
-                      await loadSessionHistory(targetAsk.sessionId);
-                      router.push({ pathname: "/session", params: { id: targetAsk.sessionId } });
+                      const targetKey = targetAsk.target ? sessionTargetKey(targetAsk.target) : undefined;
+                      if (!targetKey) return;
+                      await loadSessionHistory(targetAsk.sessionId, targetKey);
+                      router.push({ pathname: "/session", params: { id: targetAsk.sessionId, targetKey } });
                     } catch {
-                      router.push({ pathname: "/session", params: { id: targetAsk.sessionId } });
+                      // 不携带 exact target 时禁止回退到可能相同 sessionId 的 sibling。
                     } finally {
                       setOpeningAsk(false);
                     }
@@ -305,6 +317,71 @@ export default function DashboardScreen() {
                 }}
               >
                 <Text style={[styles.askBtnText, { color: theme.muted }]}>忽略</Text>
+              </TouchableOpacity>
+            </View>
+          </TouchableOpacity>
+        )}
+
+        {/* 待处理 Plan 卡片：携带完整 target key，避免同 sessionId 的 sibling 误路由 */}
+        {pendingPlans.length > 0 && pendingPlans[currentPlanIndex] && (
+          <TouchableOpacity
+            activeOpacity={0.92}
+            onPress={() => {
+              const entry = pendingPlans[currentPlanIndex];
+              if (entry) router.push({ pathname: "/session", params: { id: entry.sessionId, targetKey: sessionTargetKey(entry.target) } });
+            }}
+            style={[styles.askCard, { backgroundColor: theme.secondaryContainer ?? theme.cardBg, borderColor: theme.accent }]}
+            accessibilityRole="button"
+            accessibilityLabel={`待处理计划 ${currentPlanIndex + 1} / ${pendingPlans.length}`}
+          >
+            <View style={styles.askHeader}>
+              <View style={styles.askTitleWrap}>
+                <LineIcon name="bolt" size={16} color={theme.accent} />
+                <Text style={[styles.askTitle, { color: theme.accent }]}>待处理计划</Text>
+              </View>
+              <View style={styles.askCounterWrap}>
+                <Text style={[styles.askCounterText, { color: theme.accent }]}>{currentPlanIndex + 1} / {pendingPlans.length}</Text>
+                {pendingPlans.length > 1 && (
+                  <View style={styles.askNavBtns}>
+                    <TouchableOpacity onPress={(e) => { e.stopPropagation?.(); setCurrentPlanIndex((index) => index > 0 ? index - 1 : pendingPlans.length - 1); }} style={[styles.askNavBtn, { backgroundColor: theme.inputBg }]}>
+                      <Text style={[styles.askNavBtnText, { color: theme.text }]}>‹</Text>
+                    </TouchableOpacity>
+                    <TouchableOpacity onPress={(e) => { e.stopPropagation?.(); setCurrentPlanIndex((index) => index < pendingPlans.length - 1 ? index + 1 : 0); }} style={[styles.askNavBtn, { backgroundColor: theme.inputBg }]}>
+                      <Text style={[styles.askNavBtnText, { color: theme.text }]}>›</Text>
+                    </TouchableOpacity>
+                  </View>
+                )}
+              </View>
+            </View>
+            <Text style={styles.askMainTitle} numberOfLines={1}>{pendingPlans[currentPlanIndex].request.pathLabel} · {pendingPlans[currentPlanIndex].request.kind === "review" ? "审阅计划" : "确认计划"}</Text>
+            <Text style={styles.askDescText} numberOfLines={2}>{pendingPlans[currentPlanIndex].request.markdown.slice(0, 220)}</Text>
+            <View style={styles.askActionRow}>
+              <TouchableOpacity
+                style={[styles.askApproveBtn, { backgroundColor: theme.buttonPrimary }, openingPlan && { opacity: 0.7 }]}
+                disabled={openingPlan}
+                onPress={async (e) => {
+                  e.stopPropagation?.();
+                  const entry = pendingPlans[currentPlanIndex];
+                  if (!entry) return;
+                  setOpeningPlan(true);
+                  const targetKey = sessionTargetKey(entry.target);
+                  try {
+                    await loadSessionHistory(entry.sessionId, targetKey);
+                  } catch {
+                    setOpeningPlan(false);
+                    return;
+                  }
+                  router.push({ pathname: "/session", params: { id: entry.sessionId, targetKey } });
+                  setOpeningPlan(false);
+                }}
+              >
+                <Text style={styles.askBtnText}>{openingPlan ? "加载中…" : "查看并处理计划"}</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={[styles.askRejectBtn, { backgroundColor: theme.inputBg, borderColor: theme.border }]}
+                onPress={(e) => { e.stopPropagation?.(); const entry = pendingPlans[currentPlanIndex]; if (entry) cancelPlan(entry.request.requestId, entry.target); }}
+              >
+                <Text style={[styles.askBtnText, { color: theme.muted }]}>取消</Text>
               </TouchableOpacity>
             </View>
           </TouchableOpacity>

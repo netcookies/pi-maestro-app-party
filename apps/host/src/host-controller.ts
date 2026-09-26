@@ -1,10 +1,10 @@
-import type { HostEvent, SessionSnapshot, ExtensionUiResponse, DesktopAskRequest, DesktopAskResponse, DesktopPluginModel, DesktopPluginRuntimeStatus, DesktopPluginSessionSummary, SessionSummaryPatch, TimelineItem } from "@maestro-mobile/shared";
+import type { HostEvent, SessionSnapshot, ExtensionUiResponse, DesktopAskRequest, DesktopAskResponse, DesktopPluginModel, DesktopPluginRuntimeStatus, DesktopPluginSessionSummary, SessionSummaryPatch, TimelineItem, DesktopPlanRequest, DesktopPlanResponse } from "@maestro-mobile/shared";
+
 import type { DesktopPluginTarget } from "@maestro-mobile/shared";
-import type { RuntimeFactory, SessionRunner, OpenSessionRequest, HostEventListener } from "./types.js";
-import { SdkSessionRunner } from "./session-runner.js";
+import type { SessionCatalog, HostEventListener } from "./types.js";
 import { MaestroStateReader } from "./maestro-state.js";
 import { WorkspaceTelemetryReader } from "./workspace-telemetry.js";
-import { monitorStateEvent } from "./monitor-projection.js";
+import { executionProjectionEvents, monitorStateEvent } from "./monitor-projection.js";
 import { MonitorReadService } from "./application/monitor-read-service.js";
 import { SessionDirectory, type SessionTargetIdentity } from "./control/SessionDirectory.js";
 import { SessionCommandService } from "./application/session-command-service.js";
@@ -20,10 +20,15 @@ import { JsonlTailWatcher } from "./jsonl-tail-watcher.js";
 import { EventLog } from "./event-log.js";
 import { readFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
+
 import { fileURLToPath } from "node:url";
 
 function targetKey(target: DesktopPluginTarget): string {
   return [target.sessionId, target.endpointId, target.normalizedCwd, target.processGeneration].join("\u0000");
+}
+
+function planKey(target: DesktopPluginTarget, requestId: string, kind: DesktopPlanRequest["kind"]): string {
+  return JSON.stringify([targetKey(target), requestId, kind]);
 }
 
 function timelineContentKey(item: TimelineItem): string {
@@ -44,26 +49,29 @@ try {
  * HostController — 集中管理所有会话 + Maestro 状态 + 事件分发
  *
  * 职责：
- * - 管理 SessionRunner 实例生命周期
+ * - 管理 Desktop target 的 JSONL reader 生命周期
  * - 注册 HostEventListener 事件监听（给 WebSocket 广播用）
  * - 调度 MaestroStateReader 定期读取
  * - 处理 client commands
  */
 export class HostController {
-  private readonly sessions = new Map<string, SessionRunner>();
+  private readonly readerTargets = new Set<string>();
+
   private readonly eventLog = new EventLog();
   private readonly listeners = new Set<HostEventListener>();
   private readonly maestroReader: MaestroStateReader;
   private readonly telemetryReader: WorkspaceTelemetryReader;
   private readonly monitorReadService: MonitorReadService;
   private readonly sessionDirectory = new SessionDirectory();
-  private readonly sessionTargets = new Map<string, SessionTargetIdentity>();
+
   private readonly pendingDesktopModels = new Map<string, DesktopPluginModel>();
   private readonly pendingDesktopThinking = new Map<string, string>();
   private readonly detachedReaderDisposals = new Set<Promise<void>>();
   private readonly desktopTailWatchers = new Map<string, { sessionFile: string; watcher: JsonlTailWatcher }>();
   private readonly desktopReplayRefreshes = new Map<string, { timer: ReturnType<typeof setTimeout>; refreshing: boolean; replayQueued: boolean; pendingItems: TimelineItem[] }>();
   private readonly pendingDesktopAsks = new Map<string, { target: DesktopPluginTarget; request: DesktopAskRequest; event: Extract<HostEvent, { type: "extension_ui_request" }>; timer: ReturnType<typeof setTimeout> }>();
+  private readonly pendingDesktopPlans = new Map<string, { target: DesktopPluginTarget; request: DesktopPlanRequest; timer: ReturnType<typeof setTimeout> }>();
+
   private readonly projectedDesktopTargets = new Map<string, DesktopPluginTarget>();
   private readonly sessionCommandService: SessionCommandService;
   private readonly desktopPluginRegistry: DesktopBrokerProjectedRegistry;
@@ -83,7 +91,7 @@ export class HostController {
   private _startedAt = Date.now();
 
   constructor(
-    private readonly runtimeFactory: RuntimeFactory,
+    private readonly sessionCatalog: SessionCatalog,
     maestroReader?: MaestroStateReader,
     desktopRegistry?: DesktopBrokerProjectedRegistry,
   ) {
@@ -94,26 +102,18 @@ export class HostController {
     this.desktopControlGateway = new DesktopControlGatewayService(this.desktopPluginRegistry);
     this.sessionCommandService = new SessionCommandService(this.sessionDirectory, this.desktopControlGateway);
     this.sessionQueryService = new SessionQueryService(
-      this.runtimeFactory,
+      this.sessionCatalog,
       this.sessionDirectory,
-      (sessionId) => {
-        const target = this.getSessionTarget(sessionId);
-        return target ? this.sessionDirectory.resolve(target)?.presentation : undefined;
-      },
+      undefined,
       Date.now,
       () => this.monitorReadService.read().then((snapshot) => snapshot.state),
-      (sessionId) => {
-        const target = this.getSessionTarget(sessionId);
-        return target ? this.sessionDirectory.resolve(target) : undefined;
-      },
+      undefined,
     );
     this.applicationRouter = new ApplicationCommandRouter(
       this.sessionCommandService,
       this.sessionQueryService,
       new MonitorQueryService(this.monitorReadService),
       {
-        openSession: (request) => this.openSession(request),
-        closeSession: (sessionId, target) => this.closeSession(sessionId, target),
         respondToExtensionUi: (sessionId, requestId, response, target) => this.respondToExtensionUi(sessionId, requestId, response, target),
         sessionOperation: (operation) => this.runSessionOperation(operation),
         readMaestroState: () => this.readMaestroStateNow(),
@@ -137,7 +137,7 @@ export class HostController {
   }
 
   get activeSessionIds(): string[] {
-    return [...this.sessions.keys()];
+    return this.sessionDirectory.list().map((target) => target.identity.sessionId);
   }
 
   get directory(): SessionDirectory {
@@ -232,18 +232,12 @@ export class HostController {
       ...(registration.thinkingLevel ? { thinkingLevel: registration.thinkingLevel } : {}),
     });
     this.ensureDesktopTailWatcher(target, registration.sessionFile);
+    this.readerTargets.add(targetKey(target));
+
   }
 
   getSessionTarget(sessionId: string): SessionTargetIdentity | undefined {
-    const mapped = this.sessionTargets.get(sessionId);
-    // A mapping is established only by an exact registration/open operation. Once present it is
-    // authoritative even when sibling endpoints share the same sessionId; ambiguity applies only
-    // to legacy lookup before an exact endpoint has been selected.
-    if (mapped && this.sessionDirectory.resolve(mapped)) return { ...mapped };
-    if (mapped) this.sessionTargets.delete(sessionId);
     const matches = this.sessionDirectory.list().filter((target) => target.identity.sessionId === sessionId);
-    const desktopTargets = matches.filter((target) => target.kind === "desktop");
-    if (desktopTargets.length > 1) return undefined;
     return matches.length === 1 ? { ...matches[0].identity } : undefined;
   }
 
@@ -252,12 +246,9 @@ export class HostController {
     const key = targetKey(target);
     if (model === undefined) this.pendingDesktopModels.delete(key);
     else this.pendingDesktopModels.set(key, model);
+    const current = this.sessionDirectory.resolve(target);
+    if (!current) return;
     this.sessionDirectory.updateDesktopModel(target, model);
-    const runner = this.sessionDirectory.resolve(target)?.runner;
-    if (runner) {
-      runner.syncExternalModel?.(model);
-      return;
-    }
     this.publishDesktopSessionUpdated(target);
   }
 
@@ -268,10 +259,6 @@ export class HostController {
     if (level === undefined) this.pendingDesktopThinking.delete(key);
     else this.pendingDesktopThinking.set(key, level);
     this.sessionDirectory.updateDesktopThinking(target, level);
-    if (current.runner) {
-      current.runner.syncExternalThinking?.(level);
-      return;
-    }
     this.publishDesktopSessionUpdated(target);
   }
 
@@ -458,11 +445,59 @@ export class HostController {
     this.clearDesktopAsk(id);
   }
 
+  onDesktopPlanRequest(target: DesktopPluginTarget, request: DesktopPlanRequest): void {
+    if (this.disposed || request.deadlineAt <= Date.now() || !this.sessionDirectory.resolve(target, "plan")) return;
+    const id = planKey(target, request.requestId, request.kind);
+    if (this.pendingDesktopPlans.has(id)) return;
+    const timer = setTimeout(() => this.clearDesktopPlan(id), request.deadlineAt - Date.now());
+    timer.unref?.();
+    const event = this.eventLog.record({
+      type: "desktop_plan_request",
+      sessionId: target.sessionId,
+      target: { ...target },
+      request,
+    });
+    this.pendingDesktopPlans.set(id, { target: { ...target }, request, timer });
+    this.emitToListeners(event);
+  }
+
+  onDesktopPlanCancelled(target: DesktopPluginTarget, cancel: { requestId: string; kind: "confirm" | "review" }): void {
+    const id = planKey(target, cancel.requestId, cancel.kind);
+    this.clearDesktopPlan(id);
+  }
+
   pendingDesktopAskEvents(): HostEvent[] {
     return [...this.pendingDesktopAsks.values()]
       .filter(({ request }) => request.deadlineAt > Date.now())
       .map(({ event, request }) => ({ ...event, request: { ...event.request, timeout: Math.max(1, request.deadlineAt - Date.now()) } }));
   }
+  pendingDesktopPlanEvents(): HostEvent[] {
+    return [...this.pendingDesktopPlans.values()]
+      .filter(({ request }) => request.deadlineAt > Date.now())
+      .map(({ request, target }) => this.eventLog.record({ type: "desktop_plan_request", sessionId: target.sessionId, target: { ...target }, request }));
+  }
+
+  async respondToDesktopPlan(sessionId: string, requestId: string, response: DesktopPlanResponse, target?: SessionTargetIdentity): Promise<boolean> {
+    if (!target || target.sessionId !== sessionId) return false;
+    const id = planKey(target, requestId, response.kind);
+    const pending = this.pendingDesktopPlans.get(id);
+    if (!pending || pending.request.kind !== response.kind || pending.request.deadlineAt <= Date.now()) return false;
+    const registration = this.desktopPluginRegistry.resolve(target);
+    if (!registration?.transport.answerPlan) return false;
+    const result = await registration.transport.answerPlan({ ...response, requestId } as DesktopPlanResponse);
+    if (result.status !== "accepted") return false;
+    this.clearDesktopPlan(id);
+    return true;
+  }
+
+  private clearDesktopPlan(id: string): void {
+    const pending = this.pendingDesktopPlans.get(id);
+    if (!pending) return;
+    clearTimeout(pending.timer);
+    this.pendingDesktopPlans.delete(id);
+    if (!this.disposed) this.emitToListeners(this.eventLog.record({ type: "desktop_plan_cleared", sessionId: pending.target.sessionId, requestId: pending.request.requestId, kind: pending.request.kind, target: { ...pending.target } }));
+  }
+
 
   private clearDesktopAsk(id: string): void {
     const pending = this.pendingDesktopAsks.get(id);
@@ -489,28 +524,15 @@ export class HostController {
     this.disposeDesktopTailWatcher(target);
     const entry = this.sessionDirectory.resolve(target);
     if (!entry) return;
+    for (const [id, pending] of this.pendingDesktopPlans) {
+      if (targetKey(pending.target) === targetKey(target)) this.clearDesktopPlan(id);
+    }
     for (const [id, pending] of this.pendingDesktopAsks) {
       if (targetKey(pending.target) === targetKey(target)) this.clearDesktopAsk(id);
     }
     this.publishDesktopSummary(target, { reset: true, runtimeStatus: "sleeping", activeSince: null, lastActivityAt: new Date().toISOString() });
-    const runner = entry.runner;
-    const sessionId = target.sessionId;
-    this.pendingDesktopModels.delete(targetKey(target));
-    this.pendingDesktopThinking.delete(targetKey(target));
     this.sessionDirectory.unregister(target);
-    if (!runner) return;
-
-    // A reader created for an exact Desktop target must not silently become Host-owned when
-    // that endpoint disappears. Dispose it and require a new explicit open for another target.
-    if (this.sessions.get(sessionId) === runner) {
-      this.sessions.delete(sessionId);
-      if (targetKey(this.sessionTargets.get(sessionId) ?? target) === targetKey(target)) this.sessionTargets.delete(sessionId);
-    }
-    const task = runner.dispose().catch((error: unknown) => {
-      console.error("[maestro-mobile] desktop reader disposal failed:", error);
-    });
-    this.detachedReaderDisposals.add(task);
-    void task.finally(() => this.detachedReaderDisposals.delete(task));
+    this.readerTargets.delete(targetKey(target));
   }
   async readTelemetry() {
     return this.telemetryReader.read();
@@ -535,6 +557,9 @@ export class HostController {
       if (snapshot.stableKey === this.telemetryCache) return;
       this.telemetryCache = snapshot.stableKey;
       this.emitToListeners(this.eventLog.record(monitorStateEvent(snapshot.state)));
+      for (const event of executionProjectionEvents(snapshot.projections)) {
+        this.emitToListeners(this.eventLog.record(event));
+      }
     } catch {
       // 读取失败保留上次快照，不广播空窗口
     } finally {
@@ -556,7 +581,8 @@ export class HostController {
       version: hostPackageVersion,
       maestroDetected: this.maestroDetected,
       ...this.componentVersions,
-      sessions: this.sessions.size,
+      sessions: this.readerTargets.size,
+
       uptimeMs,
     };
   }
@@ -586,183 +612,40 @@ export class HostController {
     }
   }
 
-  /** 列出所有会话（透传 runtimeFactory） */
+  /** 列出已存在的持久化会话；不会创建或附着 AgentSession。 */
   async listSessions(cwd?: string): Promise<unknown[]> {
-    return this.runtimeFactory.listSessions(cwd);
-  }
-
-  /** 打开会话 */
-  async openSession(request: OpenSessionRequest): Promise<{ id: string }> {
-    const requestedEntry = request.target ? this.sessionDirectory.resolve(request.target) : undefined;
-    if (request.target && !requestedEntry) throw new Error("target_unavailable");
-    if (request.target && resolve(request.target.normalizedCwd) !== resolve(request.cwd)) {
-      throw new Error("target_mismatch");
-    }
-    // Reopening a list row that already owns a reader must not replace that reader or rebind
-    // the session by inference. The exact server-issued target is already the desired endpoint.
-    if (request.target && requestedEntry?.runner) {
-      const openedFile = requestedEntry.runner.state.sessionFile;
-      if (request.sessionFile && (!openedFile || resolve(openedFile) !== resolve(request.sessionFile))) {
-        throw new Error("target_mismatch");
-      }
-      this.sessions.set(request.target.sessionId, requestedEntry.runner);
-      this.sessionTargets.set(request.target.sessionId, request.target);
-      return requestedEntry.runner;
-    }
-
-    const projectedSessionFile = requestedEntry?.sessionFile;
-    if (request.target && request.sessionFile && (!projectedSessionFile || resolve(request.sessionFile) !== resolve(projectedSessionFile))) {
-      throw new Error("target_mismatch");
-    }
-    const sessionFile = request.target ? projectedSessionFile : request.sessionFile;
-    if (request.target && requestedEntry?.kind === "desktop") {
-      // Desktop JSONL is a read-only projection. Do not open it through the Pi SDK here:
-      // SessionManager.open eagerly materializes the complete conversation. Bounded JSONL
-      // paging is handled by SessionQueryService, while commands still use the Broker.
-      this.sessionTargets.set(request.target.sessionId, request.target);
-      return { id: request.target.sessionId };
-    }
-
-    const pendingEvents: HostEvent[] = [];
-    let openedTarget = request.target;
-    const runner = await SdkSessionRunner.open(this.runtimeFactory, {
-      ...request,
-      ...(sessionFile ? { sessionFile } : {}),
-    }, (event) => {
-      if (!openedTarget) {
-        pendingEvents.push(event);
-        return;
-      }
-      this.emitToListeners(this.eventLog.record(
-        event.type === "session_updated" || event.type === "timeline_item" || event.type === "timeline_delta"
-          || event.type === "raw_event" || event.type === "command_error" || event.type === "extension_ui_request" || event.type === "extension_ui_cleared"
-          ? { ...event, target: openedTarget }
-          : event,
-      ));
-    });
-    let explicitTarget: SessionTargetIdentity | undefined;
-    if (request.target) {
-      if (runner.id !== request.target.sessionId || resolve(runner.state.cwd) !== resolve(request.target.normalizedCwd)) {
-        await runner.dispose();
-        throw new Error("target_mismatch");
-      }
-      if (!this.sessionDirectory.attachRunner(request.target, runner)) {
-        await runner.dispose();
-        throw new Error("target_unavailable");
-      }
-      explicitTarget = request.target;
-    }
-
-    // P2-4：同一会话（continue 同一 sessionFile 时 id 相同）重复 open 时，
-    // 先释放旧 runner（否则旧实例仍在订阅 SDK 事件并广播，且 runtime 常驻内存），再登记新实例。
-    const existing = this.sessions.get(runner.id);
-    if (existing && existing !== runner) {
-      for (const entry of this.sessionDirectory.list().filter((candidate) => candidate.identity.sessionId === runner.id && candidate.runner === existing)) {
-        if (entry.kind === "desktop") this.sessionDirectory.detachRunner(entry.identity, existing);
-        else this.sessionDirectory.unregister(entry.identity);
-      }
-      this.sessionTargets.delete(runner.id);
-      await existing.dispose();
-    }
-    this.sessions.set(runner.id, runner);
-    const target = explicitTarget ?? this.sessionDirectory.registerHostRunner(runner);
-    openedTarget = target;
-    for (const event of pendingEvents) {
-      this.emitToListeners(this.eventLog.record(
-        event.type === "session_updated" || event.type === "timeline_item" || event.type === "timeline_delta"
-          || event.type === "raw_event" || event.type === "command_error" || event.type === "extension_ui_request" || event.type === "extension_ui_cleared"
-          ? { ...event, target }
-          : event,
-      ));
-    }
-    this.sessionTargets.set(runner.id, target);
-    const pendingModel = this.pendingDesktopModels.get(targetKey(target));
-    if (pendingModel) runner.syncExternalModel?.(pendingModel);
-    const pendingThinking = this.pendingDesktopThinking.get(targetKey(target));
-    if (pendingThinking) runner.syncExternalThinking?.(pendingThinking);
-    this.emitToListeners(this.eventLog.record({
-      type: "host_status",
-      status: `session ${runner.id} opened`,
-    } as HostEvent));
-    return runner;
-  }
-
-  /** 获取会话 */
-  getSession(sessionId: string): SessionRunner | undefined {
-    return this.sessions.get(sessionId);
+    return this.sessionCatalog.listSessions(cwd);
   }
 
   private async runSessionOperation(operation: SessionOperation): Promise<unknown> {
     const entry = this.sessionDirectory.resolve(operation.target);
-    const runner = entry?.runner;
-    if (!runner) {
-      if (entry?.kind !== "desktop") throw new Error("target_unavailable");
-      switch (operation.kind) {
-        case "load_more_history": {
-          const result = await this.sessionQueryService.history(operation.target, operation.count);
-          return result.value ?? { items: [], hasMore: false, totalEntries: 0, historyAvailable: false };
-        }
-        case "search_history": {
-          const entry = this.sessionDirectory.resolve(operation.target);
-          if (entry?.sessionFile) return searchInJsonl(entry.sessionFile, operation.keyword, operation.maxResults);
-          return { matches: [], totalEntries: 0, historyAvailable: false };
-        }
-        case "list_models":
-        case "list_skills": return this.desktopControlGateway.query(operation.target, operation.kind);
-        default: throw new Error("target_unavailable");
-      }
+    if (!entry) throw new Error("target_unavailable");
+    if (operation.kind === "load_more_history") {
+      const result = await this.sessionQueryService.history(operation.target, operation.count);
+      return result.value ?? { items: [], hasMore: false, totalEntries: 0, historyAvailable: false };
     }
-    switch (operation.kind) {
-      case "load_more_history": return runner.loadMoreHistory(operation.count);
-      case "search_history": return runner.searchHistory(operation.keyword, operation.maxResults, operation.previewLength);
-      case "list_models": return typeof runner.listModels === "function" ? runner.listModels() : { ok: false, error: "unsupported_command" };
-      case "list_skills": return typeof runner.listLoadedSkills === "function" ? runner.listLoadedSkills() : { ok: false, error: "unsupported_command" };
-      case "set_model": return typeof runner.setModel === "function" ? runner.setModel(operation.modelId, operation.provider) : { ok: false, error: "unsupported_command" };
-      case "compact": return typeof runner.compact === "function" ? runner.compact(operation.customInstructions) : { ok: false, error: "unsupported_command" };
-      case "rename_session": return typeof runner.renameSession === "function" ? runner.renameSession(operation.name) : { ok: false, error: "unsupported_command" };
+    if (operation.kind === "search_history") {
+      if (!entry.sessionFile) return { matches: [], totalEntries: 0, historyAvailable: false };
+      return searchInJsonl(entry.sessionFile, operation.keyword, operation.maxResults);
     }
+    if (entry.kind !== "desktop") throw new Error("target_unavailable");
+    if (operation.kind === "list_models" || operation.kind === "list_skills") {
+      return this.desktopControlGateway.query(operation.target, operation.kind);
+    }
+    throw new Error("unsupported_command");
   }
 
-  /** 关闭会话 */
-  async closeSession(sessionId: string, target?: SessionTargetIdentity): Promise<boolean> {
-    const resolvedTarget = target ?? this.getSessionTarget(sessionId);
-    if (!resolvedTarget || resolvedTarget.sessionId !== sessionId) return false;
-    const entry = this.sessionDirectory.resolve(resolvedTarget);
-    const runner = entry?.runner;
-    if (!runner) {
-      if (entry?.kind === "desktop") {
-        this.sessionTargets.delete(sessionId);
-        return true;
-      }
-      return false;
-    }
-    this.sessions.delete(sessionId);
-    const attachedEntries = this.sessionDirectory.list()
-      .filter((entry) => entry.identity.sessionId === sessionId && entry.runner === runner);
-    for (const entry of attachedEntries) {
-      if (entry.kind === "desktop") this.sessionDirectory.detachRunner(entry.identity, runner);
-      else this.sessionDirectory.unregister(entry.identity);
-    }
-    this.sessionTargets.delete(sessionId);
-    await runner.dispose();
-    return true;
-  }
-
-  /** 处理 extension_ui_response */
+  /** 处理 extension_ui_response；只允许 exact Desktop target。 */
   async respondToExtensionUi(sessionId: string, requestId: string, response: ExtensionUiResponse, target?: SessionTargetIdentity): Promise<boolean> {
-    const resolvedTarget = target ?? this.getSessionTarget(sessionId);
-    if (!resolvedTarget || resolvedTarget.sessionId !== sessionId) return false;
-    const entry = this.sessionDirectory.resolve(resolvedTarget);
-    if (entry?.kind === "desktop") {
-      const pending = this.pendingDesktopAsks.get(requestId);
-      if (!pending || targetKey(pending.target) !== targetKey(resolvedTarget) || pending.request.deadlineAt <= Date.now()) return false;
-      const result = await this.desktopControlGateway.answerAsk(resolvedTarget, pending.request.requestId, pending.request.toolCallId, response);
-      if (result.status !== "accepted") return false;
-      this.clearDesktopAsk(requestId);
-      return true;
-    }
-    const runner = entry?.runner;
-    return !!runner && this.sessions.get(sessionId) === runner && runner.respondToExtensionUi(requestId, response);
+    if (!target || target.sessionId !== sessionId) return false;
+    const entry = this.sessionDirectory.resolve(target, "ask");
+    if (entry?.kind !== "desktop") return false;
+    const pending = this.pendingDesktopAsks.get(requestId);
+    if (!pending || targetKey(pending.target) !== targetKey(target) || pending.request.deadlineAt <= Date.now()) return false;
+    const result = await this.desktopControlGateway.answerAsk(target, pending.request.requestId, pending.request.toolCallId, response);
+    if (result.status !== "accepted") return false;
+    this.clearDesktopAsk(requestId);
+    return true;
   }
 
   /** 刷新 Maestro 状态（仅状态变化时推送） */
@@ -798,13 +681,9 @@ export class HostController {
       this.disposeDesktopTailWatcher({ sessionId, endpointId, normalizedCwd, processGeneration });
     }
     await Promise.allSettled([...this.detachedReaderDisposals]);
-    for (const runner of this.sessions.values()) {
-      await runner.dispose();
-    }
-    this.sessions.clear();
-    this.sessionTargets.clear();
-    this.projectedDesktopTargets.clear();
     for (const target of this.sessionDirectory.list()) this.sessionDirectory.unregister(target.identity);
+    this.readerTargets.clear();
+    this.projectedDesktopTargets.clear();
     this.desktopPluginRegistry.clear();
     this.listeners.clear();
   }

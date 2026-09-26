@@ -1,11 +1,11 @@
 # maestro-mobile 部署指南
 
-Host 是 PC 端常驻服务，把 Pi agent 会话、Monitor 窗口 telemetry、maestro 调度状态投影给手机 App。三种部署形态按场景选择：
+Host 是 PC 端常驻服务，把 Desktop Plugin/Broker 的 live projection、只读 JSONL/history、Monitor 窗口 telemetry 与 maestro 调度状态投影给手机 App；Host 不创建、附着或控制 Pi `AgentSession`。三种部署形态按场景选择：
 
-| 形态 | 适用场景 | 会话接管 | 安装成本 |
+| 形态 | 适用场景 | 会话能力 | 安装成本 |
 |---|---|---|---|
-| ① npm 全局安装 | 日常主力机（macOS/Linux） | ✅ 完整 | 低 |
-| ② pi 扩展安装 | 深度 Pi 用户 | ✅ 完整 | 低 |
+| ① npm 全局安装 | 日常主力机（macOS/Linux） | ✅ 完整投影；live 控制经 Desktop Broker | 低 |
+| ② pi 扩展安装 | 深度 Pi 用户 | ✅ 完整投影；live 控制经 Desktop Broker | 低 |
 | ③ Docker 看板模式 | NAS / 远程服务器 / 不想装 Node 环境 | ❌ 仅看板 | 中 |
 
 ---
@@ -18,7 +18,7 @@ Host 是 PC 端常驻服务，把 Pi agent 会话、Monitor 窗口 telemetry、m
 npm install -g pi-maestro-mobile
 ```
 
-要求 Node ≥ 22.19。包自包含 vendored shared，并安装 Pi Agent SDK、`ws` 与二维码终端运行时依赖。
+要求 Node ≥ 22.19。包自包含 vendored shared，并使用 Pi SDK 的 `SessionManager.list()` 只读枚举已有 JSONL；不会在 Host 中创建或附着 `AgentSession`。
 
 ### 手动运行
 
@@ -51,7 +51,7 @@ headless 服务器需要 `sudo loginctl enable-linger $USER`（如果是 user se
 
 ### 能力边界
 
-完整能力：会话打开/聊天/steer、Monitor 看板、usage 统计、ask 弹窗桥、版本探测（pi/flow/CLI 真实版本）。
+完整能力：会话列表、JSONL/history、usage、Monitor 看板、ask 弹窗桥、版本探测（pi/flow/CLI 真实版本）；运行中会话的 prompt/steer/follow-up/abort/set-model 统一经 Desktop Broker 转发到拥有该会话的 Pi TUI。Host 不提供 `open_session` / `close_session`，这两个协议 envelope 会被确定性拒绝。
 
 ---
 
@@ -76,7 +76,7 @@ pi install npm:pi-maestro-mobile
 
 ## 形态三：Docker 看板模式
 
-适合 NAS / 远程服务器 / 容器化环境。**能力边界**：Dashboard、Monitor 窗口、usage 统计、会话历史浏览可用；会话控制（`open_session` / `prompt` / `steer` / `abort`）不可用（容器内没有 pi 与 `~/.pi/agent` 认证上下文）。
+适合 NAS / 远程服务器 / 容器化环境。**能力边界**：Dashboard、Monitor 窗口、usage 统计、只读会话历史浏览可用；容器不承载 Pi TUI 或 Desktop Broker，因此运行中会话控制不可用。
 
 ### docker compose（推荐）
 
@@ -157,5 +157,5 @@ ws://<PC 局域网 IP>:4739/ws
 |---|---|
 | 手机连不上 | `curl -H "Authorization: Bearer $MAESTRO_MOBILE_TOKEN" http://<PC>:4739/api/health`；无 token 的 `401` 也说明服务已监听；同时检查防火墙端口 4739 |
 | Monitor 无窗口 | 宿主 `~/.pi/teammate/workspaces/` 是否有 owners JSON（Pi 会话是否跑过 teammate） |
-| usage 显示 -- | 手机端需先在「会话」页打开一个会话（usage 是会话级聚合） |
-| Docker 内会话控制不可用 | 预期行为——看板模式不包含 Pi 认证上下文 |
+| usage 显示 -- | 手机端需先在「会话」页选择一个已有会话（Host 不创建会话，usage 是会话级聚合） |
+| Docker 内会话控制不可用 | 预期行为——看板模式只有只读 projection，不包含 Pi TUI 与 Desktop Broker 控制链路 |

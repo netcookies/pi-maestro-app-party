@@ -1,21 +1,19 @@
 import { normalize } from "node:path";
 import type { SessionContextUsage, SessionPresentation, SessionRuntimeStatus, SessionSummaryPatch, SessionTargetIdentity, SessionUsageTotals } from "@maestro-mobile/shared";
 import type { DesktopPluginCapability, DesktopPluginModel, DesktopPluginRuntimeStatus, DesktopPluginTarget } from "@maestro-mobile/shared";
-import type { SessionRunner } from "../types.js";
 
 export type { SessionTargetIdentity } from "@maestro-mobile/shared";
 
-export type SessionControlCapability = "prompt" | "steer" | "follow_up" | "abort" | "set_model" | "set_thinking" | "ask";
+export type SessionControlCapability = "prompt" | "steer" | "follow_up" | "abort" | "set_model" | "set_thinking" | "ask" | "plan";
 
 export interface SessionDirectoryTarget {
   identity: SessionTargetIdentity;
-  kind: "host" | "desktop";
+  kind: "desktop" | "history";
   capabilities: readonly SessionControlCapability[];
   /** Reader metadata supplied by the exact Desktop runtime; not part of identity. */
   sessionFile?: string;
   model?: DesktopPluginModel;
   thinkingLevel?: string;
-  runner?: SessionRunner;
   presentation?: SessionPresentation;
   runtimeStatus?: SessionRuntimeStatus;
   activeSince?: string;
@@ -50,12 +48,13 @@ function presentationForTarget(
     role: "session",
     visibility: "session_list",
     control: {
-      mode: kind === "host" ? "host" : "desktop_plugin",
+      mode: kind === "desktop" ? "desktop_plugin" : "readonly",
       canPrompt: available.has("prompt"),
       canSteer: available.has("steer"),
       canFollowUp: available.has("follow_up"),
       canAbort: available.has("abort"),
       canAnswerAsk: available.has("ask"),
+      canPlan: available.has("plan"),
     },
     revision,
   };
@@ -63,32 +62,10 @@ function presentationForTarget(
 
 export class SessionDirectory {
   private readonly targets = new Map<string, SessionDirectoryTarget>();
-  private readonly generations = new Map<string, number>();
   private _revision = 0;
 
   get revision(): number {
     return this._revision;
-  }
-
-  registerHostRunner(runner: SessionRunner): SessionTargetIdentity {
-    const count = (this.generations.get(runner.id) ?? 0) + 1;
-    this.generations.set(runner.id, count);
-    const identity: SessionTargetIdentity = {
-      sessionId: runner.id,
-      endpointId: "host",
-      normalizedCwd: normalize(runner.state.cwd),
-      processGeneration: `host-${runner.id}-${count}`,
-    };
-    const capabilities: SessionControlCapability[] = ["prompt", "steer", "follow_up", "abort", "set_model", "set_thinking"];
-    const presentation = presentationForTarget("host", capabilities, this._revision + 1);
-    this.register({
-      identity,
-      kind: "host",
-      capabilities,
-      runner,
-      presentation,
-    });
-    return identity;
   }
 
   registerDesktopTarget(
@@ -102,6 +79,8 @@ export class SessionDirectory {
         controlCapabilities.push(capability);
       } else if (capability === "ask-user-question") {
         controlCapabilities.push("ask");
+      } else if (capability === "plan") {
+        controlCapabilities.push("plan");
       }
     }
     const identity: SessionTargetIdentity = {
@@ -117,18 +96,28 @@ export class SessionDirectory {
       kind: "desktop",
       capabilities: controlCapabilities,
       presentation: existing && sameValue(existing.capabilities, controlCapabilities) ? existing.presentation : undefined,
-      sessionFile: metadata.sessionFile,
+      ...(metadata.sessionFile !== undefined ? { sessionFile: metadata.sessionFile } : existing?.sessionFile ? { sessionFile: existing.sessionFile } : {}),
       model: metadata.model ? { ...metadata.model } : existing?.model,
       thinkingLevel: metadata.thinkingLevel ?? existing?.thinkingLevel,
-      ...(existing?.runner ? { runner: existing.runner } : {}),
       runtimeStatus: existing?.runtimeStatus ?? "idle",
     });
     return identity;
   }
 
+  registerHistoryTarget(identity: SessionTargetIdentity, sessionFile: string): SessionTargetIdentity {
+    this.register({
+      identity: { ...identity, normalizedCwd: normalize(identity.normalizedCwd) },
+      kind: "history",
+      capabilities: [],
+      sessionFile,
+      runtimeStatus: "history",
+      presentation: presentationForTarget("history", [], this._revision + 1),
+    });
+    return identity;
+  }
+
   updateDesktopModel(identity: SessionTargetIdentity, model?: DesktopPluginModel): boolean {
-    const key = keyOf({ ...identity, normalizedCwd: normalize(identity.normalizedCwd) });
-    const target = this.targets.get(key);
+    const target = this.resolve(identity);
     if (!target || target.kind !== "desktop") return false;
     if (sameValue(target.model, model)) return true;
     const next = { ...target };
@@ -139,8 +128,7 @@ export class SessionDirectory {
   }
 
   updateDesktopThinking(identity: SessionTargetIdentity, level: string | undefined): boolean {
-    const key = keyOf({ ...identity, normalizedCwd: normalize(identity.normalizedCwd) });
-    const target = this.targets.get(key);
+    const target = this.resolve(identity);
     if (!target || target.kind !== "desktop") return false;
     if (target.thinkingLevel === level) return true;
     const next = { ...target };
@@ -151,8 +139,7 @@ export class SessionDirectory {
   }
 
   clearDesktopSummary(identity: SessionTargetIdentity, runtimeStatus: DesktopPluginRuntimeStatus): boolean {
-    const key = keyOf({ ...identity, normalizedCwd: normalize(identity.normalizedCwd) });
-    const target = this.targets.get(key);
+    const target = this.resolve(identity);
     if (!target || target.kind !== "desktop") return false;
     const next = { ...target, runtimeStatus };
     delete next.activeSince;
@@ -170,18 +157,13 @@ export class SessionDirectory {
   }
 
   updateDesktopSummary(identity: SessionTargetIdentity, patch: SessionSummaryPatch): SessionSummaryUpdate | undefined {
-    const key = keyOf({ ...identity, normalizedCwd: normalize(identity.normalizedCwd) });
-    const target = this.targets.get(key);
+    const target = this.resolve(identity);
     if (!target || target.kind !== "desktop") return undefined;
-
     const changed: SessionSummaryPatch = {};
     if (patch.reset && (target.messageCount !== undefined || target.usage !== undefined || target.context !== undefined
       || target.activeSince !== undefined || target.lastActivityAt !== undefined || patch.runtimeStatus !== target.runtimeStatus)) changed.reset = true;
     if (patch.runtimeStatus !== undefined && patch.runtimeStatus !== target.runtimeStatus) changed.runtimeStatus = patch.runtimeStatus;
-    if (patch.activeSince !== undefined) {
-      const next = patch.activeSince ?? undefined;
-      if (next !== target.activeSince) changed.activeSince = patch.activeSince;
-    }
+    if (patch.activeSince !== undefined && patch.activeSince !== (target.activeSince ?? null)) changed.activeSince = patch.activeSince;
     if (patch.lastActivityAt !== undefined && patch.lastActivityAt !== target.lastActivityAt) changed.lastActivityAt = patch.lastActivityAt;
     if (patch.messageCount !== undefined && patch.messageCount !== target.messageCount) changed.messageCount = patch.messageCount;
     if (patch.usage !== undefined && !sameValue(patch.usage, target.usage)) changed.usage = patch.usage;
@@ -189,15 +171,12 @@ export class SessionDirectory {
     if (Object.keys(changed).length === 0) return undefined;
 
     this._revision += 1;
-    const next: SessionDirectoryTarget = {
-      ...target,
-      ...(changed.runtimeStatus !== undefined ? { runtimeStatus: changed.runtimeStatus } : {}),
-      ...(changed.lastActivityAt !== undefined ? { lastActivityAt: changed.lastActivityAt } : {}),
-      ...(changed.messageCount !== undefined ? { messageCount: changed.messageCount } : {}),
-      ...(changed.usage !== undefined ? { usage: changed.usage } : {}),
-      ...(changed.context !== undefined ? { context: changed.context } : {}),
-      summaryRevision: this._revision,
-    };
+    const next: SessionDirectoryTarget = { ...target, summaryRevision: this._revision };
+    if (changed.runtimeStatus !== undefined) next.runtimeStatus = changed.runtimeStatus;
+    if (changed.lastActivityAt !== undefined) next.lastActivityAt = changed.lastActivityAt;
+    if (changed.messageCount !== undefined) next.messageCount = changed.messageCount;
+    if (changed.usage !== undefined) next.usage = changed.usage;
+    if (changed.context !== undefined) next.context = changed.context;
     if (changed.reset) {
       delete next.activeSince;
       delete next.lastActivityAt;
@@ -207,7 +186,7 @@ export class SessionDirectory {
     }
     if (changed.activeSince === null) delete next.activeSince;
     else if (changed.activeSince !== undefined) next.activeSince = changed.activeSince;
-    this.targets.set(key, next);
+    this.targets.set(keyOf(next.identity), next);
     return { target: next, patch: changed, revision: this._revision };
   }
 
@@ -215,7 +194,6 @@ export class SessionDirectory {
     const normalizedIdentity = { ...target.identity, normalizedCwd: normalize(target.identity.normalizedCwd) };
     const capabilities = [...target.capabilities];
     const presentation = target.presentation ?? presentationForTarget(target.kind, capabilities, this._revision + 1);
-    if (target.runner) target.runner.state.presentation = presentation;
     this.targets.set(keyOf(normalizedIdentity), {
       ...target,
       identity: normalizedIdentity,
@@ -225,42 +203,20 @@ export class SessionDirectory {
     this._revision += 1;
   }
 
-  attachRunner(identity: SessionTargetIdentity, runner: SessionRunner): boolean {
-    const target = this.resolve(identity);
-    if (!target || target.identity.sessionId !== runner.id || target.identity.normalizedCwd !== normalize(runner.state.cwd)) return false;
-    if (target.runner === runner) {
-      if (target.presentation) runner.state.presentation = target.presentation;
-      return true;
-    }
-    this.register({ ...target, runner });
-    return true;
-  }
-
-  detachRunner(identity: SessionTargetIdentity, expectedRunner?: SessionRunner): boolean {
-    const target = this.resolve(identity);
-    if (!target?.runner || (expectedRunner && target.runner !== expectedRunner)) return false;
-    const { runner: _runner, ...withoutRunner } = target;
-    this.register(withoutRunner);
-    return true;
-  }
-
   unregister(identity: SessionTargetIdentity): boolean {
-    const removed = this.targets.delete(keyOf(identity));
+    const removed = this.targets.delete(keyOf({ ...identity, normalizedCwd: normalize(identity.normalizedCwd) }));
     if (removed) this._revision += 1;
     return removed;
   }
 
   resolve(identity: SessionTargetIdentity, capability?: SessionControlCapability): SessionDirectoryTarget | undefined {
-    const target = this.targets.get(keyOf(identity));
+    const target = this.targets.get(keyOf({ ...identity, normalizedCwd: normalize(identity.normalizedCwd) }));
     if (!target) return undefined;
     if (capability && !target.capabilities.includes(capability)) return undefined;
     return target;
   }
 
   list(): SessionDirectoryTarget[] {
-    return [...this.targets.values()].map((target) => ({
-      ...target,
-      capabilities: [...target.capabilities],
-    }));
+    return [...this.targets.values()].map((target) => ({ ...target, capabilities: [...target.capabilities] }));
   }
 }

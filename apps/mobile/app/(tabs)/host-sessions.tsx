@@ -30,7 +30,8 @@ import {
   type FilterState,
 } from "../../src/filter-state";
 import { canLoadMoreSessions, isCurrentSessionSummary, mergeHostSessionPage, patchHostSessionSummary } from "../../src/host-session-pagination";
-import { routeForOpenedSession } from "../../src/session-navigation";
+import { routeForOpenedSession, selectSessionTarget } from "../../src/session-navigation";
+
 
 const PAGE_SIZE = 30;
 
@@ -43,7 +44,8 @@ export default function HostSessionsScreen() {
   const { theme } = useTheme();
   const { t } = useI18n();
   const styles = useMemo(() => makeStyles(theme), [theme]);
-  const { state, listHostSessions, openExistingSession, loadSessionHistory, isConnected, connectionState, hostUrl } = useHost();
+  const { state, listHostSessions, loadSessionHistory, isConnected, connectionState, hostUrl } = useHost();
+
   const [filterState, setFilterState] = useState<FilterState>(() => createFilterState());
   const filterStateRef = useRef(filterState);
   const [queryInput, setQueryInput] = useState("");
@@ -201,20 +203,19 @@ export default function HostSessionsScreen() {
     setOpening(session.targetKey ?? session.id);
     setError(null);
     try {
-      const opened = await openExistingSession(session);
+      // Mobile 只选择 Host 发布的 exact target，不执行任何 Host session lifecycle。
+      const opened = selectSessionTarget(session);
       await loadSessionHistory(opened.sessionId, opened.targetKey);
       router.push(routeForOpenedSession(opened));
     } catch (error) {
-      // 会话创建已锁死：无 exact target 的历史会话（以及 mode:create）会被 Host 拒绝。
-      // 原样抛错误码会让用户只看到 "session_creation_disabled"，这里给出可读原因。
       const raw = error instanceof Error ? error.message : "";
-      setError(raw === "session_creation_disabled"
-        ? "该会话未在桌面端运行，手机端暂不支持新建或打开历史会话"
+      setError(raw === "session_target_unavailable"
+        ? "该会话没有可验证的精确目标，暂时无法打开"
         : raw || "打开会话失败");
     } finally {
       setOpening(null);
     }
-  }, [loadSessionHistory, opening, openExistingSession, router]);
+  }, [loadSessionHistory, opening, router]);
 
   const cwdOptions = useMemo(() => Array.from(new Set(sessions.map((session) => session.cwd))).sort(), [sessions]);
   const scopedSessions = useMemo(() => {

@@ -4,6 +4,7 @@ import {
   projectMonitorState,
   inspectWindowExecutionState,
   telemetryStableKey,
+  projectExecutionProjections,
 } from "../src/monitor-projection.js";
 import type { WorkspaceOwnerState, WorkspaceTelemetryState } from "@maestro-mobile/shared";
 
@@ -211,6 +212,21 @@ describe("inspectWindowExecutionState & projectWindow", () => {
     expect(key3).not.toBe(key1);
   });
 
+  it("emits independent owner projections and one workspace snapshot per workspace", () => {
+    const telemetry: WorkspaceTelemetryState = {
+      owners: [
+        makeOwner({ workspaceId: "ws-1", ownerId: "owner-1", ownerNonce: "nonce-1" }),
+        makeOwner({ workspaceId: "ws-2", ownerId: "owner-2", ownerNonce: "nonce-2", sessionId: "sess-2" }),
+        makeOwner({ workspaceId: "ws-1", ownerId: "legacy", ownerNonce: undefined, sessionId: "legacy" }),
+      ],
+      observedAt: "2026-09-15T00:00:00.000Z",
+      aliveCount: 3,
+    };
+    const projections = projectExecutionProjections(telemetry, "host-epoch", 7);
+    expect(projections.filter((projection) => projection.scope === "owner")).toHaveLength(6);
+    expect(projections.filter((projection) => projection.scope === "workspace").map((projection) => projection.target.workspaceId)).toEqual(["ws-1", "ws-2"]);
+    expect(projections.every((projection) => projection.revision === 7 && projection.snapshot)).toBe(true);
+  });
   it("classifies #control as monitor_tab and regular owners as session_list", () => {
     const control = projectWindow(makeOwner({ workspaceRole: "monitor", sessionName: "work-session" }));
     const regular = projectWindow(makeOwner({ sessionName: "#control-abc123" }));

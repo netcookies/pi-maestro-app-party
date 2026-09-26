@@ -10,11 +10,13 @@
 import type {
   ClientCommand,
   HostEvent,
-  HostSessionSummary,
   SessionSnapshot,
+  DesktopPlanRequest,
+  DesktopPlanResponse,
   ExtensionUiResponse,
   ProtocolCapability,
   SessionTargetIdentity,
+  ExecutionProjection,
 } from "@maestro-mobile/shared";
 import { isCompatibleReleaseVersion, MOBILE_PROTOCOL_VERSION, MOBILE_RELEASE_VERSION } from "@maestro-mobile/shared";
 
@@ -59,15 +61,6 @@ export interface WebSocketLike {
 }
 
 export const WS_OPEN = 1;
-
-export function buildOpenExistingSessionCommand(session: HostSessionSummary): ClientCommand {
-  return {
-    type: "open_session",
-    cwd: session.cwd,
-    ...(session.path ? { sessionFile: session.path } : {}),
-    ...(session.target ? { target: session.target } : {}),
-  };
-}
 
 /**
  * 计算带 Jitter 的指数退避时长（纯函数）。
@@ -227,19 +220,30 @@ export class HostClient {
   }
 
   /** 发送扩展 UI 响应 */
-  respondExtensionUi(sessionId: string, requestId: string, response: ExtensionUiResponse, target?: SessionTargetIdentity): Promise<unknown> {
+  respondExtensionUi(sessionId: string, requestId: string, response: ExtensionUiResponse, target: SessionTargetIdentity): Promise<unknown> {
     return this.sendCommand({
       type: "extension_ui_response",
       sessionId,
       requestId,
       response,
-      ...(target ? { target } : {}),
+      target,
+
     });
   }
 
+  /** 发送独立 Plan response，不进入 Ask ExtensionUiQueue。 */
+  respondDesktopPlan(sessionId: string, requestId: string, response: DesktopPlanResponse, target: SessionTargetIdentity): Promise<unknown> {
+    return this.sendCommand({ type: "desktop_plan_response", sessionId, requestId, response, target });
+  }
+
+
+  getExecutionProjections(): Promise<{ projections: ExecutionProjection[]; revision: number }> {
+    return this.sendCommand({ type: "get_execution_projections" }) as Promise<{ projections: ExecutionProjection[]; revision: number }>;
+  }
+
   /** 获取快照 */
-  getSnapshot(sessionId: string, target?: SessionTargetIdentity): Promise<SessionSnapshot> {
-    return this.sendCommand({ type: "get_snapshot", sessionId, ...(target ? { target } : {}) }) as Promise<SessionSnapshot>;
+  getSnapshot(sessionId: string, target: SessionTargetIdentity): Promise<SessionSnapshot> {
+    return this.sendCommand({ type: "get_snapshot", sessionId, target }) as Promise<SessionSnapshot>;
   }
 
   private openSocket(): void {
@@ -364,7 +368,7 @@ export class HostClient {
       protocolVersion: MOBILE_PROTOCOL_VERSION,
       clientVersion: this.options.clientVersion ?? MOBILE_RELEASE_VERSION,
       releaseVersion: this.options.releaseVersion ?? MOBILE_RELEASE_VERSION,
-      capabilities: this.options.capabilities ?? ["session_control", "extension_ui", "monitor_read", "session_filter"],
+      capabilities: this.options.capabilities ?? ["session_control", "extension_ui", "monitor_read", "session_filter", "execution_projection_read", "plan"],
       requestId: `hello-${++this.helloSeq}`,
     };
     this.sendRaw(JSON.stringify(hello));

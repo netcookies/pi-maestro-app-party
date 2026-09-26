@@ -17,6 +17,13 @@ describe("protocol", () => {
     expect(isHostEvent(event)).toBe(true);
   });
 
+  it("validates Plan clear events with and without the additive kind field", () => {
+    const target = { sessionId: "s1", endpointId: "e1", normalizedCwd: "/work", processGeneration: "g1" };
+    expect(isHostEvent({ type: "desktop_plan_cleared", sessionId: "s1", requestId: "r1", target, seq: 1 })).toBe(true);
+    expect(isHostEvent({ type: "desktop_plan_cleared", sessionId: "s1", requestId: "r1", kind: "review", target, seq: 2 })).toBe(true);
+    expect(isHostEvent({ type: "desktop_plan_cleared", sessionId: "s1", requestId: "r1", kind: "other", target, seq: 3 })).toBe(false);
+  });
+
   it("validates an exact-target session summary patch event", () => {
     expect(isHostEvent({
       type: "session_summary_updated",
@@ -77,6 +84,24 @@ describe("protocol", () => {
     expect(isBackgroundJobSummary({ id: "bg1", status: "running", progress: 1.1 })).toBe(false);
   });
 
+  it("validates independent execution projection events and rejects malformed owner identity", () => {
+    const target = { workspaceId: "ws-1", ownerId: "owner-1", ownerNonce: "nonce-1", endpointId: "sess-1" };
+    const todo = {
+      schemaVersion: 1,
+      source: "todo",
+      scope: "owner",
+      target,
+      epoch: "nonce-1",
+      revision: 3,
+      observedAt: "2026-01-01T00:00:00.000Z",
+      snapshot: true,
+      data: { items: [{ id: "todo-1", subject: "Ship", status: "in_progress", updatedAt: 1 }] },
+    };
+    expect(isHostEvent({ type: "todo_projection_updated", projection: todo, seq: 4 })).toBe(true);
+    expect(isHostEvent({ type: "todo_projection_updated", projection: { ...todo, target: { ...target, ownerNonce: "" } }, seq: 4 })).toBe(false);
+    expect(isHostEvent({ type: "todo_projection_updated", projection: { ...todo, target: { ...target, ownerNonce: 1 } }, seq: 4 })).toBe(false);
+    expect(isHostEvent({ type: "todo_projection_updated", projection: { ...todo, data: { items: [{ id: "todo-1", subject: "Ship", status: "in_progress" }] } }, seq: 4 })).toBe(false);
+  });
   it("rejects malformed HostEvent", () => {
     expect(isHostEvent({ type: "session_updated" })).toBe(false);
     expect(isHostEvent({ type: "session_summary_updated", target: {}, patch: {}, revision: 1, seq: 1 })).toBe(false);
@@ -85,7 +110,8 @@ describe("protocol", () => {
   });
 
   it("validates ClientCommand shape", () => {
-    const cmd: ClientCommand = { type: "prompt", sessionId: "s1", message: "hi" };
+    const target = { sessionId: "s1", endpointId: "desktop-1", normalizedCwd: "/work/app", processGeneration: "generation-1" };
+    const cmd: ClientCommand = { type: "prompt", sessionId: "s1", target, message: "hi" };
     expect(isClientCommand(cmd)).toBe(true);
   });
 
@@ -97,6 +123,8 @@ describe("protocol", () => {
       processGeneration: "generation-1",
     };
     expect(isClientCommand({ type: "open_session", cwd: "/work/app", sessionFile: "/sessions/s1.jsonl", target })).toBe(true);
+    expect(isClientCommand({ type: "close_session", sessionId: "s1" })).toBe(true);
+    expect(isClientCommand({ type: "close_session" })).toBe(false);
     expect(isClientCommand({ type: "get_snapshot", sessionId: "s1", target })).toBe(true);
     expect(isClientCommand({ type: "get_snapshot", sessionId: "s1", target: { ...target, processGeneration: undefined } })).toBe(false);
   });

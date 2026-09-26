@@ -23,7 +23,8 @@ export type DesktopPluginCapability =
   | "set_thinking"
   | "list_models"
   | "list_skills"
-  | "ask-user-question";
+  | "ask-user-question"
+  | "plan";
 
 export interface DesktopPluginModel {
   provider: string;
@@ -117,6 +118,87 @@ export interface DesktopAskResponse {
   response: ExtensionUiResponse;
 }
 
+export type DesktopPlanExecutionBackend = "standalone" | "workflow";
+export type DesktopPlanExecutionContext = "current" | "compact";
+export type DesktopPlanWorkflowTarget = "current" | "new";
+
+export interface DesktopPlanExecutionChoice {
+  backend: DesktopPlanExecutionBackend;
+  context: DesktopPlanExecutionContext;
+  workflowTarget?: DesktopPlanWorkflowTarget;
+  sourceDocument?: string;
+}
+
+export interface DesktopPlanWorkflowTargetInfo {
+  sessionId: string;
+  intent: string;
+  available: boolean;
+  reason?: string;
+}
+
+export interface DesktopPlanWorkflowOptions {
+  current?: DesktopPlanWorkflowTargetInfo;
+  allowNew: boolean;
+}
+
+export interface DesktopPlanModelTransition {
+  current: string;
+  act?: string;
+}
+
+export interface DesktopPlanDraft {
+  revision: number;
+  archivedAt: string;
+  checksum: string;
+}
+
+export interface DesktopPlanRequest {
+  type: "desktop_plan_request";
+  requestId: string;
+  kind: "confirm" | "review";
+  sessionId: string;
+  operationId: number;
+  cwd: string;
+  mode: string;
+  sessionFile?: string;
+  markdown: string;
+  revision: number;
+  pathLabel: string;
+  availableActions: string[];
+  defaultExecution?: DesktopPlanExecutionChoice;
+  workflow?: DesktopPlanWorkflowOptions;
+  modelTransition?: DesktopPlanModelTransition;
+  decisionDocuments: string[];
+  drafts: DesktopPlanDraft[];
+  deadlineAt: number;
+}
+
+export interface DesktopPlanDecision {
+  action: string;
+  execution?: DesktopPlanExecutionChoice;
+  discussion?: string;
+}
+
+export type DesktopPlanResponse =
+  | { type: "desktop_plan_response"; requestId: string; kind: "confirm" | "review"; status: "decision"; decision: DesktopPlanDecision }
+  | { type: "desktop_plan_response"; requestId: string; kind: "confirm" | "review"; status: "edited"; markdown: string; expectedRevision: number }
+  | { type: "desktop_plan_response"; requestId: string; kind: "confirm" | "review"; status: "cancelled" };
+
+export interface DesktopPlanResult {
+  type: "desktop_plan_result";
+  requestId: string;
+  kind: "confirm" | "review";
+  status: "accepted" | "failed" | "unknown";
+  error?: { code: string; message?: string };
+}
+
+export interface DesktopPlanCancel {
+  type: "desktop_plan_cancel";
+  requestId: string;
+  kind: "confirm" | "review";
+}
+
+
 /** Result of applying a DesktopAskResponse inside the originating Plugin. */
 export interface DesktopAskResult {
   type: "desktop_ask_result";
@@ -138,6 +220,9 @@ export type DesktopPluginClientFrame =
   | DesktopAskRequest
   | DesktopAskResponse
   | DesktopAskResult
+  | DesktopPlanRequest
+  | DesktopPlanCancel
+  | DesktopPlanResult
   | DesktopPluginGoodbye;
 
 export interface DesktopPluginChallenge {
@@ -191,6 +276,7 @@ export type DesktopPluginServerFrame =
   | DesktopPluginReady
   | DesktopPluginReceipt
   | DesktopPluginResult
+  | DesktopPlanResponse
   | DesktopPluginError;
 
 export type DesktopPluginFrame = DesktopPluginClientFrame | DesktopPluginServerFrame;
@@ -222,11 +308,69 @@ export function isDesktopPluginClientFrame(value: unknown): value is DesktopPlug
       return stringFields(value, "requestId", "toolCallId") && isExtensionUiResponse(value.response);
     case "desktop_ask_result":
       return isDesktopAskResult(value);
+    case "desktop_plan_request":
+      return isDesktopPlanRequest(value);
+    case "desktop_plan_cancel":
+      return isDesktopPlanCancel(value);
+    case "desktop_plan_result":
+      return isDesktopPlanResult(value);
     case "desktop_plugin_goodbye":
       return value.reason === undefined || value.reason === "shutdown" || value.reason === "session_closed";
     default:
       return false;
   }
+}
+
+function isDesktopPlanExecutionChoice(value: unknown): boolean {
+  if (!isRecord(value) || (value.backend !== "standalone" && value.backend !== "workflow") || (value.context !== "current" && value.context !== "compact")) return false;
+  if (value.sourceDocument !== undefined && typeof value.sourceDocument !== "string") return false;
+  return value.backend === "standalone"
+    ? value.workflowTarget === undefined
+    : value.workflowTarget === "current" || value.workflowTarget === "new";
+}
+
+function isDesktopPlanWorkflowOptions(value: unknown): boolean {
+  if (!isRecord(value) || typeof value.allowNew !== "boolean") return false;
+  if (value.current === undefined) return true;
+  return isRecord(value.current) && stringFields(value.current, "sessionId", "intent")
+    && typeof value.current.available === "boolean"
+    && (value.current.reason === undefined || typeof value.current.reason === "string");
+}
+
+function isDesktopPlanDraft(value: unknown): boolean {
+  return isRecord(value) && nonNegativeInteger(value.revision) && stringFields(value, "archivedAt", "checksum");
+}
+
+function isDesktopPlanDecision(value: unknown): boolean {
+  return isRecord(value) && stringFields(value, "action")
+    && (value.discussion === undefined || typeof value.discussion === "string")
+    && (value.execution === undefined || isDesktopPlanExecutionChoice(value.execution));
+}
+
+export function isDesktopPlanRequest(value: unknown): value is DesktopPlanRequest {
+  return isRecord(value) && stringFields(value, "requestId", "kind", "sessionId", "cwd", "mode", "pathLabel")
+    && (value.kind === "confirm" || value.kind === "review")
+    && nonNegativeInteger(value.operationId)
+    && (value.sessionFile === undefined || typeof value.sessionFile === "string")
+    && typeof value.markdown === "string" && nonNegativeInteger(value.revision)
+    && Array.isArray(value.availableActions) && value.availableActions.every((item) => typeof item === "string")
+    && (value.defaultExecution === undefined || isDesktopPlanExecutionChoice(value.defaultExecution))
+    && (value.workflow === undefined || isDesktopPlanWorkflowOptions(value.workflow))
+    && (value.modelTransition === undefined || (isRecord(value.modelTransition) && stringFields(value.modelTransition, "current") && (value.modelTransition.act === undefined || typeof value.modelTransition.act === "string")))
+    && Array.isArray(value.decisionDocuments) && value.decisionDocuments.every((item) => typeof item === "string")
+    && Array.isArray(value.drafts) && value.drafts.every(isDesktopPlanDraft)
+    && finiteNumber(value.deadlineAt);
+}
+
+export function isDesktopPlanResponse(value: unknown): value is DesktopPlanResponse {
+  if (!isRecord(value) || !stringFields(value, "requestId", "kind") || (value.kind !== "confirm" && value.kind !== "review")) return false;
+  if (value.status === "cancelled") return true;
+  if (value.status === "edited") return typeof value.markdown === "string" && nonNegativeInteger(value.expectedRevision);
+  return value.status === "decision" && isDesktopPlanDecision(value.decision);
+}
+
+export function isDesktopPlanCancel(value: unknown): value is DesktopPlanCancel {
+  return isRecord(value) && stringFields(value, "requestId", "kind") && (value.kind === "confirm" || value.kind === "review");
 }
 
 export function isDesktopPluginResult(value: unknown): value is DesktopPluginResult {
@@ -237,6 +381,14 @@ export function isDesktopPluginResult(value: unknown): value is DesktopPluginRes
     && (value.error === undefined || (isRecord(value.error) && typeof value.error.code === "string" && (value.error.message === undefined || typeof value.error.message === "string")
       && (value.error.details === undefined || isHostError(value.error.details))));
 }
+
+export function isDesktopPlanResult(value: unknown): value is DesktopPlanResult {
+  return isRecord(value) && stringFields(value, "requestId", "kind")
+    && (value.kind === "confirm" || value.kind === "review")
+    && (value.status === "accepted" || value.status === "failed" || value.status === "unknown")
+    && (value.error === undefined || (isRecord(value.error) && typeof value.error.code === "string"));
+}
+
 export function isDesktopAskResult(value: unknown): value is DesktopAskResult {
   return isRecord(value)
     && stringFields(value, "requestId", "toolCallId")
@@ -264,6 +416,8 @@ export function isDesktopPluginServerFrame(value: unknown): value is DesktopPlug
     case "desktop_plugin_result":
       return stringFields(value, "requestId", "operation")
         && (value.status === "accepted" || value.status === "observed" || value.status === "failed" || value.status === "unknown");
+    case "desktop_plan_response":
+      return isDesktopPlanResponse(value);
     case "desktop_plugin_error":
       return stringFields(value, "message") && (value.requestId === undefined || typeof value.requestId === "string");
     default:
@@ -296,6 +450,10 @@ function desktopPluginEventArray(value: unknown): value is DesktopPluginEvent["e
 
 function finiteNumber(value: unknown): value is number {
   return typeof value === "number" && Number.isFinite(value);
+}
+
+function nonNegativeInteger(value: unknown): value is number {
+  return typeof value === "number" && Number.isSafeInteger(value) && value >= 0;
 }
 
 export function isDesktopPluginTarget(value: unknown): value is DesktopPluginTarget {

@@ -14,17 +14,14 @@ import WebSocket from "ws";
  * 不允许出现「回滚了还全绿」的空测试。
  */
 
-function stubRuntimeFactory() {
-  return {
-    createRuntime: async () => { throw new Error("Not implemented in test"); },
-    listSessions: async () => [],
-  };
+function sessionCatalog() {
+  return { listSessions: async () => [] };
 }
 
 async function createServer(options: ConstructorParameters<typeof MobileHostServer>[1] = {}) {
   const tmpDir = join(tmpdir(), `maestro-ws-resil-${randomUUID()}`);
   await mkdir(tmpDir, { recursive: true });
-  const controller = new HostController(stubRuntimeFactory(), new MaestroStateReader({ projectRoot: tmpDir }));
+  const controller = new HostController(sessionCatalog(), new MaestroStateReader({ projectRoot: tmpDir }));
   const server = new MobileHostServer(controller, options);
   await server.listen(0, "127.0.0.1");
   return { tmpDir, controller, server, port: server.address().port };
@@ -423,7 +420,7 @@ describe("search_history 参数钳制", () => {
     await conn.nextType("host_status");
 
     const reply = conn.nextType("command_result");
-    conn.ws.send(JSON.stringify({ id: "q1", type: "search_history", sessionId: "missing", keyword: "x", maxResults: 1e9, previewLength: 1e9 }));
+    conn.ws.send(JSON.stringify({ id: "q1", type: "search_history", sessionId: "missing", target: { sessionId: "missing", endpointId: "desktop", normalizedCwd: ctx.tmpDir, processGeneration: "generation-1" }, keyword: "x", maxResults: 1e9, previewLength: 1e9 }));
     const msg = await reply;
     expect((msg.error as { code: string }).code).toBe("target_unavailable");
     conn.ws.close();
@@ -523,8 +520,7 @@ describe("错误响应脱敏", () => {
     await conn.nextType("host_status");
 
     const reply = conn.nextType("command_result");
-    // 带伪造 exact target 的 open_session 会穿透创建守卫、进入 openSession 并抛错，
-    // 从而命中 command_failed 的路径脱敏分支（守卫本身只回错误码，不带 message）。
+    // 带伪造 exact target 的 open_session 仍只命中兼容性拒绝，不会进入任何 Host session lifecycle。
     conn.ws.send(JSON.stringify({
       id: "e1",
       type: "open_session",
@@ -548,16 +544,12 @@ describe("错误响应脱敏", () => {
     await conn.opened;
     await conn.nextType("host_status");
 
-    // 两条会凭空造出 Host runner 的路径都必须被拒：
-    //  1) mode:"create" 在任意 cwd 新建会话；
-    //  2) 历史会话（无 target）被 SdkSessionRunner.open 打开并附着 runner。
+    // Creation is disabled for both create and history requests; no session target is registered.
     const createReply = conn.nextType("command_result");
     conn.ws.send(JSON.stringify({ id: "c1", type: "open_session", cwd: "/tmp", mode: "create" }));
     const createMsg = await createReply;
     expect(createMsg.ok).toBe(false);
     expect((createMsg.error as { code?: string }).code).toBe("session_creation_disabled");
-    expect(ctx.controller.getSession("sess-dual-1")).toBeUndefined();
-
     const historyReply = conn.nextType("command_result");
     conn.ws.send(JSON.stringify({ id: "h1", type: "open_session", cwd: "/tmp", sessionFile: "/tmp/history.jsonl" }));
     const historyMsg = await historyReply;

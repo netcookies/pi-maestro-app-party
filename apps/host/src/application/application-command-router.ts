@@ -3,13 +3,10 @@ import type { MonitorQueryService } from "./monitor-query-service.js";
 import type { SessionCommand, CommandResult, SessionCommandService } from "./session-command-service.js";
 import type { SessionListOptions, QueryResult, SessionQueryService } from "./session-query-service.js";
 import type { SessionSnapshot, HostSessionList, TimelineItem, ExtensionUiResponse } from "@maestro-mobile/shared";
-import type { SessionTargetIdentity } from "../control/SessionDirectory.js";
 import type { UsageTotals } from "../usage-reader.js";
-import type { OpenSessionRequest } from "../types.js";
+import type { SessionTargetIdentity } from "../control/SessionDirectory.js";
 
 export interface ApplicationLifecycle {
-  openSession(request: OpenSessionRequest): Promise<{ id: string }>;
-  closeSession(sessionId: string, target?: SessionTargetIdentity): Promise<boolean>;
   respondToExtensionUi(sessionId: string, requestId: string, response: ExtensionUiResponse, target?: SessionTargetIdentity): Promise<boolean>;
   sessionOperation?(operation: SessionOperation): Promise<unknown>;
   readMaestroState?(): Promise<unknown>;
@@ -22,9 +19,7 @@ export type SessionOperation =
   | { kind: "search_history"; target: SessionTargetIdentity; keyword: string; maxResults: number; previewLength: number }
   | { kind: "list_models"; target: SessionTargetIdentity }
   | { kind: "list_skills"; target: SessionTargetIdentity }
-  | { kind: "set_model"; target: SessionTargetIdentity; modelId: string; provider?: string }
-  | { kind: "compact"; target: SessionTargetIdentity; customInstructions?: string }
-  | { kind: "rename_session"; target: SessionTargetIdentity; name: string };
+  | { kind: "set_model"; target: SessionTargetIdentity; modelId: string; provider?: string };
 
 
 export type ApplicationQuery =
@@ -60,16 +55,6 @@ export class ApplicationCommandRouter {
       case "session_usage": return this.sessions.usage(query.target);
       case "monitor": return this.monitor.read();
     }
-  }
-
-  openSession(request: OpenSessionRequest): Promise<{ id: string }> {
-    if (!this.lifecycle) return Promise.reject(new Error("session lifecycle unavailable"));
-    return this.lifecycle.openSession(request);
-  }
-
-  closeSession(sessionId: string, target?: SessionTargetIdentity): Promise<boolean> {
-    if (!this.lifecycle) return Promise.reject(new Error("session lifecycle unavailable"));
-    return this.lifecycle.closeSession(sessionId, target);
   }
 
   respondToExtensionUi(sessionId: string, requestId: string, response: ExtensionUiResponse, target?: SessionTargetIdentity): Promise<boolean> {

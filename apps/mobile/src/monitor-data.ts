@@ -1,4 +1,4 @@
-import type { MonitorState, MonitorWindowSummary } from "@maestro-mobile/shared";
+import { isExecutionProjection, type ExecutionProjection, type MonitorState, type MonitorWindowSummary } from "@maestro-mobile/shared";
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -13,7 +13,14 @@ export function monitorStateFromCommandResult(result: unknown): MonitorState {
   return candidate as unknown as MonitorState;
 }
 
-/** Monitor windows are telemetry projections, not SessionState or exact session targets. */
+export function executionProjectionsFromCommandResult(result: unknown): ExecutionProjection[] {
+  if (!isRecord(result) || !Array.isArray(result.projections) || !result.projections.every(isExecutionProjection)) {
+    throw new Error("Invalid execution projections response");
+  }
+  return result.projections;
+}
+
+
 export function monitorWindows(state: MonitorState | null): MonitorWindowSummary[] {
   return state?.windows ?? [];
 }

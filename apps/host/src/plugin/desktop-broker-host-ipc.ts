@@ -17,6 +17,10 @@ import type {
   DesktopPluginRequest,
   DesktopPluginResult,
   DesktopAskResult,
+  DesktopPlanResponse,
+  DesktopPlanResult,
+  DesktopBrokerPlanResult,
+  DesktopBrokerPlanRequest,
   DesktopPluginTarget,
   DesktopPluginCapability,
 } from "@maestro-mobile/shared";
@@ -36,6 +40,9 @@ function askCorrelationKey(target: DesktopPluginTarget, requestId: string, toolC
   return JSON.stringify([target.sessionId, target.endpointId, target.normalizedCwd, target.processGeneration, requestId, toolCallId]);
 }
 
+function planCorrelationKey(target: DesktopPluginTarget, requestId: string, kind: string): string {
+  return JSON.stringify([target.sessionId, target.endpointId, target.normalizedCwd, target.processGeneration, requestId, kind]);
+}
 function targetKey(target: DesktopPluginTarget): string {
   return [target.sessionId, target.endpointId, target.normalizedCwd, target.processGeneration].join("\u0000");
 }
@@ -72,6 +79,10 @@ class DesktopBrokerTargetTransport implements DesktopPluginTransport {
     return this.link.answerAsk(this.target, response);
   }
 
+  answerPlan(response: DesktopPlanResponse): Promise<DesktopPlanResult> {
+    if (this.closed) return Promise.resolve({ type: "desktop_plan_result", requestId: response.requestId, kind: response.kind, status: "unknown", error: { code: "disconnected" } });
+    return this.link.answerPlan(this.target, response);
+  }
   close(): void {
     this.closed = true;
   }
@@ -252,6 +263,8 @@ interface PendingAskResponse {
 export class DesktopBrokerHostLink {
   private readonly pending = new Map<string, PendingRequest>();
   private readonly pendingAskResponses = new Map<string, PendingAskResponse>();
+  private readonly pendingPlanResponses = new Map<string, { target: DesktopPluginTarget; requestId: string; kind: "confirm" | "review"; resolve: (result: DesktopPlanResult) => void; timer: ReturnType<typeof setTimeout> }>();
+
   private closed = false;
 
   constructor(
@@ -298,6 +311,28 @@ export class DesktopBrokerHostLink {
     });
   }
 
+  answerPlan(target: DesktopPluginTarget, response: DesktopPlanResponse): Promise<DesktopPlanResult> {
+    if (this.closed) return Promise.resolve({ type: "desktop_plan_result", requestId: response.requestId, kind: response.kind, status: "unknown", error: { code: "disconnected" } });
+    const key = planCorrelationKey(target, response.requestId, response.kind);
+    return new Promise<DesktopPlanResult>((resolve) => {
+      const timer = setTimeout(() => {
+        this.pendingPlanResponses.delete(key);
+        resolve({ type: "desktop_plan_result", requestId: response.requestId, kind: response.kind, status: "unknown", error: { code: "deadline_exceeded" } });
+      }, 120_000);
+      this.pendingPlanResponses.set(key, { target: { ...target }, requestId: response.requestId, kind: response.kind, resolve, timer });
+      try { this.connection.send({ type: "desktop_broker_plan_response", target, response }); }
+      catch { clearTimeout(timer); this.pendingPlanResponses.delete(key); resolve({ type: "desktop_plan_result", requestId: response.requestId, kind: response.kind, status: "unknown", error: { code: "disconnected" } }); }
+    });
+  }
+
+  handlePlanResult(frame: DesktopBrokerPlanResult): void {
+    const key = planCorrelationKey(frame.target, frame.result.requestId, frame.result.kind);
+    const pending = this.pendingPlanResponses.get(key);
+    if (!pending) return;
+    clearTimeout(pending.timer);
+    this.pendingPlanResponses.delete(key);
+    pending.resolve(frame.result);
+  }
   handleAskResult(frame: DesktopBrokerAskResult): void {
     const key = askCorrelationKey(frame.target, frame.result.requestId, frame.result.toolCallId);
     const pending = this.pendingAskResponses.get(key);
@@ -327,7 +362,12 @@ export class DesktopBrokerHostLink {
       clearTimeout(pending.timer);
       pending.resolve({ type: "desktop_ask_result", requestId: pending.requestId, toolCallId: pending.toolCallId, status: "unknown", error: { code: "disconnected" } });
     }
+    for (const pending of this.pendingPlanResponses.values()) {
+      clearTimeout(pending.timer);
+      pending.resolve({ type: "desktop_plan_result", requestId: pending.requestId, kind: pending.kind, status: "unknown", error: { code: "disconnected" } });
+    }
     this.pendingAskResponses.clear();
+    this.pendingPlanResponses.clear();
     this.connection.close(error);
   }
 }
@@ -343,6 +383,8 @@ export interface DesktopBrokerHostIpcOptions {
   onProjection?: DesktopBrokerProjectionListener;
   onAskRequest?: (target: DesktopPluginTarget, request: Extract<DesktopBrokerToHostFrame, { type: "desktop_broker_ask_request" }>["request"]) => void;
   onAskCancel?: (target: DesktopPluginTarget, response: Extract<DesktopBrokerToHostFrame, { type: "desktop_broker_ask_cancel" }>["response"]) => void;
+  onPlanRequest?: (target: DesktopPluginTarget, request: Extract<DesktopBrokerToHostFrame, { type: "desktop_broker_plan_request" }>["request"]) => void;
+  onPlanCancel?: (target: DesktopPluginTarget, cancel: Extract<DesktopBrokerToHostFrame, { type: "desktop_broker_plan_cancel" }>["cancel"]) => void;
   onDisconnected?: () => void;
 }
 
@@ -507,9 +549,22 @@ export class DesktopBrokerHostIpc {
     }
     if (frame.type === "desktop_broker_ask_request") {
       this.options.onAskRequest?.(frame.target, frame.request);
+      return;
     }
     if (frame.type === "desktop_broker_ask_cancel") {
       this.options.onAskCancel?.(frame.target, frame.response);
+      return;
+    }
+    if (frame.type === "desktop_broker_plan_result") {
+      this.link?.handlePlanResult(frame);
+      return;
+    }
+    if (frame.type === "desktop_broker_plan_request") {
+      this.options.onPlanRequest?.(frame.target, frame.request);
+      return;
+    }
+    if (frame.type === "desktop_broker_plan_cancel") {
+      this.options.onPlanCancel?.(frame.target, frame.cancel);
     }
   }
 

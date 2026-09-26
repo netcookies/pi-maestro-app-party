@@ -31,7 +31,12 @@ describe("Protocol v2 frames", () => {
   });
 
   it("requires discriminant-specific command fields", () => {
-    const command: ClientCommand = { type: "abort", sessionId: "session-1", id: "cmd-1" };
+    const command: ClientCommand = {
+      type: "abort",
+      sessionId: "session-1",
+      target: { sessionId: "session-1", endpointId: "desktop-1", normalizedCwd: "/work", processGeneration: "generation-1" },
+      id: "cmd-1",
+    };
     expect(isClientCommand(command)).toBe(true);
     expect(isClientCommand({ type: "abort" })).toBe(false);
     expect(isClientCommand({ type: "not-a-command" })).toBe(false);

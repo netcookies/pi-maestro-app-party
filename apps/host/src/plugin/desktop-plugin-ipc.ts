@@ -8,6 +8,10 @@ import type {
   DesktopPluginEvent,
   DesktopAskResponse,
   DesktopAskResult,
+  DesktopPlanRequest,
+  DesktopPlanResponse,
+  DesktopPlanResult,
+  DesktopPlanCancel,
   DesktopPluginClientFrame,
   DesktopPluginError,
   DesktopPluginFrame,
@@ -32,6 +36,7 @@ export const DEFAULT_DESKTOP_PLUGIN_MAX_FRAME_BYTES = 1024 * 1024;
 export const DEFAULT_DESKTOP_PLUGIN_HANDSHAKE_TIMEOUT_MS = 5_000;
 export const DEFAULT_DESKTOP_PLUGIN_REQUEST_TIMEOUT_MS = 2_000;
 export const DEFAULT_DESKTOP_PLUGIN_ASK_RESPONSE_TIMEOUT_MS = 2_000;
+export const DEFAULT_DESKTOP_PLUGIN_PLAN_RESPONSE_TIMEOUT_MS = 120_000;
 
 export interface DesktopPluginIpcServerOptions {
   socketPath: string;
@@ -50,6 +55,8 @@ export interface DesktopPluginIpcServerOptions {
   onSessionSummary?: (target: DesktopPluginTarget, event: Extract<DesktopPluginEvent, { event: "session_summary" }>) => void;
   onAskRequest?: (target: DesktopPluginTarget, request: DesktopAskRequest) => void;
   onAskResponse?: (target: DesktopPluginTarget, response: DesktopAskResponse) => void;
+  onPlanRequest?: (target: DesktopPluginTarget, request: DesktopPlanRequest) => void;
+  onPlanResponse?: (target: DesktopPluginTarget, response: DesktopPlanResponse) => void;
   onDisconnected?: (target: DesktopPluginTarget) => void;
 }
 
@@ -64,6 +71,7 @@ export interface DesktopPluginIpcClientOptions {
   releaseVersion?: string;
   onRequest: (request: DesktopPluginRequest) => Promise<DesktopPluginResult>;
   onAskResponse?: (response: DesktopAskResponse) => Promise<void>;
+  onPlanResponse?: (response: DesktopPlanResponse) => Promise<void>;
   onDisconnected?: () => void;
 }
 
@@ -71,6 +79,9 @@ function askCorrelationKey(requestId: string, toolCallId: string): string {
   return JSON.stringify([requestId, toolCallId]);
 }
 
+function planCorrelationKey(requestId: string, kind: string): string {
+  return JSON.stringify([requestId, kind]);
+}
 function sanitizedMessage(error: unknown): string {
   return error instanceof Error ? error.message.slice(0, 256) : "desktop plugin operation failed";
 }
@@ -165,6 +176,7 @@ export class JsonLineConnection {
 class ServerTransport implements DesktopPluginTransport {
   private readonly pending = new Map<string, { resolve: (result: DesktopPluginResult) => void; reject: (error: Error) => void; timer: ReturnType<typeof setTimeout> }>();
   private readonly pendingAskResponses = new Map<string, { requestId: string; toolCallId: string; resolve: (result: DesktopAskResult) => void; reject: (error: Error) => void; timer: ReturnType<typeof setTimeout> }>();
+  private readonly pendingPlanResponses = new Map<string, { requestId: string; kind: "confirm" | "review"; resolve: (result: DesktopPlanResult) => void; timer: ReturnType<typeof setTimeout> }>();
   private closed = false;
 
   constructor(
@@ -213,6 +225,32 @@ class ServerTransport implements DesktopPluginTransport {
     });
   }
 
+  answerPlan(response: DesktopPlanResponse): Promise<DesktopPlanResult> {
+    if (this.closed) return Promise.resolve({ type: "desktop_plan_result", requestId: response.requestId, kind: response.kind, status: "unknown", error: { code: "disconnected" } });
+    const key = planCorrelationKey(response.requestId, response.kind);
+    return new Promise<DesktopPlanResult>((resolve) => {
+      const timer = setTimeout(() => {
+        this.pendingPlanResponses.delete(key);
+        resolve({ type: "desktop_plan_result", requestId: response.requestId, kind: response.kind, status: "unknown", error: { code: "deadline_exceeded" } });
+      }, DEFAULT_DESKTOP_PLUGIN_PLAN_RESPONSE_TIMEOUT_MS);
+      this.pendingPlanResponses.set(key, { requestId: response.requestId, kind: response.kind, resolve, timer });
+      try { this.connection.send(response); }
+      catch {
+        clearTimeout(timer);
+        this.pendingPlanResponses.delete(key);
+        resolve({ type: "desktop_plan_result", requestId: response.requestId, kind: response.kind, status: "unknown", error: { code: "disconnected" } });
+      }
+    });
+  }
+
+  handlePlanResult(result: DesktopPlanResult): void {
+    const key = planCorrelationKey(result.requestId, result.kind);
+    const pending = this.pendingPlanResponses.get(key);
+    if (!pending) return;
+    clearTimeout(pending.timer);
+    this.pendingPlanResponses.delete(key);
+    pending.resolve(result);
+  }
   handleAskResult(result: DesktopAskResult): void {
     const key = askCorrelationKey(result.requestId, result.toolCallId);
     const pending = this.pendingAskResponses.get(key);
@@ -251,6 +289,11 @@ class ServerTransport implements DesktopPluginTransport {
       pending.resolve({ type: "desktop_ask_result", requestId: pending.requestId, toolCallId: pending.toolCallId, status: "unknown", error: { code: "disconnected" } });
     }
     this.pendingAskResponses.clear();
+    for (const pending of this.pendingPlanResponses.values()) {
+      clearTimeout(pending.timer);
+      pending.resolve({ type: "desktop_plan_result", requestId: pending.requestId, kind: pending.kind, status: "unknown", error: { code: "disconnected" } });
+    }
+    this.pendingPlanResponses.clear();
     this.connection.close();
   }
 }
@@ -373,6 +416,30 @@ export class DesktopPluginIpcServer {
       if (raw && typeof raw === "object" && (raw as { type?: unknown }).type === "desktop_ask_request") {
         if (isDesktopPluginClientFrame(raw) && raw.type === "desktop_ask_request" && target) {
           this.options.onAskRequest?.(target, raw);
+          return;
+        }
+        this.sendError(connection, "invalid_frame", undefined);
+        return;
+      }
+      if (raw && typeof raw === "object" && (raw as { type?: unknown }).type === "desktop_plan_request") {
+        if (isDesktopPluginClientFrame(raw) && raw.type === "desktop_plan_request" && target) {
+          this.options.onPlanRequest?.(target, raw);
+          return;
+        }
+        this.sendError(connection, "invalid_frame", undefined);
+        return;
+      }
+      if (raw && typeof raw === "object" && (raw as { type?: unknown }).type === "desktop_plan_cancel") {
+        if (isDesktopPluginClientFrame(raw) && raw.type === "desktop_plan_cancel" && target) {
+          this.options.onPlanResponse?.(target, { type: "desktop_plan_response", requestId: raw.requestId, kind: raw.kind, status: "cancelled" });
+          return;
+        }
+        this.sendError(connection, "invalid_frame", undefined);
+        return;
+      }
+      if (raw && typeof raw === "object" && (raw as { type?: unknown }).type === "desktop_plan_result") {
+        if (isDesktopPluginClientFrame(raw) && raw.type === "desktop_plan_result") {
+          transport?.handlePlanResult(validateDesktopPluginClientFrame(raw) as DesktopPlanResult);
           return;
         }
         this.sendError(connection, "invalid_frame", undefined);
@@ -540,10 +607,16 @@ export class DesktopPluginIpcClient {
         }
         if (isDesktopPluginServerFrame(raw)) {
           const frame = validateDesktopPluginServerFrame(raw);
-          if (frame.type === "desktop_plugin_error") return finishError(new Error(frame.code));
-        } else {
-          finishError(new Error("invalid desktop plugin frame"));
+          if (frame.type === "desktop_plan_response") {
+            void this.handlePlanResponse(frame);
+            return;
+          }
+          if (frame.type === "desktop_plugin_error") {
+            finishError(new Error(frame.code));
+            return;
+          }
         }
+        finishError(new Error("invalid desktop plugin frame"));
       }, (error) => {
         if (!authenticated) {
           reject(error ?? new Error("desktop plugin disconnected"));
@@ -576,6 +649,18 @@ export class DesktopPluginIpcClient {
     return this.ready;
   }
 
+  private async handlePlanResponse(response: DesktopPlanResponse): Promise<void> {
+    try {
+      await this.options.onPlanResponse?.(response);
+      this.connection?.send({ type: "desktop_plan_result", requestId: response.requestId, kind: response.kind, status: "accepted" });
+    } catch (error) {
+      try {
+        this.connection?.send({ type: "desktop_plan_result", requestId: response.requestId, kind: response.kind, status: "failed", error: { code: "plugin_plan_rejected", message: sanitizedMessage(error) } });
+      } catch {
+        // The connection is already closed; there is no upstream acknowledgement to send.
+      }
+    }
+  }
   private handleAskResponse(response: DesktopAskResponse): void {
     void (async () => {
       try {
@@ -656,6 +741,19 @@ export class DesktopPluginIpcClient {
     };
     this.connection.send(response);
   }
+
+  async sendPlanRequest(request: DesktopPlanRequest): Promise<void> {
+    await this.connect();
+    if (this.closed || !this.connection) throw new Error("desktop plugin disconnected");
+    this.connection.send(request);
+  }
+
+  async sendPlanCancellation(request: DesktopPlanRequest): Promise<void> {
+    await this.connect();
+    if (this.closed || !this.connection) throw new Error("desktop plugin disconnected");
+    this.connection.send({ type: "desktop_plan_cancel", requestId: request.requestId, kind: request.kind });
+  }
+
 
   close(): void {
     if (this.closed) return;
