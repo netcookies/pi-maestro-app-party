@@ -2,6 +2,19 @@
 
 本文件记录 Maestro Mobile 的显著变更。格式基于 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)。
 
+## [0.6.0] — 2026-09-27
+
+### 新增
+
+- add exact-target execution summaries
+- add exact-target Plan transport and summaries
+- add session error and tool telemetry views
+
+### 修复
+
+- 补齐双语动作与继续讨论输入
+- 修复模拟器配对连接兼容性
+
 ## [0.5.1] — 2026-09-23
 
 ### 修复
