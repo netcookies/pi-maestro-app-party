@@ -201,6 +201,42 @@ describe("MobileHostServer", () => {
     ws.close();
   });
 
+  it("replays current exact-target execution summaries after a Mobile reconnect", async () => {
+    const target = { sessionId: "execution-reconnect", endpointId: "desktop", normalizedCwd: ctx.tmpDir, processGeneration: "generation-1" };
+    const transport = { close: () => undefined, request: async (request: import("@maestro-mobile/shared").DesktopPluginRequest) => ({ type: "desktop_plugin_result" as const, requestId: request.requestId, operation: request.operation.type, status: "observed" as const }) };
+    const registration = {
+      target,
+      capabilities: ["abort"] as const,
+      runtimeStatus: "idle" as const,
+      executionSummary: {
+        revision: 1,
+        todos: [{ id: "todo-1", subject: "Ship", status: "in_progress", updatedAt: 1 }],
+        teammate: { running: 0, total: 0, agents: [] },
+        backgroundJobs: [],
+      },
+      transport,
+    };
+    ctx.controller.desktopPlugins.register(registration);
+    ctx.controller.applyDesktopProjection([registration]);
+
+    const first = await connectV2(ctx.url);
+    first.close();
+    const second = new WebSocket(`${ctx.url}/ws`);
+    try {
+      const replay = new Promise<{ summary: { target: typeof target; todos: Array<{ id: string }> } }>((resolve, reject) => {
+        second.on("message", (data) => {
+          const frame = JSON.parse(data.toString()) as { type?: string; summary?: { target: typeof target; todos: Array<{ id: string }> } };
+          if (frame.type === "session_execution_updated" && frame.summary) resolve({ summary: frame.summary });
+        });
+        second.once("error", reject);
+      });
+      second.once("open", () => second.send(JSON.stringify(protocolHello())));
+      await expect(replay).resolves.toMatchObject({ summary: { target, todos: [{ id: "todo-1" }] } });
+    } finally {
+      second.close();
+    }
+  });
+
   it("rejects business frames before protocol_hello", async () => {
     const ws = new WebSocket(`ws://127.0.0.1:${ctx.port}/ws`);
     const frame = await new Promise<{ type: string; code: string }>((resolve, reject) => {

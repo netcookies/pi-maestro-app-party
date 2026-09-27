@@ -5,8 +5,9 @@ import type {
   OperationStatus,
   SessionRuntimeStatus,
   SessionSummaryPatch,
+  SessionExecutionSummary,
 } from "./protocol.js";
-import { isSessionSummaryPatch, isHostError } from "./protocol.js";
+import { isSessionSummaryPatch, isHostError, isBackgroundJobSummary } from "./protocol.js";
 
 /**
  * Bump only for a breaking wire change. Additive events require ready.supportedEvents negotiation.
@@ -81,6 +82,14 @@ export type DesktopPluginSessionSummary = Omit<SessionSummaryPatch, "runtimeStat
   runtimeStatus: DesktopPluginRuntimeStatus;
 };
 
+/** A bounded same-process execution projection; the authenticated connection supplies its target. */
+export type DesktopPluginExecutionSummary = Omit<SessionExecutionSummary, "target">;
+
+export const DESKTOP_PLUGIN_MAX_EXECUTION_TODOS = 32 as const;
+export const DESKTOP_PLUGIN_MAX_EXECUTION_AGENTS = 64 as const;
+export const DESKTOP_PLUGIN_MAX_EXECUTION_BACKGROUND_JOBS = 64 as const;
+export const DESKTOP_PLUGIN_MAX_EXECUTION_TEXT_LENGTH = 512 as const;
+
 export type DesktopPluginEvent =
   | {
       type: "desktop_plugin_event";
@@ -101,6 +110,11 @@ export type DesktopPluginEvent =
       type: "desktop_plugin_event";
       event: "session_summary";
       summary: DesktopPluginSessionSummary;
+    }
+  | {
+      type: "desktop_plugin_event";
+      event: "execution_summary";
+      summary: DesktopPluginExecutionSummary;
     };
 
 export interface DesktopAskRequest {
@@ -299,7 +313,8 @@ export function isDesktopPluginClientFrame(value: unknown): value is DesktopPlug
       return (value.event === "model_select" && isDesktopPluginModel(value.model))
         || (value.event === "thinking_level_select" && typeof value.level === "string" && value.level.length > 0)
         || (value.event === "runtime_status" && (value.runtimeStatus === "running" || value.runtimeStatus === "idle"))
-        || (value.event === "session_summary" && isDesktopPluginSessionSummary(value.summary));
+        || (value.event === "session_summary" && isDesktopPluginSessionSummary(value.summary))
+        || (value.event === "execution_summary" && isDesktopPluginExecutionSummary(value.summary));
     case "desktop_ask_request":
       return stringFields(value, "requestId", "toolCallId")
         && finiteNumber(value.deadlineAt)
@@ -445,7 +460,7 @@ function stringArray(value: unknown): value is string[] {
 
 function desktopPluginEventArray(value: unknown): value is DesktopPluginEvent["event"][] {
   return Array.isArray(value)
-    && value.every((item) => item === "model_select" || item === "thinking_level_select" || item === "runtime_status" || item === "session_summary");
+    && value.every((item) => item === "model_select" || item === "thinking_level_select" || item === "runtime_status" || item === "session_summary" || item === "execution_summary");
 }
 
 function finiteNumber(value: unknown): value is number {
@@ -478,6 +493,49 @@ export function isDesktopPluginModel(value: unknown): value is DesktopPluginMode
     && stringFields(value, "provider", "id", "name")
     && typeof value.reasoning === "boolean"
     && typeof value.vision === "boolean";
+}
+
+export function isDesktopPluginExecutionSummary(value: unknown): value is DesktopPluginExecutionSummary {
+  if (!isRecord(value) || !nonNegativeInteger(value.revision)
+    || !Array.isArray(value.todos) || value.todos.length > DESKTOP_PLUGIN_MAX_EXECUTION_TODOS
+    || !value.todos.every(isBoundedExecutionTodo)
+    || !isRecord(value.teammate)
+    || !nonNegativeInteger(value.teammate.running)
+    || !nonNegativeInteger(value.teammate.total)
+    || value.teammate.running > value.teammate.total
+    || !Array.isArray(value.teammate.agents) || value.teammate.agents.length > DESKTOP_PLUGIN_MAX_EXECUTION_AGENTS
+    || value.teammate.total !== value.teammate.agents.length
+    || !value.teammate.agents.every(isBoundedExecutionAgent)
+    || !Array.isArray(value.backgroundJobs) || value.backgroundJobs.length > DESKTOP_PLUGIN_MAX_EXECUTION_BACKGROUND_JOBS
+    || !value.backgroundJobs.every(isBoundedExecutionBackgroundJob)) return false;
+  if (value.workspace !== undefined && (!isRecord(value.workspace)
+    || ![value.workspace.label, value.workspace.workspaceId, value.workspace.ownerId].every((item) => item === undefined || isBoundedText(item))
+    || ![value.workspace.label, value.workspace.workspaceId, value.workspace.ownerId].some((item) => typeof item === "string"))) return false;
+  return true;
+}
+
+function isBoundedExecutionTodo(value: unknown): boolean {
+  return isRecord(value) && isBoundedText(value.id) && isBoundedText(value.subject) && isBoundedText(value.status)
+    && finiteNumber(value.updatedAt) && (value.assigneeLabel === undefined || isBoundedText(value.assigneeLabel));
+}
+
+function isBoundedExecutionAgent(value: unknown): boolean {
+  return isRecord(value)
+    && [value.correlationId, value.name, value.agent].some(isBoundedText)
+    && isBoundedText(value.status)
+    && [value.correlationId, value.name, value.agent, value.phase].every((item) => item === undefined || isBoundedText(item))
+    && (value.outputTail === undefined || (Array.isArray(value.outputTail) && value.outputTail.length <= 8 && value.outputTail.every(isBoundedText)))
+    && (value.pendingInteractions === undefined || nonNegativeInteger(value.pendingInteractions));
+}
+
+function isBoundedExecutionBackgroundJob(value: unknown): boolean {
+  return isBackgroundJobSummary(value)
+    && isBoundedText(value.id)
+    && [value.label, value.startedAt, value.finishedAt].every((item) => item === undefined || isBoundedText(item));
+}
+
+function isBoundedText(value: unknown): value is string {
+  return typeof value === "string" && value.length > 0 && value.length <= DESKTOP_PLUGIN_MAX_EXECUTION_TEXT_LENGTH;
 }
 
 export function isDesktopPluginSessionSummary(value: unknown): value is DesktopPluginSessionSummary {

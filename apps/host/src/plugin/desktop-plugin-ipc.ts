@@ -53,6 +53,7 @@ export interface DesktopPluginIpcServerOptions {
   onThinkingLevelSelect?: (target: DesktopPluginTarget, event: Extract<DesktopPluginEvent, { event: "thinking_level_select" }>) => void;
   onRuntimeStatus?: (target: DesktopPluginTarget, event: Extract<DesktopPluginEvent, { event: "runtime_status" }>) => void;
   onSessionSummary?: (target: DesktopPluginTarget, event: Extract<DesktopPluginEvent, { event: "session_summary" }>) => void;
+  onExecutionSummary?: (target: DesktopPluginTarget, event: Extract<DesktopPluginEvent, { event: "execution_summary" }>) => void;
   onAskRequest?: (target: DesktopPluginTarget, request: DesktopAskRequest) => void;
   onAskResponse?: (target: DesktopPluginTarget, response: DesktopAskResponse) => void;
   onPlanRequest?: (target: DesktopPluginTarget, request: DesktopPlanRequest) => void;
@@ -388,6 +389,9 @@ export class DesktopPluginIpcServer {
           } else if (raw.event === "runtime_status") {
             this.registry.updateRuntimeStatus(target, raw.runtimeStatus);
             this.options.onRuntimeStatus?.(target, raw);
+          } else if (raw.event === "execution_summary") {
+            this.registry.updateExecutionSummary(target, raw.summary);
+            this.options.onExecutionSummary?.(target, raw);
           } else {
             this.registry.updateSessionSummary(target, raw.summary);
             this.options.onSessionSummary?.(target, raw);
@@ -529,6 +533,7 @@ export class DesktopPluginIpcClient {
   private supportsThinkingLevelSelect = false;
   private supportsRuntimeStatus = false;
   private supportsSessionSummary = false;
+  private supportsExecutionSummary = false;
 
   constructor(private readonly options: DesktopPluginIpcClientOptions) {}
 
@@ -557,6 +562,7 @@ export class DesktopPluginIpcClient {
             this.supportsThinkingLevelSelect = frame.supportedEvents?.includes("thinking_level_select") ?? false;
             this.supportsRuntimeStatus = frame.supportedEvents?.includes("runtime_status") ?? false;
             this.supportsSessionSummary = frame.supportedEvents?.includes("session_summary") ?? false;
+            this.supportsExecutionSummary = frame.supportedEvents?.includes("execution_summary") ?? false;
             if (timer) clearTimeout(timer);
             resolve();
           }
@@ -716,6 +722,11 @@ export class DesktopPluginIpcClient {
         runtimeStatus: event.summary.runtimeStatus,
       });
     }
+  }
+
+  async sendExecutionSummary(event: Extract<DesktopPluginEvent, { event: "execution_summary" }>): Promise<void> {
+    await this.connect();
+    if (this.supportsExecutionSummary) await this.sendEvent(event);
   }
 
   private async sendEvent(event: DesktopPluginEvent): Promise<void> {

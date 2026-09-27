@@ -76,7 +76,7 @@ export default function SessionScreen() {
   const executionJobs = executionSummary?.backgroundJobs ?? [];
   const executionDetails = executionSummary ? [
     { title: `Todo (${executionSummary.todos.length})`, items: executionSummary.todos.map((item) => `${item.subject} · ${item.status}`), count: executionSummary.todos.length },
-    { title: `Teammate (${executionSummary.teammate.agents.length})`, items: executionSummary.teammate.agents.map((item) => `${item.name} · ${item.status}`), count: executionSummary.teammate.agents.length },
+    { title: `Teammate (${executionSummary.teammate.agents.length})`, items: executionSummary.teammate.agents.map((item) => `${item.name ?? item.agent ?? item.correlationId ?? "Teammate"} · ${item.status}`), count: executionSummary.teammate.agents.length },
     { title: `Background (${executionJobs.length})`, items: executionJobs.map((item) => `${item.label ?? item.id} · ${item.status}`), count: executionJobs.length },
   ] : [];
 
@@ -955,7 +955,6 @@ export default function SessionScreen() {
         {executionSummary && <View style={{ gap: 12 }}>
           <View style={styles.sheetHeader}>
             <Text style={[styles.sheetTitle, { color: theme.text }]}>Session execution</Text>
-            <TouchableOpacity onPress={() => setExecutionDetailsOpen(false)} accessibilityRole="button" accessibilityLabel={t.close}><LineIcon name="x" size={16} color={theme.muted} /></TouchableOpacity>
           </View>
           <Text style={[styles.sheetDesc, { color: theme.muted }]}>{isConnected ? `Revision ${executionSummary.revision}` : "Disconnected · showing last received summary"}</Text>
           {executionDetails.map((section) => <View key={section.title} style={{ gap: 4 }}>

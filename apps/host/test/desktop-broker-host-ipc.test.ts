@@ -191,6 +191,35 @@ describe("DesktopBrokerHostIpc", () => {
     await expect(connected.nextFrame()).resolves.toMatchObject({ type: "desktop_broker_error", code: "revision_gap" });
   });
 
+  it("projects execution snapshots and rejects stale per-target source revisions", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "maestro-broker-execution-"));
+    host = new DesktopBrokerHostIpc({ socketPath: join(dir, "broker.sock"), secret: "secret", hostInstanceId: "host-1" });
+    await host.start();
+    const connected = await connect(join(dir, "broker.sock"));
+    socket = connected.socket;
+    writeFrame(socket, { type: "desktop_broker_hello", protocolVersion: 1, brokerInstanceId: "broker-1", clientNonce: "nonce", secret: "secret" });
+    await connected.nextFrame();
+    const summary = { revision: 3, todos: [], teammate: { running: 0, total: 0, agents: [] }, backgroundJobs: [] };
+    writeFrame(socket, { type: "desktop_broker_snapshot_begin", brokerInstanceId: "broker-1", snapshotId: "snapshot-1", revision: 1, targetCount: 2 });
+    writeFrame(socket, { type: "desktop_broker_snapshot_chunk", brokerInstanceId: "broker-1", snapshotId: "snapshot-1", revision: 1, chunkIndex: 0, records: [{ ...record(target), executionSummary: summary }, record(sibling)] });
+    writeFrame(socket, { type: "desktop_broker_snapshot_end", brokerInstanceId: "broker-1", snapshotId: "snapshot-1", revision: 1, chunkCount: 1 });
+    await waitFor(() => host?.projection.resolve(target)?.executionSummary?.revision === 3);
+    expect(host.projection.resolve(sibling)?.executionSummary).toBeUndefined();
+
+    writeFrame(socket, {
+      type: "desktop_broker_delta", brokerInstanceId: "broker-1", baseRevision: 1, revision: 2,
+      mutation: { kind: "execution_summary", target, summary: { ...summary, revision: 4, todos: [{ id: "todo-1", subject: "Ship", status: "pending", updatedAt: 1 }] } },
+    });
+    await waitFor(() => host?.projection.resolve(target)?.executionSummary?.revision === 4);
+    writeFrame(socket, {
+      type: "desktop_broker_delta", brokerInstanceId: "broker-1", baseRevision: 2, revision: 3,
+      mutation: { kind: "execution_summary", target, summary: { ...summary, revision: 4 } },
+    });
+    await waitFor(() => host?.projection.isValid === false);
+    expect(host.projection.list()).toHaveLength(0);
+    await expect(connected.nextFrame()).resolves.toMatchObject({ type: "desktop_broker_error", code: "revision_gap" });
+  });
+
   it("projects thinking level snapshots and contiguous deltas", async () => {
     const dir = await mkdtemp(join(tmpdir(), "maestro-broker-thinking-"));
     host = new DesktopBrokerHostIpc({ socketPath: join(dir, "broker.sock"), secret: "secret", hostInstanceId: "host-1" });

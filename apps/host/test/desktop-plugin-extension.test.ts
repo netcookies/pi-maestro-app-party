@@ -2,21 +2,32 @@ import { describe, expect, it, afterEach } from "vitest";
 import { mkdtemp } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import type { DesktopPluginResult, DesktopPluginModel, DesktopPluginRuntimeStatus, DesktopPluginTarget } from "@maestro-mobile/shared";
+import type { DesktopPluginExecutionSummary, DesktopPluginResult, DesktopPluginModel, DesktopPluginRuntimeStatus, DesktopPluginTarget } from "@maestro-mobile/shared";
 import { DesktopPluginIpcServer } from "../src/plugin/desktop-plugin-ipc.js";
 import { DesktopControlGatewayService } from "../src/control/desktop-control-gateway.js";
 import { DesktopPluginRegistry } from "../src/plugin/desktop-plugin-registry.js";
 import { createDesktopPluginExtension } from "../src/plugin/desktop-plugin-extension.js";
 
 /** 最小假 Pi API/ctx：只保真 extension 实际使用的成员，避免用宽泛 mock 掩盖真实调用。 */
-function fakePi(options: { models: { provider: string; id: string; name: string }[]; availableModels?: { provider: string; id: string; name: string }[]; skills?: { name: string; description?: string }[]; model?: unknown; configuredAuth?: boolean }) {
+function fakePi(options: { models: { provider: string; id: string; name: string }[]; availableModels?: { provider: string; id: string; name: string }[]; skills?: { name: string; description?: string }[]; model?: unknown; configuredAuth?: boolean; entries?: unknown[] }) {
+  let sessionEntries = options.entries ?? [];
   const handlers = new Map<string, ((event: unknown, ctx: unknown) => unknown)[]>();
+  const eventHandlers = new Map<string, ((payload: unknown) => void)[]>();
   const setModelCalls: unknown[] = [];
   const setThinkingCalls: string[] = [];
   let thinkingLevel = "medium";
   let sessionId = "tui-session";
   const sent: { content: unknown; options?: { deliverAs?: string } }[] = [];
   const pi = {
+    events: {
+      on(event: string, handler: (payload: unknown) => void) {
+        eventHandlers.set(event, [...(eventHandlers.get(event) ?? []), handler]);
+        return () => eventHandlers.set(event, (eventHandlers.get(event) ?? []).filter((candidate) => candidate !== handler));
+      },
+      emit(event: string, payload: unknown) {
+        for (const handler of eventHandlers.get(event) ?? []) handler(payload);
+      },
+    },
     on(event: string, handler: (event: unknown, ctx: unknown) => unknown) {
       handlers.set(event, [...(handlers.get(event) ?? []), handler]);
     },
@@ -44,6 +55,7 @@ function fakePi(options: { models: { provider: string; id: string; name: string 
     sessionManager: {
       getSessionId: () => sessionId,
       getSessionFile: () => `/sessions/${sessionId}.jsonl`,
+      getEntries: () => sessionEntries,
     },
     model: options.model === undefined
       ? { provider: "provider-a", id: "shared-id", name: "Model A", reasoning: true, input: ["text"] }
@@ -72,7 +84,9 @@ function fakePi(options: { models: { provider: string; id: string; name: string 
     emit,
     emitAsync,
     handlers,
+    emitBus: (event: string, payload: unknown) => pi.events.emit(event, payload),
     setSessionId: (nextSessionId: string) => { sessionId = nextSessionId; },
+    setSessionEntries: (entries: unknown[]) => { sessionEntries = entries; },
   };
 }
 
@@ -173,6 +187,95 @@ describe("Desktop Plugin extension (TUI side)", () => {
     expect(received.at(-1)).toEqual({ provider: "provider-b", id: "shared-id", name: "Model B", reasoning: false, vision: true });
   });
 
+  it("publishes bounded same-process Todo, teammate, and background execution data", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "maestro-ext-execution-"));
+    const providerKey = Symbol.for("pi-maestro.workspace-projection-providers.v1");
+    const globals = globalThis as Record<symbol, unknown>;
+    const previousProviders = globals[providerKey];
+    globals[providerKey] = new Map([
+      ["todo", {
+        kind: "todo",
+        snapshot: () => [{ kind: "todo", data: { id: "todo-1", subject: "Ship", status: "in_progress", updatedAt: 1, assigneeLabel: "root" } }],
+      }],
+    ]);
+    const teammateKey = Symbol.for("pi-maestro-teammate.root-registry");
+    const previousTeammate = globals[teammateKey];
+    globals[teammateKey] = {
+      currentWorkspaceId: "workspace-1",
+      currentSessionId: "tui-session",
+      currentSourceId: "source-1",
+      sessionGeneration: 1,
+    };
+    try {
+      const summaries: DesktopPluginExecutionSummary[] = [];
+      const registry = new DesktopPluginRegistry();
+      server = new DesktopPluginIpcServer({
+        socketPath: join(dir, "plugin.sock"),
+        secret: "test-secret",
+        registry,
+        supportedEvents: ["execution_summary"],
+        onExecutionSummary: (_target, event) => { summaries.push(event.summary); },
+      });
+      await server.start();
+      const fake = fakePi({ models: [] });
+      createDesktopPluginExtension({ socketPath: join(dir, "plugin.sock"), secret: "test-secret" })(fake.pi as never);
+      fake.emit("session_start", { type: "session_start", reason: "startup" });
+      await waitFor(() => registry.list()[0]?.executionSummary?.todos[0]?.id === "todo-1");
+      const initialRevision = registry.list()[0].executionSummary!.revision;
+      fake.emitBus("teammate:started", {
+        projection: { workspaceId: "workspace-1", sessionId: "tui-session", sourceId: "source-1", generation: 1 },
+        correlationId: "agent-1", agent: "general", status: "running", name: "reviewer",
+      });
+      fake.emitBus("bash-bg:update", { jobs: [{ id: "job-1", command: "pnpm test", cwd: "/work/app", pid: 10, status: "running", startedAt: 1, updatedAt: 2, exitCode: null, outputTail: "", outputBytes: 0, logPath: "/tmp/job.log" }] });
+      await waitFor(() => registry.list()[0]?.executionSummary?.teammate.agents[0]?.correlationId === "agent-1");
+      await waitFor(() => registry.list()[0]?.executionSummary?.backgroundJobs[0]?.id === "job-1");
+      const execution = registry.list()[0].executionSummary!;
+      expect(execution.teammate).toMatchObject({ running: 1, total: 1 });
+      expect(execution.backgroundJobs).toEqual([expect.objectContaining({ id: "job-1", status: "running", label: "pnpm test" })]);
+      expect(summaries.some((summary) => summary.teammate.agents.some((agent) => agent.correlationId === "agent-1"))).toBe(true);
+      expect(execution.revision).toBeGreaterThan(initialRevision);
+      for (let index = 0; index < 70; index += 1) {
+        fake.emitBus("teammate:started", {
+          projection: { workspaceId: "workspace-1", sessionId: "tui-session", sourceId: "source-1", generation: 1 },
+          correlationId: `agent-${index + 2}`, agent: "general", status: "running",
+        });
+      }
+      await waitFor(() => registry.list()[0]?.executionSummary?.teammate.agents.at(-1)?.correlationId === "agent-71");
+      expect(registry.list()[0]?.executionSummary?.teammate.total).toBe(64);
+      const bounded = structuredClone(registry.list()[0].executionSummary!);
+      fake.emitBus("teammate:started", {
+        projection: { workspaceId: "workspace-2", sessionId: "sibling", sourceId: "source-2", generation: 1 },
+        correlationId: "sibling-agent", agent: "general", status: "running",
+      });
+      expect(() => fake.emitBus("bash-bg:update", { jobs: [{ id: "bad", command: "bad", cwd: "/work/app", pid: 1, status: "running", startedAt: Number.MAX_VALUE, updatedAt: 1, exitCode: null, outputTail: "", outputBytes: 0, logPath: "/tmp/bad.log" }] })).not.toThrow();
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      expect(registry.list()[0].executionSummary).toEqual(bounded);
+      expect(registry.list()[0].executionSummary?.teammate.agents.some((agent) => agent.correlationId === "sibling-agent")).toBe(false);
+      globals[teammateKey] = {
+        currentWorkspaceId: "workspace-1",
+        currentSessionId: "tui-session",
+        currentSourceId: "source-2",
+        sessionGeneration: 2,
+      };
+      fake.emitBus("teammate:started", {
+        projection: { workspaceId: "workspace-1", sessionId: "tui-session", sourceId: "source-1", generation: 1 },
+        correlationId: "old-fence-agent", agent: "general", status: "running",
+      });
+      fake.emitBus("maestro:todo-state-changed", { version: 1 });
+      await waitFor(() => registry.list()[0]?.executionSummary?.teammate.total === 0);
+      fake.emitBus("teammate:started", {
+        projection: { workspaceId: "workspace-1", sessionId: "tui-session", sourceId: "source-2", generation: 2 },
+        correlationId: "new-fence-agent", agent: "general", status: "running",
+      });
+      await waitFor(() => registry.list()[0]?.executionSummary?.teammate.agents[0]?.correlationId === "new-fence-agent");
+    } finally {
+      if (previousProviders === undefined) delete globals[providerKey];
+      else globals[providerKey] = previousProviders;
+      if (previousTeammate === undefined) delete globals[teammateKey];
+      else globals[teammateKey] = previousTeammate;
+    }
+  });
+
   it("lists the bound model when Pi has no available or catalog snapshot", async () => {
     const dir = await mkdtemp(join(tmpdir(), "maestro-ext-model-fallback-"));
     const registry = new DesktopPluginRegistry();
@@ -244,7 +347,42 @@ describe("Desktop Plugin extension (TUI side)", () => {
     await waitFor(() => registry.list().length === 0);
   });
 
-  it("reconnects and re-reports current model and thinking level after the socket drops", async () => {
+  it("collects root Todo state from the durable session snapshot", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "maestro-ext-root-todo-"));
+    const registry = new DesktopPluginRegistry();
+    server = new DesktopPluginIpcServer({
+      socketPath: join(dir, "plugin.sock"),
+      secret: "test-secret",
+      registry,
+      supportedEvents: ["execution_summary"],
+    });
+    await server.start();
+    const fake = fakePi({
+      models: [],
+      entries: [{ type: "custom", customType: "todo-state", data: { version: 8, tasks: { "todo-root": { id: "todo-root", subject: "Root task", status: "pending", updatedAt: 10, assignee: { label: "root" } } } } }],
+    });
+    createDesktopPluginExtension({ socketPath: join(dir, "plugin.sock"), secret: "test-secret" })(fake.pi as never);
+    fake.emit("session_start", { type: "session_start", reason: "startup" });
+    await waitFor(() => registry.list()[0]?.executionSummary?.todos[0]?.id === "todo-root");
+    expect(registry.list()[0]?.executionSummary?.todos).toEqual([{ id: "todo-root", subject: "Root task", status: "pending", updatedAt: 10, assigneeLabel: "root" }]);
+  });
+
+  it("publishes an empty root Todo summary when no durable Todo state exists", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "maestro-ext-empty-todo-"));
+    const registry = new DesktopPluginRegistry();
+    server = new DesktopPluginIpcServer({ socketPath: join(dir, "plugin.sock"), secret: "test-secret", registry, supportedEvents: ["execution_summary"] });
+    await server.start();
+    const fake = fakePi({ models: [], entries: [] });
+    createDesktopPluginExtension({ socketPath: join(dir, "plugin.sock"), secret: "test-secret" })(fake.pi as never);
+    fake.emit("session_start", { type: "session_start", reason: "startup" });
+    await waitFor(() => registry.list()[0]?.executionSummary?.todos.length === 0);
+    expect(registry.list()[0]?.executionSummary?.todos).toEqual([]);
+  });
+  it("reconnects and re-reports current model, thinking level, and execution summary after the socket drops", async () => {
+    const providerKey = Symbol.for("pi-maestro.workspace-projection-providers.v1");
+    const globals = globalThis as Record<symbol, unknown>;
+    const previousProviders = globals[providerKey];
+    globals[providerKey] = new Map([["todo", { kind: "todo", snapshot: () => [{ kind: "todo", data: { id: "todo-reconnect", subject: "Reconnect", status: "pending", updatedAt: 1 } }] }]]);
     const dir = await mkdtemp(join(tmpdir(), "maestro-ext-reconnect-"));
     const socketPath = join(dir, "plugin.sock");
     const registry = new DesktopPluginRegistry();
@@ -254,7 +392,7 @@ describe("Desktop Plugin extension (TUI side)", () => {
       socketPath,
       secret: "test-secret",
       registry,
-      supportedEvents: ["thinking_level_select"],
+      supportedEvents: ["thinking_level_select", "execution_summary"],
       onModelSelect: (_target, event) => { received.push(event.model); },
       onThinkingLevelSelect: (_target, event) => { thinkingLevels.push(event.level); },
     });
@@ -278,6 +416,7 @@ describe("Desktop Plugin extension (TUI side)", () => {
     fake.pi.setThinkingLevel("xhigh");
     await waitFor(() => thinkingLevels.at(-1) === "xhigh");
     const thinkingReportsBeforeReconnect = thinkingLevels.filter((level) => level === "xhigh").length;
+    await waitFor(() => registry.list()[0]?.executionSummary?.todos[0]?.id === "todo-reconnect");
 
     await server.close();
     server = undefined;
@@ -287,7 +426,7 @@ describe("Desktop Plugin extension (TUI side)", () => {
       socketPath,
       secret: "test-secret",
       registry,
-      supportedEvents: ["thinking_level_select"],
+      supportedEvents: ["thinking_level_select", "execution_summary"],
       onModelSelect: (_target, event) => { received.push(event.model); },
       onThinkingLevelSelect: (_target, event) => { thinkingLevels.push(event.level); },
     });
@@ -296,7 +435,10 @@ describe("Desktop Plugin extension (TUI side)", () => {
 
     await waitFor(() => received.some((model) => model.id === "model-c") && restarted.registry.list().length > 0);
     await waitFor(() => thinkingLevels.filter((level) => level === "xhigh").length > thinkingReportsBeforeReconnect);
+    await waitFor(() => restarted.registry.list()[0]?.executionSummary?.todos[0]?.id === "todo-reconnect");
     expect(restarted.registry.hasCapability(target as DesktopPluginTarget, "set_model")).toBe(true);
+    if (previousProviders === undefined) delete globals[providerKey];
+    else globals[providerKey] = previousProviders;
   });
 
   it("always asks Pi to queue prompt as steer so streaming never drops it", async () => {

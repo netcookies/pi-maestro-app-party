@@ -1,4 +1,4 @@
-import type { HostEvent, SessionSnapshot, ExtensionUiResponse, DesktopAskRequest, DesktopAskResponse, DesktopPluginModel, DesktopPluginRuntimeStatus, DesktopPluginSessionSummary, SessionSummaryPatch, TimelineItem, DesktopPlanRequest, DesktopPlanResponse } from "@maestro-mobile/shared";
+import type { HostEvent, SessionSnapshot, ExtensionUiResponse, DesktopAskRequest, DesktopAskResponse, DesktopPluginModel, DesktopPluginRuntimeStatus, DesktopPluginSessionSummary, DesktopPluginExecutionSummary, SessionExecutionSummary, SessionSummaryPatch, TimelineItem, DesktopPlanRequest, DesktopPlanResponse } from "@maestro-mobile/shared";
 
 import type { DesktopPluginTarget } from "@maestro-mobile/shared";
 import type { SessionCatalog, HostEventListener } from "./types.js";
@@ -71,6 +71,9 @@ export class HostController {
   private readonly desktopReplayRefreshes = new Map<string, { timer: ReturnType<typeof setTimeout>; refreshing: boolean; replayQueued: boolean; pendingItems: TimelineItem[] }>();
   private readonly pendingDesktopAsks = new Map<string, { target: DesktopPluginTarget; request: DesktopAskRequest; event: Extract<HostEvent, { type: "extension_ui_request" }>; timer: ReturnType<typeof setTimeout> }>();
   private readonly pendingDesktopPlans = new Map<string, { target: DesktopPluginTarget; request: DesktopPlanRequest; timer: ReturnType<typeof setTimeout> }>();
+  private readonly desktopExecutionSourceRevisions = new Map<string, number>();
+  private readonly desktopExecutionEventRevisions = new Map<string, number>();
+  private desktopExecutionRevision = 0;
 
   private readonly projectedDesktopTargets = new Map<string, DesktopPluginTarget>();
   private readonly sessionCommandService: SessionCommandService;
@@ -189,6 +192,7 @@ export class HostController {
     sessionFile?: string;
     runtimeStatus: DesktopPluginRuntimeStatus;
     summary?: DesktopPluginSessionSummary;
+    executionSummary?: DesktopPluginExecutionSummary;
   }[]): void {
     const nextTargets = new Map(records.map((record) => [targetKey(record.target), record.target]));
     for (const previous of this.projectedDesktopTargets.values()) {
@@ -216,6 +220,8 @@ export class HostController {
       if (thinkingChanged) this.syncDesktopThinking(record.target, record.thinkingLevel, true);
       if (record.summary) this.syncDesktopSessionSummary(record.target, record.summary);
       else this.publishDesktopSummary(record.target, { reset: true, runtimeStatus: record.runtimeStatus, activeSince: null });
+      if (record.executionSummary) this.syncDesktopExecutionSummary(record.target, record.executionSummary);
+      else this.clearDesktopExecutionSummary(record.target);
     }
   }
 
@@ -466,6 +472,23 @@ export class HostController {
     this.clearDesktopPlan(id);
   }
 
+  currentDesktopExecutionEvents(): HostEvent[] {
+    return this.desktopPluginRegistry.list().flatMap((registration) => {
+      const snapshot = registration.executionSummary;
+      if (!snapshot) return [];
+      const revision = this.desktopExecutionEventRevisions.get(targetKey(registration.target));
+      if (revision === undefined) return [];
+      return [this.eventLog.record({
+        type: "session_execution_updated",
+        summary: {
+          ...structuredClone(snapshot),
+          target: { ...registration.target },
+          revision,
+        },
+      })];
+    });
+  }
+
   pendingDesktopAskEvents(): HostEvent[] {
     return [...this.pendingDesktopAsks.values()]
       .filter(({ request }) => request.deadlineAt > Date.now())
@@ -518,10 +541,48 @@ export class HostController {
     }));
   }
 
+  private publishDesktopExecutionSummary(target: DesktopPluginTarget, snapshot: DesktopPluginExecutionSummary, reset = false): void {
+    const key = targetKey(target);
+    const revision = ++this.desktopExecutionRevision;
+    this.desktopExecutionEventRevisions.set(key, revision);
+    const summary: SessionExecutionSummary = {
+      ...structuredClone(snapshot),
+      target: { ...target },
+      revision,
+    };
+    this.emitToListeners(this.eventLog.record({
+      type: "session_execution_updated",
+      summary,
+      ...(reset ? { reset: true } : {}),
+    }));
+  }
+
+  private syncDesktopExecutionSummary(target: DesktopPluginTarget, snapshot: DesktopPluginExecutionSummary): void {
+    const key = targetKey(target);
+    const previousRevision = this.desktopExecutionSourceRevisions.get(key);
+    if (previousRevision !== undefined && snapshot.revision <= previousRevision) return;
+    this.desktopExecutionSourceRevisions.set(key, snapshot.revision);
+    this.publishDesktopExecutionSummary(target, snapshot);
+  }
+
+  private clearDesktopExecutionSummary(target: DesktopPluginTarget): void {
+    const key = targetKey(target);
+    if (!this.desktopExecutionSourceRevisions.has(key)) return;
+    this.desktopExecutionSourceRevisions.delete(key);
+    this.publishDesktopExecutionSummary(target, {
+      revision: 0,
+      todos: [],
+      teammate: { running: 0, total: 0, agents: [] },
+      backgroundJobs: [],
+    }, true);
+    this.desktopExecutionEventRevisions.delete(key);
+  }
+
   unregisterDesktopTarget(target: DesktopPluginTarget): void {
     // A reconnect may replace the registration before the old socket closes.
     if (this.desktopPluginRegistry.resolve(target)) return;
     this.disposeDesktopTailWatcher(target);
+    this.clearDesktopExecutionSummary(target);
     const entry = this.sessionDirectory.resolve(target);
     if (!entry) return;
     for (const [id, pending] of this.pendingDesktopPlans) {

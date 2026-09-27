@@ -102,7 +102,7 @@ export class DesktopBroker {
       socketPath: options.pluginSocketPath,
       secret: options.secret,
       registry: this.registry,
-      supportedEvents: ["model_select", "thinking_level_select", "runtime_status", "session_summary"],
+      supportedEvents: ["model_select", "thinking_level_select", "runtime_status", "session_summary", "execution_summary"],
       onAskRequest: (target, request) => {
         if (!this.registry.resolve(target) || request.deadlineAt <= Date.now()) return;
         const key = this.askKey(target, request.requestId);

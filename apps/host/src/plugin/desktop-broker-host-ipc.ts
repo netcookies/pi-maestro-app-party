@@ -21,8 +21,9 @@ import type {
   DesktopPlanResult,
   DesktopBrokerPlanResult,
   DesktopBrokerPlanRequest,
-  DesktopPluginTarget,
   DesktopPluginCapability,
+  DesktopPluginExecutionSummary,
+  DesktopPluginTarget,
 } from "@maestro-mobile/shared";
 import {
   DESKTOP_BROKER_PROTOCOL_VERSION,
@@ -158,6 +159,12 @@ export class DesktopBrokerProjectedRegistry {
         else registration.thinkingLevel = mutation.level;
       } else if (mutation.kind === "runtime_status") {
         registration.runtimeStatus = mutation.runtimeStatus;
+      } else if (mutation.kind === "execution_summary") {
+        if (registration.executionSummary && mutation.summary.revision <= registration.executionSummary.revision) {
+          this.invalidate();
+          return false;
+        }
+        registration.executionSummary = structuredClone(mutation.summary);
       } else {
         registration.summary = structuredClone(mutation.summary);
         registration.runtimeStatus = mutation.summary.runtimeStatus;
@@ -220,6 +227,7 @@ export class DesktopBrokerProjectedRegistry {
       ...(registration.model ? { model: structuredClone(registration.model) } : {}),
       ...(registration.thinkingLevel ? { thinkingLevel: registration.thinkingLevel } : {}),
       ...(registration.summary ? { summary: structuredClone(registration.summary) } : {}),
+      ...(registration.executionSummary ? { executionSummary: structuredClone(registration.executionSummary) } : {}),
     }));
   }
 
@@ -233,6 +241,7 @@ export class DesktopBrokerProjectedRegistry {
       ...(record.thinkingLevel ? { thinkingLevel: record.thinkingLevel } : {}),
       runtimeStatus: record.runtimeStatus,
       ...(record.summary ? { summary: structuredClone(record.summary) } : {}),
+      ...(record.executionSummary ? { executionSummary: structuredClone(record.executionSummary) } : {}),
       ...(record.connectedAt ? { connectedAt: record.connectedAt } : {}),
       ...(record.lastEventAt ? { lastEventAt: record.lastEventAt } : {}),
     };
@@ -637,6 +646,7 @@ export class DesktopBrokerHostIpc {
       ...(registration.thinkingLevel ? { thinkingLevel: registration.thinkingLevel } : {}),
       runtimeStatus: registration.runtimeStatus,
       ...(registration.summary ? { summary: structuredClone(registration.summary) } : {}),
+      ...(registration.executionSummary ? { executionSummary: structuredClone(registration.executionSummary) } : {}),
       ...(registration.connectedAt ? { connectedAt: registration.connectedAt } : {}),
       ...(registration.lastEventAt ? { lastEventAt: registration.lastEventAt } : {}),
     })), brokerInstanceId, this.projection.revision);

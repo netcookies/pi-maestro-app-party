@@ -303,6 +303,7 @@ export class MobileHostServer {
     this.sendFrame(client, { type: "host_status", status: "connected", seq: 0 }, "required", "host_status");
     this.sendFrame(client, { type: "host_info", info: this.controller.getStatus(), seq: 0 }, "required", "host_info");
     if (this.rolloutMode !== "disabled") {
+      for (const event of this.controller.currentDesktopExecutionEvents()) this.sendFrame(client, event, "required", event.type);
       for (const event of this.controller.pendingDesktopAskEvents()) this.sendFrame(client, event, "required", event.type);
       if (hello.capabilities.includes("plan")) {
         for (const event of this.controller.pendingDesktopPlanEvents()) this.sendFrame(client, event, "required", event.type);

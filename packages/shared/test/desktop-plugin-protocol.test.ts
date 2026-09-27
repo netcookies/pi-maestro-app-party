@@ -9,6 +9,7 @@ import {
   DESKTOP_BROKER_PROTOCOL_VERSION,
   isDesktopBrokerToHostFrame,
   isDesktopHostToBrokerFrame,
+  isDesktopBrokerDeltaMutation,
 } from "../src/desktop-broker-protocol.js";
 
 describe("Desktop Plugin IPC protocol", () => {
@@ -34,6 +35,26 @@ describe("Desktop Plugin IPC protocol", () => {
 
   it("rejects the retired Plugin protocol v1 hello", () => {
     expect(isDesktopPluginClientFrame({ ...hello, protocolVersion: 1 })).toBe(false);
+  });
+
+  it("bounds execution snapshots and carries them in Broker records/deltas", () => {
+    const target = { sessionId: "session-1", endpointId: "endpoint-1", normalizedCwd: "/work/app", processGeneration: "generation-1" };
+    const summary = {
+      revision: 1,
+      todos: [{ id: "todo-1", subject: "Implement", status: "in_progress", updatedAt: 1 }],
+      teammate: { running: 1, total: 1, agents: [{ correlationId: "agent-1", agent: "general", status: "running" }] },
+      backgroundJobs: [{ id: "job-1", status: "running", startedAt: "2026-01-01T00:00:00.000Z" }],
+    } as const;
+    const event = { type: "desktop_plugin_event", event: "execution_summary", summary };
+    expect(isDesktopPluginClientFrame(event)).toBe(true);
+    expect(isDesktopPluginClientFrame({ ...event, summary: { ...summary, revision: 1.5 } })).toBe(false);
+    expect(isDesktopPluginClientFrame({ ...event, summary: { ...summary, todos: Array.from({ length: 33 }, (_, index) => ({ id: `t${index}`, subject: "Todo", status: "pending", updatedAt: 1 })) } })).toBe(false);
+    expect(isDesktopPluginClientFrame({ ...event, summary: { ...summary, todos: [{ ...summary.todos[0], subject: "x".repeat(513) }] } })).toBe(false);
+    expect(isDesktopBrokerDeltaMutation({ kind: "execution_summary", target, summary })).toBe(true);
+    expect(isDesktopBrokerToHostFrame({
+      type: "desktop_broker_snapshot_chunk", brokerInstanceId: "broker-1", snapshotId: "snapshot-1", revision: 2, chunkIndex: 0,
+      records: [{ target, capabilities: ["prompt"], runtimeStatus: "idle", executionSummary: summary }],
+    })).toBe(true);
   });
 
   it("accepts ready frames and validates advertised event support", () => {

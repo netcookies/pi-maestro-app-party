@@ -8,6 +8,7 @@ import type {
   DesktopPlanCancel,
   DesktopPluginCapability,
   DesktopPluginEvent,
+  DesktopPluginExecutionSummary,
   DesktopPluginModel,
   DesktopPluginRequest,
   DesktopPluginResult,
@@ -18,6 +19,7 @@ import type {
 import {
   DESKTOP_PLUGIN_PROTOCOL_VERSION,
   isDesktopPluginModel,
+  isDesktopPluginExecutionSummary,
   isDesktopPluginResult,
   isDesktopPluginSessionSummary,
   isDesktopPluginTarget,
@@ -60,6 +62,7 @@ export interface DesktopBrokerTargetRecord {
   thinkingLevel?: string;
   runtimeStatus: DesktopPluginRuntimeStatus;
   summary?: DesktopPluginSessionSummary;
+  executionSummary?: DesktopPluginExecutionSummary;
   connectedAt?: string;
   lastEventAt?: string;
 }
@@ -95,7 +98,8 @@ export type DesktopBrokerDeltaMutation =
   | { kind: "model"; target: DesktopPluginTarget; model: DesktopPluginModel | null }
   | { kind: "thinking_level"; target: DesktopPluginTarget; level: string | null }
   | { kind: "runtime_status"; target: DesktopPluginTarget; runtimeStatus: DesktopPluginRuntimeStatus }
-  | { kind: "session_summary"; target: DesktopPluginTarget; summary: DesktopPluginSessionSummary };
+  | { kind: "session_summary"; target: DesktopPluginTarget; summary: DesktopPluginSessionSummary }
+  | { kind: "execution_summary"; target: DesktopPluginTarget; summary: DesktopPluginExecutionSummary };
 
 export interface DesktopBrokerDelta {
   type: "desktop_broker_delta";
@@ -301,11 +305,12 @@ function isDesktopBrokerTargetRecord(value: unknown): value is DesktopBrokerTarg
     && optionalString(value, "thinkingLevel")
     && (value.runtimeStatus === "running" || value.runtimeStatus === "idle")
     && (value.summary === undefined || isDesktopPluginSessionSummary(value.summary))
+    && (value.executionSummary === undefined || isDesktopPluginExecutionSummary(value.executionSummary))
     && optionalString(value, "connectedAt")
     && optionalString(value, "lastEventAt");
 }
 
-function isDesktopBrokerDeltaMutation(value: unknown): value is DesktopBrokerDeltaMutation {
+export function isDesktopBrokerDeltaMutation(value: unknown): value is DesktopBrokerDeltaMutation {
   if (!isRecord(value) || typeof value.kind !== "string") return false;
   switch (value.kind) {
     case "upsert":
@@ -320,6 +325,8 @@ function isDesktopBrokerDeltaMutation(value: unknown): value is DesktopBrokerDel
       return isDesktopPluginTarget(value.target) && (value.runtimeStatus === "running" || value.runtimeStatus === "idle");
     case "session_summary":
       return isDesktopPluginTarget(value.target) && isDesktopPluginSessionSummary(value.summary);
+    case "execution_summary":
+      return isDesktopPluginTarget(value.target) && isDesktopPluginExecutionSummary(value.summary);
     default:
       return false;
   }
@@ -389,5 +396,5 @@ function nonNegativeInteger(value: unknown): value is number {
   return typeof value === "number" && Number.isSafeInteger(value) && value >= 0;
 }
 
-export type DesktopBrokerEventName = Extract<DesktopPluginEvent["event"], "model_select" | "thinking_level_select" | "runtime_status" | "session_summary">;
+export type DesktopBrokerEventName = Extract<DesktopPluginEvent["event"], "model_select" | "thinking_level_select" | "runtime_status" | "session_summary" | "execution_summary">;
 export type DesktopBrokerJson = JsonValue;

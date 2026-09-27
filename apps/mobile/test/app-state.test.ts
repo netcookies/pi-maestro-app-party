@@ -76,6 +76,34 @@ describe("AppState reducer", () => {
     expect(state.sessionExecutionSummaries.get(JSON.stringify([sibling.sessionId, sibling.endpointId, sibling.normalizedCwd, sibling.processGeneration]))?.workspace?.workspaceId).toBe("sibling");
   });
 
+  it("retains more than 256 active exact-target execution summaries", () => {
+    let state = createInitialState();
+    for (let index = 0; index < 260; index += 1) {
+      const target = { sessionId: `many-${index}`, endpointId: `endpoint-${index}`, normalizedCwd: "/work", processGeneration: `generation-${index}` };
+      state = reduceEvent(state, { type: "session_execution_updated", summary: { target, revision: index + 1, todos: [], teammate: { running: 0, total: 0, agents: [] }, backgroundJobs: [] }, seq: index + 1 });
+    }
+    expect(state.sessionExecutionSummaries.size).toBe(260);
+    expect(state.sessionExecutionRevisions.size).toBe(260);
+  });
+
+  it("rejects fractional execution revisions", () => {
+    const target = { sessionId: "fractional", endpointId: "endpoint-a", normalizedCwd: "/work", processGeneration: "generation-1" };
+    const summary = { target, revision: 1.5, todos: [], teammate: { running: 0, total: 0, agents: [] }, backgroundJobs: [] };
+    const state = reduceEvent(createInitialState(), { type: "session_execution_updated", summary, seq: 1 } as never);
+    expect(state.sessionExecutionSummaries.size).toBe(0);
+    expect(state.sessionExecutionRevisions.size).toBe(0);
+  });
+
+  it("clears an exact execution target on reset while retaining its revision watermark", () => {
+    const target = { sessionId: "reset-execution", endpointId: "endpoint-a", normalizedCwd: "/work", processGeneration: "generation-1" };
+    const summary = { target, revision: 4, todos: [], teammate: { running: 0, total: 0, agents: [] }, backgroundJobs: [] };
+    let state = createInitialState();
+    state = reduceEvent(state, { type: "session_execution_updated", summary, seq: 1 });
+    state = reduceEvent(state, { type: "session_execution_updated", summary: { ...summary, revision: 5 }, reset: true, seq: 2 });
+    state = reduceEvent(state, { type: "session_execution_updated", summary: { ...summary, revision: 4, todos: [{ id: "stale", subject: "stale", status: "pending", updatedAt: 1 }] }, seq: 3 });
+    expect(state.sessionExecutionSummaries.has(JSON.stringify([target.sessionId, target.endpointId, target.normalizedCwd, target.processGeneration]))).toBe(false);
+  });
+
   it("fails closed without an exact session target and selects only the current target", async () => {
     const { selectExecutionSummaryForSession } = await import("../src/session-execution");
     const first = { sessionId: "execution-select", endpointId: "endpoint-a", normalizedCwd: "/work", processGeneration: "generation-1" };

@@ -4,7 +4,7 @@ import { join, normalize } from "node:path";
 import { randomUUID } from "node:crypto";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import type { ImageContent, Model, TextContent } from "@earendil-works/pi-ai";
-import type { DesktopPluginEvent, DesktopPluginModel, DesktopPluginRuntimeStatus, DesktopPluginSessionSummary, DesktopPluginTarget, DesktopAskRequest, DesktopPlanResponse, JsonValue } from "@maestro-mobile/shared";
+import type { BackgroundJobSummary, DesktopPluginEvent, DesktopPluginExecutionSummary, DesktopPluginModel, DesktopPluginRuntimeStatus, DesktopPluginSessionSummary, DesktopPluginTarget, DesktopAskRequest, DesktopPlanResponse, JsonValue, MonitorTodoSummary, TeammateAgentState } from "@maestro-mobile/shared";
 import { DesktopPluginIpcClient } from "./desktop-plugin-ipc.js";
 import {
   beginDesktopPluginRuntimeRecord,
@@ -41,6 +41,128 @@ export interface DesktopPluginExtensionOptions {
   secret?: string;
   endpointId?: string;
   processGeneration?: string;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function boundedText(value: unknown, maxLength = 512): string | undefined {
+  return typeof value === "string" && value.length > 0 && value.length <= maxLength ? value : undefined;
+}
+
+function todoSnapshotFromSessionEntries(entries: readonly unknown[]): MonitorTodoSummary[] | undefined {
+  let entry: Record<string, unknown> | undefined;
+  for (let index = entries.length - 1; index >= 0; index -= 1) {
+    const candidate = entries[index];
+    if (isRecord(candidate) && candidate.type === "custom" && candidate.customType === "todo-state") {
+      entry = candidate;
+      break;
+    }
+  }
+  if (!entry) return [];
+  const data = entry.data;
+  if (!isRecord(data) || !isRecord(data.tasks)) return undefined;
+  const todos: MonitorTodoSummary[] = [];
+  const ids = new Set<string>();
+  for (const [entryId, value] of Object.entries(data.tasks)) {
+    if (!isRecord(value) || value.status === "deleted") continue;
+    const id = boundedText(value.id) ?? boundedText(entryId);
+    const subject = boundedText(value.subject);
+    const status = boundedText(value.status, 64);
+    const updatedAt = value.updatedAt;
+    const assignee = isRecord(value.assignee) ? boundedText(value.assignee.label) : undefined;
+    if (!id || !subject || !status || typeof updatedAt !== "number" || !Number.isFinite(updatedAt) || ids.has(id)) return undefined;
+    if (isRecord(value.assignee) && value.assignee.label !== undefined && !assignee) return undefined;
+    ids.add(id);
+    todos.push({ id, subject, status, updatedAt, ...(assignee ? { assigneeLabel: assignee } : {}) });
+    if (todos.length >= 32) break;
+  }
+  return todos;
+}
+
+function flowTodoSnapshot(entries?: readonly unknown[]): MonitorTodoSummary[] | undefined {
+  if (entries) {
+    const sessionSnapshot = todoSnapshotFromSessionEntries(entries);
+    if (sessionSnapshot === undefined || sessionSnapshot.length > 0) return sessionSnapshot;
+  }
+  const registry = (globalThis as Record<symbol, unknown>)[Symbol.for("pi-maestro.workspace-projection-providers.v1")];
+  if (!(registry instanceof Map)) return entries ? [] : undefined;
+  const provider = registry.get("todo");
+  if (!isRecord(provider) || typeof provider.snapshot !== "function") return entries ? [] : undefined;
+  try {
+    const items = provider.snapshot();
+    if (!Array.isArray(items)) return undefined;
+    const todos: MonitorTodoSummary[] = [];
+    const ids = new Set<string>();
+    for (const item of items) {
+      if (!isRecord(item) || item.kind !== "todo") continue;
+      const data = item.data;
+      if (!isRecord(data)) return undefined;
+      const id = boundedText(data.id);
+      const subject = boundedText(data.subject);
+      const status = boundedText(data.status, 64);
+      if (!id || !subject || !status || typeof data.updatedAt !== "number" || !Number.isFinite(data.updatedAt) || ids.has(id)) return undefined;
+      const assigneeLabel = data.assigneeLabel === undefined ? undefined : boundedText(data.assigneeLabel);
+      if (data.assigneeLabel !== undefined && !assigneeLabel) return undefined;
+      ids.add(id);
+      todos.push({ id, subject, status, updatedAt: data.updatedAt, ...(assigneeLabel ? { assigneeLabel } : {}) });
+      if (todos.length >= 32) break;
+    }
+    return todos;
+  } catch {
+    return undefined;
+  }
+  return entries ? [] : undefined;
+}
+
+function timestampIso(value: unknown): string | undefined {
+  if (typeof value !== "number" || !Number.isFinite(value)) return undefined;
+  const date = new Date(value);
+  return Number.isFinite(date.getTime()) ? date.toISOString() : undefined;
+}
+
+function backgroundSnapshot(payload: unknown): BackgroundJobSummary[] | undefined {
+  if (!isRecord(payload) || !Array.isArray(payload.jobs)) return undefined;
+  const jobs: BackgroundJobSummary[] = [];
+  for (const value of payload.jobs.slice(0, 64)) {
+    if (!isRecord(value) || !boundedText(value.id)) return undefined;
+    const status = value.status === "running" || value.status === "stopping" ? "running"
+      : value.status === "completed" ? "completed"
+        : value.status === "failed" ? "failed"
+          : value.status === "killed" ? "cancelled" : undefined;
+    const startedAt = timestampIso(value.startedAt);
+    const finishedAt = value.finishedAt === undefined ? undefined : timestampIso(value.finishedAt);
+    if (!status || !startedAt || (value.finishedAt !== undefined && !finishedAt)) return undefined;
+    const label = typeof value.command === "string" ? value.command.slice(0, 512) : undefined;
+    jobs.push({
+      id: boundedText(value.id)!,
+      status,
+      ...(label ? { label } : {}),
+      startedAt,
+      ...(finishedAt ? { finishedAt } : {}),
+    });
+  }
+  return jobs;
+}
+
+function currentTeammateProjection(sessionId: string): { workspaceId: string; sessionId: string; sourceId: string; generation: number } | undefined {
+  const state = (globalThis as Record<symbol, unknown>)[Symbol.for("pi-maestro-teammate.root-registry")];
+  if (!isRecord(state) || state.currentSessionId !== sessionId) return undefined;
+  const workspaceId = boundedText(state.currentWorkspaceId);
+  const sourceId = boundedText(state.currentSourceId);
+  const generation = state.sessionGeneration;
+  return workspaceId && sourceId && Number.isSafeInteger(generation) && (generation as number) > 0
+    ? { workspaceId, sessionId, sourceId, generation: generation as number }
+    : undefined;
+}
+
+function sameProjection(value: unknown, expected: { workspaceId: string; sessionId: string; sourceId: string; generation: number }): boolean {
+  return isRecord(value)
+    && value.workspaceId === expected.workspaceId
+    && value.sessionId === expected.sessionId
+    && value.sourceId === expected.sourceId
+    && value.generation === expected.generation;
 }
 
 function messageContent(message: string, images?: unknown[]): string | Array<TextContent | ImageContent> {
@@ -139,6 +261,14 @@ export function createDesktopPluginExtension(options: DesktopPluginExtensionOpti
     let messageCount = 0;
     let latestUsage: DesktopPluginSessionSummary["usage"];
     let latestContext: DesktopPluginSessionSummary["context"];
+    let executionSessionId: string | undefined;
+    let executionTargetGeneration: string | undefined;
+    let executionTeammateProjection: { workspaceId: string; sessionId: string; sourceId: string; generation: number } | undefined;
+    let executionAgents = new Map<string, TeammateAgentState>();
+    let executionJobs: BackgroundJobSummary[] = [];
+    let executionRevision = 0;
+    let executionFingerprint = "";
+    let executionTodoEntries: (() => unknown[]) | undefined;
     let runtimeGenerationToken: string | undefined;
     interface PendingAsk {
       request: DesktopAskRequest;
@@ -330,6 +460,14 @@ export function createDesktopPluginExtension(options: DesktopPluginExtensionOpti
             event: "session_summary",
             summary: currentSummary(),
           }).catch(() => undefined);
+          const executionSummary = currentExecutionSummary();
+          if (executionSummary) {
+            await candidate.sendExecutionSummary({
+              type: "desktop_plugin_event",
+              event: "execution_summary",
+              summary: executionSummary,
+            }).catch(() => undefined);
+          }
           if (!isCurrentSession(generation, sessionAdapter)) {
             abandonCandidate(candidate);
             return;
@@ -405,6 +543,15 @@ export function createDesktopPluginExtension(options: DesktopPluginExtensionOpti
         normalizedCwd: normalize(ctx.cwd),
         processGeneration: options.processGeneration ?? randomUUID(),
       };
+      executionSessionId = target.sessionId;
+      executionTargetGeneration = target.processGeneration;
+      executionTeammateProjection = currentTeammateProjection(target.sessionId);
+      executionAgents = new Map();
+      executionJobs = [];
+      executionRevision = 0;
+      executionFingerprint = "";
+      const getEntries = (ctx.sessionManager as unknown as { getEntries?: () => unknown[] }).getEntries;
+      executionTodoEntries = typeof getEntries === "function" ? () => getEntries.call(ctx.sessionManager) : undefined;
       planTransport = createDesktopPlanTransport({
         getClient: () => client,
         isCurrent: (request) => !stopping
@@ -412,6 +559,12 @@ export function createDesktopPluginExtension(options: DesktopPluginExtensionOpti
           && normalize(request.cwd) === target.normalizedCwd,
       });
       unregisterFlowPlanTransport = registerFlowPlanTransport(planTransport);
+      queueMicrotask(() => {
+        if (executionSessionId === target.sessionId && executionTargetGeneration === target.processGeneration && !stopping) {
+          eventBus?.emit("bash-bg:query", undefined);
+          publishExecutionSummary();
+        }
+      });
       // `sendUserMessage` 返回 void 且失败被 SDK 吞进 emitError（调用方无法 catch），
       // 因此在此提前执行投递预检，用带 code 的抛错把它变成可观测结果。
       // 无条件预检（不判 isIdle）是安全的：能进入流式状态的会话必然已有可用模型与凭据，
@@ -516,6 +669,109 @@ export function createDesktopPluginExtension(options: DesktopPluginExtensionOpti
       }).catch(() => undefined);
     });
 
+    const reconcileExecutionTeammateProjection = (): void => {
+      if (!executionSessionId) return;
+      const current = currentTeammateProjection(executionSessionId);
+      const changed = executionTeammateProjection !== undefined
+        && (current === undefined || !sameProjection(current, executionTeammateProjection));
+      executionTeammateProjection = current;
+      if (changed) {
+        executionAgents.clear();
+        executionFingerprint = "";
+      }
+    };
+
+    const currentExecutionSummary = (): DesktopPluginExecutionSummary | undefined => {
+      reconcileExecutionTeammateProjection();
+      const todos = flowTodoSnapshot(executionTodoEntries?.());
+      if (!todos) return undefined;
+      const agents = [...executionAgents.values()].slice(0, 64);
+      return {
+        revision: executionRevision,
+        todos,
+        teammate: {
+          running: agents.filter((agent) => agent.status === "running" || agent.status === "retrying").length,
+          total: agents.length,
+          agents,
+        },
+        backgroundJobs: executionJobs.slice(0, 64),
+      };
+    };
+
+    const publishExecutionSummary = (): void => {
+      if (!executionSessionId || !client) return;
+      const next = currentExecutionSummary();
+      if (!next) return;
+      const fingerprint = JSON.stringify({ todos: next.todos, teammate: next.teammate, backgroundJobs: next.backgroundJobs });
+      if (fingerprint === executionFingerprint && executionRevision > 0) return;
+      executionFingerprint = fingerprint;
+      executionRevision += 1;
+      void client.sendExecutionSummary({
+        type: "desktop_plugin_event",
+        event: "execution_summary",
+        summary: { ...next, revision: executionRevision },
+      }).catch(() => undefined);
+    };
+
+    const updateExecutionAgent = (value: unknown): void => {
+      if (!isRecord(value)) return;
+      const correlationId = boundedText(value.correlationId);
+      const agent = boundedText(value.agent);
+      const status = boundedText(value.status, 64);
+      if (!correlationId || !agent || !status) return;
+      const name = boundedText(value.name);
+      const phase = boundedText(value.phase, 64);
+      if (executionAgents.has(correlationId)) executionAgents.delete(correlationId);
+      while (executionAgents.size >= 64) executionAgents.delete(executionAgents.keys().next().value!);
+      executionAgents.set(correlationId, {
+        correlationId,
+        agent,
+        status,
+        ...(name ? { name } : {}),
+        ...(phase ? { phase } : {}),
+      });
+    };
+
+    const currentExecutionTeammateProjection = (): typeof executionTeammateProjection => {
+      reconcileExecutionTeammateProjection();
+      return executionTeammateProjection;
+    };
+
+    const eventBus = (pi as unknown as { events?: { on(event: string, handler: (payload: unknown) => void): void; emit(event: string, payload: unknown): void } }).events;
+    if (eventBus) {
+      eventBus.on("teammate:started", (payload) => {
+        if (!isRecord(payload)) return;
+        const current = currentExecutionTeammateProjection();
+        if (!current || !sameProjection(payload.projection, current)) return;
+        updateExecutionAgent(payload);
+        publishExecutionSummary();
+      });
+      eventBus.on("teammate:message", (payload) => {
+        if (!isRecord(payload)) return;
+        const current = currentExecutionTeammateProjection();
+        if (!current || !sameProjection(payload.projection, current)) return;
+        if (Array.isArray(payload.progress)) for (const agent of payload.progress) updateExecutionAgent(agent);
+        publishExecutionSummary();
+      });
+      eventBus.on("teammate:complete", (payload) => {
+        if (!isRecord(payload)) return;
+        const current = currentExecutionTeammateProjection();
+        if (!current || !sameProjection(payload.projection, current)) return;
+        const correlationId = boundedText(payload.correlationId);
+        if (correlationId) executionAgents.delete(correlationId);
+        publishExecutionSummary();
+      });
+      eventBus.on("bash-bg:update", (payload) => {
+        const generation = executionTargetGeneration;
+        if (!generation) return;
+        const jobs = backgroundSnapshot(payload);
+        if (!jobs || executionTargetGeneration !== generation || stopping) return;
+        executionJobs = jobs;
+        publishExecutionSummary();
+      });
+      eventBus.on("maestro:todo-state-changed", () => publishExecutionSummary());
+    }
+
     const currentSummary = (): DesktopPluginSessionSummary => ({
       runtimeStatus: latestRuntimeStatus,
       activeSince: activeSince ?? null,
@@ -577,6 +833,12 @@ export function createDesktopPluginExtension(options: DesktopPluginExtensionOpti
         : undefined;
       stopping = true;
       sessionGeneration += 1;
+      executionSessionId = undefined;
+      executionTodoEntries = undefined;
+      executionTargetGeneration = undefined;
+      executionTeammateProjection = undefined;
+      executionAgents.clear();
+      executionJobs = [];
       adapter = undefined;
       for (const key of [...pendingAskRequests.keys()]) settlePendingAsk(key, { status: "cancelled" });
       unregisterFlowAskTransport?.();

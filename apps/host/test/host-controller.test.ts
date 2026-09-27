@@ -203,6 +203,61 @@ describe("HostController", () => {
     expect(events.some((event) => (event as { type?: string }).type === "timeline_item")).toBe(false);
   });
 
+  it("emits exact-target execution summaries and clears only the disconnected sibling", () => {
+    const exact = target("execution", "endpoint-a", "generation-a");
+    const sibling = target("execution", "endpoint-b", "generation-b");
+    const registration = (value: typeof exact) => ({ target: value, capabilities: ["abort"] as const, runtimeStatus: "idle" as const, transport: transport() });
+    controller.desktopPlugins.register(registration(exact));
+    controller.desktopPlugins.register(registration(sibling));
+    controller.applyDesktopProjection([registration(exact), registration(sibling)]);
+    const summary = {
+      revision: 1,
+      todos: [{ id: "todo-1", subject: "Ship", status: "in_progress", updatedAt: 1 }],
+      teammate: { running: 1, total: 1, agents: [{ correlationId: "agent-1", agent: "general", status: "running" }] },
+      backgroundJobs: [],
+    };
+    controller.applyDesktopProjection([
+      { ...registration(exact), executionSummary: summary },
+      registration(sibling),
+    ]);
+    expect(events).toContainEqual(expect.objectContaining({ type: "session_execution_updated", summary: expect.objectContaining({ target: exact, revision: 1, todos: summary.todos }) }));
+    events = [];
+    controller.applyDesktopProjection([registration(exact), registration(sibling)]);
+    expect(events).toContainEqual(expect.objectContaining({ type: "session_execution_updated", reset: true, summary: expect.objectContaining({ target: exact }) }));
+    const resetRevision = (events.find((event) => (event as { type?: string }).type === "session_execution_updated") as { summary: { revision: number } }).summary.revision;
+    events = [];
+    controller.applyDesktopProjection([{ ...registration(exact), executionSummary: summary }, registration(sibling)]);
+    expect(events).toContainEqual(expect.objectContaining({ type: "session_execution_updated", summary: expect.objectContaining({ target: exact, revision: resetRevision + 1, todos: summary.todos }) }));
+    events = [];
+    controller.desktopPlugins.unregister(exact);
+    controller.applyDesktopProjection([registration(sibling)]);
+    expect(events).toContainEqual(expect.objectContaining({ type: "session_execution_updated", reset: true, summary: expect.objectContaining({ target: exact, teammate: { running: 0, total: 0, agents: [] } }) }));
+    expect(events.filter((event) => (event as { type?: string }).type === "session_execution_updated").every((event) => (event as { summary: { target: typeof exact } }).summary.target.endpointId === exact.endpointId)).toBe(true);
+  });
+
+  it("keeps execution revisions monotonic and replayable beyond 256 active targets", () => {
+    const records = Array.from({ length: 260 }, (_, index) => {
+      const value = target(`many-${index}`, `endpoint-${index}`, `generation-${index}`);
+      const executionSummary = { revision: 1, todos: [], teammate: { running: 0, total: 0, agents: [] }, backgroundJobs: [] };
+      controller.desktopPlugins.register({ target: value, capabilities: ["abort"], transport: transport(), executionSummary });
+      return { target: value, capabilities: ["abort"] as const, runtimeStatus: "idle" as const, executionSummary, transport: transport() };
+    });
+    controller.applyDesktopProjection(records);
+    const replay = controller.currentDesktopExecutionEvents();
+    expect(replay).toHaveLength(260);
+    const firstTarget = records[0].target;
+    const firstRevision = (replay.find((event) => event.type === "session_execution_updated" && event.summary.target.sessionId === firstTarget.sessionId) as { summary: { revision: number } }).summary.revision;
+    const updatedExecution = { ...records[0].executionSummary, revision: 2, todos: [{ id: "updated", subject: "Updated", status: "pending", updatedAt: 2 }] };
+    controller.desktopPlugins.register({ ...records[0], executionSummary: updatedExecution });
+    controller.applyDesktopProjection([
+      { ...records[0], executionSummary: updatedExecution },
+      ...records.slice(1),
+    ]);
+    const next = controller.currentDesktopExecutionEvents().find((event) => event.type === "session_execution_updated" && event.summary.target.sessionId === firstTarget.sessionId) as { summary: { revision: number; todos: Array<{ id: string }> } };
+    expect(next.summary.revision).toBeGreaterThan(firstRevision);
+    expect(next.summary.todos[0]?.id).toBe("updated");
+  });
+
   it("keeps Desktop summary updates isolated by full target identity", () => {
     const exact = target("same", "endpoint-a", "generation-a");
     const sibling = target("same", "endpoint-b", "generation-b");

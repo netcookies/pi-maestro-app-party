@@ -7,6 +7,7 @@ import type {
   DesktopBrokerDeltaMutation,
   DesktopBrokerTargetRecord,
   DesktopPluginCapability,
+  DesktopPluginExecutionSummary,
   DesktopPluginModel,
   DesktopPluginRequest,
   DesktopPluginResult,
@@ -14,6 +15,7 @@ import type {
   DesktopPluginSessionSummary,
   DesktopPluginTarget,
 } from "@maestro-mobile/shared";
+import { isDesktopPluginExecutionSummary } from "@maestro-mobile/shared";
 import {
   DesktopPluginRegistryStore,
   type DesktopPluginRegistryDiagnosticSnapshot,
@@ -34,6 +36,7 @@ export interface DesktopPluginRegistration {
   thinkingLevel?: string;
   runtimeStatus: DesktopPluginRuntimeStatus;
   summary?: DesktopPluginSessionSummary;
+  executionSummary?: DesktopPluginExecutionSummary;
   connectedAt?: string;
   lastEventAt?: string;
 }
@@ -67,6 +70,7 @@ function cloneRecord(registration: DesktopPluginRegistration): DesktopBrokerTarg
     ...(registration.thinkingLevel ? { thinkingLevel: registration.thinkingLevel } : {}),
     runtimeStatus: registration.runtimeStatus,
     ...(registration.summary ? { summary: structuredClone(registration.summary) } : {}),
+    ...(registration.executionSummary ? { executionSummary: structuredClone(registration.executionSummary) } : {}),
     ...(registration.connectedAt ? { connectedAt: registration.connectedAt } : {}),
     ...(registration.lastEventAt ? { lastEventAt: registration.lastEventAt } : {}),
   };
@@ -110,6 +114,7 @@ export class DesktopPluginRegistry {
       target,
       capabilities: [...registration.capabilities],
       runtimeStatus: registration.runtimeStatus ?? "idle",
+      ...(registration.executionSummary ? { executionSummary: structuredClone(registration.executionSummary) } : {}),
       connectedAt: registration.connectedAt ?? new Date().toISOString(),
     });
     this.mutate({ kind: "upsert", record: cloneRecord(this.registrations.get(key)!) });
@@ -164,6 +169,21 @@ export class DesktopPluginRegistry {
     return true;
   }
 
+  updateExecutionSummary(target: DesktopPluginTarget, summary: DesktopPluginExecutionSummary): boolean {
+    if (!isDesktopPluginExecutionSummary(summary)) return false;
+    const registration = this.resolve(target);
+    if (!registration) return false;
+    const previous = registration.executionSummary;
+    if (previous && summary.revision < previous.revision) return false;
+    if (previous && summary.revision === previous.revision) {
+      return JSON.stringify(previous) === JSON.stringify(summary);
+    }
+    registration.executionSummary = structuredClone(summary);
+    registration.lastEventAt = new Date().toISOString();
+    this.mutate({ kind: "execution_summary", target: { ...registration.target }, summary: structuredClone(summary) });
+    return true;
+  }
+
   resolve(target: DesktopPluginTarget): DesktopPluginRegistration | undefined {
     return this.registrations.get(keyOf(normalizeTarget(target)));
   }
@@ -180,6 +200,7 @@ export class DesktopPluginRegistry {
       ...(registration.model ? { model: { ...registration.model } } : {}),
       ...(registration.thinkingLevel ? { thinkingLevel: registration.thinkingLevel } : {}),
       ...(registration.summary ? { summary: structuredClone(registration.summary) } : {}),
+      ...(registration.executionSummary ? { executionSummary: structuredClone(registration.executionSummary) } : {}),
     }));
   }
 

@@ -621,7 +621,7 @@ export type HostEvent =
   | { type: "raw_event"; sessionId: string; event: JsonValue; target?: SessionTargetIdentity; seq: number }
   | { type: "command_error"; sessionId: string; command: string; message: string; error?: HostError; target?: SessionTargetIdentity; seq: number }
   | { type: "session_error"; sessionId: string; error: HostError; target?: SessionTargetIdentity; seq: number }
-  | { type: "session_execution_updated"; summary: SessionExecutionSummary; seq: number }
+  | { type: "session_execution_updated"; summary: SessionExecutionSummary; reset?: boolean; seq: number }
   | { type: "todo_projection_updated"; projection: TodoProjection; seq: number }
   | { type: "teammate_projection_updated"; projection: TeammateProjection; seq: number }
   | { type: "workspace_window_projection_updated"; projection: WorkspaceWindowProjection; seq: number }
@@ -764,7 +764,7 @@ export function isHostEvent(value: unknown): value is HostEvent {
       return isString(value.sessionId) && isHostError(value.error)
         && (value.target === undefined || (isSessionTargetIdentity(value.target) && value.target.sessionId === value.sessionId));
     case "session_execution_updated":
-      return isSessionExecutionSummary(value.summary);
+      return isSessionExecutionSummary(value.summary) && (value.reset === undefined || typeof value.reset === "boolean");
     case "todo_projection_updated":
       return isTodoProjection(value.projection);
     case "teammate_projection_updated":
@@ -1001,7 +1001,7 @@ export function isBackgroundJobSummary(value: unknown): value is BackgroundJobSu
 }
 
 function isSessionExecutionSummary(value: unknown): value is SessionExecutionSummary {
-  if (!isRecord(value) || !isSessionTargetIdentity(value.target) || !isFiniteNumber(value.revision) || value.revision < 0
+  if (!isRecord(value) || !isSessionTargetIdentity(value.target) || !isNonNegativeSafeInteger(value.revision)
     || !Array.isArray(value.todos) || !value.todos.every(isMonitorTodoSummary)
     || !isRecord(value.teammate) || !isFiniteNumber(value.teammate.running) || value.teammate.running < 0
     || !Number.isInteger(value.teammate.running) || !isFiniteNumber(value.teammate.total) || value.teammate.total < 0
@@ -1071,6 +1071,10 @@ function isSessionContextUsage(value: unknown): value is SessionContextUsage {
 
 function isString(value: unknown): value is string {
   return typeof value === "string" && value.length > 0;
+}
+
+function isNonNegativeSafeInteger(value: unknown): value is number {
+  return typeof value === "number" && Number.isSafeInteger(value) && value >= 0;
 }
 
 function isFiniteNumber(value: unknown): value is number {

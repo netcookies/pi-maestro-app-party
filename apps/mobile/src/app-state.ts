@@ -33,7 +33,6 @@ import { parseHostStatusMeta, type HostStatusMeta } from "./host-status";
 import { sessionTargetKey, isSessionTargetIdentity } from "@maestro-mobile/shared";
 
 export const MAX_SESSION_SUMMARY_PATCHES = 256;
-export const MAX_SESSION_EXECUTION_SUMMARIES = 256;
 
 export interface AppState {
   connectionStatus: string;
@@ -48,6 +47,8 @@ export interface AppState {
   sessionSummaryPatches: Map<string, { target: SessionTargetIdentity; patch: SessionSummaryPatch; revision: number }>;
   /** Authoritative session execution summaries, keyed by the complete target identity. */
   sessionExecutionSummaries: Map<string, SessionExecutionSummary>;
+  /** Execution revision watermarks are retained after reset to reject stale replays. */
+  sessionExecutionRevisions: Map<string, number>;
   timelines: Map<string, TimelineItem[]>;
   targetedTimelines: Map<string, TimelineItem[]>;
   maestro: MaestroState | null;
@@ -84,6 +85,7 @@ export function createInitialState(): AppState {
     targetedSessions: new Map(),
     sessionSummaryPatches: new Map(),
     sessionExecutionSummaries: new Map(),
+    sessionExecutionRevisions: new Map(),
     timelines: new Map(),
     targetedTimelines: new Map(),
     maestro: null,
@@ -402,18 +404,21 @@ export function reduceEvent(state: AppState, event: AppAction, deps: AppStateDep
     case "session_execution_updated": {
       const summary = event.summary;
       if (!summary || !isSessionTargetIdentity(summary.target)
-        || !Number.isFinite(summary.revision) || summary.revision < 0) return state;
+        || !Number.isSafeInteger(summary.revision) || summary.revision < 0) return state;
       const key = sessionTargetKey(summary.target);
       const current = state.sessionExecutionSummaries.get(key);
-      if (current && current.revision >= summary.revision) return state;
+      const currentRevision = state.sessionExecutionRevisions.get(key) ?? current?.revision ?? -1;
+      if (currentRevision >= summary.revision) return state;
       const sessionExecutionSummaries = new Map(state.sessionExecutionSummaries);
-      sessionExecutionSummaries.set(key, summary);
-      while (sessionExecutionSummaries.size > MAX_SESSION_EXECUTION_SUMMARIES) {
-        const oldest = sessionExecutionSummaries.keys().next().value as string | undefined;
-        if (oldest === undefined) break;
-        sessionExecutionSummaries.delete(oldest);
+      const sessionExecutionRevisions = new Map(state.sessionExecutionRevisions);
+      if (event.reset) {
+        sessionExecutionSummaries.delete(key);
+        sessionExecutionRevisions.set(key, summary.revision);
+      } else {
+        sessionExecutionSummaries.set(key, summary);
+        sessionExecutionRevisions.set(key, summary.revision);
       }
-      return { ...state, sessionExecutionSummaries };
+      return { ...state, sessionExecutionSummaries, sessionExecutionRevisions };
     }
 
     case "session_summary_updated": {
