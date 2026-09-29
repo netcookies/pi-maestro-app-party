@@ -34,6 +34,7 @@ export type LineIconName =
   | "radio"
   | "key"
   | "refresh"
+  | "rotate"
   | "qrcode"
   | "smartphone"
   | "moon"
@@ -162,6 +163,11 @@ const PATHS: Record<LineIconName, React.ReactNode> = {
   refresh: (
     <G>
       <Path d="M21.5 2v6h-6M21.34 15.57a10 10 0 1 1-.57-8.38l5.67-5.19" />
+    </G>
+  ),
+  rotate: (
+    <G>
+      <Path d="M7 7H3v4M3.5 11A8.5 8.5 0 0 1 18 5.5L20 7M17 17h4v-4M20.5 13A8.5 8.5 0 0 1 6 18.5L4 17" />
     </G>
   ),
   qrcode: (

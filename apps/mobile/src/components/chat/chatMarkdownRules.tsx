@@ -1,4 +1,4 @@
-import React, { useState, useRef } from "react";
+import React, { useEffect, useState, useRef } from "react";
 import {
   Platform,
   Pressable,
@@ -13,6 +13,10 @@ import type { AppTheme } from "../../theme";
 import { LineIcon } from "../LineIcon";
 import { hapticNotificationSuccess } from "../../utils/haptics";
 import { HEADING_AMBER, isHexColor, getContrastColor } from "./color-utils";
+import type { Language } from "../../i18n";
+import { useI18n } from "../../i18n";
+import { MarkdownExpandButton } from "./MarkdownExpandViewer";
+import type { MarkdownExpandRequest } from "./MarkdownExpandViewer";
 
 function trimTrailingNewLine(str: string): string {
   return str.endsWith("\n") ? str.slice(0, -1) : str;
@@ -23,9 +27,53 @@ interface CustomFenceProps {
   language: string;
   theme: AppTheme;
   onCopyCode?: (code: string, language: string) => void;
+  onExpand?: (request: MarkdownExpandRequest) => void;
 }
 
-function CustomFenceBlock({ code, language, theme, onCopyCode }: CustomFenceProps) {
+function ExpandedCodeCopyAction({
+  code,
+  language,
+  theme,
+  onCopyCode,
+}: {
+  code: string;
+  language: string;
+  theme: AppTheme;
+  onCopyCode: (code: string, language: string) => void;
+}) {
+  const { t } = useI18n();
+  const [copied, setCopied] = useState(false);
+  const resetTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  useEffect(() => () => {
+    if (resetTimer.current) clearTimeout(resetTimer.current);
+  }, []);
+
+  const handleCopy = () => {
+    void hapticNotificationSuccess();
+    onCopyCode(code, language);
+    setCopied(true);
+    if (resetTimer.current) clearTimeout(resetTimer.current);
+    resetTimer.current = setTimeout(() => setCopied(false), 2000);
+  };
+
+  return (
+    <Pressable
+      accessibilityRole="button"
+      accessibilityLabel={t.copyCode}
+      onPress={handleCopy}
+      style={fenceStyles.viewerCopyButton}
+    >
+      <LineIcon name={copied ? "check" : "copy"} size={15} color={copied ? theme.success : theme.muted} />
+      <Text style={[fenceStyles.copyLabel, { color: copied ? theme.success : theme.muted }]}>
+        {copied ? t.copied : t.copy}
+      </Text>
+    </Pressable>
+  );
+}
+
+function CustomFenceBlock({ code, language, theme, onCopyCode, onExpand }: CustomFenceProps) {
+  const { t } = useI18n();
   const [copied, setCopied] = useState(false);
   const morphAnim = useRef(new Animated.Value(1)).current;
   const isDark = theme.name.includes("dark");
@@ -51,7 +99,32 @@ function CustomFenceBlock({ code, language, theme, onCopyCode }: CustomFenceProp
     }
   };
 
-  const showHeader = Boolean(language.length > 0 || onCopyCode);
+  const openExpanded = () => {
+    onExpand?.({
+      title: language ? `${language.toUpperCase()} ${t.code}` : t.code,
+      actions: onCopyCode ? (
+        <ExpandedCodeCopyAction
+          code={code}
+          language={language}
+          theme={theme}
+          onCopyCode={onCopyCode}
+        />
+      ) : undefined,
+      children: (
+        <ScrollView horizontal nestedScrollEnabled showsHorizontalScrollIndicator style={fenceStyles.scroll}>
+          <Text
+            selectable
+            style={[
+              fenceStyles.expandedCode,
+              { color: theme.mdCodeBlock ?? theme.text, fontFamily: monoFont },
+            ]}
+          >
+            {code}
+          </Text>
+        </ScrollView>
+      ),
+    });
+  };
 
   return (
     <View
@@ -63,51 +136,55 @@ function CustomFenceBlock({ code, language, theme, onCopyCode }: CustomFenceProp
         },
       ]}
     >
-      {showHeader && (
-        <View
-          style={[
-            fenceStyles.header,
-            {
-              borderBottomColor: theme.border,
-              backgroundColor: isDark ? "rgba(255,255,255,0.03)" : "rgba(0,0,0,0.03)",
-            },
-          ]}
-        >
-          <Text style={[fenceStyles.languageLabel, { color: theme.muted, fontFamily: monoFont }]}>
-            {language || "code"}
+      <View
+        style={[
+          fenceStyles.header,
+          {
+            borderBottomColor: theme.border,
+            backgroundColor: isDark ? "rgba(255,255,255,0.03)" : "rgba(0,0,0,0.03)",
+          },
+        ]}
+      >
+        <Text style={[fenceStyles.languageLabel, { color: theme.muted, fontFamily: monoFont }]}>
+            {language || t.code}
           </Text>
-          {Boolean(onCopyCode) && (
-            <Pressable
-              accessibilityRole="button"
-              accessibilityLabel="复制代码"
-              onPress={handleCopy}
-              style={fenceStyles.copyBtn}
-            >
-              <Animated.View
-                style={{
-                  transform: [{ scale: morphAnim }],
-                  flexDirection: "row",
-                  alignItems: "center",
-                  gap: 4,
-                }}
+          <View style={fenceStyles.actions}>
+            {Boolean(onCopyCode) && (
+              <Pressable
+                accessibilityRole="button"
+                accessibilityLabel={t.copyCode}
+                onPress={handleCopy}
+                style={fenceStyles.copyBtn}
               >
-                {copied ? (
-                  <>
-                    <LineIcon name="check" size={13} color={theme.success} strokeWidth={2.5} />
-                    <Text style={[fenceStyles.copiedText, { color: theme.success }]}>Copied!</Text>
-                  </>
-                ) : (
-                  <View style={fenceStyles.copyRow}>
-                    <LineIcon name="copy" size={13} color={theme.muted} />
-                    <Text style={[fenceStyles.copyLabel, { color: theme.muted }]}>Copy</Text>
-                  </View>
-                )}
-              </Animated.View>
-            </Pressable>
-          )}
+                <Animated.View
+                  style={{
+                    transform: [{ scale: morphAnim }],
+                    flexDirection: "row",
+                    alignItems: "center",
+                    gap: 4,
+                  }}
+                >
+                  {copied ? (
+                    <>
+                      <LineIcon name="check" size={13} color={theme.success} strokeWidth={2.5} />
+                      <Text style={[fenceStyles.copiedText, { color: theme.success }]}>{t.copied}</Text>
+                    </>
+                  ) : (
+                    <View style={fenceStyles.copyRow}>
+                      <LineIcon name="copy" size={13} color={theme.muted} />
+                      <Text style={[fenceStyles.copyLabel, { color: theme.muted }]}>{t.copy}</Text>
+                    </View>
+                  )}
+                </Animated.View>
+              </Pressable>
+            )}
+            <MarkdownExpandButton
+              theme={theme}
+              onPress={openExpanded}
+            />
+          </View>
         </View>
-      )}
-      <ScrollView horizontal showsHorizontalScrollIndicator={false} style={fenceStyles.scroll}>
+      <ScrollView horizontal nestedScrollEnabled showsHorizontalScrollIndicator={false} style={fenceStyles.scroll}>
         <Highlight theme={prismTheme} code={code} language={language || "text"}>
           {({ tokens, getTokenProps }) => (
             <View style={fenceStyles.codeArea}>
@@ -166,6 +243,18 @@ const fenceStyles = StyleSheet.create({
     fontWeight: "600",
     textTransform: "uppercase",
   },
+  actions: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 2,
+  },
+  viewerCopyButton: {
+    minHeight: 44,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 5,
+    paddingHorizontal: 8,
+  },
   copyBtn: {
     paddingHorizontal: 6,
     paddingVertical: 2,
@@ -191,6 +280,12 @@ const fenceStyles = StyleSheet.create({
     padding: 10,
     minWidth: "100%",
   },
+  expandedCode: {
+    minWidth: "100%",
+    padding: 12,
+    fontSize: 13,
+    lineHeight: 19,
+  },
   codeLine: {
     flexDirection: "row",
     minHeight: 18,
@@ -201,12 +296,69 @@ const fenceStyles = StyleSheet.create({
   },
 });
 
+function ExpandableTable({
+  nodeKey,
+  children,
+  styles,
+  theme,
+  onExpand,
+}: {
+  nodeKey: React.Key;
+  children: React.ReactNode;
+  styles: Record<string, any>;
+  theme: AppTheme;
+  onExpand?: (request: MarkdownExpandRequest) => void;
+}) {
+  const { t } = useI18n();
+  const renderTable = (showScrollIndicator: boolean) => (
+    <ScrollView
+      horizontal
+      nestedScrollEnabled
+      showsHorizontalScrollIndicator={showScrollIndicator}
+      style={tableStyles.scroll}
+    >
+      <View style={styles.table}>{children}</View>
+    </ScrollView>
+  );
+
+  return (
+    <View key={nodeKey} style={tableStyles.container}>
+      <View style={tableStyles.toolbar}>
+        <Text style={[tableStyles.label, { color: theme.muted }]}>{t.table.toUpperCase()}</Text>
+        <MarkdownExpandButton
+          theme={theme}
+          onPress={() => onExpand?.({ title: t.table, children: renderTable(true) })}
+        />
+      </View>
+      {renderTable(false)}
+    </View>
+  );
+}
+
+const tableStyles = StyleSheet.create({
+  container: { width: "100%", marginVertical: 6 },
+  toolbar: {
+    minHeight: 32,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+  },
+  label: { fontSize: 11, fontWeight: "600" },
+  scroll: { width: "100%" },
+});
+
 function isInsideHeading(parents: any): boolean {
   if (!Array.isArray(parents)) return false;
   return parents.some((p) => typeof p?.type === "string" && p.type.startsWith("heading"));
 }
 
-export function createChatMarkdownRules(theme: AppTheme, onCopyCode?: (code: string, language: string) => void) {
+export function createChatMarkdownRules(
+  theme: AppTheme,
+  languageOrOnCopy?: ((code: string, language: string) => void) | Language,
+  maybeOnCopyCode?: (code: string, language: string) => void,
+  onExpand?: (request: MarkdownExpandRequest) => void,
+) {
+  const onCopyCode = typeof languageOrOnCopy === "function" ? languageOrOnCopy : maybeOnCopyCode;
   const monoFont = Platform.OS === "ios" ? "Menlo" : "monospace";
 
   return {
@@ -306,9 +458,22 @@ export function createChatMarkdownRules(theme: AppTheme, onCopyCode?: (code: str
           language={language}
           theme={theme}
           onCopyCode={onCopyCode}
+          onExpand={onExpand}
         />
       );
     },
+
+    // 普通缩进代码块复用 fenced code 的展开和复制交互。
+    code_block: (node: any) => (
+      <CustomFenceBlock
+        key={node.key}
+        code={trimTrailingNewLine(node.content)}
+        language=""
+        theme={theme}
+        onCopyCode={onCopyCode}
+        onExpand={onExpand}
+      />
+    ),
 
     // 3. 标题：显式带回 # 暖橙色符号，清晰层级
     heading1: (node: any, children: any, _parent: any, styles: any) => (
@@ -360,11 +525,11 @@ export function createChatMarkdownRules(theme: AppTheme, onCopyCode?: (code: str
       </View>
     ),
 
-    // 4. 表格：用横向 ScrollView 包装，防止多列宽表挤压变形
+    // 4. 表格：保留行内横向滚动，并提供全屏查看入口。
     table: (node: any, children: any, _parent: any, styles: any) => (
-      <ScrollView key={node.key} horizontal showsHorizontalScrollIndicator={false} style={{ marginVertical: 6 }}>
-        <View style={styles.table}>{children}</View>
-      </ScrollView>
+      <ExpandableTable key={node.key} nodeKey={node.key} styles={styles} theme={theme} onExpand={onExpand}>
+        {children}
+      </ExpandableTable>
     ),
   };
 }

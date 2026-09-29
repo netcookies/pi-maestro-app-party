@@ -201,6 +201,17 @@ export interface I18nDictionary {
   planActionRollback: string;
   planActionExit: string;
   planActionClose: string;
+  expand: string;
+  code: string;
+  table: string;
+  copy: string;
+  copied: string;
+  copyCode: string;
+  expandCode: string;
+  expandTable: string;
+  closeExpandedContent: string;
+  rotateContent: string;
+  restoreContent: string;
 }
 
 export const DICTIONARIES: Record<Language, I18nDictionary> = {
@@ -400,6 +411,17 @@ export const DICTIONARIES: Record<Language, I18nDictionary> = {
     planActionRollback: "回滚到历史草稿",
     planActionExit: "退出计划模式",
     planActionClose: "关闭",
+    expand: "展开",
+    code: "代码",
+    table: "表格",
+    copy: "复制",
+    copied: "已复制",
+    copyCode: "复制代码",
+    expandCode: "展开代码",
+    expandTable: "展开表格",
+    closeExpandedContent: "关闭展开内容",
+    rotateContent: "旋转横屏",
+    restoreContent: "恢复竖屏",
   },
   en: {
     tabWorkbench: "Workbench",
@@ -597,6 +619,17 @@ export const DICTIONARIES: Record<Language, I18nDictionary> = {
     planActionRollback: "Rollback to Draft",
     planActionExit: "Exit Plan Mode",
     planActionClose: "Close",
+    expand: "Expand",
+    code: "Code",
+    table: "Table",
+    copy: "Copy",
+    copied: "Copied",
+    copyCode: "Copy code",
+    expandCode: "Expand code",
+    expandTable: "Expand table",
+    closeExpandedContent: "Close expanded content",
+    rotateContent: "Rotate to landscape",
+    restoreContent: "Restore portrait",
   },
 };
 
