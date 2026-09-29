@@ -38,6 +38,12 @@ describe("ask wizard source selection", () => {
     expect(active?.questions[0].question).toBe("Which approach?");
   });
 
+  it("keeps a cleared direct ask from resurrecting its stale timeline projection", () => {
+    const active = selectActiveAskWizard([timelineAsk()], direct(), new Set());
+    const timelineDismissed = new Set(active?.dismissIds.filter((id) => id !== active.requestId));
+    expect(selectActiveAskWizard([timelineAsk()], undefined, timelineDismissed)).toBeNull();
+  });
+
   it("uses the direct request ID for a timeline-backed wizard response", () => {
     const request = direct({ questions: undefined });
     const active = selectActiveAskWizard([timelineAsk()], request, new Set());

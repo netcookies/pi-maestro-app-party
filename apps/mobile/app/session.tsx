@@ -255,14 +255,14 @@ export default function SessionScreen() {
     });
   }, []);
 
-  const markAsksDismissed = (callIds: readonly string[]) => {
+  const markAsksDismissed = useCallback((callIds: readonly string[]) => {
     setDismissedAskIds((prev) => {
       const next = new Set(prev);
       for (const callId of callIds) next.add(callId);
       void AsyncStorage.setItem("maestro-mobile.dismissed-asks", JSON.stringify([...next])).catch(() => {});
       return next;
     });
-  };
+  }, []);
 
   const isCurrentDialog = useCallback((entry: { request: { sessionId: string }; target?: Parameters<typeof sessionTargetKey>[0]; status: string }) =>
     entry.request.sessionId === id && entry.status === "pending"
@@ -276,6 +276,26 @@ export default function SessionScreen() {
   const activeAskWizard = useMemo(() =>
     selectActiveAskWizard(timeline, directDialog?.request, dismissedAskIds),
   [timeline, directDialog, dismissedAskIds]);
+
+  // TUI 先提交时，Host 会清掉 direct dialog，但 timeline 结果可能稍后才到。
+  // 记住已配对的 timeline ID，避免 direct 清理后的短暂空窗重新弹出同一道题。
+  const pairedDirectAskRef = useRef<{ requestId: string; timelineIds: string[] } | undefined>();
+  useEffect(() => {
+    const currentRequestId = directDialog?.request.id;
+    const previous = pairedDirectAskRef.current;
+    if (currentRequestId && activeAskWizard?.requestId === currentRequestId) {
+      const timelineIds = activeAskWizard.dismissIds.filter((id) => id !== currentRequestId);
+      if (previous && previous.requestId !== currentRequestId && previous.timelineIds.length > 0) {
+        markAsksDismissed(previous.timelineIds);
+      }
+      pairedDirectAskRef.current = { requestId: currentRequestId, timelineIds };
+      return;
+    }
+    if (!currentRequestId && previous) {
+      pairedDirectAskRef.current = undefined;
+      if (previous.timelineIds.length > 0) markAsksDismissed(previous.timelineIds);
+    }
+  }, [activeAskWizard, directDialog, markAsksDismissed]);
 
   // 待处理单项交互弹窗：优先本地直通 dialog
   const activeAskDialog = useMemo(() => {
