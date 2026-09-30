@@ -916,6 +916,7 @@ export class MobileHostServer {
             options: {
               ...(command.cwd ? { cwd: command.cwd } : {}),
               ...(command.query ? { query: command.query } : {}),
+              ...(command.includeMonitor !== undefined ? { includeMonitor: command.includeMonitor } : {}),
               ...(command.limit !== undefined ? { limit: command.limit } : {}),
               ...(command.cursor ? { cursor: command.cursor } : {}),
               ...(command.sessionIds !== undefined ? { sessionIds: command.sessionIds } : {}),

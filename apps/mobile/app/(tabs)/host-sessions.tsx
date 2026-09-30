@@ -16,9 +16,8 @@ import { SafeAreaView } from "react-native-safe-area-context";
 import { useHost } from "../../src/store";
 import { useTheme, MIUIX_RADIUS, MIUIX_SPACE, MIUIX_TYPE } from "../../src/theme";
 import { LineIcon } from "../../src/components/LineIcon";
-import { PulsingDot } from "../../src/components/PulsingDot";
-import { SpringCard } from "../../src/components/SpringCard";
-import { useI18n, formatRelativeTime } from "../../src/i18n";
+import { HostSessionCard } from "../../src/components/HostSessionCard";
+import { useI18n } from "../../src/i18n";
 import { sessionTargetKey, type HostSessionSummary } from "@maestro-mobile/shared";
 import {
   beginFilterRequest,
@@ -29,7 +28,7 @@ import {
   updateFilterState,
   type FilterState,
 } from "../../src/filter-state";
-import { canLoadMoreSessions, isCurrentSessionSummary, mergeHostSessionPage, patchHostSessionSummary } from "../../src/host-session-pagination";
+import { canLoadMoreSessions, isCurrentSessionSummary, mergeHostSessionPage, patchHostSessionSummary, removeHostSessionSummary, sessionRoleRevision } from "../../src/host-session-pagination";
 import { routeForOpenedSession, selectSessionTarget } from "../../src/session-navigation";
 
 
@@ -45,6 +44,11 @@ export default function HostSessionsScreen() {
   const { t } = useI18n();
   const styles = useMemo(() => makeStyles(theme), [theme]);
   const { state, listHostSessions, loadSessionHistory, isConnected, connectionState, hostUrl } = useHost();
+  const sessionRoleRevisionValue = useMemo(
+    () => sessionRoleRevision(state.workspaceWindowProjections.values()),
+    [state.workspaceWindowProjections],
+  );
+  const sessionRoleRevisionRef = useRef(sessionRoleRevisionValue);
 
   const [filterState, setFilterState] = useState<FilterState>(() => createFilterState());
   const filterStateRef = useRef(filterState);
@@ -77,9 +81,8 @@ export default function HostSessionsScreen() {
     let next = sessionsRef.current;
     for (const update of state.sessionSummaryPatches.values()) {
       if (update.patch.reset && update.patch.runtimeStatus === "sleeping") {
-        const key = sessionTargetKey(update.target);
-        const filtered = next.filter((session) => session.targetKey !== key);
-        if (filtered.length !== next.length) next = filtered;
+        const removed = removeHostSessionSummary(next, update.target);
+        if (removed.length !== next.length) next = removed;
         continue;
       }
       const patched = patchHostSessionSummary(next, update.target, update.patch, update.revision);
@@ -88,7 +91,7 @@ export default function HostSessionsScreen() {
     if (next === sessionsRef.current) return;
     sessionsRef.current = next;
     setSessions(next);
-  }, [state.sessionSummaryPatches, sessions]);
+  }, [state.sessionSummaryPatches]);
 
   const setFilter = useCallback((patch: Partial<FilterState["filter"]>) => {
     const next = updateFilterState(filterStateRef.current, patch);
@@ -144,6 +147,12 @@ export default function HostSessionsScreen() {
   useEffect(() => {
     void loadFirstPage();
   }, [loadFirstPage, filterState.generation]);
+
+  useEffect(() => {
+    if (sessionRoleRevisionRef.current === sessionRoleRevisionValue) return;
+    sessionRoleRevisionRef.current = sessionRoleRevisionValue;
+    if (isConnected) void loadFirstPage(true);
+  }, [isConnected, loadFirstPage, sessionRoleRevisionValue]);
 
   useEffect(() => {
     if (!isConnected || state.sessionSummaryPatches.size === 0 || firstPageInFlightRef.current) return;
@@ -270,7 +279,7 @@ export default function HostSessionsScreen() {
         <FlatList
           data={rows}
           keyExtractor={(row) => row.key}
-          renderItem={({ item }) => item.type === "group" ? <View style={styles.group}><Text style={styles.groupTitle}>{cwdName(item.cwd)} · {item.count}</Text><Text style={styles.groupPath} numberOfLines={1}>{item.cwd}</Text></View> : <SessionCard session={item.session} opening={opening === (item.session.targetKey ?? item.session.id)} theme={theme} styles={styles} t={t} onPress={() => void handleOpen(item.session)} />}
+          renderItem={({ item }) => item.type === "group" ? <View style={styles.group}><Text style={styles.groupTitle}>{cwdName(item.cwd)} · {item.count}</Text><Text style={styles.groupPath} numberOfLines={1}>{item.cwd}</Text></View> : <HostSessionCard session={item.session} opening={opening === (item.session.targetKey ?? item.session.id)} onPress={() => void handleOpen(item.session)} />}
           contentContainerStyle={styles.list}
           keyboardShouldPersistTaps="handled"
           refreshing={refreshing}
@@ -369,23 +378,6 @@ export default function HostSessionsScreen() {
   );
 }
 
-function SessionCard({ session, opening, theme, styles, t, onPress }: { session: HostSessionSummary; opening: boolean; theme: ReturnType<typeof useTheme>["theme"]; styles: ReturnType<typeof makeStyles>; t: ReturnType<typeof useI18n>["t"]; onPress: () => void }) {
-  const status = session.runtimeStatus;
-  const active = status !== "history";
-  const context = session.context;
-  const title = session.name || session.cwdName || session.title || session.id;
-  const statusColor = status === "running" ? theme.success : status === "idle" ? "#0A84FF" : status === "sleeping" ? theme.warning : theme.dim;
-  const statusLabel = status === "running" ? t.running : status === "idle" ? t.statusIdle : status === "sleeping" ? t.statusSleeping : t.statusHistory;
-  const cacheDenominator = session.usage ? session.usage.input + session.usage.cacheRead : 0;
-  const cacheHit = cacheDenominator > 0 && session.usage ? `${Math.round((session.usage.cacheRead / cacheDenominator) * 100)}%` : "--";
-  return <SpringCard style={[styles.sessionCard, active && { borderColor: theme.accent }]} onPress={onPress} accessibilityRole="button" accessibilityLabel={`${title} · ${statusLabel}`}>
-    <View style={styles.sessionHeader}><View style={styles.sessionHeaderLeft}><PulsingDot color={statusColor} active={active} size={8} /><Text style={styles.sessionTitle} numberOfLines={1}>{title}</Text></View><View style={[styles.badge, { borderColor: statusColor }]}><Text style={[styles.badgeText, { color: statusColor }]}>#{session.id.slice(0, 8)}</Text></View>{opening && <ActivityIndicator size="small" color={theme.accent} />}</View>
-    <View style={styles.pathRow}><LineIcon name="folder" size={13} color={theme.muted} /><Text style={styles.pathText} numberOfLines={1}>{session.cwd || session.path}</Text></View>
-    <View style={styles.stats}><Stat label={t.contextLabel} value={context?.percent != null ? `${Math.round(context.percent)}%` : "--"} theme={theme} /><Stat label={t.tokensLabel} value={session.totalTokens ? `${Math.round(session.totalTokens / 1000)}k` : "--"} theme={theme} /><Stat label={t.cacheLabel} value={cacheHit} theme={theme} /><Stat label={t.messagesAndTime} value={`${session.messageCount} · ${status === "running" && session.activeSince ? `${t.statusActive} ${formatRelativeTime(session.activeSince, t)}` : formatRelativeTime(session.lastActivityAt ?? session.updatedAt, t)}`} theme={theme} /></View>
-  </SpringCard>;
-}
-
-function Stat({ label, value, theme }: { label: string; value: string; theme: ReturnType<typeof useTheme>["theme"] }) { return <View style={{ width: "48%" }}><Text style={{ color: theme.dim, fontSize: 9 }}>{label}</Text><Text style={{ color: theme.text, fontSize: 11, fontFamily: "monospace", fontWeight: "600", marginTop: 2 }}>{value}</Text></View>; }
 function cwdName(cwd: string): string { return cwd.split("/").filter(Boolean).pop() ?? cwd; }
 
 function makeStyles(theme: ReturnType<typeof useTheme>["theme"]) {
@@ -411,15 +403,6 @@ function makeStyles(theme: ReturnType<typeof useTheme>["theme"]) {
     group: { marginTop: 6, marginBottom: 8 },
     groupTitle: { color: theme.text, fontSize: MIUIX_TYPE.footnote1, fontWeight: "700" },
     groupPath: { color: theme.dim, fontSize: 10, fontFamily: "monospace", marginTop: 2 },
-    sessionCard: { backgroundColor: theme.cardBg, borderWidth: 1, borderColor: theme.border, borderRadius: MIUIX_RADIUS.lg, padding: MIUIX_SPACE.md, marginBottom: MIUIX_SPACE.sm },
-    sessionHeader: { flexDirection: "row", alignItems: "center", gap: 8 },
-    sessionHeaderLeft: { flex: 1, minWidth: 0, flexDirection: "row", alignItems: "center", gap: 8 },
-    sessionTitle: { color: theme.text, fontSize: 13, fontWeight: "700", flex: 1 },
-    badge: { paddingHorizontal: 8, paddingVertical: 2, borderRadius: 10, backgroundColor: theme.secondaryContainer ?? theme.inputBg, borderWidth: 1, borderColor: theme.border },
-    badgeText: { color: theme.accent, fontSize: 9, fontFamily: "monospace", fontWeight: "600" },
-    pathRow: { flexDirection: "row", alignItems: "center", gap: 5, marginTop: 8, marginBottom: 8 },
-    pathText: { color: theme.muted, fontSize: 11, fontFamily: "monospace", flex: 1 },
-    stats: { flexDirection: "row", flexWrap: "wrap", columnGap: 8, rowGap: 6, backgroundColor: theme.inputBg, borderRadius: MIUIX_RADIUS.md, padding: 9, borderWidth: 1, borderColor: theme.border },
     center: { flex: 1, alignItems: "center", justifyContent: "center", padding: 40 },
     centerText: { color: theme.muted, marginTop: 10 },
     errorPanel: { alignItems: "center", padding: 24, gap: 10 },

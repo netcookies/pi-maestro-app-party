@@ -293,7 +293,8 @@ export function projectWindow(o: WorkspaceOwnerState): MonitorWindowSummary {
 
   return {
     sessionId: o.sessionId,
-    endpointId: o.sessionId,
+    endpointId: o.desktopTargetIdentity?.endpointId ?? o.sessionId,
+    ...(o.desktopTargetIdentity ? { target: { ...o.desktopTargetIdentity } } : {}),
     runtimeStatus,
     identity,
     name: o.normalizedCwd.split("/").filter(Boolean).pop() ?? o.normalizedCwd,

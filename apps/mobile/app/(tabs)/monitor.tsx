@@ -1,167 +1,161 @@
-import React, { useCallback, useEffect, useMemo, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { FlatList, StyleSheet, Text, View } from "react-native";
+import { useRouter } from "expo-router";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { useHost } from "../../src/store";
-import { useTheme, MIUIX_RADIUS, MIUIX_SPACE, MIUIX_TYPE } from "../../src/theme";
+import { useTheme, MIUIX_SPACE, MIUIX_TYPE } from "../../src/theme";
 import { LineIcon } from "../../src/components/LineIcon";
 import { PulsingDot } from "../../src/components/PulsingDot";
-import { SpringCard } from "../../src/components/SpringCard";
+import { HostSessionCard } from "../../src/components/HostSessionCard";
 import { useI18n } from "../../src/i18n";
-import { monitorWindowKey, monitorWindows } from "../../src/monitor-data";
-import type { MonitorTodoSummary, MonitorWindowSummary } from "@maestro-mobile/shared";
+import { sessionTargetKey, type HostSessionSummary } from "@maestro-mobile/shared";
+import { routeForOpenedSession, selectSessionTarget } from "../../src/session-navigation";
+import { filterSessionsByVisibility, mergeHostSessionPage, patchHostSessionSummary, removeHostSessionSummary, sessionRoleRevision } from "../../src/host-session-pagination";
+
+const PAGE_SIZE = 100;
 
 export default function MonitorScreen({ active = true }: { active?: boolean }) {
-  const { state, isConnected, refreshMonitor } = useHost();
+  const router = useRouter();
+  const { state, isConnected, listHostSessions, loadSessionHistory } = useHost();
   const { theme } = useTheme();
   const { t } = useI18n();
-  const styles = useMemo(() => makeStyles(theme), [theme]);
-  const windows = useMemo(() => {
-    const projected = [...state.workspaceWindowProjections.values()].flatMap((projection) => projection.data.windows);
-    return projected.length > 0 ? projected.filter((window) => window.presentation?.visibility === "monitor_tab") : monitorWindows(state.monitor);
-  }, [state.monitor, state.workspaceWindowProjections]);
-  const [expandedKey, setExpandedKey] = useState<string | null>(null);
+  const [sessions, setSessions] = useState<HostSessionSummary[]>([]);
+  const [opening, setOpening] = useState<string | null>(null);
   const [refreshing, setRefreshing] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const refreshGenerationRef = useRef(0);
+  const summaryPatchesRef = useRef(state.sessionSummaryPatches);
+  summaryPatchesRef.current = state.sessionSummaryPatches;
+  const styles = useMemo(() => makeStyles(theme), [theme]);
+  const monitorRoleRevision = useMemo(
+    () => sessionRoleRevision(state.workspaceWindowProjections.values()),
+    [state.workspaceWindowProjections],
+  );
+  const monitorRoleRevisionRef = useRef(monitorRoleRevision);
+  monitorRoleRevisionRef.current = monitorRoleRevision;
 
   const refresh = useCallback(async () => {
-    if (!isConnected) return;
-    setRefreshing(true);
-    try {
-      await refreshMonitor();
-    } catch {
-      // Store exposes the failure through its existing lastError channel.
-    } finally {
+    const generation = ++refreshGenerationRef.current;
+    if (!isConnected) {
+      setSessions([]);
       setRefreshing(false);
+      return;
     }
-  }, [isConnected, refreshMonitor]);
+    setRefreshing(true);
+    setError(null);
+    const roleRevision = monitorRoleRevisionRef.current;
+    try {
+      let response = await listHostSessions({ limit: PAGE_SIZE, includeMonitor: true });
+      let summaries = response.sessions;
+      const seenCursors = new Set<string>();
+      while (response.hasMore) {
+        const cursor = response.nextCursor;
+        if (!cursor || seenCursors.has(cursor)) throw new Error("monitor_session_pagination_stalled");
+        seenCursors.add(cursor);
+        response = await listHostSessions({ limit: PAGE_SIZE, cursor, includeMonitor: true });
+        summaries = mergeHostSessionPage(summaries, response, false).sessions;
+      }
+      let monitorSessions = filterSessionsByVisibility(summaries, "monitor_tab");
+      if (monitorSessions.some((session) => !session.target)) throw new Error("monitor_session_target_unavailable");
+      for (const update of summaryPatchesRef.current.values()) {
+        if (update.patch.reset && update.patch.runtimeStatus === "sleeping") {
+          monitorSessions = removeHostSessionSummary(monitorSessions, update.target);
+        } else {
+          monitorSessions = patchHostSessionSummary(monitorSessions, update.target, update.patch, update.revision);
+        }
+      }
+      if (refreshGenerationRef.current === generation && monitorRoleRevisionRef.current === roleRevision) setSessions(monitorSessions);
+    } catch (refreshError) {
+      if (refreshGenerationRef.current === generation && monitorRoleRevisionRef.current === roleRevision) setError(refreshError instanceof Error ? refreshError.message : String(refreshError));
+    } finally {
+      if (refreshGenerationRef.current === generation && monitorRoleRevisionRef.current === roleRevision) setRefreshing(false);
+    }
+  }, [isConnected, listHostSessions, monitorRoleRevision]);
+
+  const openSession = useCallback(async (session: HostSessionSummary) => {
+    if (opening) return;
+    const key = session.targetKey ?? (session.target ? sessionTargetKey(session.target) : session.id);
+    setOpening(key);
+    setError(null);
+    try {
+      const opened = selectSessionTarget(session);
+      await loadSessionHistory(opened.sessionId, opened.targetKey);
+      router.push(routeForOpenedSession(opened));
+    } catch (openError) {
+      setError(openError instanceof Error ? openError.message : String(openError));
+    } finally {
+      setOpening(null);
+    }
+  }, [loadSessionHistory, opening, router]);
 
   useEffect(() => {
-    if (active && isConnected) void refresh();
-  }, [active, isConnected, refresh]);
+    if (state.sessionSummaryPatches.size === 0) return;
+    setSessions((current) => {
+      let next = current;
+      for (const update of state.sessionSummaryPatches.values()) {
+        if (update.patch.reset && update.patch.runtimeStatus === "sleeping") {
+          const filtered = removeHostSessionSummary(next, update.target);
+          if (filtered.length !== next.length) next = filtered;
+          continue;
+        }
+        const patched = patchHostSessionSummary(next, update.target, update.patch, update.revision);
+        if (patched.some((session, index) => session !== next[index])) next = patched;
+      }
+      return next === current ? current : next;
+    });
+  }, [state.sessionSummaryPatches]);
+
+  useEffect(() => {
+    if (active) void refresh();
+  }, [active, isConnected, monitorRoleRevision, refresh]);
 
   return (
     <View style={[styles.container, { backgroundColor: theme.bg }]}>
       <View style={[styles.headerContainer, { backgroundColor: theme.headerBg, borderBottomColor: theme.border }]}>
         <SafeAreaView edges={["top"]} style={{ backgroundColor: theme.headerBg }}>
           <View style={styles.topHeader}>
-            <View><Text style={[styles.title, { color: theme.text }]}>{t.tabMonitor}</Text><Text style={[styles.subtitle, { color: theme.muted }]}>{t.monitorReadOnly}</Text></View>
-            <View style={styles.connection}><PulsingDot color={isConnected ? theme.success : theme.error} size={6} active={isConnected} /><Text style={{ color: isConnected ? theme.success : theme.error, fontSize: 11 }}>{isConnected ? t.onlineBadge : t.offlineBadge}</Text></View>
+            <Text style={[styles.title, { color: theme.text }]}>{t.tabMonitor}</Text>
+            <View
+              style={[
+                styles.connection,
+                {
+                  borderColor: isConnected ? "rgba(16, 185, 129, 0.4)" : "rgba(239, 68, 68, 0.4)",
+                  backgroundColor: isConnected ? "rgba(16, 185, 129, 0.15)" : "rgba(239, 68, 68, 0.15)",
+                },
+              ]}
+            >
+              <PulsingDot color={isConnected ? theme.success : theme.error} size={6} active={isConnected} />
+              <Text style={{ color: isConnected ? theme.success : theme.error, fontSize: 11 }}>{isConnected ? t.onlineBadge : t.offlineBadge}</Text>
+            </View>
           </View>
         </SafeAreaView>
       </View>
-      {windows.length === 0 ? (
+      {sessions.length === 0 ? (
         <View style={styles.empty}>
           <LineIcon name="eye" size={26} color={theme.dim} />
-          <Text style={[styles.emptyTitle, { color: theme.muted }]}>{t.noMonitorSessions}</Text>
+          <Text style={[styles.emptyTitle, { color: theme.muted }]}>{error ?? t.noMonitorSessions}</Text>
           <Text style={[styles.emptyText, { color: theme.dim }]}>{t.noMonitorSessionsDesc}</Text>
         </View>
       ) : (
         <FlatList
-          data={windows}
-          keyExtractor={monitorWindowKey}
-          renderItem={({ item }) => {
-            const key = monitorWindowKey(item);
-            const identity = item.identity;
-            const ownerProjectionKey = (source: string) => JSON.stringify([source, identity.workspaceId, identity.ownerId, identity.ownerNonce, identity.endpointId]);
-            const todos = state.todoProjections.get(ownerProjectionKey("todo"))?.data.items ?? item.todos;
-            const agents = state.teammateProjections.get(ownerProjectionKey("teammate"))?.data.agents ?? [];
-            const jobs = state.backgroundJobProjections.get(ownerProjectionKey("background-job"))?.data.jobs ?? [];
-            return (
-              <MonitorCard
-                window={item}
-                todos={todos}
-                agentCount={agents.length}
-                jobCount={jobs.length}
-                expanded={expandedKey === key}
-                theme={theme}
-                styles={styles}
-                t={t}
-                onPress={() => setExpandedKey((current) => current === key ? null : key)}
-              />
-            );
-          }}
+          data={sessions}
+          keyExtractor={(session) => session.targetKey ?? (session.target ? sessionTargetKey(session.target) : session.id)}
+          renderItem={({ item }) => (
+            <HostSessionCard
+              session={item}
+              opening={opening === (item.targetKey ?? (item.target ? sessionTargetKey(item.target) : item.id))}
+              onPress={() => void openSession(item)}
+            />
+          )}
           contentContainerStyle={styles.list}
           refreshing={refreshing}
           onRefresh={() => void refresh()}
+          ListHeaderComponent={error ? <Text style={[styles.errorText, { color: theme.error }]}>{error}</Text> : null}
         />
       )}
     </View>
   );
 }
-
-function MonitorCard({ window, todos, agentCount, jobCount, expanded, theme, styles, t, onPress }: {
-  window: MonitorWindowSummary;
-  todos: MonitorTodoSummary[];
-  agentCount: number;
-  jobCount: number;
-  expanded: boolean;
-  theme: ReturnType<typeof useTheme>["theme"];
-  styles: ReturnType<typeof makeStyles>;
-  t: ReturnType<typeof useI18n>["t"];
-  onPress: () => void;
-}) {
-  const control = window.presentation?.control;
-  const running = window.runtimeStatus === "running";
-  const title = window.name || window.sessionId;
-  return (
-    <SpringCard style={styles.card} onPress={onPress} accessibilityRole="button" accessibilityLabel={`${title} ${t.openSessionDetail}`}>
-      <View style={styles.cardHeader}>
-        <View style={styles.cardTitleWrap}>
-          <PulsingDot color={running ? theme.success : theme.muted} active={running} size={8} />
-          <Text style={[styles.cardTitle, { color: theme.text }]} numberOfLines={1}>{title}</Text>
-        </View>
-        <LineIcon name={expanded ? "chevronDown" : "chevronRight"} size={16} color={theme.muted} />
-      </View>
-      <View style={styles.pathRow}><LineIcon name="folder" size={13} color={theme.muted} /><Text style={[styles.path, { color: theme.muted }]} numberOfLines={1}>{window.cwd ?? t.unknownPath}</Text></View>
-      <View style={[styles.detail, { backgroundColor: theme.inputBg, borderColor: theme.border }]}>
-        <Text style={[styles.detailText, { color: theme.muted }]}>{window.runtimeStatus}</Text>
-        <Text style={[styles.detailText, { color: theme.muted }]}>{window.lifecycle}</Text>
-        <Text style={[styles.detailText, { color: theme.accent }]}>{window.workStatus}</Text>
-        <Text style={[styles.detailText, { color: theme.muted }]}>T {todos.length} · A {agentCount} · J {jobCount}</Text>
-      </View>
-      <View style={styles.capabilities}>
-        <Capability label={t.promptCapability} enabled={control?.canPrompt === true} theme={theme} />
-        <Capability label={t.steerCapability} enabled={control?.canSteer === true} theme={theme} />
-        <Capability label={t.followUpCapability} enabled={control?.canFollowUp === true} theme={theme} />
-        <Capability label={t.abortCapability} enabled={control?.canAbort === true} theme={theme} />
-      </View>
-      {expanded ? (
-        <View style={[styles.expanded, { borderTopColor: theme.border }]}>
-          {window.objective ? <Text style={[styles.objective, { color: theme.text }]}>{window.objective}</Text> : null}
-          {window.pendingAsk ? (
-            <View style={[styles.notice, { borderColor: theme.warning }]}>
-              <Text style={[styles.noticeTitle, { color: theme.warning }]}>{window.pendingAsk.title ?? window.pendingAsk.toolName}</Text>
-              {window.pendingAsk.question ? <Text style={[styles.noticeText, { color: theme.text }]}>{window.pendingAsk.question}</Text> : null}
-            </View>
-          ) : null}
-          {window.attention.map((item) => (
-            <View key={`${item.code}:${item.message}`} style={[styles.notice, { borderColor: item.severity === "error" ? theme.error : theme.warning }]}>
-              <Text style={[styles.noticeTitle, { color: item.severity === "error" ? theme.error : theme.warning }]}>{item.code}</Text>
-              <Text style={[styles.noticeText, { color: theme.text }]}>{item.message}</Text>
-            </View>
-          ))}
-          {todos.map((todo) => (
-            <View key={todo.id} style={styles.todoRow}>
-              <LineIcon name={todo.status === "completed" ? "check" : "plan"} size={14} color={todo.status === "completed" ? theme.success : theme.muted} />
-              <Text style={[styles.todoSubject, { color: theme.text }]} numberOfLines={2}>{todo.subject}</Text>
-              <Text style={[styles.todoStatus, { color: theme.muted }]}>{todo.status}</Text>
-            </View>
-          ))}
-          <Text style={[styles.identity, { color: theme.dim }]} numberOfLines={1}>
-            {window.identity.workspaceId} / {window.identity.ownerId} / {window.identity.endpointId}
-          </Text>
-        </View>
-      ) : null}
-    </SpringCard>
-  );
-}
-
-function Capability({ label, enabled, theme }: { label: string; enabled: boolean; theme: ReturnType<typeof useTheme>["theme"] }) {
-  return <View style={[stylesStatic.capability, { borderColor: theme.border }, enabled && { borderColor: theme.accent, backgroundColor: theme.secondaryContainer ?? theme.inputBg }]}><Text style={{ color: enabled ? theme.accent : theme.dim, fontSize: 9, fontWeight: "600" }}>{label}</Text></View>;
-}
-
-const stylesStatic = StyleSheet.create({
-  capability: { borderWidth: 1, borderRadius: 9, paddingHorizontal: 8, paddingVertical: 3 },
-});
 
 function makeStyles(theme: ReturnType<typeof useTheme>["theme"]) {
   return StyleSheet.create({
@@ -169,29 +163,11 @@ function makeStyles(theme: ReturnType<typeof useTheme>["theme"]) {
     headerContainer: { borderBottomWidth: StyleSheet.hairlineWidth, shadowColor: "#000", shadowOpacity: 0.06, shadowRadius: 3, elevation: 3 },
     topHeader: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", paddingHorizontal: 20, paddingVertical: 12 },
     title: { fontSize: 20, fontWeight: "700" },
-    subtitle: { fontSize: 11, fontFamily: "monospace", marginTop: 2 },
-    connection: { flexDirection: "row", alignItems: "center", gap: 6, borderWidth: 1, borderColor: theme.border, borderRadius: 14, paddingHorizontal: 10, paddingVertical: 4 },
+    connection: { flexDirection: "row", alignItems: "center", gap: 6, borderWidth: 1, borderRadius: 14, paddingHorizontal: 10, paddingVertical: 4 },
     list: { padding: MIUIX_SPACE.lg, paddingBottom: 32 },
-    card: { backgroundColor: theme.cardBg, borderWidth: 1, borderColor: theme.border, borderRadius: MIUIX_RADIUS.lg, padding: MIUIX_SPACE.md, marginBottom: MIUIX_SPACE.sm },
-    cardHeader: { flexDirection: "row", alignItems: "center", justifyContent: "space-between" },
-    cardTitleWrap: { flex: 1, minWidth: 0, flexDirection: "row", alignItems: "center", gap: 8 },
-    cardTitle: { fontSize: 14, fontWeight: "700", flex: 1 },
-    pathRow: { flexDirection: "row", alignItems: "center", gap: 5, marginTop: 7, marginBottom: 9 },
-    path: { flex: 1, fontSize: 11, fontFamily: "monospace" },
-    detail: { flexDirection: "row", justifyContent: "space-between", gap: 8, borderWidth: 1, borderRadius: MIUIX_RADIUS.md, padding: 9 },
-    detailText: { minWidth: 0, flexShrink: 1, fontSize: 10, fontFamily: "monospace" },
-    capabilities: { flexDirection: "row", flexWrap: "wrap", gap: 6, marginTop: 9 },
-    expanded: { borderTopWidth: StyleSheet.hairlineWidth, marginTop: 12, paddingTop: 12, gap: 8 },
-    objective: { fontSize: 12, lineHeight: 17 },
-    notice: { borderLeftWidth: 2, paddingLeft: 9, gap: 3 },
-    noticeTitle: { fontSize: 10, fontWeight: "700" },
-    noticeText: { fontSize: 11, lineHeight: 16 },
-    todoRow: { flexDirection: "row", alignItems: "flex-start", gap: 7 },
-    todoSubject: { flex: 1, minWidth: 0, fontSize: 11, lineHeight: 16 },
-    todoStatus: { flexShrink: 0, fontSize: 9, fontFamily: "monospace" },
-    identity: { fontSize: 9, fontFamily: "monospace", marginTop: 2 },
+    errorText: { paddingBottom: 10, fontSize: 11 },
     empty: { flex: 1, alignItems: "center", justifyContent: "center", padding: 32, gap: 8 },
-    emptyTitle: { fontSize: MIUIX_TYPE.body1, fontWeight: "700", marginTop: 8 },
+    emptyTitle: { fontSize: MIUIX_TYPE.body1, fontWeight: "700", marginTop: 8, textAlign: "center" },
     emptyText: { fontSize: MIUIX_TYPE.footnote1, textAlign: "center" },
   });
 }

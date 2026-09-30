@@ -4,6 +4,7 @@
  * 合同（pi-maestro-teammate 持久化）：
  *   ~/.pi/teammate/workspaces/<workspaceId>/runtime/owners/<ownerId>.json
  *     { workspaceId, normalizedCwd, ownerId, pid, sessionId, publishedAt,
+ *       desktopTargetIdentity: { sessionId, endpointId, normalizedCwd, processGeneration },
  *       contextPressure, agents[], settled[], backgroundJobs[] }
  *   ~/.pi/teammate/workspaces/<id>/runtime/identities/claims/<key>.heartbeat.json
  *
@@ -18,7 +19,7 @@
 import { readFile, readdir, stat } from "node:fs/promises";
 import { join } from "node:path";
 import { homedir } from "node:os";
-import type { WorkspaceOwnerState, WorkspaceTelemetryState, JsonValue } from "@maestro-mobile/shared";
+import { isSessionTargetIdentity, type WorkspaceOwnerState, type WorkspaceTelemetryState, type JsonValue } from "@maestro-mobile/shared";
 
 /** 兼容别名：投影层使用 shared 类型（单一来源） */
 export type WorkspaceOwner = WorkspaceOwnerState;
@@ -82,6 +83,10 @@ export class WorkspaceTelemetryReader {
             pid: Number(d.pid ?? 0),
             sessionId: String(d.sessionId ?? ""),
             sessionName: typeof d.sessionName === "string" ? d.sessionName : undefined,
+            ...(isSessionTargetIdentity(d.desktopTargetIdentity)
+              && d.desktopTargetIdentity.sessionId === String(d.sessionId ?? "")
+              ? { desktopTargetIdentity: d.desktopTargetIdentity }
+              : {}),
             workspaceRole: d.workspaceRole === "monitor" || d.workspaceRole === "session" ? d.workspaceRole : undefined,
             publishedAt,
             mainActivityAt: typeof d.mainActivityAt === "number" ? d.mainActivityAt : undefined,

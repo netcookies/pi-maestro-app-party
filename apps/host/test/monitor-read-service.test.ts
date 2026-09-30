@@ -61,6 +61,27 @@ describe("MonitorReadService", () => {
     expect(second.state.windows[0]?.status).toBe("running");
   });
 
+  it("replaces a dynamic owner role without changing its exact owner identity", async () => {
+    let telemetry: WorkspaceTelemetryState = {
+      owners: [owner],
+      observedAt: "2026-01-01T00:00:00.000Z",
+      aliveCount: 1,
+    };
+    const service = new MonitorReadService(() => Promise.resolve(telemetry));
+    const monitor = await service.read();
+    expect(monitor.state.windows[0]?.presentation?.visibility).toBe("monitor_tab");
+
+    telemetry = {
+      ...telemetry,
+      owners: [{ ...owner, workspaceRole: "session", publishedAt: 2000 }],
+    };
+    const session = await service.read();
+    expect(session.state.revision).toBe(monitor.state.revision! + 1);
+    expect(session.state.windows[0]?.presentation?.visibility).toBe("session_list");
+    expect(session.state.windows[0]?.identity).toEqual(monitor.state.windows[0]?.identity);
+    expect(session.state.windows[0]?.identity.ownerNonce).toBe("nonce-1");
+  });
+
   it("serializes concurrent reads so revisions follow read order", async () => {
     const firstTelemetry: WorkspaceTelemetryState = { owners: [owner], observedAt: "first", aliveCount: 1 };
     const secondTelemetry: WorkspaceTelemetryState = { owners: [{ ...owner, mainProgress: { events: [{ kind: "lifecycle", phase: "turn_start" }] } }], observedAt: "second", aliveCount: 1 };

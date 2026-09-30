@@ -1,5 +1,13 @@
-import { sessionTargetKey, type HostSessionList, type HostSessionSummary, type SessionPresentation, type SessionSummaryPatch, type SessionTargetIdentity, type SessionVisibility } from "@maestro-mobile/shared";
+import { sessionTargetKey, type HostSessionList, type HostSessionSummary, type SessionPresentation, type SessionSummaryPatch, type SessionTargetIdentity, type SessionVisibility, type WorkspaceWindowProjection } from "@maestro-mobile/shared";
 
+/** Stable token for role changes that must invalidate both session-list tabs. */
+export function sessionRoleRevision(projections: Iterable<WorkspaceWindowProjection>): string {
+  return JSON.stringify(
+    [...projections].flatMap((projection) => projection.data.windows)
+      .filter((window) => window.presentation?.role === "monitor" || window.presentation?.role === "session")
+      .map((window) => [window.sessionId, window.endpointId, window.presentation?.role, window.presentation?.revision]),
+  );
+}
 export function isServerSessionPresentation(value: unknown): value is SessionPresentation {
   if (!value || typeof value !== "object" || Array.isArray(value)) return false;
   const p = value as Record<string, unknown>;
@@ -127,6 +135,14 @@ export function mergeHostSessionPage(
   };
 }
 
+export function removeHostSessionSummary(
+  current: readonly HostSessionSummary[],
+  target: SessionTargetIdentity,
+): HostSessionSummary[] {
+  const key = sessionTargetKey(target);
+  return current.filter((session) => (session.targetKey ?? (session.target ? sessionTargetKey(session.target) : undefined)) !== key);
+}
+
 export function patchHostSessionSummary(
   current: readonly HostSessionSummary[],
   target: SessionTargetIdentity,
@@ -137,7 +153,7 @@ export function patchHostSessionSummary(
   return current.map((session) => {
     // Event targets are exact identities. A legacy row without target metadata cannot
     // safely accept a patch from a different endpoint sharing the same sessionId.
-    if (session.targetKey !== key) return session;
+    if ((session.targetKey ?? (session.target ? sessionTargetKey(session.target) : undefined)) !== key) return session;
     if ((session.summaryRevision ?? 0) >= revision) return session;
     const usage = patch.usage;
     // Reset is a boundary for the target's live projection. Remove fields that may

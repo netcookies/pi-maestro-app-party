@@ -157,6 +157,30 @@ function currentTeammateProjection(sessionId: string): { workspaceId: string; se
     : undefined;
 }
 
+function sameTargetIdentity(left: DesktopPluginTarget, right: DesktopPluginTarget): boolean {
+  return left.sessionId === right.sessionId && left.endpointId === right.endpointId
+    && left.normalizedCwd === right.normalizedCwd && left.processGeneration === right.processGeneration;
+}
+
+// Shared Pi process bridge lets Teammate capture the target regardless of extension listener order.
+function publishDesktopTargetIdentity(target: DesktopPluginTarget, sessionGeneration: number): boolean {
+  (globalThis as Record<symbol, unknown>)[Symbol.for("pi-maestro-mobile.desktop-target-identity")] = { ...target };
+  const state = (globalThis as Record<symbol, unknown>)[Symbol.for("pi-maestro-teammate.root-registry")];
+  if (!isRecord(state) || typeof state.publishDesktopTargetIdentity !== "function") return false;
+  return state.publishDesktopTargetIdentity(target, sessionGeneration) === true;
+}
+
+function clearDesktopTargetIdentity(target: DesktopPluginTarget): boolean {
+  const globals = globalThis as Record<symbol, unknown>;
+  const sharedTarget = globals[Symbol.for("pi-maestro-mobile.desktop-target-identity")];
+  if (isRecord(sharedTarget) && sameTargetIdentity(sharedTarget as unknown as DesktopPluginTarget, target)) {
+    delete globals[Symbol.for("pi-maestro-mobile.desktop-target-identity")];
+  }
+  const state = globals[Symbol.for("pi-maestro-teammate.root-registry")];
+  if (!isRecord(state) || typeof state.clearDesktopTargetIdentity !== "function") return false;
+  return state.clearDesktopTargetIdentity(target) === true;
+}
+
 function sameProjection(value: unknown, expected: { workspaceId: string; sessionId: string; sourceId: string; generation: number }): boolean {
   return isRecord(value)
     && value.workspaceId === expected.workspaceId
@@ -247,6 +271,7 @@ export function createDesktopPluginExtension(options: DesktopPluginExtensionOpti
     let reconnectTimer: ReturnType<typeof setTimeout> | undefined;
     let stopping = false;
     let sessionGeneration = 0;
+    let activeTarget: DesktopPluginTarget | undefined;
     let connectionAttempt: {
       generation: number;
       adapter: DesktopPiSessionAdapter;
@@ -543,6 +568,13 @@ export function createDesktopPluginExtension(options: DesktopPluginExtensionOpti
         normalizedCwd: normalize(ctx.cwd),
         processGeneration: options.processGeneration ?? randomUUID(),
       };
+      const targetSessionGeneration = sessionGeneration;
+      activeTarget = target;
+      queueMicrotask(() => {
+        if (stopping || sessionGeneration !== targetSessionGeneration || activeTarget !== target) return;
+        const projection = currentTeammateProjection(target.sessionId);
+        if (projection) publishDesktopTargetIdentity(target, projection.generation);
+      });
       executionSessionId = target.sessionId;
       executionTargetGeneration = target.processGeneration;
       executionTeammateProjection = currentTeammateProjection(target.sessionId);
@@ -826,6 +858,9 @@ export function createDesktopPluginExtension(options: DesktopPluginExtensionOpti
     });
 
     pi.on("session_shutdown", async () => {
+      const shutdownTarget = activeTarget;
+      activeTarget = undefined;
+      if (shutdownTarget) clearDesktopTargetIdentity(shutdownTarget);
       const shutdownGeneration = sessionGeneration;
       const shutdownAdapter = adapter;
       const shutdownAttempt = connectionAttempt?.generation === shutdownGeneration

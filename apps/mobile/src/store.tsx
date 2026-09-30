@@ -13,6 +13,7 @@ import {
   type ExtensionUiRequest,
   type HostEvent,
   type HostSessionList,
+  type MaestroState,
   type MonitorState,
   type SessionTargetIdentity,
   type TimelineItem,
@@ -48,7 +49,8 @@ export interface HostStoreValue {
   connect(url: string, token?: string): void;
   disconnect(): void;
 
-  listHostSessions(options?: { cwd?: string; limit?: number; cursor?: string; query?: string; sessionIds?: string[]; latestForCwds?: string[] }): Promise<HostSessionList>;
+  listHostSessions(options?: { cwd?: string; limit?: number; cursor?: string; query?: string; includeMonitor?: boolean; sessionIds?: string[]; latestForCwds?: string[] }): Promise<HostSessionList>;
+  refreshMaestroState(): Promise<MaestroState | null>;
   refreshMonitor(): Promise<MonitorState>;
   refreshExecutionProjections(): Promise<ExecutionProjection[]>;
   loadSessionHistory(sessionId: string, targetKey?: string): Promise<void>;
@@ -179,8 +181,12 @@ export function HostStoreProvider({ children }: { children: React.ReactNode }) {
 
   const targetForSession = useCallback((sessionId: string, targetKey?: string): SessionTargetIdentity | undefined => {
     const key = targetKey ?? activeTargetKeysRef.current.get(sessionId);
-    const target = key ? sessionTargetsRef.current.get(key) : undefined;
-    return target?.sessionId === sessionId ? target : undefined;
+    if (key) {
+      const target = sessionTargetsRef.current.get(key);
+      return target?.sessionId === sessionId ? target : undefined;
+    }
+    const matches = [...sessionTargetsRef.current.values()].filter((target) => target.sessionId === sessionId);
+    return matches.length === 1 ? matches[0] : undefined;
   }, []);
 
   const targetOptions = useCallback((sessionId: string): { target: SessionTargetIdentity } => {
@@ -234,18 +240,43 @@ export function HostStoreProvider({ children }: { children: React.ReactNode }) {
         setConnectionState(s);
         if (s === "disconnected" || s === "reconnecting") {
           clearBufferedEvents();
-          dispatch({ type: "__connection_reset" });
+          dispatch({ type: "__connection_reset", connectionGeneration: stateRef.current.connectionGeneration + 1 });
         }
         // P2-2：断线重连成功后，为重连前活动的会话补拉 snapshot（代次号防陈旧响应覆盖新状态）
         if (s === "connected") {
+          const projectionConnectionGeneration = stateRef.current.connectionGeneration;
           void client.getExecutionProjections()
             .then((result) => {
-              for (const projection of executionProjectionsFromCommandResult(result)) {
-                if (projection.source === "todo") dispatch({ type: "todo_projection_updated", projection, seq: 0 });
-                else if (projection.source === "teammate") dispatch({ type: "teammate_projection_updated", projection, seq: 0 });
-                else if (projection.source === "workspace") dispatch({ type: "workspace_window_projection_updated", projection, seq: 0 });
-                else dispatch({ type: "background_job_projection_updated", projection, seq: 0 });
+              const projections = executionProjectionsFromCommandResult(result);
+              if (clientRef.current !== client || stateRef.current.connectionGeneration !== projectionConnectionGeneration) return;
+              dispatch({ type: "__execution_projections_load", projections, revision: result.revision, connectionGeneration: projectionConnectionGeneration });
+            })
+            .catch(() => undefined);
+          void client.sendCommand({ type: "get_maestro_state" })
+            .then((result) => {
+              if (result && typeof result === "object" && Array.isArray((result as { schedules?: unknown }).schedules)) {
+                dispatch({ type: "maestro_state", state: result as MaestroState, seq: 0 });
               }
+            })
+            .catch(() => undefined);
+          void client.sendCommand({ type: "list_host_sessions", limit: 100 })
+            .then((result) => {
+              if (clientRef.current !== client || stateRef.current.connectionGeneration !== projectionConnectionGeneration) return;
+              if (!result || typeof result !== "object" || !Array.isArray((result as { sessions?: unknown }).sessions)) return;
+              const list = result as HostSessionList;
+              for (const session of list.sessions) {
+                if (!session.target || !isSessionTargetIdentity(session.target)
+                  || session.target.sessionId !== session.sessionId
+                  || session.target.endpointId !== session.endpointId
+                  || (session.targetKey !== undefined && session.targetKey !== sessionTargetKey(session.target))) continue;
+                const key = sessionTargetKey(session.target);
+                sessionTargetsRef.current.set(key, session.target);
+              }
+              dispatch({
+                type: "__host_session_list_load",
+                list: { ...list, sessions: filterSessionsByVisibility(list.sessions, "session_list") },
+                connectionGeneration: projectionConnectionGeneration,
+              });
             })
             .catch(() => undefined);
           const sessionId = activeSessionRef.current;
@@ -282,7 +313,7 @@ export function HostStoreProvider({ children }: { children: React.ReactNode }) {
     activeSessionRef.current = null;
     sessionTargetsRef.current.clear();
     activeTargetKeysRef.current.clear();
-    dispatch({ type: "__connection_reset" });
+    dispatch({ type: "__connection_reset", connectionGeneration: stateRef.current.connectionGeneration + 1 });
     setConnectionState("disconnected");
   }, [clearBufferedEvents]);
 
@@ -315,7 +346,7 @@ export function HostStoreProvider({ children }: { children: React.ReactNode }) {
     })();
   }, [connect]);
 
-  const listHostSessions = useCallback(async (options: { cwd?: string; limit?: number; cursor?: string; query?: string; sessionIds?: string[]; latestForCwds?: string[] } = {}): Promise<HostSessionList> => {
+  const listHostSessions = useCallback(async (options: { cwd?: string; limit?: number; cursor?: string; query?: string; includeMonitor?: boolean; sessionIds?: string[]; latestForCwds?: string[] } = {}): Promise<HostSessionList> => {
     const result = await getClient().sendCommand({ type: "list_host_sessions", ...options });
     const list = result as HostSessionList;
     if (!list || !Array.isArray(list.sessions) || typeof list.observedAt !== "string") {
@@ -324,7 +355,12 @@ export function HostStoreProvider({ children }: { children: React.ReactNode }) {
     if (list.sessions.some((session) => session.presentation !== undefined && !isServerSessionPresentation(session.presentation))) {
       throw new Error("Invalid session presentation");
     }
-    if (list.sessions.some((session) => session.target !== undefined && !isSessionTargetIdentity(session.target))) {
+    if (list.sessions.some((session) => session.target !== undefined && (
+      !isSessionTargetIdentity(session.target)
+      || session.target.sessionId !== session.sessionId
+      || session.target.endpointId !== session.endpointId
+      || (session.targetKey !== undefined && session.targetKey !== sessionTargetKey(session.target))
+    ))) {
       throw new Error("Invalid session target");
     }
     for (const session of list.sessions) {
@@ -332,8 +368,20 @@ export function HostStoreProvider({ children }: { children: React.ReactNode }) {
       const key = session.targetKey ?? sessionTargetKey(session.target);
       sessionTargetsRef.current.set(key, session.target);
     }
-    return { ...list, sessions: filterSessionsByVisibility(list.sessions, "session_list") };
+    return { ...list, sessions: filterSessionsByVisibility(list.sessions, options.includeMonitor ? "monitor_tab" : "session_list") };
   }, [getClient]);
+
+  const refreshMaestroState = useCallback(async (): Promise<MaestroState | null> => {
+    try {
+      const state = await getClient().sendCommand({ type: "get_maestro_state" }) as MaestroState;
+      if (!state || !Array.isArray(state.schedules)) throw new Error("Invalid Maestro state response");
+      dispatch({ type: "maestro_state", state, seq: 0 });
+      return state;
+    } catch (error) {
+      dispatch({ type: "__local_error", message: error instanceof Error ? error.message : String(error) });
+      return null;
+    }
+  }, [dispatch, getClient]);
 
   const refreshMonitor = useCallback(async (): Promise<MonitorState> => {
     try {
@@ -348,13 +396,12 @@ export function HostStoreProvider({ children }: { children: React.ReactNode }) {
 
   const refreshExecutionProjections = useCallback(async (): Promise<ExecutionProjection[]> => {
     try {
-      const projections = executionProjectionsFromCommandResult(await getClient().getExecutionProjections());
-      for (const projection of projections) {
-        if (projection.source === "todo") dispatch({ type: "todo_projection_updated", projection, seq: 0 });
-        else if (projection.source === "teammate") dispatch({ type: "teammate_projection_updated", projection, seq: 0 });
-        else if (projection.source === "workspace") dispatch({ type: "workspace_window_projection_updated", projection, seq: 0 });
-        else dispatch({ type: "background_job_projection_updated", projection, seq: 0 });
-      }
+      const client = getClient();
+      const projectionRequestGeneration = stateRef.current.connectionGeneration;
+      const result = await client.getExecutionProjections();
+      const projections = executionProjectionsFromCommandResult(result);
+      if (projectionRequestGeneration !== stateRef.current.connectionGeneration || clientRef.current !== client) return projections;
+      dispatch({ type: "__execution_projections_load", projections, revision: result.revision, connectionGeneration: projectionRequestGeneration });
       return projections;
     } catch (error) {
       dispatch({ type: "__local_error", message: error instanceof Error ? error.message : String(error) });
@@ -562,6 +609,7 @@ export function HostStoreProvider({ children }: { children: React.ReactNode }) {
       connect,
       disconnect,
       listHostSessions,
+      refreshMaestroState,
       refreshMonitor,
       refreshExecutionProjections,
       loadSessionHistory,
@@ -584,7 +632,7 @@ export function HostStoreProvider({ children }: { children: React.ReactNode }) {
       lastError: state.lastError,
       clearError,
     }),
-    [state, connectionState, hostUrl, token, connect, disconnect, listHostSessions, refreshMonitor, refreshExecutionProjections, loadSessionHistory, loadMoreHistory, searchHistory, listModels, listSkills, getMaestroSettings, updateMaestroSettings, fetchSessionUsage, setModel, setThinking, sendPrompt, sendSteer, sendAbort, answerDialog, cancelDialog, respondPlan, cancelPlan, clearError],
+    [state, connectionState, hostUrl, token, connect, disconnect, listHostSessions, refreshMaestroState, refreshMonitor, refreshExecutionProjections, loadSessionHistory, loadMoreHistory, searchHistory, listModels, listSkills, getMaestroSettings, updateMaestroSettings, fetchSessionUsage, setModel, setThinking, sendPrompt, sendSteer, sendAbort, answerDialog, cancelDialog, respondPlan, cancelPlan, clearError],
 
   );
 

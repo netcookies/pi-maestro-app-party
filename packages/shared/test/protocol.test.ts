@@ -76,9 +76,24 @@ describe("protocol", () => {
       workspace: { label: "@main·7c268c" },
       backgroundJobs: [{ id: "bg1", status: "running" }],
     };
+    const target = summary.target;
     expect(isSessionTargetIdentity(summary.target)).toBe(true);
-    expect(isHostEvent({ type: "session_execution_updated", summary, seq: 1 })).toBe(true);
-    expect(isHostEvent({ type: "session_execution_updated", summary: { ...summary, target: { sessionId: "s1", endpointId: "e1", normalizedCwd: "/work" } }, seq: 1 })).toBe(false);
+    const window = {
+      sessionId: target.sessionId,
+      endpointId: target.endpointId,
+      target,
+      runtimeStatus: "running",
+      identity: { workspaceId: "ws-1", ownerId: "owner-1", ownerNonce: "nonce-1", endpointId: "owner-endpoint" },
+      status: "running",
+      lifecycle: "running",
+      workStatus: "active",
+      todos: [],
+      attention: [],
+      facets: [],
+    };
+    expect(isHostEvent({ type: "monitor_state", state: { windows: [window], observedAt: "2026-01-01T00:00:00Z" }, seq: 1 })).toBe(true);
+    expect(isHostEvent({ type: "monitor_state", state: { windows: [{ ...window, target: { ...target, processGeneration: undefined } }], observedAt: "2026-01-01T00:00:00Z" }, seq: 1 })).toBe(false);
+    expect(isHostEvent({ type: "monitor_state", state: { windows: [{ ...window, endpointId: "different" }], observedAt: "2026-01-01T00:00:00Z" }, seq: 1 })).toBe(false);
     expect(isHostEvent({ type: "session_execution_updated", summary: { ...summary, teammate: { running: 1, total: 1, agents: [{}] } }, seq: 1 })).toBe(false);
     expect(isHostEvent({ type: "session_execution_updated", summary: { ...summary, workspace: {} }, seq: 1 })).toBe(false);
     expect(isBackgroundJobSummary({ id: "bg1", status: "running", progress: 1.1 })).toBe(false);
@@ -143,8 +158,11 @@ describe("protocol", () => {
       cursor: "opaque",
       sessionIds: ["live-1"],
       latestForCwds: ["/work/running"],
+      includeMonitor: true,
     };
     expect(isClientCommand(command)).toBe(true);
+    expect(isClientCommand({ type: "list_host_sessions", includeMonitor: "yes" })).toBe(false);
+    expect(isClientCommand({ type: "get_monitor_state" })).toBe(true);
   });
 
   it("builds a valid MaestroState with schedules", () => {

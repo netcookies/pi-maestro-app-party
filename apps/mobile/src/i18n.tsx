@@ -21,6 +21,7 @@ export interface I18nDictionary {
   contextLabel: string;
   tokensLabel: string;
   cacheLabel: string;
+  cacheTokensLabel: string;
   messagesAndTime: string;
   msgCount: string;
   accentPalette: string;
@@ -231,6 +232,7 @@ export const DICTIONARIES: Record<Language, I18nDictionary> = {
     contextLabel: "上下文视窗",
     tokensLabel: "Token 消耗",
     cacheLabel: "缓存命中",
+    cacheTokensLabel: "缓存",
     messagesAndTime: "对话与时间",
     msgCount: "条对话",
     accentPalette: "高光主题色",
@@ -290,7 +292,7 @@ export const DICTIONARIES: Record<Language, I18nDictionary> = {
     askDesc: "来自桌面插件界面的交互确认请求：",
     askConfirm: "批准执行",
     askReject: "拒绝",
-    attentionTitle: "系统关注警告 (Attention)",
+    attentionTitle: "系统关注警告",
     steerPlaceholder: "输入协同干预指令 (Steer)...",
     steerBtn: "协同介入",
     secAppearance: "外观模式",
@@ -439,6 +441,7 @@ export const DICTIONARIES: Record<Language, I18nDictionary> = {
     contextLabel: "Context Window",
     tokensLabel: "Token Usage",
     cacheLabel: "Cache Hit",
+    cacheTokensLabel: "Cache",
     messagesAndTime: "Messages & Time",
     msgCount: "messages",
     accentPalette: "Accent Palette",

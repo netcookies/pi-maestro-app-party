@@ -11,11 +11,14 @@ import type {
   HostEvent,
   MaestroState,
   MonitorState,
+  MonitorWindowSummary,
+  HostSessionList,
   SessionState,
   SessionPresentation,
   SessionSummaryPatch,
   SessionTargetIdentity,
   SessionExecutionSummary,
+  SessionUsageSummary,
   TimelineItem,
   ExtensionUiRequest,
   ExtensionUiResponse,
@@ -36,6 +39,9 @@ export const MAX_SESSION_SUMMARY_PATCHES = 256;
 
 export interface AppState {
   connectionStatus: string;
+  connectionGeneration: number;
+  executionProjectionRevision: number;
+  executionProjectionsLoaded: boolean;
   /** host_status 对象载荷解析出的版本/maestro 检测元数据（设置页「版本与诊断」用；null = 待 Host 接入） */
   hostStatusMeta: HostStatusMeta | null;
   sessions: Map<string, SessionState>;
@@ -49,8 +55,11 @@ export interface AppState {
   sessionExecutionSummaries: Map<string, SessionExecutionSummary>;
   /** Execution revision watermarks are retained after reset to reject stale replays. */
   sessionExecutionRevisions: Map<string, number>;
+  hostSessionUsage: Map<string, SessionUsageSummary>;
   timelines: Map<string, TimelineItem[]>;
   targetedTimelines: Map<string, TimelineItem[]>;
+  /** Latest live error for each exact target; historical snapshots never create alerts. */
+  sessionAlerts: Map<string, { code: string; message: string }>;
   maestro: MaestroState | null;
   monitor: MonitorState | null;
   /** Independent category snapshots; each map is keyed by exact projection target. */
@@ -79,6 +88,9 @@ export interface AppState {
 export function createInitialState(): AppState {
   return {
     connectionStatus: "disconnected",
+    connectionGeneration: 0,
+    executionProjectionRevision: 0,
+    executionProjectionsLoaded: false,
     hostStatusMeta: null,
     sessions: new Map(),
     activeSessionTargets: new Map(),
@@ -86,8 +98,10 @@ export function createInitialState(): AppState {
     sessionSummaryPatches: new Map(),
     sessionExecutionSummaries: new Map(),
     sessionExecutionRevisions: new Map(),
+    hostSessionUsage: new Map(),
     timelines: new Map(),
     targetedTimelines: new Map(),
+    sessionAlerts: new Map(),
     maestro: null,
     monitor: null,
     todoProjections: new Map(),
@@ -193,6 +207,20 @@ export interface RevisionEvent {
 
 export interface ConnectionResetEvent {
   type: "__connection_reset";
+  connectionGeneration?: number;
+}
+
+export interface ExecutionProjectionSnapshotEvent {
+  type: "__execution_projections_load";
+  projections: ExecutionProjection[];
+  revision: number;
+  connectionGeneration: number;
+}
+
+export interface HostSessionListLoadEvent {
+  type: "__host_session_list_load";
+  list: HostSessionList;
+  connectionGeneration: number;
 }
 
 /** reducer 可接受的全部 action：host 事件流 + 本地内部事件 */
@@ -207,7 +235,9 @@ export type AppAction =
   | DialogStateChangedEvent
   | PlanStateChangedEvent
   | RevisionEvent
-  | ConnectionResetEvent;
+  | ConnectionResetEvent
+  | ExecutionProjectionSnapshotEvent
+  | HostSessionListLoadEvent;
 
 function revisionOf(value: unknown): number | undefined {
   return typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : undefined;
@@ -255,8 +285,120 @@ export function reduceEvent(state: AppState, event: AppAction, deps: AppStateDep
     }
     return s;
   }
-  if (event.type === "__snapshot_load") {
-    // Snapshot nextSeq belongs to the selected runner. It must never be compared with
+    if (event.type === "__execution_projections_load") {
+    if (event.connectionGeneration !== state.connectionGeneration || (state.executionProjectionsLoaded && event.revision < state.executionProjectionRevision)) return state;
+    const todoProjections = new Map<string, TodoProjection>();
+    const teammateProjections = new Map<string, TeammateProjection>();
+    const workspaceWindowProjections = new Map<string, WorkspaceWindowProjection>();
+    const backgroundJobProjections = new Map<string, BackgroundJobProjection>();
+    for (const projection of event.projections) {
+      const key = projectionKey(projection);
+      if (projection.source === "todo") todoProjections.set(key, projection);
+      else if (projection.source === "teammate") teammateProjections.set(key, projection);
+      else if (projection.source === "workspace") workspaceWindowProjections.set(key, projection);
+      else backgroundJobProjections.set(key, projection);
+    }
+    for (const [key, current] of state.todoProjections) {
+      const snapshot = todoProjections.get(key);
+      if (snapshot && !acceptsProjection(current, snapshot)) todoProjections.set(key, current);
+    }
+    for (const [key, current] of state.teammateProjections) {
+      const snapshot = teammateProjections.get(key);
+      if (snapshot && !acceptsProjection(current, snapshot)) teammateProjections.set(key, current);
+    }
+    for (const [key, current] of state.workspaceWindowProjections) {
+      const snapshot = workspaceWindowProjections.get(key);
+      if (snapshot && !acceptsProjection(current, snapshot)) workspaceWindowProjections.set(key, current);
+    }
+    for (const [key, current] of state.backgroundJobProjections) {
+      const snapshot = backgroundJobProjections.get(key);
+      if (snapshot && !acceptsProjection(current, snapshot)) backgroundJobProjections.set(key, current);
+    }
+    return {
+      ...state,
+      executionProjectionRevision: event.revision,
+      executionProjectionsLoaded: true,
+      todoProjections,
+      teammateProjections,
+      workspaceWindowProjections,
+      backgroundJobProjections,
+    };
+  }
+  if (event.type === "__host_session_list_load") {
+    if (event.connectionGeneration !== state.connectionGeneration) return state;
+    const sessions = new Map<string, SessionState>();
+    const targetedSessions = new Map<string, SessionState>();
+    const activeSessionTargets = new Map<string, string>();
+    const hostSessionUsage = new Map<string, SessionUsageSummary>();
+    const preferredTargetBySession = new Map<string, string>();
+    for (const summary of event.list.sessions) {
+      const isHistory = summary.target?.endpointId === "history";
+      if (summary.target && !isHistory) preferredTargetBySession.set(summary.sessionId, sessionTargetKey(summary.target));
+    }
+    for (const summary of event.list.sessions) {
+      const session: SessionState = {
+        id: summary.sessionId,
+        cwd: summary.cwd,
+        title: summary.name ?? summary.title,
+        runState: summary.runtimeStatus === "running" ? "streaming" : "idle",
+        messageCount: summary.messageCount,
+        pendingMessageCount: 0,
+        updatedAt: summary.lastActivityAt ?? summary.updatedAt,
+        presentation: summary.presentation,
+      };
+      if (summary.target) {
+        if (!isSessionTargetIdentity(summary.target)
+          || summary.target.sessionId !== summary.sessionId
+          || summary.target.endpointId !== summary.endpointId
+          || (summary.targetKey !== undefined && summary.targetKey !== sessionTargetKey(summary.target))) continue;
+        const key = sessionTargetKey(summary.target);
+        targetedSessions.set(key, session);
+        if (summary.usage && summary.usage.totalTokens > 0) {
+          hostSessionUsage.set(key, {
+            sessionId: summary.sessionId,
+            entries: 1,
+            input: summary.usage.input,
+            output: summary.usage.output,
+            cacheRead: summary.usage.cacheRead,
+            cacheWrite: summary.usage.cacheWrite,
+            reasoning: 0,
+            totalTokens: summary.usage.totalTokens,
+            cost: summary.usage.cost,
+            context: summary.context ?? null,
+          });
+        } else if (typeof summary.totalTokens === "number" && summary.totalTokens > 0) {
+          hostSessionUsage.set(key, {
+            sessionId: summary.sessionId,
+            entries: 1,
+            input: 0,
+            output: 0,
+            cacheRead: 0,
+            cacheWrite: 0,
+            reasoning: 0,
+            totalTokens: summary.totalTokens,
+            cost: summary.cost ?? 0,
+            context: summary.context ?? null,
+          });
+        }
+        const currentKey = activeSessionTargets.get(summary.sessionId);
+        if (!currentKey || (currentKey.includes('"history"') && summary.target.endpointId !== "history")) {
+          activeSessionTargets.set(summary.sessionId, key);
+        }
+      }
+      const currentSession = sessions.get(summary.sessionId);
+      const isActiveTarget = !summary.target
+        || activeSessionTargets.get(summary.sessionId) === preferredTargetBySession.get(summary.sessionId);
+      const isPreferredTarget = !summary.target
+        || preferredTargetBySession.get(summary.sessionId) === sessionTargetKey(summary.target);
+      if (!currentSession || (isActiveTarget && isPreferredTarget && summary.target?.endpointId !== "history")) {
+        sessions.set(summary.sessionId, session);
+      }
+    }
+    return { ...state, sessions, targetedSessions, activeSessionTargets, hostSessionUsage };
+  }
+
+    if (event.type === "__snapshot_load") {
+      // Snapshot nextSeq belongs to the selected runner. It must never be compared with
     // Host-global wire event seq, even when both values happen to be numeric.
     const targetKey = event.target ? sessionTargetKey(event.target) : undefined;
     const snapshotKey = targetKey ? `target:${targetKey}` : `session:${event.session.id}`;
@@ -300,6 +442,9 @@ export function reduceEvent(state: AppState, event: AppAction, deps: AppStateDep
       targetedSessions,
       timelines,
       targetedTimelines,
+      sessionAlerts: targetKey
+        ? new Map([...state.sessionAlerts].filter(([key]) => key !== targetKey))
+        : state.sessionAlerts,
       targetEventSeq,
       snapshotNextSeq,
       snapshotWireSeq,
@@ -344,6 +489,7 @@ export function reduceEvent(state: AppState, event: AppAction, deps: AppStateDep
     return {
       ...fresh,
       connectionStatus: state.connectionStatus,
+      connectionGeneration: Math.max(state.connectionGeneration + 1, event.connectionGeneration ?? 0),
       planRequests: deps.planQueue?.pendingPlans ?? [],
     };
   }
@@ -373,7 +519,7 @@ export function reduceEvent(state: AppState, event: AppAction, deps: AppStateDep
     const key = event.target ? sessionTargetKey(event.target) : undefined;
     const source = key ? state.targetedTimelines : state.timelines;
     const existing = (key ? source.get(key) : source.get(event.sessionId)) ?? [];
-    const existingIds = new Set(existing.map((t) => t.id));
+    const existingIds = new Set(existing.map((item: TimelineItem) => item.id));
     const fresh = event.items.filter((t) => !existingIds.has(t.id));
     if (key) {
       const targetedTimelines = new Map(state.targetedTimelines);
@@ -418,7 +564,8 @@ export function reduceEvent(state: AppState, event: AppAction, deps: AppStateDep
         sessionExecutionSummaries.set(key, summary);
         sessionExecutionRevisions.set(key, summary.revision);
       }
-      return { ...state, sessionExecutionSummaries, sessionExecutionRevisions };
+      const sessionAlerts = event.reset ? new Map([...state.sessionAlerts].filter(([alertKey]) => alertKey !== key)) : state.sessionAlerts;
+      return { ...state, sessionExecutionSummaries, sessionExecutionRevisions, sessionAlerts };
     }
 
     case "session_summary_updated": {
@@ -522,7 +669,16 @@ export function reduceEvent(state: AppState, event: AppAction, deps: AppStateDep
             return [...items, event.item];
           })();
       timelines.set(key ?? event.sessionId, next);
-      return key ? { ...state, targetedTimelines: timelines } : { ...state, timelines };
+      if (key) {
+        const sessionAlerts = new Map(state.sessionAlerts);
+        if (event.item.status === "failed" || event.item.isError || event.item.error) {
+          sessionAlerts.set(key, { code: event.item.error?.code ?? "session_error", message: event.item.error?.message ?? event.item.text });
+        } else if (event.item.kind === "assistant") {
+          sessionAlerts.delete(key);
+        }
+        return { ...state, targetedTimelines: timelines, sessionAlerts };
+      }
+      return { ...state, timelines };
     }
 
     case "timeline_snapshot": {
@@ -530,7 +686,9 @@ export function reduceEvent(state: AppState, event: AppAction, deps: AppStateDep
       if (key) {
         const targetedTimelines = new Map(state.targetedTimelines);
         targetedTimelines.set(key, event.items);
-        return { ...state, targetedTimelines };
+        const sessionAlerts = new Map(state.sessionAlerts);
+        sessionAlerts.delete(key);
+        return { ...state, targetedTimelines, sessionAlerts };
       }
       const timelines = new Map(state.timelines);
       timelines.set(event.sessionId, event.items);
@@ -556,7 +714,7 @@ export function reduceEvent(state: AppState, event: AppAction, deps: AppStateDep
       const revision = revisionOf(event.state.revision);
       const monitor = revision !== undefined && state.monitor?.revision !== undefined && revision < state.monitor.revision
         ? state.monitor
-        : { ...event.state, windows: event.state.windows.filter((window) => window.presentation?.visibility === "monitor_tab") };
+        : { ...event.state, windows: event.state.windows.filter((window: MonitorWindowSummary) => window.presentation?.visibility === "monitor_tab") };
       return withRevision({ ...state, monitor }, revision);
     }
 
@@ -642,9 +800,11 @@ export function reduceEvent(state: AppState, event: AppAction, deps: AppStateDep
         isError: true,
         status: "failed",
       };
-      const existing = items.findIndex((candidate) => candidate.id === item.id);
-      timelines.set(key, existing >= 0 ? items.map((candidate, index) => index === existing ? item : candidate) : [...items, item]);
-      return { ...state, targetedTimelines: timelines };
+      const nextItems = [...items, item];
+      timelines.set(key, nextItems);
+      const sessionAlerts = new Map(state.sessionAlerts);
+      sessionAlerts.set(key, { code: event.error.code, message: event.error.message });
+      return { ...state, targetedTimelines: timelines, sessionAlerts };
     }
 
     case "command_error":

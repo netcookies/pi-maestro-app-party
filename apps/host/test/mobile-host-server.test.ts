@@ -1,4 +1,4 @@
-import { describe, expect, it, beforeEach, afterEach } from "vitest";
+import { describe, expect, it, beforeEach, afterEach, vi } from "vitest";
 import { MobileHostServer } from "../src/server/mobile-host-server.js";
 import { HostController } from "../src/host-controller.js";
 import { MaestroStateReader } from "../src/maestro-state.js";
@@ -112,6 +112,29 @@ describe("MobileHostServer", () => {
       });
       await expect(request("targeted-missing", { sessionIds: ["missing"] })).resolves.toMatchObject({ sessions: [], targeted: true });
       await expect(request("targeted-cwd", { latestForCwds: [ctx.tmpDir] })).resolves.toMatchObject({ sessions: [{ id: "readerless" }], targeted: true });
+    } finally {
+      ws.close();
+    }
+  });
+
+  it("forwards includeMonitor through the client command to the session query", async () => {
+    const query = vi.spyOn(ctx.controller.application, "query");
+    const ws = await connectV2(ctx.url);
+    try {
+      const result = await new Promise<{ sessions: unknown[] }>((resolve, reject) => {
+        const onMessage = (data: WebSocket.RawData) => {
+          const frame = JSON.parse(data.toString()) as { type: string; in_reply_to?: string; result?: { sessions: unknown[] } };
+          if (frame.type !== "command_result" || frame.in_reply_to !== "include-monitor") return;
+          ws.off("message", onMessage);
+          resolve(frame.result!);
+        };
+        ws.on("message", onMessage);
+        ws.once("error", reject);
+        ws.send(JSON.stringify({ type: "list_host_sessions", id: "include-monitor", includeMonitor: true }));
+      });
+
+      expect(Array.isArray(result.sessions)).toBe(true);
+      expect(query).toHaveBeenCalledWith({ kind: "session_list", options: { includeMonitor: true } });
     } finally {
       ws.close();
     }

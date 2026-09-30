@@ -7,7 +7,8 @@ import {
   type AppState,
 } from "../src/app-state.js";
 import { ExtensionUiQueue } from "../src/extension-ui-queue.js";
-import type { HostEvent, SessionState, TimelineItem, MaestroState } from "@maestro-mobile/shared";
+import { sessionTargetKey } from "@maestro-mobile/shared";
+import type { HostEvent, SessionState, TimelineItem, MaestroState, MonitorWindowSummary } from "@maestro-mobile/shared";
 
 describe("AppState reducer", () => {
   it("H4: __event_batch folds events in order with single state transition", () => {
@@ -39,6 +40,79 @@ describe("AppState reducer", () => {
     expect(state.sessions.size).toBe(0);
     expect(state.maestro).toBeNull();
     expect(state.dialogs).toEqual([]);
+  });
+
+  it("replaces projection maps from a complete cold-start snapshot", () => {
+    const target = { workspaceId: "workspace-a", ownerId: "owner", ownerNonce: "nonce", endpointId: "session" };
+    const workspace = (workspaceId: string, windows: MonitorWindowSummary[]) => ({
+      schemaVersion: 1 as const, source: "workspace" as const, scope: "workspace" as const,
+      target: { workspaceId }, epoch: "epoch", revision: 1, observedAt: "", snapshot: true as const,
+      data: { windows },
+    });
+    const window = { sessionId: "s", endpointId: "e", runtimeStatus: "idle" as const, identity: target, status: "idle", lifecycle: "settled", workStatus: "idle", todos: [], attention: [], facets: [] };
+    let state = createInitialState();
+    state = reduceEvent(state, { type: "workspace_window_projection_updated", projection: workspace("workspace-a", [window]), seq: 1 });
+    state = reduceEvent(state, { type: "__execution_projections_load", projections: [workspace("workspace-b", [])], revision: 1, connectionGeneration: state.connectionGeneration });
+    expect(state.workspaceWindowProjections.has(JSON.stringify(["workspace", "workspace-a"]))).toBe(false);
+    expect(state.workspaceWindowProjections.has(JSON.stringify(["workspace", "workspace-b"]))).toBe(true);
+  });
+
+  it("ignores an older projection snapshot revision", () => {
+    const projection = {
+      schemaVersion: 1 as const, source: "workspace" as const, scope: "workspace" as const,
+      target: { workspaceId: "workspace" }, epoch: "epoch", revision: 2, observedAt: "", snapshot: true as const,
+      data: { windows: [] },
+    };
+    let state = createInitialState();
+    state = reduceEvent(state, { type: "__execution_projections_load", projections: [projection], revision: 2, connectionGeneration: state.connectionGeneration });
+    const stale = { ...projection, revision: 1 };
+    state = reduceEvent(state, { type: "__execution_projections_load", projections: [stale], revision: 1, connectionGeneration: state.connectionGeneration });
+    expect(state.workspaceWindowProjections.get(JSON.stringify(["workspace", "workspace"]))?.revision).toBe(2);
+  });
+  it("loads cold-start session summaries with exact target selection", () => {
+    const target = { sessionId: "cold", endpointId: "desktop", normalizedCwd: "/work", processGeneration: "g1" };
+    const state = reduceEvent(createInitialState(), {
+      type: "__host_session_list_load",
+      list: { observedAt: "", sessions: [{ id: "cold", sessionId: "cold", endpointId: "desktop", target, targetKey: JSON.stringify(["cold", "desktop", "/work", "g1"]), runtimeStatus: "idle", cwd: "/work", cwdName: "work", path: "", title: "Cold", messageCount: 2, updatedAt: "2026-09-04T08:00:00.000Z", lastActivityAt: "2026-09-05T08:00:00.000Z" }] },
+      connectionGeneration: 0,
+    });
+    expect(state.sessions.has("cold")).toBe(true);
+    expect(state.sessions.get("cold")?.updatedAt).toBe("2026-09-05T08:00:00.000Z");
+    expect(state.activeSessionTargets.get("cold")).toBe(JSON.stringify(["cold", "desktop", "/work", "g1"]));
+  });
+
+  it("replaces session list snapshots without allowing a sibling to overwrite the active session", () => {
+    const firstTarget = { sessionId: "sibling", endpointId: "desktop-a", normalizedCwd: "/work", processGeneration: "a" };
+    const secondTarget = { ...firstTarget, endpointId: "desktop-b", processGeneration: "b" };
+    const makeSummary = (target: typeof firstTarget) => ({
+      id: target.sessionId, sessionId: target.sessionId, endpointId: target.endpointId, target,
+      targetKey: sessionTargetKey(target), runtimeStatus: "idle" as const, cwd: "/work", cwdName: "work",
+      path: "", title: target.endpointId, messageCount: 1, updatedAt: "",
+    });
+    const event = (sessions: ReturnType<typeof makeSummary>[]) => ({
+      type: "__host_session_list_load" as const,
+      list: { observedAt: "", sessions },
+      connectionGeneration: 0,
+    });
+    let state = reduceEvent(createInitialState(), event([makeSummary(firstTarget), makeSummary(secondTarget)]));
+    expect(state.targetedSessions.size).toBe(2);
+    expect(state.activeSessionTargets.get("sibling")).toBe(sessionTargetKey(firstTarget));
+    expect(state.sessions.get("sibling")?.title).toBe("desktop-a");
+    state = reduceEvent(state, event([]));
+    expect(state.sessions.size).toBe(0);
+    expect(state.targetedSessions.size).toBe(0);
+    expect(state.activeSessionTargets.size).toBe(0);
+  });
+  it("rejects a stale projection snapshot from a prior connection generation", () => {
+    const state = createInitialState();
+    const projection = {
+      schemaVersion: 1 as const, source: "workspace" as const, scope: "workspace" as const,
+      target: { workspaceId: "workspace" }, epoch: "epoch", revision: 1, observedAt: "", snapshot: true as const,
+      data: { windows: [] },
+    };
+    const reset = reduceEvent(state, { type: "__connection_reset", connectionGeneration: 1 });
+    const stale = reduceEvent(reset, { type: "__execution_projections_load", projections: [projection], revision: 1, connectionGeneration: 0 });
+    expect(stale.workspaceWindowProjections.size).toBe(0);
   });
 
   it("stores independent execution projections by exact target and orders by epoch/revision", () => {
@@ -130,7 +204,42 @@ describe("AppState reducer", () => {
     const key = JSON.stringify([target.sessionId, target.endpointId, target.normalizedCwd, target.processGeneration]);
     const siblingKey = JSON.stringify([sibling.sessionId, sibling.endpointId, sibling.normalizedCwd, sibling.processGeneration]);
     expect(state.targetedTimelines.get(key)?.[0]).toMatchObject({ error: { httpStatus: 400 }, status: "failed" });
+    expect(state.sessionAlerts.get(key)).toEqual({ code: "bad_response_status_code", message: "openai_error" });
     expect(state.targetedTimelines.has(siblingKey)).toBe(false);
+  });
+
+  it("clears a live session alert after a later successful assistant item", () => {
+    const target = { sessionId: "alert-session", endpointId: "desktop", normalizedCwd: "/work", processGeneration: "g1" };
+    const key = JSON.stringify([target.sessionId, target.endpointId, target.normalizedCwd, target.processGeneration]);
+    let state = reduceEvent(createInitialState(), {
+      type: "session_error",
+      sessionId: target.sessionId,
+      target,
+      error: { source: "provider", code: "provider_error", message: "failed" },
+      seq: 1,
+    });
+    state = reduceEvent(state, {
+      type: "timeline_item",
+      sessionId: target.sessionId,
+      target,
+      item: { id: "assistant-ok", kind: "assistant", text: "恢复成功", createdAt: "", status: "completed" },
+      seq: 2,
+    });
+    expect(state.sessionAlerts.has(key)).toBe(false);
+  });
+
+  it("does not create a live alert from a historical timeline snapshot", () => {
+    const target = { sessionId: "history-session", endpointId: "desktop", normalizedCwd: "/work", processGeneration: "g1" };
+    const key = JSON.stringify([target.sessionId, target.endpointId, target.normalizedCwd, target.processGeneration]);
+    const state = reduceEvent(createInitialState(), {
+      type: "timeline_snapshot",
+      sessionId: target.sessionId,
+      target,
+      items: [{ id: "old-error", kind: "assistant", text: "旧错误", createdAt: "", isError: true, status: "failed" }],
+      seq: 1,
+    });
+    expect(state.sessionAlerts.has(key)).toBe(false);
+    expect(state.targetedTimelines.get(key)).toHaveLength(1);
   });
 
   it("handles host_status event", () => {

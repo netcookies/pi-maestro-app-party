@@ -5,7 +5,8 @@
  * 顶部 Hero（Token 用量卡：无协议数据源，显示 -- 并注明待 Host 接入），
  * 2x2 指标卡，现在运行窗口列表，「需要关注」告警区。
  *
- * 数据全部来自 store（monitor windows / maestro schedules / extension-ui 队列），
+ * 数据全部来自 store（Protocol v2 workspace/execution projections / session error / Ask / Plan），
+
  * 指标推导集中在 src/dashboard-logic.ts（纯函数，可单测）。
  */
 import React, { useMemo, useState } from "react";
@@ -20,10 +21,13 @@ import { PulsingDot } from "../../src/components/PulsingDot";
 import { useTabSwipe } from "../../src/hooks/useTabSwipe";
 import { useI18n } from "../../src/i18n";
 import {
+  aggregateSessionUsage,
   deriveDashboardMetrics,
+  getActiveUsageTargets,
+  getCacheHitPercent,
   type PendingAskItem,
 } from "../../src/dashboard-logic";
-import { sessionTargetKey, type SessionUsageSummary } from "@maestro-mobile/shared";
+import { sessionTargetKey, type SessionExecutionSummary, type SessionUsageSummary, type MonitorWindowSummary } from "@maestro-mobile/shared";
 
 /** 2x2 指标卡定义 */
 type MetricCard = { value: string; label: string };
@@ -49,19 +53,36 @@ export default function DashboardScreen() {
 
   // Dashboard deliberately contains overview, Ask/Plan attention, and connection state only.
 
-  // 已打开会话的 usage（仅第一个可控会话作为代表；usage 协议是会话级）
+  /** 只聚合会话 Tab Current 集合中的 exact-target usage。 */
   const [usage, setUsage] = React.useState<SessionUsageSummary | null>(null);
-  const firstSessionId = useMemo(() => [...state.sessions.keys()][0] ?? null, [state.sessions]);
+  const usageTargets = useMemo(
+    () => getActiveUsageTargets([...state.sessions.values()], state.activeSessionTargets.entries()),
+    [state.activeSessionTargets, state.sessions],
+  );
+  const listedUsageByTarget = useMemo(() => new Map(
+    usageTargets.flatMap(({ targetKey }) => {
+      const summary = state.hostSessionUsage.get(targetKey);
+      return summary?.entries ? [[targetKey, summary] as const] : [];
+    }),
+  ), [state.hostSessionUsage, usageTargets]);
   React.useEffect(() => {
     let cancelled = false;
-    setUsage(null);
-    if (firstSessionId) {
-      void fetchSessionUsage(firstSessionId).then((u) => {
-        if (!cancelled) setUsage(u);
-      });
-    }
+    setUsage(aggregateSessionUsage([...listedUsageByTarget.values()]));
+    if (!isConnected || usageTargets.length === 0) return () => { cancelled = true; };
+
+    void Promise.all(usageTargets.map(async ({ sessionId, targetKey }) => ({
+      targetKey,
+      summary: await fetchSessionUsage(sessionId),
+    }))).then((results) => {
+      if (cancelled) return;
+      const usageByTarget = new Map(listedUsageByTarget);
+      for (const { targetKey, summary } of results) {
+        if (summary?.entries) usageByTarget.set(targetKey, summary);
+      }
+      setUsage(aggregateSessionUsage([...usageByTarget.values()]));
+    });
     return () => { cancelled = true; };
-  }, [firstSessionId, fetchSessionUsage, isConnected]);
+  }, [fetchSessionUsage, isConnected, listedUsageByTarget, usageTargets]);
 
   const pairingPrompt = connectionState === "connecting"
     ? t.connectingHost
@@ -88,9 +109,73 @@ export default function DashboardScreen() {
 
   const pendingPlans = React.useMemo(() => state.planRequests.filter((entry) => entry.status === "pending"), [state.planRequests]);
 
+  const workspaceWindows = useMemo(
+    () => {
+      const windows = new Map<string, MonitorWindowSummary>();
+      for (const projection of state.workspaceWindowProjections.values()) {
+        for (const window of projection.data.windows) {
+          if (window.presentation?.visibility !== "monitor_tab") continue;
+          const key = sessionTargetKey({
+            sessionId: window.sessionId,
+            endpointId: window.endpointId,
+            normalizedCwd: window.cwd ?? "",
+            processGeneration: window.identity.ownerNonce || window.identity.ownerId,
+          });
+          windows.set(key, window);
+        }
+      }
+      return [...windows.values()];
+    },
+    [state.workspaceWindowProjections],
+  );
+  const executionSummaryList = useMemo(() => {
+    const summaries = [...state.sessionExecutionSummaries.values()];
+    const activeTargetKeys = new Set(state.activeSessionTargets.values());
+    return activeTargetKeys.size > 0
+      ? summaries.filter((summary) => activeTargetKeys.has(sessionTargetKey(summary.target)))
+      : summaries;
+  }, [state.activeSessionTargets, state.sessionExecutionSummaries]);
+  const executionSummaries = useMemo<SessionExecutionSummary[] | undefined>(
+    () => executionSummaryList.length > 0 ? executionSummaryList : undefined,
+    [executionSummaryList],
+  );
+  const sessionErrors = useMemo(
+    () => [...state.sessionAlerts].map(([key, error]) => {
+      const summary = state.sessionExecutionSummaries.get(key);
+      return {
+        key,
+        windowName: summary?.workspace?.label ?? summary?.target.sessionId ?? key,
+        code: error.code,
+        message: error.message,
+      };
+    }),
+    [state.sessionAlerts, state.sessionExecutionSummaries],
+  );
+
+  const sessionListSessions = useMemo(
+    () => [...state.sessions.values()].filter((session) => session.presentation?.visibility === "session_list"),
+    [state.sessions],
+  );
+  const sessionWindowCounts = useMemo(() => {
+    const sessionIds = new Set(sessionListSessions.map((session) => session.id));
+    const active = [...state.activeSessionTargets.entries()].filter(
+      ([sessionId, targetKey]) => sessionIds.has(sessionId) && !targetKey.includes('"history"'),
+    ).length;
+    return { active, total: sessionIds.size };
+  }, [sessionListSessions, state.activeSessionTargets]);
+
   const metrics = React.useMemo(
-    () => deriveDashboardMetrics({ monitor: state.monitor, maestro: state.maestro, pendingAsks }, new Date()),
-    [state.monitor, state.maestro, pendingAsks],
+    () => deriveDashboardMetrics({
+      monitor: workspaceWindows.length > 0 ? { windows: workspaceWindows, observedAt: new Date().toISOString() } : state.monitor,
+      maestro: state.maestro,
+      pendingAsks,
+      pendingPlans: pendingPlans.length,
+      executionSummaries,
+      sessions: sessionListSessions,
+      sessionWindowCounts,
+      sessionErrors,
+    }, new Date()),
+    [executionSummaries, pendingAsks, pendingPlans.length, sessionErrors, sessionListSessions, sessionWindowCounts, state.maestro, state.monitor, workspaceWindows],
   );
 
   const metricCards = React.useMemo<MetricCard[]>(() => [
@@ -101,22 +186,22 @@ export default function DashboardScreen() {
         : `Active / Total ${metrics.totalWindows}`,
     },
     {
-      value: `${metrics.runsCompletedToday} / ${metrics.runsCompletedToday + metrics.runsActive}`,
+      value: metrics.totalTasks === null ? "--" : `${metrics.completedTasks} / ${metrics.totalTasks}`,
       label: t.tabWorkbench === "工作台"
-        ? "今日 Run 完成 / 总数"
-        : "Runs Completed / Total",
+        ? "任务完成 / 总任务"
+        : "Tasks Completed / Total",
     },
     {
-      value: `${metrics.teammatesWorking} / ${metrics.teammatesTotal}`,
+      value: `${metrics.activeSessionsToday} / ${metrics.totalSessions}`,
       label: t.tabWorkbench === "工作台"
-        ? "协作者工作中 / 可见"
-        : "Teammates Working / Visible",
+        ? "今日活跃会话 / 会话总数"
+        : "Active Today / Total Sessions",
     },
     {
       value: String(metrics.waitingCount),
       label: t.tabWorkbench === "工作台"
-        ? "等待处理 (Ask + Attention)"
-        : "Pending Actions (Ask + Attention)",
+        ? "等待处理"
+        : "Pending Actions",
     },
   ], [metrics, t]);
 
@@ -160,7 +245,7 @@ export default function DashboardScreen() {
       </View>
 
       <ScrollView contentContainerStyle={styles.content}>
-        {/* Hero：Token 用量卡（首个已打开会话的 usage；离线时提示去设置配对，点击直达设置页） */}
+        {/* Hero：会话 Tab Current 集合的 Token usage 总和；点击进入会话页。 */}
         <SpringCard
           style={styles.hero}
           onPress={() => router.push(isConnected ? "/host-sessions" : "/settings")}
@@ -194,11 +279,9 @@ export default function DashboardScreen() {
                 <Text style={[styles.heroCaption, { color: theme.muted }]}>
                   {t.output} {formatTokens(usage.output)} · {t.cost} ${usage.cost.toFixed(4)}
                 </Text>
-                {usage.context?.percent != null && (
-                  <Text style={[styles.heroContextPill, { color: theme.accent }]}>
-                    {t.contextLabel} {Math.round(usage.context.percent)}%
-                  </Text>
-                )}
+                <Text style={[styles.heroCaption, { color: theme.accent, fontWeight: "700" }]}>
+                  {t.cacheTokensLabel} {formatTokens(usage.cacheRead + usage.cacheWrite)}{getCacheHitPercent(usage) === null ? "" : ` (${getCacheHitPercent(usage)}%)`}
+                </Text>
               </View>
             </>
           ) : (
@@ -233,6 +316,18 @@ export default function DashboardScreen() {
           })}
         </View>
 
+        {/* 系统警告 */}
+        <View style={styles.sectionHeader}>
+          <Text style={styles.sectionTitle}>{t.attentionTitle}</Text>
+          <Text style={styles.sectionMeta}>{metrics.waitingAttention} {t.alertCount}</Text>
+        </View>
+        {metrics.attentionGroups.length === 0 ? (
+          <View style={styles.row}>
+            <Text style={styles.emptyText}>{t.noAlerts}</Text>
+          </View>
+        ) : (
+          metrics.attentionGroups.map((group) => <View key={group.key}>{renderAttentionGroup({ item: group })}</View>)
+        )}
         {/* 待处理 Ask 弹窗卡片（支持多条队列角标与前后切换） */}
         {pendingAsks.length > 0 && pendingAsks[currentAskIndex] && (
           <TouchableOpacity
@@ -386,19 +481,6 @@ export default function DashboardScreen() {
             </View>
           </TouchableOpacity>
         )}
-
-        {/* 需要关注 */}
-        <View style={styles.sectionHeader}>
-          <Text style={styles.sectionTitle}>{t.attentionTitle}</Text>
-          <Text style={styles.sectionMeta}>{metrics.waitingCount} {t.alertCount}</Text>
-        </View>
-        {metrics.attentionGroups.length === 0 ? (
-          <View style={styles.row}>
-            <Text style={styles.emptyText}>{t.noAlerts}</Text>
-          </View>
-        ) : (
-          metrics.attentionGroups.map((group) => <View key={group.key}>{renderAttentionGroup({ item: group })}</View>)
-        )}
       </ScrollView>
     </View>
   );
@@ -452,7 +534,6 @@ function makeStyles(theme: ReturnType<typeof useTheme>["theme"]) {
     heroLabel: { fontSize: 11, fontWeight: "600", color: theme.muted },
     heroValue: { fontSize: 32, fontWeight: "700", color: theme.text, fontFamily: "monospace", fontVariant: ["tabular-nums"] },
     heroCaption: { fontSize: 11, color: theme.dim, fontFamily: "monospace" },
-    heroContextPill: { fontSize: 11, fontWeight: "700", fontFamily: "monospace" },
     liveBadge: {
       flexDirection: "row",
       alignItems: "center",

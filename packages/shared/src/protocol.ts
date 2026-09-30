@@ -340,6 +340,8 @@ export interface WorkspaceOwnerState {
   pid: number;
   sessionId: string;
   sessionName?: string;
+  /** Optional producer-owned exact Desktop target; absent on legacy snapshots. */
+  desktopTargetIdentity?: SessionTargetIdentity;
   /** Optional producer-owned role; absent means the owner remains a regular session. */
   workspaceRole?: "session" | "monitor";
   publishedAt: number;
@@ -472,6 +474,8 @@ export interface MonitorPendingAsk {
 export interface MonitorWindowSummary {
   sessionId: string;
   endpointId: string;
+  /** Exact Desktop target shared by the owner producer; absent on legacy snapshots. */
+  target?: SessionTargetIdentity;
   runtimeStatus: SessionRuntimeStatus;
   identity: {
     workspaceId: string;
@@ -653,7 +657,7 @@ export type TargetedSessionCommand = {
 export type ClientCommandPayload =
   /** Deprecated compatibility envelope: Host always rejects it and never creates/attaches a session. */
   | { type: "open_session"; cwd: string; mode?: "create" | "continue"; sessionFile?: string; target?: SessionTargetIdentity }
-  | { type: "list_host_sessions"; cwd?: string; limit?: number; cursor?: string; query?: string; sessionIds?: string[]; latestForCwds?: string[] }
+  | { type: "list_host_sessions"; cwd?: string; limit?: number; cursor?: string; query?: string; includeMonitor?: boolean; sessionIds?: string[]; latestForCwds?: string[] }
   | ({ type: "load_more_history"; count?: number } & TargetedSessionCommand)
   | ({ type: "search_history"; keyword: string; maxResults?: number; previewLength?: number } & TargetedSessionCommand)
   | ({ type: "list_models" } & TargetedSessionCommand)
@@ -795,7 +799,7 @@ export function isHostEvent(value: unknown): value is HostEvent {
     case "maestro_state":
       return isRecord(value.state);
     case "monitor_state":
-      return isRecord(value.state);
+      return isMonitorState(value.state);
     case "teammate_event":
       return isString(value.scheduleId) && isString(value.status)
         && (value.dispatchId === undefined || isString(value.dispatchId));
@@ -813,6 +817,7 @@ export function isClientCommand(value: unknown): value is ClientCommand {
   if (value.type !== "open_session" && value.type !== "close_session"
     && value.type !== "list_host_sessions"
     && value.type !== "get_maestro_settings" && value.type !== "get_maestro_state"
+    && value.type !== "get_monitor_state"
     && value.type !== "get_execution_projections" && value.type !== "ping"
     && value.type !== "update_maestro_settings"
     && (value.target === undefined || !isSessionTargetIdentity(value.target))) return false;
@@ -821,7 +826,8 @@ export function isClientCommand(value: unknown): value is ClientCommand {
       return isString(value.cwd) && optionalEnum(value.mode, "create", "continue") && optionalString(value.sessionFile);
     case "list_host_sessions":
       return optionalString(value.cwd) && optionalFiniteNumber(value.limit) && optionalString(value.cursor)
-        && optionalString(value.query) && optionalStringArray(value.sessionIds) && optionalStringArray(value.latestForCwds);
+        && optionalString(value.query) && (value.includeMonitor === undefined || typeof value.includeMonitor === "boolean")
+        && optionalStringArray(value.sessionIds) && optionalStringArray(value.latestForCwds);
     case "get_maestro_settings":
     case "get_maestro_state":
     case "get_monitor_state":
@@ -973,8 +979,16 @@ function isWorkspaceProjectionTarget(value: unknown): value is WorkspaceProjecti
   return isRecord(value) && isString(value.workspaceId);
 }
 
+function isMonitorState(value: unknown): value is MonitorState {
+  return isRecord(value) && isString(value.observedAt)
+    && Array.isArray(value.windows) && value.windows.every(isMonitorWindowSummary)
+    && (value.revision === undefined || isNonNegativeSafeInteger(value.revision));
+}
+
 function isMonitorWindowSummary(value: unknown): value is MonitorWindowSummary {
   return isRecord(value) && isString(value.sessionId) && isString(value.endpointId)
+    && (value.target === undefined || (isSessionTargetIdentity(value.target)
+      && value.target.sessionId === value.sessionId && value.target.endpointId === value.endpointId))
     && (value.runtimeStatus === "running" || value.runtimeStatus === "idle" || value.runtimeStatus === "sleeping" || value.runtimeStatus === "history")
     && isRecord(value.identity) && isString(value.identity.workspaceId) && isString(value.identity.ownerId)
     && isString(value.identity.ownerNonce) && isString(value.identity.endpointId)

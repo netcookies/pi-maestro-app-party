@@ -7,12 +7,15 @@ export interface OpenedSession {
 
 /** Opening a session only selects the exact server-issued target; it performs no Host lifecycle operation. */
 export function selectSessionTarget(session: HostSessionSummary): OpenedSession {
-  if (!session.target || !isSessionTargetIdentity(session.target)) {
+  if (!session.target || !isSessionTargetIdentity(session.target)
+    || session.target.sessionId !== session.sessionId
+    || session.target.endpointId !== session.endpointId) {
     throw new Error("session_target_unavailable");
   }
+  const canonicalTargetKey = sessionTargetKey(session.target);
   return {
     sessionId: session.sessionId,
-    targetKey: session.targetKey ?? sessionTargetKey(session.target),
+    targetKey: canonicalTargetKey,
   };
 }
 

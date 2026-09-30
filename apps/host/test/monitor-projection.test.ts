@@ -55,6 +55,18 @@ describe("inspectWindowExecutionState & projectWindow", () => {
     expect(projected.identity).not.toHaveProperty("processGeneration");
   });
 
+  it("projects the complete Desktop target identity supplied by the owner", () => {
+    const target = {
+      sessionId: "sess-12345678-abcd",
+      endpointId: "desktop-live",
+      normalizedCwd: "/Users/test/project",
+      processGeneration: "generation-1",
+    };
+    const projected = projectWindow(makeOwner({ desktopTargetIdentity: target }));
+    expect(projected.target).toEqual(target);
+    expect(projected.endpointId).toBe(target.endpointId);
+  });
+
   it("does not keep an ask after agent_end", () => {
     const projected = projectWindow(makeOwner({
       mainProgress: {

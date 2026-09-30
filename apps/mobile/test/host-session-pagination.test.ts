@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
-import type { HostSessionList, HostSessionSummary } from "@maestro-mobile/shared";
-import { canLoadMoreSessions, filterSessionsByVisibility, isLoadMoreResponseCurrent, isServerSessionPresentation, isTargetedResponseCurrent, mergeHostSessionPage, mergeSessionPresentation, mergeTargetedHostSessions, patchHostSessionSummary, shouldBlockSessionListError, shouldRequestTargetedSummaries } from "../src/host-session-pagination";
+import type { HostSessionList, HostSessionSummary, WorkspaceWindowProjection } from "@maestro-mobile/shared";
+import { canLoadMoreSessions, filterSessionsByVisibility, isLoadMoreResponseCurrent, isServerSessionPresentation, isTargetedResponseCurrent, mergeHostSessionPage, mergeSessionPresentation, mergeTargetedHostSessions, patchHostSessionSummary, removeHostSessionSummary, sessionRoleRevision, shouldBlockSessionListError, shouldRequestTargetedSummaries } from "../src/host-session-pagination";
 
 function session(id: string, title = id): HostSessionSummary {
   return {
@@ -23,6 +23,75 @@ describe("host session pagination", () => {
     expect(filterSessionsByVisibility([visible, monitor], "session_list").map((item) => item.id)).toEqual(["visible"]);
     expect(filterSessionsByVisibility([visible, monitor], "monitor_tab").map((item) => item.id)).toEqual(["monitor"]);
     expect(isServerSessionPresentation({ role: "session", visibility: "session_list" })).toBe(false);
+  });
+
+  it("changes the tab invalidation token when a workspace role changes", () => {
+    const projection = (role: "session" | "monitor"): WorkspaceWindowProjection => ({
+      schemaVersion: 1,
+      source: "workspace",
+      scope: "workspace",
+      target: { workspaceId: "workspace" },
+      epoch: "epoch",
+      revision: 1,
+      observedAt: "2026-01-01T00:00:00.000Z",
+      snapshot: true,
+      data: {
+        windows: [{
+          sessionId: "s",
+          endpointId: "e",
+          runtimeStatus: "idle",
+          identity: { workspaceId: "workspace", ownerId: "owner", ownerNonce: "nonce", endpointId: "e" },
+          status: "idle",
+          lifecycle: "settled",
+          workStatus: "idle",
+          todos: [],
+          attention: [],
+          facets: [],
+          presentation: {
+            role,
+            visibility: role === "monitor" ? "monitor_tab" : "session_list",
+            control: { mode: "readonly", canPrompt: false, canSteer: false, canFollowUp: false, canAbort: false, canAnswerAsk: false },
+            revision: 1,
+          },
+        }],
+      },
+    });
+
+    const sessionToken = sessionRoleRevision([projection("session")]);
+    const monitorToken = sessionRoleRevision([projection("monitor")]);
+    const sessionAgainToken = sessionRoleRevision([{ ...projection("session"), revision: 2 }]);
+    expect(sessionToken).not.toBe(monitorToken);
+    expect(monitorToken).not.toBe(sessionAgainToken);
+  });
+  it("switches the same sessionId between tabs without collapsing exact-target siblings", () => {
+    const sessionTarget = { sessionId: "shared-session", endpointId: "endpoint-a", normalizedCwd: "/project", processGeneration: "generation-a" };
+    const monitorTarget = { sessionId: "shared-session", endpointId: "endpoint-b", normalizedCwd: "/project", processGeneration: "generation-b" };
+    const basePresentation = { control: { mode: "readonly" as const, canPrompt: false, canSteer: false, canFollowUp: false, canAbort: false, canAnswerAsk: false }, revision: 1 };
+    const sessionRow = { ...session("shared-session", "session"), endpointId: sessionTarget.endpointId, target: sessionTarget, targetKey: JSON.stringify([sessionTarget.sessionId, sessionTarget.endpointId, sessionTarget.normalizedCwd, sessionTarget.processGeneration]), presentation: { ...basePresentation, role: "session" as const, visibility: "session_list" as const } };
+    const monitorRow = { ...session("shared-session", "monitor"), endpointId: monitorTarget.endpointId, target: monitorTarget, targetKey: JSON.stringify([monitorTarget.sessionId, monitorTarget.endpointId, monitorTarget.normalizedCwd, monitorTarget.processGeneration]), presentation: { ...basePresentation, role: "monitor" as const, visibility: "monitor_tab" as const } };
+
+    expect(filterSessionsByVisibility([sessionRow, monitorRow], "session_list")).toEqual([sessionRow]);
+    expect(filterSessionsByVisibility([sessionRow, monitorRow], "monitor_tab")).toEqual([monitorRow]);
+    expect(sessionRow.sessionId).toBe(monitorRow.sessionId);
+    expect(sessionRow.targetKey).not.toBe(monitorRow.targetKey);
+
+    const switched = {
+      ...sessionRow,
+      presentation: { ...sessionRow.presentation, role: "monitor" as const, visibility: "monitor_tab" as const, revision: 2 },
+    };
+    expect(filterSessionsByVisibility([switched], "session_list")).toEqual([]);
+    expect(filterSessionsByVisibility([switched], "monitor_tab")).toEqual([switched]);
+  });
+
+  it("removes only the unregistered exact-target row", () => {
+    const removed = { sessionId: "same", endpointId: "endpoint-a", normalizedCwd: "/project", processGeneration: "generation-a" };
+    const sibling = { ...removed, endpointId: "endpoint-b", processGeneration: "generation-b" };
+    const rows = [
+      { ...session("same", "removed"), target: removed },
+      { ...session("same", "sibling"), target: sibling, targetKey: JSON.stringify([sibling.sessionId, sibling.endpointId, sibling.normalizedCwd, sibling.processGeneration]) },
+    ];
+
+    expect(removeHostSessionSummary(rows, removed)).toEqual([rows[1]]);
   });
 
   it("keeps the newest server presentation when responses race", () => {

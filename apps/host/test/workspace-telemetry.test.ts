@@ -15,6 +15,7 @@ interface OwnerOpts {
   kind?: string;
   publishedAt?: number | string;
   padKb?: number;
+  desktopTargetIdentity?: { sessionId: string; endpointId: string; normalizedCwd: string; processGeneration: string } | Record<string, unknown>;
 }
 
 function ownerPayload(wsId: string, ownerId: string, opts: OwnerOpts = {}) {
@@ -26,6 +27,7 @@ function ownerPayload(wsId: string, ownerId: string, opts: OwnerOpts = {}) {
     ownerId,
     pid: 4242,
     sessionId: `sess-${ownerId}`,
+    ...(opts.desktopTargetIdentity === undefined ? {} : { desktopTargetIdentity: opts.desktopTargetIdentity }),
     publishedAt: opts.publishedAt ?? Date.now(),
     contextPressure: null,
     agents: [],
@@ -53,6 +55,23 @@ describe("WorkspaceTelemetryReader", () => {
     expect(result.owners.map((o) => o.ownerId)).toEqual(["o1"]);
     expect(result.aliveCount).toBe(1);
     expect(result.owners[0].pid).toBe(4242);
+  });
+
+  it("reads only a complete Desktop target identity from the owner snapshot", async () => {
+    const { root, ownersDir } = await fixture();
+    const target = {
+      sessionId: "sess-exact",
+      endpointId: "desktop-endpoint",
+      normalizedCwd: "/proj",
+      processGeneration: "generation-1",
+    };
+    await writeFile(join(ownersDir, "exact.json"), ownerPayload("ws-1", "exact", { desktopTargetIdentity: target }), "utf8");
+    await writeFile(join(ownersDir, "partial.json"), ownerPayload("ws-1", "partial", {
+      desktopTargetIdentity: { ...target, processGeneration: undefined },
+    }), "utf8");
+    const result = await new WorkspaceTelemetryReader(90_000, { rootPath: root }).read();
+    expect(result.owners.find((owner) => owner.ownerId === "exact")?.desktopTargetIdentity).toEqual(target);
+    expect(result.owners.find((owner) => owner.ownerId === "partial")?.desktopTargetIdentity).toBeUndefined();
   });
 
   it("超过 1MB 的 owner 文件跳过并告警（旧实现无字节上限分配）", async () => {

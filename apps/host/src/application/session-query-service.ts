@@ -160,7 +160,7 @@ export class SessionQueryService {
   constructor(
     private readonly source: SessionListSource,
     private readonly directory: SessionDirectory,
-    private readonly presentationFor?: (sessionId: string) => SessionPresentation | undefined,
+    _presentationFor?: (sessionId: string) => SessionPresentation | undefined,
     private readonly now: () => number = Date.now,
     private readonly monitorState?: () => Promise<MonitorState>,
     private readonly targetFor?: (sessionId: string) => SessionDirectoryTarget | undefined,
@@ -187,11 +187,14 @@ export class SessionQueryService {
       if (summary.target && summary.path) this.directory.registerHistoryTarget(summary.target, summary.path);
     }
     const monitorWindows = this.monitorState ? (await this.monitorState()).windows : [];
-    const windowsBySessionId = new Map<string, typeof monitorWindows>();
+    const windowsByTargetKey = new Map<string, typeof monitorWindows>();
     for (const window of monitorWindows) {
-      const windows = windowsBySessionId.get(window.sessionId) ?? [];
-      windows.push(window);
-      windowsBySessionId.set(window.sessionId, windows);
+      if (window.target) {
+        const targetKey = targetIdentityKey(window.target);
+        const exactWindows = windowsByTargetKey.get(targetKey) ?? [];
+        exactWindows.push(window);
+        windowsByTargetKey.set(targetKey, exactWindows);
+      }
     }
     const observedAt = new Date(this.now()).toISOString();
     const directoryTargets = this.directory.list();
@@ -213,44 +216,32 @@ export class SessionQueryService {
         messageCount: 0,
         updatedAt: observedAt,
         presentation: window.presentation,
+        ...(window.target ? { target: { ...window.target }, targetKey: targetIdentityKey(window.target) } : {}),
       });
     }
     const projectedTargetKeys = new Set<string>();
     let sessions = summaries.flatMap((summary) => {
-      const windows = windowsBySessionId.get(summary.sessionId) ?? [];
-      const window = windows.length === 1 ? windows[0] : undefined;
-      const sourcePresentation = window?.presentation ?? summary.presentation ?? this.presentationFor?.(summary.sessionId);
       const matchingTargets = directoryTargets.filter((candidate) => candidate.identity.sessionId === summary.sessionId);
       if (matchingTargets.length > 0) {
         return matchingTargets.flatMap((target) => {
           const targetKey = targetIdentityKey(target.identity);
           if (projectedTargetKeys.has(targetKey)) return [];
           projectedTargetKeys.add(targetKey);
-          const attributedWindows = windows.filter((candidate) => candidate.endpointId === target.identity.endpointId
-            && candidate.cwd !== undefined && normalize(candidate.cwd) === target.identity.normalizedCwd);
-          const sameEndpointTargets = matchingTargets.filter((candidate) => candidate.identity.endpointId === target.identity.endpointId
-            && candidate.identity.normalizedCwd === target.identity.normalizedCwd);
-          const presentation = matchingTargets.length === 1 ? sourcePresentation
-            : attributedWindows.length === 1 && sameEndpointTargets.length === 1 ? attributedWindows[0].presentation : undefined;
+          const exactWindows = windowsByTargetKey.get(targetKey) ?? [];
+          const presentation = target.kind === "desktop" && exactWindows.length === 1
+            ? exactWindows[0]?.presentation : undefined;
           return [summaryForTarget(target, this.directory.revision, observedAt, summary, presentation)];
         });
       }
       const target = this.targetFor?.(summary.sessionId);
       if (target) {
         projectedTargetKeys.add(targetIdentityKey(target.identity));
-        return [summaryForTarget(target, this.directory.revision, observedAt, summary, sourcePresentation)];
+        const exactWindows = windowsByTargetKey.get(targetIdentityKey(target.identity)) ?? [];
+        const presentation = target.kind === "desktop" && exactWindows.length === 1
+          ? exactWindows[0]?.presentation : undefined;
+        return [summaryForTarget(target, this.directory.revision, observedAt, summary, presentation)];
       }
-      const directoryPresentation = this.presentationFor?.(summary.sessionId);
-      return [window
-        ? {
-            ...summary,
-            endpointId: window.endpointId,
-            runtimeStatus: window.runtimeStatus,
-            ...(directoryPresentation ?? window.presentation ?? summary.presentation
-              ? { presentation: directoryPresentation ?? window.presentation ?? summary.presentation }
-              : {}),
-          }
-        : summary];
+      return [summary];
     });
     for (const target of directoryTargets) {
       const targetKey = targetIdentityKey(target.identity);
@@ -258,7 +249,10 @@ export class SessionQueryService {
       sessions.push(summaryForTarget(target, this.directory.revision, observedAt));
     }
     sessions = sessions.filter((session) => {
-      const presentation = session.presentation ?? this.presentationFor?.(session.id) ?? readonlyPresentation(this.directory.revision);
+      const presentation = session.presentation ?? readonlyPresentation(this.directory.revision);
+      if (presentation.visibility === "monitor_tab"
+        && (!session.target || !directoryTargets.some((target) => target.kind === "desktop"
+          && targetIdentityKey(target.identity) === targetIdentityKey(session.target!)))) return false;
       if (!options.includeMonitor && presentation.visibility === "monitor_tab") return false;
       if (projectCwds && !projectCwds.includes(session.cwd)) return false;
       if (!query) return true;
@@ -378,7 +372,7 @@ export class SessionQueryService {
   private withPresentation(session: HostSessionSummary): HostSessionSummary {
     return {
       ...session,
-      presentation: session.presentation ?? this.presentationFor?.(session.id) ?? readonlyPresentation(this.directory.revision),
+      presentation: session.presentation ?? readonlyPresentation(this.directory.revision),
     };
   }
 }

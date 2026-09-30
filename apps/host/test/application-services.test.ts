@@ -81,7 +81,7 @@ describe("SessionCommandService", () => {
 });
 
 describe("SessionQueryService", () => {
-  it("filters by project and excludes monitor sessions while paginating", async () => {
+  it("does not infer Monitor placement from a session ID alone", async () => {
     const directory = new SessionDirectory();
     const source = {
       listSessions: vi.fn(async () => [
@@ -100,13 +100,13 @@ describe("SessionQueryService", () => {
     const service = new SessionQueryService(source, directory, (id) => id === "monitor" ? monitor : readonly);
 
     const page = await service.list({ projectCwds: ["/work/app"], limit: 1 });
-    expect(page.sessions.map((session) => session.id)).toEqual(["a"]);
-    expect(page.total).toBe(1);
-    expect(page.sessions[0]?.presentation).toEqual(readonly);
+    expect(page.sessions.map((session) => session.id)).toEqual(["monitor"]);
+    expect(page.total).toBe(2);
+    expect(page.sessions[0]?.presentation).toMatchObject({ role: "session", visibility: "session_list" });
     expect(source.listSessions).toHaveBeenCalledWith(undefined);
   });
 
-  it("keeps a monitor presentation when telemetry overlays an existing history record", async () => {
+  it("does not attribute an owner Monitor role to a history target without an exact identity", async () => {
     const directory = new SessionDirectory();
     const monitorPresentation = {
       role: "monitor" as const,
@@ -140,7 +140,7 @@ describe("SessionQueryService", () => {
     );
 
     await expect(service.list({ includeMonitor: true })).resolves.toMatchObject({
-      sessions: [{ id: "monitor", presentation: monitorPresentation, runtimeStatus: "idle" }],
+      sessions: [{ id: "monitor", presentation: { role: "session", visibility: "session_list" }, runtimeStatus: "history" }],
     });
   });
 
@@ -166,7 +166,8 @@ describe("SessionQueryService", () => {
       async () => ({
         windows: [{
           sessionId: "monitor",
-          endpointId: "telemetry-endpoint",
+          endpointId: "desktop-endpoint",
+          target,
           runtimeStatus: "running",
           identity: { workspaceId: "ws", ownerId: "owner", ownerNonce: "nonce", endpointId: "telemetry-endpoint" },
           name: "Monitor owner",
@@ -348,7 +349,45 @@ describe("SessionQueryService", () => {
     expect(list.sessions.every((session) => session.presentation?.control.mode === "desktop_plugin")).toBe(true);
   });
 
-  it("does not leak Monitor placement across sibling Desktop targets", async () => {
+  it("attributes Monitor placement only through the exact Desktop identity", async () => {
+    const directory = new SessionDirectory();
+    const target = { sessionId: "shared", endpointId: "desktop-endpoint", normalizedCwd: "/work/app", processGeneration: "g1" };
+    directory.registerDesktopTarget(target, ["abort"]);
+    const monitorPresentation = {
+      role: "monitor" as const,
+      visibility: "monitor_tab" as const,
+      control: { mode: "readonly" as const, canPrompt: false, canSteer: false, canFollowUp: false, canAbort: false, canAnswerAsk: false },
+      revision: 2,
+    };
+    const service = new SessionQueryService(
+      { listSessions: async () => [{ id: "shared", cwd: "/work/app", path: "/sessions/shared.jsonl" }] },
+      directory,
+      undefined,
+      Date.now,
+      async () => ({
+        windows: [{
+          sessionId: "shared", endpointId: "desktop-endpoint", target, runtimeStatus: "idle",
+          identity: { workspaceId: "ws", ownerId: "owner", ownerNonce: "nonce", endpointId: "shared" },
+          name: "Monitor", cwd: "/work/app", status: "idle", lifecycle: "settled", workStatus: "idle",
+          todos: [], attention: [], facets: [], presentation: monitorPresentation,
+        }],
+        observedAt: "2026-01-03T00:00:00Z",
+      }),
+    );
+
+    const all = await service.list({ includeMonitor: true });
+    expect(all.sessions).toHaveLength(2);
+    const desktopRow = all.sessions.find((session) => session.targetKey === JSON.stringify([target.sessionId, target.endpointId, target.normalizedCwd, target.processGeneration]));
+    const historyRow = all.sessions.find((session) => session.target?.endpointId === "history");
+    expect(desktopRow?.presentation)
+      .toMatchObject({ role: "monitor", visibility: "monitor_tab", control: { mode: "desktop_plugin", canAbort: true } });
+    expect(historyRow?.presentation).toMatchObject({ role: "session", visibility: "session_list" });
+    const defaultList = await service.list();
+    expect(defaultList.sessions.some((session) => session.targetKey === desktopRow?.targetKey)).toBe(false);
+    expect(defaultList.sessions.some((session) => session.target?.endpointId === "history")).toBe(true);
+  });
+
+  it("does not leak Monitor placement across ambiguous sibling Desktop targets", async () => {
     const directory = new SessionDirectory();
     const regular = { sessionId: "shared", endpointId: "regular", normalizedCwd: "/work/app", processGeneration: "g1" };
     const monitor = { ...regular, endpointId: "monitor-endpoint", processGeneration: "g2" };
@@ -367,8 +406,8 @@ describe("SessionQueryService", () => {
       Date.now,
       async () => ({
         windows: [{
-          sessionId: "shared", endpointId: monitor.endpointId, runtimeStatus: "idle",
-          identity: { workspaceId: "ws", ownerId: "owner", ownerNonce: "nonce", endpointId: monitor.endpointId },
+          sessionId: "shared", endpointId: monitor.endpointId, target: monitor, runtimeStatus: "idle",
+          identity: { workspaceId: "ws", ownerId: "owner", ownerNonce: "nonce", endpointId: "shared" },
           name: "Monitor", cwd: "/work/app", status: "idle", lifecycle: "settled", workStatus: "idle",
           todos: [], attention: [], facets: [], presentation: monitorPresentation,
         }],
@@ -376,11 +415,110 @@ describe("SessionQueryService", () => {
       }),
     );
 
-    await expect(service.list()).resolves.toMatchObject({ sessions: [{ target: regular, presentation: { visibility: "session_list" } }] });
     const all = await service.list({ includeMonitor: true });
     expect(all.sessions).toHaveLength(2);
+    expect(all.sessions.find((session) => session.target?.endpointId === regular.endpointId)?.presentation)
+      .toMatchObject({ role: "session", visibility: "session_list" });
     expect(all.sessions.find((session) => session.target?.endpointId === monitor.endpointId)?.presentation)
-      .toMatchObject({ role: "monitor", visibility: "monitor_tab", control: { mode: "desktop_plugin", canAbort: true } });
+      .toMatchObject({ role: "monitor", visibility: "monitor_tab" });
+  });
+
+  it("does not attribute Monitor placement when a unique Desktop target has no exact owner identity", async () => {
+    const directory = new SessionDirectory();
+    const target = { sessionId: "shared", endpointId: "desktop", normalizedCwd: "/work/app", processGeneration: "g1" };
+    directory.registerDesktopTarget(target, ["abort"]);
+    const monitorPresentation = {
+      role: "monitor" as const,
+      visibility: "monitor_tab" as const,
+      control: { mode: "readonly" as const, canPrompt: false, canSteer: false, canFollowUp: false, canAbort: false, canAnswerAsk: false },
+      revision: 1,
+    };
+    const service = new SessionQueryService(
+      { listSessions: async () => [{ id: "shared", cwd: "/work/app" }] },
+      directory,
+      undefined,
+      Date.now,
+      async () => ({
+        windows: [{
+          sessionId: "shared", endpointId: "shared", runtimeStatus: "idle",
+          identity: { workspaceId: "ws", ownerId: "owner", ownerNonce: "nonce", endpointId: "shared" },
+          name: "Monitor", cwd: "/work/app", status: "idle", lifecycle: "settled", workStatus: "idle",
+          todos: [], attention: [], facets: [], presentation: monitorPresentation,
+        }],
+        observedAt: "2026-01-03T00:00:00Z",
+      }),
+    );
+
+    const list = await service.list({ includeMonitor: true });
+    expect(list.sessions).toHaveLength(1);
+    expect(list.sessions[0]?.target).toEqual(target);
+    expect(list.sessions[0]?.presentation).toMatchObject({ role: "session", visibility: "session_list" });
+  });
+
+  it("applies Monitor placement to only the exact sibling Desktop target", async () => {
+    const directory = new SessionDirectory();
+    const regular = { sessionId: "shared", endpointId: "regular", normalizedCwd: "/work/app", processGeneration: "g1" };
+    const monitor = { ...regular, endpointId: "monitor-endpoint", processGeneration: "g2" };
+    directory.registerDesktopTarget(regular, ["prompt"]);
+    directory.registerDesktopTarget(monitor, ["abort"]);
+    const monitorPresentation = {
+      role: "monitor" as const,
+      visibility: "monitor_tab" as const,
+      control: { mode: "readonly" as const, canPrompt: false, canSteer: false, canFollowUp: false, canAbort: false, canAnswerAsk: false },
+      revision: 2,
+    };
+    const service = new SessionQueryService(
+      { listSessions: async () => [{ id: "shared", cwd: "/work/app" }] },
+      directory,
+      undefined,
+      Date.now,
+      async () => ({
+        windows: [{
+          sessionId: "shared", endpointId: monitor.endpointId, target: monitor, runtimeStatus: "idle",
+          identity: { workspaceId: "ws", ownerId: "owner", ownerNonce: "nonce", endpointId: "shared" },
+          name: "Monitor", cwd: "/work/app", status: "idle", lifecycle: "settled", workStatus: "idle",
+          todos: [], attention: [], facets: [], presentation: monitorPresentation,
+        }],
+        observedAt: "2026-01-03T00:00:00Z",
+      }),
+    );
+
+    const list = await service.list({ includeMonitor: true });
+    expect(list.sessions.find((session) => session.target?.endpointId === regular.endpointId)?.presentation)
+      .toMatchObject({ role: "session", visibility: "session_list" });
+    expect(list.sessions.find((session) => session.target?.endpointId === monitor.endpointId)?.presentation)
+      .toMatchObject({ role: "monitor", visibility: "monitor_tab" });
+  });
+
+  it("does not expose an owner target as Monitor unless the Desktop registry confirms it", async () => {
+    const directory = new SessionDirectory();
+    const target = { sessionId: "orphaned", endpointId: "desktop-orphan", normalizedCwd: "/work/app", processGeneration: "g1" };
+    const monitorPresentation = {
+      role: "monitor" as const,
+      visibility: "monitor_tab" as const,
+      control: { mode: "readonly" as const, canPrompt: false, canSteer: false, canFollowUp: false, canAbort: false, canAnswerAsk: false },
+      revision: 1,
+    };
+    const service = new SessionQueryService(
+      { listSessions: async () => [] },
+      directory,
+      undefined,
+      Date.now,
+      async () => ({
+        windows: [{
+          sessionId: target.sessionId,
+          endpointId: target.endpointId,
+          target,
+          runtimeStatus: "idle",
+          identity: { workspaceId: "ws", ownerId: "owner", ownerNonce: "nonce", endpointId: target.sessionId },
+          name: "Monitor", cwd: target.normalizedCwd, status: "idle", lifecycle: "settled", workStatus: "idle",
+          todos: [], attention: [], facets: [], presentation: monitorPresentation,
+        }],
+        observedAt: "2026-01-03T00:00:00Z",
+      }),
+    );
+
+    await expect(service.list({ includeMonitor: true })).resolves.toMatchObject({ sessions: [] });
   });
 
   it("honors targeted session IDs and latest cwd without paging", async () => {
