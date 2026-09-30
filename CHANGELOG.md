@@ -2,6 +2,17 @@
 
 本文件记录 Maestro Mobile 的显著变更。格式基于 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)。
 
+## [0.7.0] — 2026-09-30
+
+### 新增
+
+- integrate Monitor and Workbench projections
+
+### 修复
+
+- prevent stale ask resurrection
+- stabilize Markdown expand viewers
+
 ## [0.6.0] — 2026-09-27
 
 ### 新增
