@@ -22,8 +22,12 @@ afterEach(async () => {
   await rm(dir, { recursive: true, force: true });
 });
 
-function usageLine(id: string, usage: Record<string, unknown>, type = "message"): string {
-  return JSON.stringify({ type, id, message: { role: "assistant", usage } });
+function usageLine(id: string, usage: Record<string, unknown>, type = "message", role = "assistant"): string {
+  return JSON.stringify({ type, id, message: { role, usage } });
+}
+
+function topLevelUsageLine(id: string, type: "usage" | "compaction" | "branch_summary", usage: Record<string, unknown>): string {
+  return JSON.stringify({ type, id, kind: type === "usage" ? "cache_warm" : undefined, usage });
 }
 
 describe("parseUsageLine", () => {
@@ -36,25 +40,101 @@ describe("parseUsageLine", () => {
     expect(t.cost).toBeCloseTo(0.0026);
   });
 
-  it("computes totalTokens as sum of parts when totalTokens field absent", () => {
+  it("computes totalTokens from independent fields only", () => {
     const t = parseUsageLine(usageLine("a2", { input: 100, output: 20, cacheRead: 30, cacheWrite: 5, reasoning: 7 }));
-    expect(t.totalTokens).toBe(162);
+    expect(t.reasoning).toBe(7);
+    expect(t.totalTokens).toBe(155);
   });
 
-  it("returns zeros for non-message entries", () => {
-    expect(parseUsageLine(JSON.stringify({ type: "model_change", id: "m1" }))).toEqual(EMPTY_TOTALS);
+  it("accepts assistant and toolResult messages plus top-level usage-bearing entries", () => {
+    const usage = { input: 1, output: 2, cacheRead: 3, cacheWrite: 4 };
+    const lines = [
+      usageLine("assistant", usage, "message", "assistant"),
+      usageLine("tool", usage, "message", "toolResult"),
+      topLevelUsageLine("warm", "usage", usage),
+      topLevelUsageLine("compact", "compaction", usage),
+      topLevelUsageLine("branch", "branch_summary", usage),
+    ];
+    for (const line of lines) {
+      expect(parseUsageLine(line)).toEqual({
+        entries: 1, ...usage, reasoning: 0, totalTokens: 10, cost: 0,
+      });
+    }
   });
 
-  it("returns zeros for malformed JSON and missing usage", () => {
-    expect(parseUsageLine("not json")).toEqual(EMPTY_TOTALS);
-    expect(parseUsageLine(JSON.stringify({ type: "message", id: "x", message: { role: "user" } }))).toEqual(EMPTY_TOTALS);
+  it("does not add reasoning or cacheWrite1h subsets to totalTokens", () => {
+    const t = parseUsageLine(usageLine("subset", {
+      input: 10, output: 20, cacheRead: 30, cacheWrite: 40, reasoning: 7, cacheWrite1h: 8,
+    }));
+    expect(t.reasoning).toBe(7);
+    expect(t.cacheWrite).toBe(40);
+    expect(t.totalTokens).toBe(100);
   });
 
-  it("treats non-finite numbers as zero", () => {
+  it.each(["user", "system", "custom", "bashExecution", "tool", undefined])("ignores unsupported message role %s", (role) => {
+    expect(parseUsageLine(JSON.stringify({
+      type: "message", id: "unsupported-role", message: { role, usage: { input: 100 } },
+    }))).toEqual(EMPTY_TOTALS);
+  });
+
+  it.each(["model_change", "thinking_level_change", "session", "custom", "custom_message", "context_edit", "unknown"])("ignores unsupported entry type %s", (type) => {
+    expect(parseUsageLine(JSON.stringify({
+      type, id: "unsupported-kind", usage: { input: 100 }, message: { role: "assistant", usage: { input: 100 } },
+    }))).toEqual(EMPTY_TOTALS);
+  });
+
+  it.each([null, [], [1], "bad", 12, true])("rejects non-record usage %j for every supported shape", (usage) => {
+    const entries = [
+      { type: "message", message: { role: "assistant", usage } },
+      { type: "message", message: { role: "toolResult", usage } },
+      { type: "usage", usage }, { type: "compaction", usage }, { type: "branch_summary", usage },
+    ];
+    for (const entry of entries) expect(parseUsageLine(JSON.stringify(entry))).toEqual(EMPTY_TOTALS);
+  });
+
+  it("returns zeros for malformed JSON, malformed records, and missing usage", () => {
+    for (const line of ["not json", '{"usage":', "null", "[]", '[{"usage":{"input":1}}]']) {
+      expect(parseUsageLine(line)).toEqual(EMPTY_TOTALS);
+    }
+    for (const message of [null, [], "bad", { role: "assistant" }, { role: "toolResult" }]) {
+      expect(parseUsageLine(JSON.stringify({ type: "message", message, usage: { input: 100 } }))).toEqual(EMPTY_TOTALS);
+    }
+    for (const type of ["usage", "compaction", "branch_summary"]) {
+      expect(parseUsageLine(JSON.stringify({ type }))).toEqual(EMPTY_TOTALS);
+    }
+  });
+
+  it.each(["-1", "1e309", "-1e309", '"10"', "null", "[]", "true"])("sanitizes invalid numeric token and cost value %s", (value) => {
+    // 直接写指数触发非有限值检查；JSON.stringify 会把 Infinity/NaN 转为 null。
+    const line = `{"type":"message","message":{"role":"assistant","usage":{
+      "input":${value},"output":${value},"cacheRead":${value},"cacheWrite":${value},
+      "reasoning":${value},"cacheWrite1h":${value},"totalTokens":${value},"cost":{"total":${value}}
+    }}}`;
+    expect(parseUsageLine(line)).toEqual({ ...EMPTY_TOTALS, entries: 1 });
+  });
+
+  it.each([null, [], "bad", { total: "1" }, { total: -1 }])("sanitizes malformed cost record %j", (cost) => {
+    const t = parseUsageLine(usageLine("cost", { input: 2, cost }));
+    expect(t.cost).toBe(0);
+    expect(t.totalTokens).toBe(2);
+  });
+
+  it("preserves valid fields while sanitizing malformed fields", () => {
+    const t = parseUsageLine(usageLine("mixed", {
+      input: 4, output: 20, cacheRead: -1, cacheWrite: "5", reasoning: 7, cost: { total: 0.4 }, totalTokens: 999,
+    }));
+    expect(t).toEqual({
+      entries: 1, input: 4, output: 20, cacheRead: 0, cacheWrite: 0, reasoning: 7, totalTokens: 24, cost: 0.4,
+    });
+  });
+
+  it("preserves finite large values and sanitizes JSON-serialized nonfinite numbers", () => {
     const t = parseUsageLine(usageLine("a3", { input: Number.MAX_VALUE, output: "bad", cacheRead: NaN }));
     expect(t.entries).toBe(1);
+    expect(t.input).toBe(Number.MAX_VALUE);
     expect(t.output).toBe(0);
     expect(t.cacheRead).toBe(0);
+    expect(t.totalTokens).toBe(Number.MAX_VALUE);
   });
 });
 
@@ -73,7 +153,34 @@ describe("readSessionUsage", () => {
     expect(t.entries).toBe(2);
     expect(t.input).toBe(300);
     expect(t.output).toBe(30);
-    expect(t.totalTokens).toBe(300 + 30 + 5 + 0 + 3);
+    expect(t.totalTokens).toBe(300 + 30 + 5);
+  });
+
+  it("counts all supported usage-bearing kinds and does not poison ids with ignored rows", async () => {
+    const file = join(dir, "mixed.jsonl");
+    const usage = (input: number) => ({ input, output: 0, cacheRead: 0, cacheWrite: 0 });
+    const lines = [
+      JSON.stringify({ type: "custom", id: "late", usage: usage(999) }),
+      topLevelUsageLine("late", "usage", usage(7)),
+      usageLine("assistant", usage(1), "message", "assistant"),
+      usageLine("tool", usage(2), "message", "toolResult"),
+      topLevelUsageLine("warm", "usage", usage(3)),
+      topLevelUsageLine("compact", "compaction", usage(4)),
+      topLevelUsageLine("branch", "branch_summary", usage(5)),
+      usageLine("assistant", usage(100), "message", "assistant"),
+      JSON.stringify({ type: "context_edit", id: "ignored", usage: usage(500) }),
+      usageLine("user", usage(600), "message", "user"),
+      topLevelUsageLine("warm", "usage", usage(300)),
+      JSON.stringify({ type: "message", id: "invalid-before-valid", message: { role: "assistant", usage: [] } }),
+      usageLine("invalid-before-valid", usage(6)),
+      "not json",
+      JSON.stringify({ type: "custom_message", id: "custom-message", usage: usage(999) }),
+    ];
+    await writeFile(file, lines.join("\n"));
+    const t = await readSessionUsage(file);
+    expect(t.entries).toBe(7);
+    expect(t.input).toBe(1 + 2 + 3 + 4 + 5 + 6 + 7);
+    expect(t.totalTokens).toBe(t.input);
   });
 
   it("returns zeros for missing file", async () => {

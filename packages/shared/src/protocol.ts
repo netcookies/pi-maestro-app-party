@@ -696,7 +696,7 @@ export interface SessionUsageSummary {
   cacheRead: number;
   cacheWrite: number;
   reasoning: number;
-  /** input+output+cacheRead+cacheWrite+reasoning 之和（参考值，非独立增量） */
+  /** input+output+cacheRead+cacheWrite 之和；reasoning 已包含在 output 中 */
   totalTokens: number;
   /** 累计成本（美元；免费模型为 0） */
   cost: number;

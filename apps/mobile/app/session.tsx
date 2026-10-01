@@ -98,17 +98,14 @@ export default function SessionScreen() {
   const [planMode, setPlanMode] = useState("YOLO");
   const [actionSheetType, setActionSheetType] = useState<"think" | "plan" | null>(null);
 
-  // 确保配置加载与会话数据（冷启动直接进本页时）
+  // 配置加载与当前会话通知状态由详情页负责；历史快照在 timeline 尚未预加载时才补拉。
   useEffect(() => {
     void loadConfig();
-    if (id) {
-      setActiveViewingSession(id);
-      void loadSessionHistory(id, targetKey).catch(() => {});
-    }
+    if (id) setActiveViewingSession(id);
     return () => {
       setActiveViewingSession(null);
     };
-  }, [id, targetKey, loadSessionHistory]);
+  }, [id]);
 
   const openModelPicker = () => {
     const curId = modelIdOf(session?.model) ?? currentModelId ?? "";
@@ -150,8 +147,11 @@ export default function SessionScreen() {
   const stickToBottom = useRef(true);
   // 最近一次 onScroll 的 offset（懒加载 prepend 后恢复位置用）
   const lastScrollY = useRef(0);
-  // 懒加载冷却：scrollToOffset 恢复会再次触发 scroll，防止连环加载
   const loadCooldownUntil = useRef(0);
+  // 程序化滚动期间忽略中间 onScroll，避免 FAB 在动画未结束时重新出现。
+  const programmaticScrollGeneration = useRef(0);
+  const programmaticScrollActive = useRef(false);
+  const programmaticScrollTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   // FAB 显示状态（不在底部附近时显示）；ref 用于滚动回调判断真实变化，避免反复调度 LayoutAnimation
   const [showFab, setShowFab] = useState(false);
   const showFabRef = useRef(false);
@@ -234,6 +234,14 @@ export default function SessionScreen() {
   const timeline = selectedTargetKey
     ? (state.targetedTimelines.get(selectedTargetKey) ?? state.timelines.get(id ?? "") ?? [])
     : (state.timelines.get(id ?? "") ?? []);
+
+  // 详情页只在没有已加载 timeline 时补拉；列表页预加载成功后不重复请求。
+  const shouldLoadHistory = Boolean(id) && timeline.length === 0 && !state.targetedTimelines.has(selectedTargetKey ?? "") && !state.timelines.has(id ?? "");
+  useEffect(() => {
+    if (!shouldLoadHistory || !id) return;
+    void loadSessionHistory(id, targetKey).catch(() => {});
+  }, [id, targetKey, loadSessionHistory, shouldLoadHistory]);
+
   const timelineRows = useMemo(() => buildTimelineRows(timeline), [timeline]);
   const renderedRows = useMemo<ListRow[]>(
     () => hasMore ? [{ type: "load_more", id: LOAD_MORE_ID }, ...timelineRows] : timelineRows,
@@ -423,12 +431,30 @@ export default function SessionScreen() {
 
   const isStreaming = Boolean(isTurnWorking || isSessionStreaming || sending);
 
-  // reduce-motion 时跳过布局动画，加 try/catch 避免 Fabric 新架构初次布局时崩溃
-  const animateLayout = useCallback(() => {
-    try {
-      if (!reduceMotion) LayoutAnimation.easeInEaseOut();
-    } catch {}
-  }, [reduceMotion]);
+  const finishProgrammaticScroll = useCallback((generation: number, forceBottom: boolean) => {
+    if (!programmaticScrollActive.current || generation !== programmaticScrollGeneration.current) return;
+    programmaticScrollActive.current = false;
+    if (programmaticScrollTimer.current) {
+      clearTimeout(programmaticScrollTimer.current);
+      programmaticScrollTimer.current = null;
+    }
+    const contentH = lastContentHeight.current;
+    const viewH = viewportHeight.current;
+    if (contentH <= 0 || viewH <= 0) return;
+    const maxY = Math.max(0, contentH - viewH);
+    if (forceBottom) listRef.current?.scrollToEnd({ animated: false });
+    updateFabState(forceBottom ? maxY : lastScrollY.current, contentH, viewH);
+  }, [updateFabState]);
+
+  const cancelProgrammaticScroll = useCallback(() => {
+    programmaticScrollGeneration.current += 1;
+    programmaticScrollActive.current = false;
+    if (programmaticScrollTimer.current) {
+      clearTimeout(programmaticScrollTimer.current);
+      programmaticScrollTimer.current = null;
+    }
+  }, []);
+
 
   useEffect(() => {
     let cancelled = false;
@@ -450,25 +476,26 @@ export default function SessionScreen() {
     return () => { anim.stop(); pulseOpacity.setValue(1); };
   }, [session?.runState, reduceMotion, pulseOpacity]);
 
-  // 精准双重吸底：先以 requestAnimationFrame/scrollToEnd 快速定位，再在动画末期按实际测量最大 offset 二次校准
+  // 程序化滚动使用 generation + 兜底定时器；用户开始拖动时立即取消 guard。
   const scrollToBottom = useCallback((animated = true) => {
+    const generation = programmaticScrollGeneration.current + 1;
+    programmaticScrollGeneration.current = generation;
+    programmaticScrollActive.current = true;
+    if (programmaticScrollTimer.current) clearTimeout(programmaticScrollTimer.current);
     stickToBottom.current = true;
     if (showFabRef.current) {
       showFabRef.current = false;
       setShowFab(false);
     }
-    if (!listRef.current) return;
-    listRef.current.scrollToEnd({ animated });
-    setTimeout(() => {
-      const maxY = lastContentHeight.current - viewportHeight.current;
-      if (maxY > 0) {
-        listRef.current?.scrollToOffset({
-          offset: maxY + 40,
-          animated: false,
-        });
-      }
-    }, animated ? 100 : 25);
-  }, []);
+    listRef.current?.scrollToEnd({ animated });
+    programmaticScrollTimer.current = setTimeout(() => {
+      if (generation !== programmaticScrollGeneration.current) return;
+      // 校准后解除 guard，并仅按最终内容与视口状态更新 FAB。
+      finishProgrammaticScroll(generation, true);
+    }, animated ? 400 : 50);
+  }, [finishProgrammaticScroll]);
+
+  useEffect(() => cancelProgrammaticScroll, [cancelProgrammaticScroll]);
 
   useEffect(() => {
     // 新消息时滚动到底部（仅在用户位于底部附近时跟随）
@@ -515,13 +542,6 @@ export default function SessionScreen() {
     }
   };
 
-  // 触发一次初始 hasMore 探测（tail 返回时 snapshot 后 service 有值）
-  useEffect(() => {
-    if (timeline.length > 0) {
-      // 滚动到底部（初始位置展示最新消息）
-      setTimeout(() => listRef.current?.scrollToEnd({ animated: false }), 50);
-    }
-  }, []);
 
   const renderItem = ({ item, index }: { item: ListRow; index: number }) => {
     if (item.type === "load_more") {
@@ -785,10 +805,11 @@ export default function SessionScreen() {
         onLayout={(e) => {
           const h = e.nativeEvent.layout.height;
           viewportHeight.current = h;
-          updateFabState(lastScrollY.current, lastContentHeight.current, h);
+          if (!programmaticScrollActive.current) updateFabState(lastScrollY.current, lastContentHeight.current, h);
         }}
         onContentSizeChange={(w, h) => {
           lastContentHeight.current = h;
+          if (programmaticScrollActive.current) return;
           // prepend 完成后：锚点 = 原 offset + 新增高度（停在新段落底部）
           if (pendingOffsetRestore.current) {
             const prev = contentHeightBefore.current;
@@ -812,6 +833,7 @@ export default function SessionScreen() {
             updateFabState(lastScrollY.current, h, viewportHeight.current);
           }
         }}
+        onScrollBeginDrag={cancelProgrammaticScroll}
         onScroll={(e) => {
           const y = e.nativeEvent.contentOffset.y;
           const contentH = e.nativeEvent.contentSize.height;
@@ -819,10 +841,10 @@ export default function SessionScreen() {
           lastScrollY.current = y;
           contentHeightBefore.current = contentH;
           viewportHeight.current = viewH;
-          updateFabState(y, contentH, viewH);
+          if (!programmaticScrollActive.current) updateFabState(y, contentH, viewH);
 
           // 顶部懒加载：接近顶部且有更多时拉取更早历史（带冷却防连环）
-          if (y < cfg.loadMoreThreshold && hasMore && !loadingMore && Date.now() >= loadCooldownUntil.current) {
+          if (!programmaticScrollActive.current && y < cfg.loadMoreThreshold && hasMore && !loadingMore && Date.now() >= loadCooldownUntil.current) {
             void handleLoadMore();
           }
         }}

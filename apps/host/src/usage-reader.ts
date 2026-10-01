@@ -8,24 +8,24 @@
  *              "totalTokens":N,"cost":{"input":..,"output":..,"total":..}}}}
  *
  * 聚合语义（实测验证）：
- *  - totalTokens = input + output + cacheRead + cacheWrite + reasoning（各部分之和，非独立增量）
+ *  - totalTokens = input + output + cacheRead + cacheWrite（reasoning/cacheWrite1h 是已有字段的子集）
  *  - input 每轮重复计入上下文，「今日消耗」以 output/cost 为主指标、totalTokens 做参考
  *  - 条目 id 可能因流式补写重复出现，必须按 id 去重
- *  - usage 缺失（用户消息/工具消息）直接跳过
+ *  - 仅统计 assistant/toolResult message，以及 usage/compaction/branch_summary 条目中的 usage
  */
 import { readdir, stat, open } from "node:fs/promises";
 import { join, basename } from "node:path";
 import { homedir } from "node:os";
 
 export interface UsageTotals {
-  /** assistant 轮次（含 usage 的 message 条目数，已去重） */
+  /** 含 usage 的记录数（不是 assistant 轮次数；按 id 去重） */
   entries: number;
   input: number;
   output: number;
   cacheRead: number;
   cacheWrite: number;
   reasoning: number;
-  /** input+output+cacheRead+cacheWrite+reasoning 之和（参考值） */
+  /** input+output+cacheRead+cacheWrite 之和（reasoning/cacheWrite1h 已包含在对应字段中） */
   totalTokens: number;
   /** 累计成本（美元，模型定价;免费模型为 0） */
   cost: number;
@@ -55,7 +55,27 @@ function addTotals(a: UsageTotals, b: UsageTotals): UsageTotals {
   };
 }
 
-/** 单条 JSONL 行 → UsageTotals（非 message 条目 / 无 usage / 数值异常均返回零） */
+type JsonRecord = Record<string, unknown>;
+
+function isRecord(value: unknown): value is JsonRecord {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
+function usageRecordForEntry(entry: JsonRecord): JsonRecord | undefined {
+  const type = entry.type;
+  if (type === "message") {
+    if (!isRecord(entry.message)) return undefined;
+    const role = entry.message.role;
+    if (role !== "assistant" && role !== "toolResult") return undefined;
+    return isRecord(entry.message.usage) ? entry.message.usage : undefined;
+  }
+  if (type === "usage" || type === "compaction" || type === "branch_summary") {
+    return isRecord(entry.usage) ? entry.usage : undefined;
+  }
+  return undefined;
+}
+
+/** 单条 JSONL 行 → UsageTotals（不支持的条目 / 无 usage / 数值异常均返回零） */
 export function parseUsageLine(line: string): UsageTotals {
   if (!line.includes('"usage"')) return EMPTY_TOTALS;
   let d: unknown;
@@ -64,18 +84,15 @@ export function parseUsageLine(line: string): UsageTotals {
   } catch {
     return EMPTY_TOTALS;
   }
-  if (!d || typeof d !== "object") return EMPTY_TOTALS;
-  const rec = d as Record<string, unknown>;
-  if (rec.type !== "message") return EMPTY_TOTALS;
-  const message = rec.message as Record<string, unknown> | undefined;
-  const usage = message?.usage as Record<string, unknown> | undefined;
-  if (!usage || typeof usage !== "object") return EMPTY_TOTALS;
+  if (!isRecord(d)) return EMPTY_TOTALS;
+  const usage = usageRecordForEntry(d);
+  if (!usage) return EMPTY_TOTALS;
   // token/cost 要求非负有限：损坏行产生负 totals 或精度失真会污染聚合
   const num = (k: string): number => {
     const v = usage[k];
     return typeof v === "number" && Number.isFinite(v) && v >= 0 ? v : 0;
   };
-  const costObj = usage.cost as Record<string, unknown> | undefined;
+  const costObj = isRecord(usage.cost) ? usage.cost : undefined;
   const costRaw = costObj?.total;
   const cost = typeof costRaw === "number" && Number.isFinite(costRaw) && costRaw >= 0 ? costRaw : 0;
   const input = num("input"), output = num("output"), cacheRead = num("cacheRead"),
@@ -83,7 +100,8 @@ export function parseUsageLine(line: string): UsageTotals {
   return {
     entries: 1,
     input, output, cacheRead, cacheWrite, reasoning,
-    totalTokens: input + output + cacheRead + cacheWrite + reasoning,
+    // reasoning 已计入 output；cacheWrite1h 已计入 cacheWrite。
+    totalTokens: input + output + cacheRead + cacheWrite,
     cost,
   };
 }
@@ -162,19 +180,16 @@ async function scanUsageFile(sessionFile: string): Promise<UsageTotals> {
         return;
       }
       const text = line.toString("utf8");
-      // id 去重：流式补写同一条 message 可能重复出现
-      let id: string | undefined;
-      try {
-        const parsed = JSON.parse(text) as { id?: unknown };
-        if (typeof parsed.id === "string") id = parsed.id;
-      } catch {
-        // 解析失败仍尝试聚合 usage 行本身
-      }
+      const parsedTotals = parseUsageLine(text);
+      // 无用量的条目不占用去重 id，以免屏蔽之后的有效记录。
+      if (parsedTotals.entries === 0) return;
+      const parsed = JSON.parse(text) as { id?: unknown };
+      const id = typeof parsed.id === "string" ? parsed.id : undefined;
       if (id) {
         if (seenIds.has(id)) return;
         seenIds.add(id);
       }
-      totals = addTotals(totals, parseUsageLine(text));
+      totals = addTotals(totals, parsedTotals);
     };
 
     while (pos < size) {
