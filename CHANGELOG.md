@@ -2,6 +2,12 @@
 
 本文件记录 Maestro Mobile 的显著变更。格式基于 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)。
 
+## [0.8.0] — 2026-10-01
+
+### 修复
+
+- upgrade pi and stabilize session scrolling
+
 ## [0.7.0] — 2026-09-30
 
 ### 新增
