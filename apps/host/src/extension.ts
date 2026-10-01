@@ -22,7 +22,7 @@ import qrcodeTerminal from "qrcode-terminal";
 import { DEFAULT_DESKTOP_BROKER_PID_FILE, isOwnedProcessCommand } from "./plugin/desktop-broker-supervisor.js";
 import { compareDesktopCurrentStatus, formatDesktopCurrentStatus, type DesktopHostDiagnostic } from "./current-desktop-status.js";
 import { getDesktopPluginRuntimeRecord } from "./plugin/desktop-plugin-runtime-state.js";
-import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
+import { getPackageDir, type ExtensionAPI, type ExtensionContext } from "@earendil-works/pi-coding-agent";
 
 const PID_FILE = join(homedir(), ".pi", "maestro-mobile.pid");
 const TOKEN_FILE = join(homedir(), ".pi", "maestro-mobile-token");
@@ -148,6 +148,25 @@ function hostCliPath(): string {
 }
 
 /**
+ * host 子进程环境。
+ *
+ * host 是独立 Node 进程，不经过 Pi 扩展加载器，拿不到加载器注入给扩展的 host-provided peer 映射
+ * （`@earendil-works/pi-coding-agent` 因此无法从 mobile 包自身解析）。这里把宿主包目录按 Pi 官方变量
+ * `PI_PACKAGE_DIR`（`getPackageDir()` 读同一个变量）传给子进程，让它复用宿主正在运行的那一份 runtime，
+ * 而不是让用户在 mobile 包里再装一份副本。
+ */
+export function hostChildEnv(port: number, base: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {
+  const env: NodeJS.ProcessEnv = { ...base, MAESTRO_MOBILE_PORT: String(port) };
+  try {
+    const packageDir = getPackageDir();
+    if (packageDir) env.PI_PACKAGE_DIR = packageDir;
+  } catch {
+    // 取不到宿主目录时留给子进程按常规解析 / 全局前缀回退
+  }
+  return env;
+}
+
+/**
  * 启动 host 子进程（detached）并等待 health 通过。
  * O_EXCL 竞争锁防多 Pi 会话并发 start；stdout/stderr 继承日志 fd 使退出原因可查。
  */
@@ -179,7 +198,7 @@ async function startHostDetached(
       // 以前固定 "ignore"：host 的退出原因（OOM / EADDRINUSE / uncaught / 被信号杀）全进 /dev/null，
       // 只能表现为“无声消失”。日志必须 0600：cli 启动横幅会打印完整 token。
       stdio: logFd === undefined ? "ignore" : ["ignore", logFd, logFd],
-      env: { ...process.env, MAESTRO_MOBILE_PORT: String(port) },
+      env: hostChildEnv(port),
     });
     if (logFd !== undefined) closeSync(logFd); // 子进程已持有副本
     child.unref();
