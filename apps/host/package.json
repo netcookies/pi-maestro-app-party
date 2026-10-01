@@ -35,12 +35,16 @@
     "prepublishOnly": "pnpm --filter @maestro-mobile/shared build && bash build.sh && vitest run"
   },
   "dependencies": {
-    "@earendil-works/pi-coding-agent": "0.99.2",
-    "@earendil-works/pi-ai": "0.99.2",
     "qrcode-terminal": "^0.12.0",
     "ws": "^8.18.0"
   },
+  "peerDependencies": {
+    "@earendil-works/pi-coding-agent": "*",
+    "@earendil-works/pi-ai": "*"
+  },
   "devDependencies": {
+    "@earendil-works/pi-coding-agent": "0.99.2",
+    "@earendil-works/pi-ai": "0.99.2",
     "@types/node": "^22.0.0",
     "@types/ws": "^8.18.0",
     "tsx": "^4.20.0",
