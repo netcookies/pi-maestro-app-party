@@ -80,6 +80,15 @@ export default function SessionScreen() {
     { title: `Background (${executionJobs.length})`, items: executionJobs.map((item) => `${item.label ?? item.id} · ${item.status}`), count: executionJobs.length },
   ] : [];
 
+  const [reduceMotion, setReduceMotion] = useState(false);
+
+  // reduce-motion 时跳过布局动画，并隔离 Fabric 初次布局阶段的异常。
+  const animateLayout = useCallback(() => {
+    try {
+      if (!reduceMotion) LayoutAnimation.easeInEaseOut();
+    } catch {}
+  }, [reduceMotion]);
+
   // 统一的 FAB（回到底部向下箭头）显示状态判定逻辑
   const updateFabState = useCallback((y: number, contentH: number, viewH: number) => {
     if (contentH <= 0 || viewH <= 0) return;
@@ -92,7 +101,7 @@ export default function SessionScreen() {
       animateLayout();
       setShowFab(nextFab);
     }
-  }, [cfg.stickBottomTolerance]);
+  }, [cfg.stickBottomTolerance, animateLayout]);
 
   // 优化项 1 落地：FloatingToolBar 状态回显与操作
   const [planMode, setPlanMode] = useState("YOLO");
@@ -159,7 +168,6 @@ export default function SessionScreen() {
   const [composerHeight, setComposerHeight] = useState(0);
   // streaming 呼吸点（reduce-motion 时不启动循环）
   const pulseOpacity = useRef(new Animated.Value(1)).current;
-  const [reduceMotion, setReduceMotion] = useState(false);
   // 搜索状态
   const [searchOpen, setSearchOpen] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
