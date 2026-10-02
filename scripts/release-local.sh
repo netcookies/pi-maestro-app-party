@@ -24,7 +24,7 @@ for arg in "${@:2}"; do
 done
 
 [[ -n "$VERSION" ]] || { echo "用法: $0 <version> [--skip-npm] [--skip-apk] [--skip-ios]"; exit 1; }
-TAG="maestro-mobile-v$VERSION"
+TAG="v$VERSION"
 OUT_DIR="$REPO_ROOT/dist-release"
 mkdir -p "$OUT_DIR"
 
