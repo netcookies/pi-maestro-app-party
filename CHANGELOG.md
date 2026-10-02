@@ -2,6 +2,17 @@
 
 本文件记录 Maestro Mobile 的显著变更。格式基于 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)。
 
+## [0.8.4] — 2026-10-02
+
+### 修复
+
+- normalize simulator deployment target
+- restore token projection for Pi 1.0
+
+### 新增
+
+- optimize startup loading and request reuse
+
 ## [0.8.3] — 2026-10-01
 
 ### 修复
