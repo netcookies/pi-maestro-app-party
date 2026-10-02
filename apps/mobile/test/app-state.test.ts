@@ -316,12 +316,19 @@ describe("AppState reducer", () => {
     state = reduceEvent(state, {
       type: "session_summary_updated",
       target,
-      patch: { runtimeStatus: "running", messageCount: 2, lastActivityAt: "2026-01-01T00:00:01.000Z" },
+      patch: {
+        runtimeStatus: "running",
+        messageCount: 2,
+        lastActivityAt: "2026-01-01T00:00:01.000Z",
+        usage: { input: 10, output: 5, cacheRead: 2, cacheWrite: 1, totalTokens: 18, cost: 0.2 },
+        context: { tokens: 18, contextWindow: 100, percent: 18 },
+      },
       revision: 1,
       seq: 1,
     });
     const key = JSON.stringify([target.sessionId, target.endpointId, target.normalizedCwd, target.processGeneration]);
     expect(state.targetedSessions.get(key)).toMatchObject({ runState: "streaming", messageCount: 2, updatedAt: "2026-01-01T00:00:01.000Z" });
+    expect(state.hostSessionUsage.get(key)).toMatchObject({ entries: 1, totalTokens: 18, cost: 0.2 });
 
     state = reduceEvent(state, {
       type: "session_summary_updated",
@@ -340,6 +347,7 @@ describe("AppState reducer", () => {
       seq: 3,
     });
     expect(state.targetedSessions.get(key)).toMatchObject({ runState: "idle", messageCount: 2 });
+    expect(state.hostSessionUsage.has(key)).toBe(false);
   });
 
   it("does not clone a sibling session when an unloaded exact target emits a summary", () => {

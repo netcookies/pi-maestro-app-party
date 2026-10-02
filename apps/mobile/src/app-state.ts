@@ -592,6 +592,27 @@ export function reduceEvent(state: AppState, event: AppAction, deps: AppStateDep
         sessionSummaryPatches.delete(oldest);
       }
       let nextState = withRevision({ ...state, sessionSummaryPatches }, event.revision);
+      const hostSessionUsage = new Map(nextState.hostSessionUsage);
+      if (event.patch.reset) {
+        hostSessionUsage.delete(key);
+      } else if (patch.usage !== undefined) {
+        hostSessionUsage.set(key, {
+          sessionId: event.target.sessionId,
+          entries: 1,
+          input: patch.usage.input,
+          output: patch.usage.output,
+          cacheRead: patch.usage.cacheRead,
+          cacheWrite: patch.usage.cacheWrite,
+          reasoning: 0,
+          totalTokens: patch.usage.totalTokens,
+          cost: patch.usage.cost,
+          context: patch.context ?? null,
+        });
+      } else if (patch.context !== undefined) {
+        const existingUsage = hostSessionUsage.get(key);
+        if (existingUsage) hostSessionUsage.set(key, { ...existingUsage, context: patch.context });
+      }
+      nextState = { ...nextState, hostSessionUsage };
       const activeTarget = nextState.activeSessionTargets.get(event.target.sessionId);
       const currentSession = nextState.targetedSessions.get(key)
         ?? (activeTarget === key ? nextState.sessions.get(event.target.sessionId) : undefined);

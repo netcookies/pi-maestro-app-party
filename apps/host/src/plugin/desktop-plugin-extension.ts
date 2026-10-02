@@ -47,6 +47,72 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
+type SessionUsageProjection = NonNullable<DesktopPluginSessionSummary["usage"]>;
+
+function finiteNumber(value: unknown): value is number {
+  return typeof value === "number" && Number.isFinite(value) && value >= 0;
+}
+
+function usageProjection(value: unknown): SessionUsageProjection | undefined {
+  if (!isRecord(value)) return undefined;
+  const cost = isRecord(value.cost) ? value.cost.total : value.cost;
+  const input = finiteNumber(value.input) ? value.input : 0;
+  const output = finiteNumber(value.output) ? value.output : 0;
+  const cacheRead = finiteNumber(value.cacheRead) ? value.cacheRead : 0;
+  const cacheWrite = finiteNumber(value.cacheWrite) ? value.cacheWrite : 0;
+  const totalTokens = finiteNumber(value.totalTokens) ? value.totalTokens : input + output + cacheRead + cacheWrite;
+  if (totalTokens <= 0 && input + output + cacheRead + cacheWrite <= 0) return undefined;
+  return {
+    input,
+    output,
+    cacheRead,
+    cacheWrite,
+    totalTokens,
+    cost: finiteNumber(cost) ? cost : 0,
+  };
+}
+
+function addUsage(left: SessionUsageProjection | undefined, right: SessionUsageProjection): SessionUsageProjection {
+  return {
+    input: (left?.input ?? 0) + right.input,
+    output: (left?.output ?? 0) + right.output,
+    cacheRead: (left?.cacheRead ?? 0) + right.cacheRead,
+    cacheWrite: (left?.cacheWrite ?? 0) + right.cacheWrite,
+    totalTokens: (left?.totalTokens ?? 0) + right.totalTokens,
+    cost: (left?.cost ?? 0) + right.cost,
+  };
+}
+
+function sessionEntriesOf(ctx: unknown): readonly unknown[] {
+  if (!isRecord(ctx) || !isRecord(ctx.sessionManager)) return [];
+  const getEntries = ctx.sessionManager.getEntries;
+  if (typeof getEntries !== "function") return [];
+  const entries = getEntries.call(ctx.sessionManager);
+  return Array.isArray(entries) ? entries : [];
+}
+
+function usageFromSessionEntries(entries: readonly unknown[]): SessionUsageProjection | undefined {
+  let total: SessionUsageProjection | undefined;
+  const seen = new Set<string>();
+  for (const entry of entries) {
+    if (!isRecord(entry)) continue;
+    const id = typeof entry.id === "string" ? entry.id : undefined;
+    let rawUsage: unknown;
+    if (entry.type === "message" && isRecord(entry.message)
+      && (entry.message.role === "assistant" || entry.message.role === "toolResult")) {
+      rawUsage = entry.message.usage;
+    } else if (entry.type === "usage" || entry.type === "compaction" || entry.type === "branch_summary") {
+      rawUsage = entry.usage;
+    }
+    const usage = usageProjection(rawUsage);
+    if (!usage) continue;
+    if (id && seen.has(id)) continue;
+    if (id) seen.add(id);
+    total = addUsage(total, usage);
+  }
+  return total;
+}
+
 function boundedText(value: unknown, maxLength = 512): string | undefined {
   return typeof value === "string" && value.length > 0 && value.length <= maxLength ? value : undefined;
 }
@@ -667,7 +733,7 @@ export function createDesktopPluginExtension(options: DesktopPluginExtensionOpti
       sessionFile = ctx.sessionManager.getSessionFile();
       latestRuntimeStatus = ctx.isIdle() ? "idle" : "running";
       activeSince = undefined;
-      latestUsage = undefined;
+      latestUsage = usageFromSessionEntries(sessionEntriesOf(ctx));
       if (latestRuntimeStatus === "running") activeSince = new Date().toISOString();
       lastActivityAt = new Date().toISOString();
       messageCount = countStoredMessages(ctx);
@@ -834,25 +900,25 @@ export function createDesktopPluginExtension(options: DesktopPluginExtensionOpti
 
     pi.on("agent_start", () => publishRuntimeStatus("running"));
     pi.on("message_end", (event, ctx) => {
-      const role = (event as { message?: { role?: string; usage?: { input?: number; output?: number; cacheRead?: number; cacheWrite?: number; totalTokens?: number; cost?: { total?: number } } } }).message?.role;
+      const role = (event as { message?: { role?: string } }).message?.role;
+      const usage = usageProjection((event as { message?: { usage?: unknown } }).message?.usage);
       messageCount += 1;
       lastActivityAt = new Date().toISOString();
-      if (role === "assistant") {
-        const usage = (event as { message?: { usage?: { input?: number; output?: number; cacheRead?: number; cacheWrite?: number; totalTokens?: number; cost?: { total?: number } } } }).message?.usage;
-        if (usage && [usage.input, usage.output, usage.cacheRead, usage.cacheWrite, usage.totalTokens, usage.cost?.total].every((value) => typeof value === "number")) {
-          latestUsage = { input: usage.input!, output: usage.output!, cacheRead: usage.cacheRead!, cacheWrite: usage.cacheWrite!, totalTokens: usage.totalTokens!, cost: usage.cost!.total! };
-        }
+      if (role === "assistant" && usage) {
+        latestUsage = addUsage(latestUsage, usage);
       }
       latestContext = readContextUsage(ctx);
       publishSummary();
     });
     pi.on("session_compact", (_event, ctx) => {
       messageCount = countStoredMessages(ctx);
+      latestUsage = usageFromSessionEntries(sessionEntriesOf(ctx)) ?? latestUsage;
       latestContext = readContextUsage(ctx);
       lastActivityAt = new Date().toISOString();
       publishSummary();
     });
     pi.on("agent_end", (_event, ctx) => {
+      latestUsage = usageFromSessionEntries(sessionEntriesOf(ctx)) ?? latestUsage;
       latestContext = readContextUsage(ctx);
       publishRuntimeStatus("idle");
     });

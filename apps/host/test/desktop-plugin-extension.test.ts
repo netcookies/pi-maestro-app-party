@@ -378,6 +378,53 @@ describe("Desktop Plugin extension (TUI side)", () => {
     await waitFor(() => registry.list()[0]?.executionSummary?.todos.length === 0);
     expect(registry.list()[0]?.executionSummary?.todos).toEqual([]);
   });
+  it("publishes Pi 1.0 session usage from existing and completed assistant entries", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "maestro-ext-usage-"));
+    const registry = new DesktopPluginRegistry();
+    server = new DesktopPluginIpcServer({
+      socketPath: join(dir, "plugin.sock"),
+      secret: "test-secret",
+      registry,
+      supportedEvents: ["session_summary"],
+    });
+    await server.start();
+    const fake = fakePi({
+      models: [],
+      entries: [{
+        type: "custom",
+        id: "assistant-1",
+        customType: "diagnostic",
+      }, {
+        type: "message",
+        id: "assistant-1",
+        message: {
+          role: "assistant",
+          usage: { input: 100, output: 20, cacheRead: 30, cacheWrite: 5, totalTokens: 155, cost: { total: 0.4 } },
+        },
+      }],
+    });
+    createDesktopPluginExtension({ socketPath: join(dir, "plugin.sock"), secret: "test-secret" })(fake.pi as never);
+    fake.emit("session_start", { type: "session_start", reason: "startup" });
+    await waitFor(() => registry.list()[0]?.summary?.usage?.totalTokens === 155);
+
+    fake.emit("message_end", {
+      type: "message_end",
+      message: {
+        role: "assistant",
+        usage: { input: 200, output: 40, cacheRead: 60, cacheWrite: 10, totalTokens: 310, cost: { total: 0.6 } },
+      },
+    });
+    await waitFor(() => registry.list()[0]?.summary?.usage?.totalTokens === 465);
+    expect(registry.list()[0]?.summary?.usage).toEqual({
+      input: 300,
+      output: 60,
+      cacheRead: 90,
+      cacheWrite: 15,
+      totalTokens: 465,
+      cost: 1,
+    });
+  });
+
   it("reconnects and re-reports current model, thinking level, and execution summary after the socket drops", async () => {
     const providerKey = Symbol.for("pi-maestro.workspace-projection-providers.v1");
     const globals = globalThis as Record<symbol, unknown>;

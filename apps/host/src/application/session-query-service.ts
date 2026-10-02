@@ -356,7 +356,7 @@ export class SessionQueryService {
     return {
       ok: true,
       value: {
-        entries: 0,
+        entries: usage ? 1 : 0,
         input: usage?.input ?? 0,
         output: usage?.output ?? 0,
         cacheRead: usage?.cacheRead ?? 0,

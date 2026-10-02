@@ -578,6 +578,13 @@ describe("SessionQueryService", () => {
       ok: true,
       value: { session: { id: "desktop-session", presentation: { control: { mode: "desktop_plugin", canAbort: true } } } },
     });
+    directory.updateDesktopSummary(target, {
+      usage: { input: 10, output: 5, cacheRead: 2, cacheWrite: 1, totalTokens: 18, cost: 0.2 },
+    });
+    await expect(service.usage(target)).resolves.toMatchObject({
+      ok: true,
+      value: { entries: 1, totalTokens: 18, cost: 0.2 },
+    });
     await expect(service.usage({ ...target, normalizedCwd: "/wrong" })).resolves.toMatchObject({
       ok: false,
       status: "unknown",
