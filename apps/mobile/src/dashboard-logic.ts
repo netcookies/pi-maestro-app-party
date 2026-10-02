@@ -158,6 +158,13 @@ export function getActiveUsageTargets(
     .map(([sessionId, targetKey]) => ({ sessionId, targetKey }));
 }
 
+export function selectMissingUsageTargets(
+  targets: readonly ActiveUsageTarget[],
+  usageByTarget: ReadonlyMap<string, SessionUsageSummary>,
+): ActiveUsageTarget[] {
+  return targets.filter(({ targetKey }) => !usageByTarget.has(targetKey));
+}
+
 /** 汇总所有 Current exact-target 会话的 usage；没有有效样本时返回 null。 */
 export function aggregateSessionUsage(usages: readonly SessionUsageSummary[]): SessionUsageSummary | null {
   const valid = usages.filter((usage) => usage.entries > 0);

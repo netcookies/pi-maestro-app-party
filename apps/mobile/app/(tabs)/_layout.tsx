@@ -179,10 +179,10 @@ export default function TabLayout() {
         contentContainerStyle={{ width: pageWidth * 4 }}
       >
         <View style={{ width: pageWidth, height: "100%" }}>
-          <HostSessionsScreen />
+          <HostSessionsScreen active={activeIndex === 0} />
         </View>
         <View style={{ width: pageWidth, height: "100%" }}>
-          <DashboardScreen />
+          <DashboardScreen active={activeIndex === 1} />
         </View>
         <View style={{ width: pageWidth, height: "100%" }}>
           <MonitorScreen active={activeIndex === 2} />

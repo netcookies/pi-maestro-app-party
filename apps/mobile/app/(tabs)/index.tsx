@@ -24,6 +24,7 @@ import {
   aggregateSessionUsage,
   deriveDashboardMetrics,
   getActiveUsageTargets,
+  selectMissingUsageTargets,
   getCacheHitPercent,
   type PendingAskItem,
 } from "../../src/dashboard-logic";
@@ -40,7 +41,7 @@ function formatTokens(n: number): string {
   return String(Math.round(n));
 }
 
-export default function DashboardScreen() {
+export default function DashboardScreen({ active = true }: { active?: boolean }) {
   const router = useRouter();
   const { state, isConnected, connectionState, fetchSessionUsage, loadSessionHistory, cancelDialog, cancelPlan } = useHost();
   const { theme } = useTheme();
@@ -68,9 +69,10 @@ export default function DashboardScreen() {
   React.useEffect(() => {
     let cancelled = false;
     setUsage(aggregateSessionUsage([...listedUsageByTarget.values()]));
-    if (!isConnected || usageTargets.length === 0) return () => { cancelled = true; };
+    const missingUsageTargets = selectMissingUsageTargets(usageTargets, listedUsageByTarget);
+    if (!active || !isConnected || missingUsageTargets.length === 0) return () => { cancelled = true; };
 
-    void Promise.all(usageTargets.map(async ({ sessionId, targetKey }) => ({
+    void Promise.all(missingUsageTargets.map(async ({ sessionId, targetKey }) => ({
       targetKey,
       summary: await fetchSessionUsage(sessionId),
     }))).then((results) => {
@@ -82,7 +84,7 @@ export default function DashboardScreen() {
       setUsage(aggregateSessionUsage([...usageByTarget.values()]));
     });
     return () => { cancelled = true; };
-  }, [fetchSessionUsage, isConnected, listedUsageByTarget, usageTargets]);
+  }, [active, fetchSessionUsage, isConnected, listedUsageByTarget, usageTargets]);
 
   const pairingPrompt = connectionState === "connecting"
     ? t.connectingHost

@@ -28,6 +28,12 @@ import { ExtensionUiQueue } from "./extension-ui-queue";
 import { PlanQueue } from "./plan-queue";
 import { describeSendFailure } from "./delivery-error";
 import { monitorStateFromCommandResult, executionProjectionsFromCommandResult } from "./monitor-data";
+import {
+  loadStartupSnapshot,
+  startupCacheIdentity,
+  updateStartupSnapshot,
+} from "./mobile-startup-cache";
+import { singleFlight, stableRequestKey } from "./request-coordinator";
 
 import {
   createInitialState,
@@ -104,6 +110,7 @@ export function HostStoreProvider({ children }: { children: React.ReactNode }) {
   const sessionTargetsRef = useRef(new Map<string, SessionTargetIdentity>());
   const activeTargetKeysRef = useRef(new Map<string, string>());
   const reloadGenerationRef = useRef(0);
+  const requestFlightsRef = useRef(new Map<string, Promise<unknown>>());
 
   // H4：实时事件微批 — 同一帧内的 WS 事件合并为一次 reducer 执行，
   // 避免流式 delta 逐条触发全局重渲染。16ms 窗口上限（≈1 帧）。
@@ -218,6 +225,7 @@ export function HostStoreProvider({ children }: { children: React.ReactNode }) {
 
   const connect = useCallback((url: string, tok?: string) => {
     clearBufferedEvents();
+    requestFlightsRef.current.clear();
     clientRef.current?.close();
     sessionTargetsRef.current.clear();
     activeTargetKeysRef.current.clear();
@@ -245,21 +253,35 @@ export function HostStoreProvider({ children }: { children: React.ReactNode }) {
         // P2-2：断线重连成功后，为重连前活动的会话补拉 snapshot（代次号防陈旧响应覆盖新状态）
         if (s === "connected") {
           const projectionConnectionGeneration = stateRef.current.connectionGeneration;
-          void client.getExecutionProjections()
+          void singleFlight(
+            requestFlightsRef.current,
+            stableRequestKey("get_execution_projections", { generation: projectionConnectionGeneration }),
+            () => client.getExecutionProjections(),
+          )
             .then((result) => {
               const projections = executionProjectionsFromCommandResult(result);
               if (clientRef.current !== client || stateRef.current.connectionGeneration !== projectionConnectionGeneration) return;
               dispatch({ type: "__execution_projections_load", projections, revision: result.revision, connectionGeneration: projectionConnectionGeneration });
+              void updateStartupSnapshot(startupCacheIdentity(url, tok), { executionProjections: projections });
             })
             .catch(() => undefined);
-          void client.sendCommand({ type: "get_maestro_state" })
+          void singleFlight(
+            requestFlightsRef.current,
+            stableRequestKey("get_maestro_state", { generation: projectionConnectionGeneration }),
+            () => client.sendCommand({ type: "get_maestro_state" }),
+          )
             .then((result) => {
               if (result && typeof result === "object" && Array.isArray((result as { schedules?: unknown }).schedules)) {
                 dispatch({ type: "maestro_state", state: result as MaestroState, seq: 0 });
+                void updateStartupSnapshot(startupCacheIdentity(url, tok), { maestro: result as MaestroState });
               }
             })
             .catch(() => undefined);
-          void client.sendCommand({ type: "list_host_sessions", limit: 100 })
+          void singleFlight(
+            requestFlightsRef.current,
+            stableRequestKey("list_host_sessions", { generation: projectionConnectionGeneration, options: { limit: 100 } }),
+            () => client.sendCommand({ type: "list_host_sessions", limit: 100 }),
+          )
             .then((result) => {
               if (clientRef.current !== client || stateRef.current.connectionGeneration !== projectionConnectionGeneration) return;
               if (!result || typeof result !== "object" || !Array.isArray((result as { sessions?: unknown }).sessions)) return;
@@ -272,6 +294,7 @@ export function HostStoreProvider({ children }: { children: React.ReactNode }) {
                 const key = sessionTargetKey(session.target);
                 sessionTargetsRef.current.set(key, session.target);
               }
+              void updateStartupSnapshot(startupCacheIdentity(url, tok), { sessions: list });
               dispatch({
                 type: "__host_session_list_load",
                 list: { ...list, sessions: filterSessionsByVisibility(list.sessions, "session_list") },
@@ -306,6 +329,7 @@ export function HostStoreProvider({ children }: { children: React.ReactNode }) {
 
   const disconnect = useCallback(() => {
     clearBufferedEvents();
+    requestFlightsRef.current.clear();
     clientRef.current?.close();
     clientRef.current = null;
     queueRef.current.clearAll();
@@ -342,12 +366,33 @@ export function HostStoreProvider({ children }: { children: React.ReactNode }) {
         const list = await loadPairedHosts();
         if (list[0]) { url = list[0].hostUrl; tok = list[0].token; }
       }
-      if (url) connect(url, tok.trim() || undefined);
+      if (url) {
+        const identity = startupCacheIdentity(url, tok.trim() || undefined);
+        const cached = await loadStartupSnapshot(identity);
+        if (cached?.sessions) {
+          dispatch({
+            type: "__host_session_list_load",
+            list: { ...cached.sessions, sessions: filterSessionsByVisibility(cached.sessions.sessions, "session_list") },
+            connectionGeneration: stateRef.current.connectionGeneration,
+          });
+        }
+        if (cached?.maestro) dispatch({ type: "maestro_state", state: cached.maestro, seq: 0 });
+        connect(url, tok.trim() || undefined);
+      }
     })();
   }, [connect]);
 
   const listHostSessions = useCallback(async (options: { cwd?: string; limit?: number; cursor?: string; query?: string; includeMonitor?: boolean; sessionIds?: string[]; latestForCwds?: string[] } = {}): Promise<HostSessionList> => {
-    const result = await getClient().sendCommand({ type: "list_host_sessions", ...options });
+    const requestGeneration = stateRef.current.connectionGeneration;
+    const requestClient = getClient();
+    const requestKey = stableRequestKey("list_host_sessions", {
+      generation: requestGeneration,
+      options,
+    });
+    const result = await singleFlight(requestFlightsRef.current, requestKey, () => requestClient.sendCommand({ type: "list_host_sessions", ...options }));
+    if (requestClient !== clientRef.current || requestGeneration !== stateRef.current.connectionGeneration) {
+      throw new Error("Host connection changed while loading sessions");
+    }
     const list = result as HostSessionList;
     if (!list || !Array.isArray(list.sessions) || typeof list.observedAt !== "string") {
       throw new Error("Invalid session list response");
@@ -368,12 +413,23 @@ export function HostStoreProvider({ children }: { children: React.ReactNode }) {
       const key = session.targetKey ?? sessionTargetKey(session.target);
       sessionTargetsRef.current.set(key, session.target);
     }
-    return { ...list, sessions: filterSessionsByVisibility(list.sessions, options.includeMonitor ? "monitor_tab" : "session_list") };
-  }, [getClient]);
+    const visibleList = { ...list, sessions: filterSessionsByVisibility(list.sessions, options.includeMonitor ? "monitor_tab" : "session_list") };
+    if (options.limit === 100 && !options.cwd && !options.cursor && !options.query && !options.includeMonitor && !options.sessionIds && !options.latestForCwds) {
+      void updateStartupSnapshot(startupCacheIdentity(hostUrl, token), { sessions: list });
+    }
+    return visibleList;
+  }, [getClient, hostUrl, token]);
 
   const refreshMaestroState = useCallback(async (): Promise<MaestroState | null> => {
+    const requestGeneration = stateRef.current.connectionGeneration;
+    const requestClient = getClient();
     try {
-      const state = await getClient().sendCommand({ type: "get_maestro_state" }) as MaestroState;
+      const state = await singleFlight(
+        requestFlightsRef.current,
+        stableRequestKey("get_maestro_state", { generation: requestGeneration }),
+        () => requestClient.sendCommand({ type: "get_maestro_state" }),
+      ) as MaestroState;
+      if (requestClient !== clientRef.current || requestGeneration !== stateRef.current.connectionGeneration) return null;
       if (!state || !Array.isArray(state.schedules)) throw new Error("Invalid Maestro state response");
       dispatch({ type: "maestro_state", state, seq: 0 });
       return state;
@@ -384,8 +440,15 @@ export function HostStoreProvider({ children }: { children: React.ReactNode }) {
   }, [dispatch, getClient]);
 
   const refreshMonitor = useCallback(async (): Promise<MonitorState> => {
+    const requestGeneration = stateRef.current.connectionGeneration;
+    const requestClient = getClient();
     try {
-      const monitor = monitorStateFromCommandResult(await getClient().sendCommand({ type: "get_monitor_state" }));
+      const monitor = monitorStateFromCommandResult(await singleFlight(
+        requestFlightsRef.current,
+        stableRequestKey("get_monitor_state", { generation: requestGeneration }),
+        () => requestClient.sendCommand({ type: "get_monitor_state" }),
+      ));
+      if (requestClient !== clientRef.current || requestGeneration !== stateRef.current.connectionGeneration) throw new Error("Host connection changed while loading monitor");
       dispatch({ type: "monitor_state", state: monitor, seq: 0 });
       return monitor;
     } catch (error) {
@@ -398,7 +461,11 @@ export function HostStoreProvider({ children }: { children: React.ReactNode }) {
     try {
       const client = getClient();
       const projectionRequestGeneration = stateRef.current.connectionGeneration;
-      const result = await client.getExecutionProjections();
+      const result = await singleFlight(
+        requestFlightsRef.current,
+        stableRequestKey("get_execution_projections", { generation: projectionRequestGeneration }),
+        () => client.getExecutionProjections(),
+      );
       const projections = executionProjectionsFromCommandResult(result);
       if (projectionRequestGeneration !== stateRef.current.connectionGeneration || clientRef.current !== client) return projections;
       dispatch({ type: "__execution_projections_load", projections, revision: result.revision, connectionGeneration: projectionRequestGeneration });
@@ -462,8 +529,18 @@ export function HostStoreProvider({ children }: { children: React.ReactNode }) {
 
   const fetchSessionUsage = useCallback(async (sessionId: string): Promise<SessionUsageSummary | null> => {
     try {
-      const result = await getClient().sendCommand({ type: "get_session_usage", sessionId, ...targetOptions(sessionId) });
-      return result as SessionUsageSummary;
+      const target = targetOptions(sessionId).target;
+      const requestGeneration = stateRef.current.connectionGeneration;
+      const requestClient = getClient();
+      const result = await singleFlight(
+        requestFlightsRef.current,
+        stableRequestKey("get_session_usage", { generation: requestGeneration, target }),
+        () => requestClient.sendCommand({ type: "get_session_usage", sessionId, target }),
+      );
+      if (requestClient !== clientRef.current || requestGeneration !== stateRef.current.connectionGeneration) return null;
+      const usage = result as SessionUsageSummary;
+      if (usage && typeof usage === "object") dispatch({ type: "__session_usage_load", target, usage, connectionGeneration: requestGeneration });
+      return usage;
     } catch {
       return null;
     }

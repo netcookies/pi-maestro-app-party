@@ -38,7 +38,7 @@ type SessionView = "current" | "all";
 
 type Row = { type: "group"; key: string; cwd: string; count: number } | { type: "session"; key: string; session: HostSessionSummary };
 
-export default function HostSessionsScreen() {
+export default function HostSessionsScreen({ active = true }: { active?: boolean }) {
   const router = useRouter();
   const { theme } = useTheme();
   const { t } = useI18n();
@@ -105,11 +105,25 @@ export default function HostSessionsScreen() {
   }, [queryInput, setFilter]);
 
   const loadFirstPage = useCallback(async (refresh = false) => {
+    if (!active) return;
     if (!isConnected) {
       setLoading(false);
       return;
     }
     const current = filterStateRef.current;
+    if (!refresh && !current.filter.query && !current.filter.cwds?.length && state.hostSessionList
+      && state.hostSessionList.sessions.every((session) => session.presentation?.visibility !== "monitor_tab")) {
+      const page = mergeHostSessionPage([], state.hostSessionList, true);
+      const scoped = filterSessionSummaries(page.sessions, current.filter);
+      sessionsRef.current = scoped;
+      setSessions(scoped);
+      nextCursorRef.current = page.nextCursor;
+      setNextCursor(page.nextCursor);
+      setHasMore(page.hasMore);
+      setTotal(page.total);
+      setLoading(false);
+      return;
+    }
     const token = beginFilterRequest(current);
     firstPageInFlightRef.current = true;
     lastRequestedCursorRef.current = undefined;
@@ -142,11 +156,12 @@ export default function HostSessionsScreen() {
         setRefreshing(false);
       }
     }
-  }, [isConnected, listHostSessions]);
+  }, [active, isConnected, listHostSessions, state.hostSessionList]);
 
   useEffect(() => {
+    if (!active) return;
     void loadFirstPage();
-  }, [loadFirstPage, filterState.generation]);
+  }, [active, loadFirstPage, filterState.generation]);
 
   useEffect(() => {
     if (sessionRoleRevisionRef.current === sessionRoleRevisionValue) return;

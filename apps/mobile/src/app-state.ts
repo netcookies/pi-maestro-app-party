@@ -45,6 +45,7 @@ export interface AppState {
   /** host_status 对象载荷解析出的版本/maestro 检测元数据（设置页「版本与诊断」用；null = 待 Host 接入） */
   hostStatusMeta: HostStatusMeta | null;
   sessions: Map<string, SessionState>;
+  hostSessionList: HostSessionList | null;
   /** Exact target currently loaded for each session screen. */
   activeSessionTargets: Map<string, string>;
   /** Targeted session projections retained separately so sibling endpoints cannot overwrite each other. */
@@ -93,6 +94,7 @@ export function createInitialState(): AppState {
     executionProjectionsLoaded: false,
     hostStatusMeta: null,
     sessions: new Map(),
+    hostSessionList: null,
     activeSessionTargets: new Map(),
     targetedSessions: new Map(),
     sessionSummaryPatches: new Map(),
@@ -223,6 +225,14 @@ export interface HostSessionListLoadEvent {
   connectionGeneration: number;
 }
 
+export interface SessionUsageLoadEvent {
+  type: "__session_usage_load";
+  target: SessionTargetIdentity;
+  usage: SessionUsageSummary;
+  connectionGeneration: number;
+}
+
+
 /** reducer 可接受的全部 action：host 事件流 + 本地内部事件 */
 export type AppAction =
   | HostEvent
@@ -237,7 +247,8 @@ export type AppAction =
   | RevisionEvent
   | ConnectionResetEvent
   | ExecutionProjectionSnapshotEvent
-  | HostSessionListLoadEvent;
+  | HostSessionListLoadEvent
+  | SessionUsageLoadEvent;
 
 function revisionOf(value: unknown): number | undefined {
   return typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : undefined;
@@ -324,6 +335,12 @@ export function reduceEvent(state: AppState, event: AppAction, deps: AppStateDep
       backgroundJobProjections,
     };
   }
+  if (event.type === "__session_usage_load") {
+    if (event.connectionGeneration !== state.connectionGeneration) return state;
+    const hostSessionUsage = new Map(state.hostSessionUsage);
+    hostSessionUsage.set(sessionTargetKey(event.target), event.usage);
+    return { ...state, hostSessionUsage };
+  }
   if (event.type === "__host_session_list_load") {
     if (event.connectionGeneration !== state.connectionGeneration) return state;
     const sessions = new Map<string, SessionState>();
@@ -394,7 +411,7 @@ export function reduceEvent(state: AppState, event: AppAction, deps: AppStateDep
         sessions.set(summary.sessionId, session);
       }
     }
-    return { ...state, sessions, targetedSessions, activeSessionTargets, hostSessionUsage };
+    return { ...state, sessions, targetedSessions, activeSessionTargets, hostSessionUsage, hostSessionList: event.list };
   }
 
     if (event.type === "__snapshot_load") {

@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   aggregateSessionUsage,
   getActiveUsageTargets,
+  selectMissingUsageTargets,
   getCacheHitPercent,
   windowKey,
   isSameLocalDay,
@@ -115,8 +116,14 @@ describe("usage aggregation helpers", () => {
       [["active", JSON.stringify(["active", "desktop", "/work", "g1"])], ["active", JSON.stringify(["active", "history", "/work", "h1"])], ["hidden", JSON.stringify(["hidden", "desktop", "/work", "g2"])], ["missing", "not-json"]],
     )).toEqual([{ sessionId: "active", targetKey: JSON.stringify(["active", "desktop", "/work", "g1"]) }]);
   });
-
-
+  it("selects only usage targets absent from host push state", () => {
+    const targets = [
+      { sessionId: "a", targetKey: "a-key" },
+      { sessionId: "b", targetKey: "b-key" },
+    ];
+    const present = new Map([["a-key", usage("a")]]);
+    expect(selectMissingUsageTargets(targets, present)).toEqual([{ sessionId: "b", targetKey: "b-key" }]);
+  });
   const usage = (sessionId: string, values: Partial<SessionUsageSummary> = {}): SessionUsageSummary => ({
     sessionId,
     entries: 1,
