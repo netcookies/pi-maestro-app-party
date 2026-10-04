@@ -1,13 +1,24 @@
 name: Release
 
-# 触发：push maestro-mobile-v* tag（如 maestro-mobile-v0.1.1）
+# 触发：push v* tag（如 v0.9.0），也支持手动补跑指定 tag
 # 产物：签名 APK + 未签名 IPA + npm publish + GitHub Release
 # 本地发布（GitHub runner 限额时）用 scripts/release-local.sh，产物一致
 
 on:
   push:
     tags:
-      - "maestro-mobile-v*"
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "要构建的版本号（例如 0.9.0）"
+        required: true
+        type: string
+      ref:
+        description: "要检出的 tag 或 commit（例如 v0.9.0）"
+        required: true
+        default: "v0.9.0"
+        type: string
 
 permissions:
   contents: write
@@ -21,6 +32,7 @@ jobs:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
+          ref: ${{ github.event_name == 'workflow_dispatch' && inputs.ref || github.ref }}
 
       # pnpm 版本从 package.json 的 packageManager 字段读取（避免双源冲突）
       - uses: pnpm/action-setup@v4
@@ -42,12 +54,14 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
-      # ── 版本号：tag maestro-mobile-v0.1.1 → 0.1.1 ──
+      # ── 版本号：tag v0.9.0 → 0.9.0 ──
       - name: Resolve version
         id: ver
         run: |
-          if [[ "$GITHUB_REF" == refs/tags/maestro-mobile-v* ]]; then
-            V="${GITHUB_REF#refs/tags/maestro-mobile-v}"
+          if [[ "$GITHUB_REF" == refs/tags/v* ]]; then
+            V="${GITHUB_REF#refs/tags/v}"
+          elif [[ "$GITHUB_EVENT_NAME" == "workflow_dispatch" ]]; then
+            V="${{ inputs.version }}"
           else
             V="$(node -p "require('./apps/host/package.json').version")"
           fi
@@ -62,7 +76,7 @@ jobs:
 
       # ── host npm publish（Trusted Publisher OIDC：无需 NPM_TOKEN，需在 npmjs.com 包 Settings 配置本 workflow）──
       - name: Publish npm package
-        if: startsWith(github.ref, 'refs/tags/maestro-mobile-v')
+        if: startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch'
         working-directory: apps/host
         run: |
           # Trusted Publisher OIDC：包 Publishing access 已允许 trusted-publisher tokens（免 2FA 全自动）
@@ -119,7 +133,7 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           VERSION: ${{ steps.ver.outputs.version }}
         run: |
-          TAG="maestro-mobile-v$VERSION"
+          TAG="v$VERSION"
           NOTES="$(cat <<EOF
           ## 安装
 
