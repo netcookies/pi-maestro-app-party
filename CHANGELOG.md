@@ -2,6 +2,16 @@
 
 本文件记录 Maestro Mobile 的显著变更。格式基于 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)。
 
+## [0.9.1] — 2026-10-04
+
+### 修复
+
+- 收口通知投递与移动端导航
+
+### 其他
+
+- align release workflow with v tags
+
 ## [0.9.0] — 2026-10-04
 
 ### 测试

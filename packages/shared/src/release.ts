@@ -1,4 +1,4 @@
-export const MOBILE_RELEASE_VERSION = "0.9.0" as const;
+export const MOBILE_RELEASE_VERSION = "0.9.1" as const;
 
 export type MobileRolloutMode = "disabled" | "shadow" | "enabled";
 
