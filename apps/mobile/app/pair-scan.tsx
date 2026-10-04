@@ -130,7 +130,7 @@ export default function PairScanScreen() {
       if (!isActive()) return;
       navigationAllowedRef.current = true;
       commitInProgressRef.current = false;
-      if (params.from === "settings" || router.canGoBack()) {
+      if (params.from === "settings") {
         router.back();
       } else {
         router.replace("/settings");
@@ -204,7 +204,7 @@ export default function PairScanScreen() {
     }
     cancelledRef.current = true;
     abortControllerRef.current.abort();
-    if (router.canGoBack()) {
+    if (params.from === "settings") {
       router.back();
     } else {
       router.replace("/settings");

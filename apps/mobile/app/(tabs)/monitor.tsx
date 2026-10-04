@@ -80,7 +80,7 @@ export default function MonitorScreen({ active = true }: { active?: boolean }) {
     try {
       const opened = selectSessionTarget(session);
       await loadSessionHistory(opened.sessionId, opened.targetKey);
-      router.push(routeForOpenedSession(opened));
+      router.push(routeForOpenedSession(opened, "monitor"));
     } catch (openError) {
       setError(openError instanceof Error ? openError.message : String(openError));
     } finally {

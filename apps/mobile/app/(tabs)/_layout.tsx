@@ -9,7 +9,7 @@ import {
   type NativeSyntheticEvent,
   type NativeScrollEvent,
 } from "react-native";
-import { usePathname, useLocalSearchParams } from "expo-router";
+import { usePathname, useLocalSearchParams, useRouter } from "expo-router";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useTheme } from "../../src/theme";
 import { useI18n } from "../../src/i18n";
@@ -22,16 +22,18 @@ import SettingsScreen from "./settings";
 
 interface TabDef {
   key: string;
+  route: "/host-sessions" | "/" | "/monitor" | "/settings";
   icon: LineIconName;
   labelKey: "tabWorkbench" | "tabSessions" | "tabMonitor" | "tabSettings";
 }
 
 const TABS: TabDef[] = [
-  { key: "sessions", icon: "chat", labelKey: "tabSessions" },
-  { key: "workbench", icon: "workbench", labelKey: "tabWorkbench" },
-  { key: "monitor", icon: "monitor", labelKey: "tabMonitor" },
-  { key: "settings", icon: "settings", labelKey: "tabSettings" },
+  { key: "sessions", route: "/host-sessions", icon: "chat", labelKey: "tabSessions" },
+  { key: "workbench", route: "/", icon: "workbench", labelKey: "tabWorkbench" },
+  { key: "monitor", route: "/monitor", icon: "monitor", labelKey: "tabMonitor" },
+  { key: "settings", route: "/settings", icon: "settings", labelKey: "tabSettings" },
 ];
+
 
 export const unstable_settings = { initialRouteName: "index" };
 
@@ -50,6 +52,7 @@ export default function TabLayout() {
   const { t } = useI18n();
   const insets = useSafeAreaInsets();
   const pathname = usePathname();
+  const router = useRouter();
   const params = useLocalSearchParams<{ tab?: string }>();
 
   const [pageWidth, setPageWidth] = useState(() => Dimensions.get("window").width);
@@ -122,7 +125,7 @@ export default function TabLayout() {
 
   const handleTabPress = useCallback(
     (index: number) => {
-      if (index === activeIndex) return;
+      if (index === activeIndex && getIndexFromPathname(pathname) === index) return;
       void hapticImpactLight();
       lastActiveTabIndex = index;
       setActiveIndex(index);
@@ -133,8 +136,9 @@ export default function TabLayout() {
           isProgrammaticScroll.current = false;
         }, 350);
       }
+      router.replace(TABS[index].route);
     },
-    [activeIndex, pageWidth],
+    [activeIndex, pageWidth, pathname, router],
   );
 
   const handleMomentumScrollEnd = useCallback(
@@ -146,9 +150,10 @@ export default function TabLayout() {
         void hapticImpactLight();
         lastActiveTabIndex = nextIndex;
         setActiveIndex(nextIndex);
+        router.replace(TABS[nextIndex].route);
       }
     },
-    [activeIndex, pageWidth],
+    [activeIndex, pageWidth, router],
   );
 
   return (

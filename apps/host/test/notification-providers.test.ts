@@ -30,6 +30,15 @@ describe("notification providers", () => {
     expect(JSON.stringify(result)).not.toContain("secret");
   });
 
+  it("treats a PushDeer business error as failed even when HTTP status is 200", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify({ code: 80501, error: "错误的Key" }), {
+      status: 200,
+      headers: { "content-type": "application/json" },
+    })));
+    const provider = notificationProviders.get("pushdeer")!;
+    const result = await provider.send(testEvent(), provider.validate(base("pushdeer", { pushkey: "invalid" })), new AbortController().signal);
+    expect(result).toMatchObject({ ok: false, retryable: false, statusCode: 200, code: "provider_80501" });
+  });
   it("classifies transient HTTP errors for retry", async () => {
     vi.stubGlobal("fetch", vi.fn(async () => new Response("upstream", { status: 503 })));
     const provider = notificationProviders.get("webhook")!;

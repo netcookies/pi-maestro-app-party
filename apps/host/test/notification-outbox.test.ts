@@ -1,5 +1,5 @@
-import { describe, expect, it } from "vitest";
-import { mkdtemp, readFile } from "node:fs/promises";
+import { describe, expect, it, vi } from "vitest";
+import { mkdtemp, readFile, rename, mkdir, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { NotificationOutbox } from "../src/notifications/notification-outbox.js";
@@ -47,6 +47,21 @@ describe("NotificationOutbox", () => {
     expect((await outbox.list())[0]?.status).toBe("failed");
   });
 
+  it("recovers durable state after a persistence failure", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "maestro-notification-recovery-"));
+    const path = join(directory, "outbox.json");
+    const outbox = new NotificationOutbox(path);
+    await outbox.enqueue(event());
+    await outbox.claimReady();
+    await rename(path, `${path}.backup`);
+    await mkdir(path);
+    await expect(outbox.release("event-1")).rejects.toBeTruthy();
+    await rm(path, { recursive: true });
+    await rename(`${path}.backup`, path);
+    await outbox.release("event-1");
+    const recovered = new NotificationOutbox(path);
+    expect((await recovered.list())[0]?.status).toBe("pending");
+  });
   it("bounds event text and persisted queue size", async () => {
     const directory = await mkdtemp(join(tmpdir(), "maestro-notification-"));
     const path = join(directory, "outbox.json");

@@ -468,10 +468,10 @@ export default function SettingsScreen() {
           <View style={[styles.prefDivider, { backgroundColor: theme.dividerLine ?? theme.border }]} />
           <View style={styles.prefRow}>
             <View style={styles.prefMain}>
-              <Text style={styles.prefLabel}>{Platform.OS === "android" ? "后台连接" : "iOS 后台策略"}</Text>
-              <Text style={styles.prefSummary}>{Platform.OS === "android" ? "后台保持连接会显示常驻通知并增加耗电，系统或厂商策略仍可能停止服务。" : "iOS 不保证后台常驻；尽力保持只使用系统允许的短时后台机会。"}</Text>
+              <Text style={styles.prefLabel}>{Platform.OS === "android" ? t.backgroundConnectionTitle : t.iosBackgroundConnectionTitle}</Text>
+              <Text style={styles.prefSummary}>{Platform.OS === "android" ? t.androidBackgroundConnectionSummary : t.iosBackgroundConnectionSummary}</Text>
             </View>
-            <MiuixSwitch value={config.backgroundConnectionMode === "best_effort"} onValueChange={(value) => saveBackgroundMode(value ? "best_effort" : "power_saving")} accessibilityLabel="后台连接策略" />
+            <MiuixSwitch value={config.backgroundConnectionMode === "best_effort"} onValueChange={(value) => saveBackgroundMode(value ? "best_effort" : "power_saving")} accessibilityLabel={t.backgroundConnectionAccessibility} />
           </View>
           <View style={styles.prefRow}>
             <View style={styles.prefMain}>
@@ -483,15 +483,15 @@ export default function SettingsScreen() {
           <View style={[styles.prefDivider, { backgroundColor: theme.dividerLine ?? theme.border }]} />
           <View style={styles.prefRow}>
             <View style={styles.prefMain}>
-              <Text style={styles.prefLabel}>Host 后台通知渠道</Text>
+              <Text style={styles.prefLabel}>{t.thirdPartyNotificationChannels}</Text>
               <Text style={styles.prefSummary}>{notificationProviders.length > 0 ? notificationProviders.map((provider) => {
                 const value = provider as { id?: string; kind?: string; eventKinds?: string[] };
-                return `${value.id ?? value.kind ?? "Provider"}: ${(value.eventKinds ?? []).join(", ")}`;
-              }).join("\n") : "未配置 Provider；可在 Host 端配置 PushDeer、ntfy、Bark、Gotify、Telegram 或 Webhook。"}</Text>
+                return `${value.id ?? value.kind ?? t.providerLabel}: ${(value.eventKinds ?? []).join(", ")}`;
+              }).join("\n") : t.noNotificationProviders}</Text>
               {notificationTest ? <Text style={styles.prefSummary}>{notificationTest}</Text> : null}
             </View>
-            <TouchableOpacity onPress={() => void runNotificationTest()} disabled={!isConnected} accessibilityRole="button" accessibilityLabel="测试通知">
-              <Text style={{ color: isConnected ? theme.accent : theme.muted, fontWeight: "700", fontSize: 12 }}>测试</Text>
+            <TouchableOpacity onPress={() => void runNotificationTest()} disabled={!isConnected} accessibilityRole="button" accessibilityLabel={t.testNotification}>
+              <Text style={{ color: isConnected ? theme.accent : theme.muted, fontWeight: "700", fontSize: 12 }}>{t.testNotification}</Text>
             </TouchableOpacity>
           </View>
         </View>

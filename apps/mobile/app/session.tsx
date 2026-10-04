@@ -56,7 +56,7 @@ function modelNameOf(value: unknown): string | undefined {
 }
 
 export default function SessionScreen() {
-  const { id, targetKey } = useLocalSearchParams<{ id: string; targetKey?: string }>();
+  const { id, targetKey, from } = useLocalSearchParams<{ id: string; targetKey?: string; from?: string }>();
   const router = useRouter();
   const { state, sendPrompt, sendAbort, answerDialog, cancelDialog, respondPlan, cancelPlan, loadSessionHistory, loadMoreHistory, searchHistory, setThinking, listSkills, isConnected, connectionState, lastError, clearError: dispatchLocalError } = useHost();
   const { theme } = useTheme();
@@ -700,7 +700,7 @@ export default function SessionScreen() {
       <View style={styles.header}>
         <TouchableOpacity
           onPress={() => {
-            if (router.canGoBack()) {
+            if (from === "sessions" || from === "monitor" || from === "workbench") {
               router.back();
             } else {
               router.replace("/(tabs)");

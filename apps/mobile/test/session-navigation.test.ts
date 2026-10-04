@@ -29,9 +29,9 @@ describe("history session navigation", () => {
     const opened = selectSessionTarget(historyRow({ target, targetKey: sessionTargetKey(target) }));
 
     expect(opened).toEqual({ sessionId: "history-1", targetKey: sessionTargetKey(target) });
-    expect(routeForOpenedSession(opened)).toEqual({
+    expect(routeForOpenedSession(opened, "sessions")).toEqual({
       pathname: "/session",
-      params: { id: "history-1", targetKey: sessionTargetKey(target) },
+      params: { id: "history-1", targetKey: sessionTargetKey(target), from: "sessions" },
     });
   });
 
@@ -62,9 +62,9 @@ describe("history session navigation", () => {
 
     const opened = selectSessionTarget(monitor);
     expect(opened).toEqual({ sessionId: "history-1", targetKey: sessionTargetKey(target) });
-    expect(routeForOpenedSession(opened)).toEqual({
+    expect(routeForOpenedSession(opened, "monitor")).toEqual({
       pathname: "/session",
-      params: { id: "history-1", targetKey: sessionTargetKey(target) },
+      params: { id: "history-1", targetKey: sessionTargetKey(target), from: "monitor" },
     });
   });
 

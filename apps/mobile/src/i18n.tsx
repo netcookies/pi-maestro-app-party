@@ -103,6 +103,15 @@ export interface I18nDictionary {
   notificationAskSummary: string;
   notificationSettledTitle: string;
   notificationSettledSummary: string;
+  backgroundConnectionTitle: string;
+  iosBackgroundConnectionTitle: string;
+  androidBackgroundConnectionSummary: string;
+  iosBackgroundConnectionSummary: string;
+  backgroundConnectionAccessibility: string;
+  thirdPartyNotificationChannels: string;
+  noNotificationProviders: string;
+  testNotification: string;
+  providerLabel: string;
   notConnected: string;
   notDetected: string;
   notInstalled: string;
@@ -314,6 +323,15 @@ export const DICTIONARIES: Record<Language, I18nDictionary> = {
     notificationAskSummary: "收到决策或操作确认时弹出系统横幅与震动",
     notificationSettledTitle: "Agent 轮次完成通知",
     notificationSettledSummary: "本轮任务思考、输出或工具执行全部结束时提醒",
+    backgroundConnectionTitle: "后台连接",
+    iosBackgroundConnectionTitle: "iOS 后台策略",
+    androidBackgroundConnectionSummary: "后台保持连接会显示常驻通知并增加耗电，系统或厂商策略仍可能停止服务。",
+    iosBackgroundConnectionSummary: "iOS 不保证后台常驻；尽力保持只使用系统允许的短时后台机会。",
+    backgroundConnectionAccessibility: "后台连接策略",
+    thirdPartyNotificationChannels: "第三方通知渠道",
+    noNotificationProviders: "未配置 Provider；可在 Host 端配置 PushDeer、ntfy、Bark、Gotify、Telegram 或 Webhook。",
+    testNotification: "测试",
+    providerLabel: "Provider",
     notConnected: "未连接",
     notDetected: "未检测到",
     notInstalled: "未安装",
@@ -523,6 +541,15 @@ export const DICTIONARIES: Record<Language, I18nDictionary> = {
     notificationAskSummary: "Show a system banner and vibration for decisions or confirmations",
     notificationSettledTitle: "Agent turn completion notifications",
     notificationSettledSummary: "Notify when the turn's thinking, output, and tools are complete",
+    backgroundConnectionTitle: "Background connection",
+    iosBackgroundConnectionTitle: "iOS background policy",
+    androidBackgroundConnectionSummary: "Keeping the connection active shows a persistent notification and uses more power; system or vendor policies may still stop the service.",
+    iosBackgroundConnectionSummary: "iOS does not guarantee persistent background execution; the app uses only the short background opportunities allowed by the system.",
+    backgroundConnectionAccessibility: "Background connection policy",
+    thirdPartyNotificationChannels: "Third-party notification channels",
+    noNotificationProviders: "No Provider configured; configure PushDeer, ntfy, Bark, Gotify, Telegram, or Webhook on the Host.",
+    testNotification: "Test",
+    providerLabel: "Provider",
     notConnected: "Disconnected",
     notDetected: "Not detected",
     notInstalled: "Not installed",

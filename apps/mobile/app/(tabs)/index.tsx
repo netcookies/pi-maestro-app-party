@@ -338,7 +338,7 @@ export default function DashboardScreen({ active = true }: { active?: boolean })
               const ask = pendingAsks[currentAskIndex];
               if (!ask?.target) return;
               const targetKey = sessionTargetKey(ask.target);
-              router.push({ pathname: "/session", params: { id: ask.sessionId, targetKey } });
+              router.push({ pathname: "/session", params: { id: ask.sessionId, targetKey, from: "workbench" } });
             }}
             style={[styles.askCard, { backgroundColor: theme.secondaryContainer ?? theme.cardBg, borderColor: theme.warning }]}
           >
@@ -392,7 +392,7 @@ export default function DashboardScreen({ active = true }: { active?: boolean })
                       const targetKey = targetAsk.target ? sessionTargetKey(targetAsk.target) : undefined;
                       if (!targetKey) return;
                       await loadSessionHistory(targetAsk.sessionId, targetKey);
-                      router.push({ pathname: "/session", params: { id: targetAsk.sessionId, targetKey } });
+                      router.push({ pathname: "/session", params: { id: targetAsk.sessionId, targetKey, from: "workbench" } });
                     } catch {
                       // 不携带 exact target 时禁止回退到可能相同 sessionId 的 sibling。
                     } finally {
@@ -425,7 +425,7 @@ export default function DashboardScreen({ active = true }: { active?: boolean })
             activeOpacity={0.92}
             onPress={() => {
               const entry = pendingPlans[currentPlanIndex];
-              if (entry) router.push({ pathname: "/session", params: { id: entry.sessionId, targetKey: sessionTargetKey(entry.target) } });
+              if (entry) router.push({ pathname: "/session", params: { id: entry.sessionId, targetKey: sessionTargetKey(entry.target), from: "workbench" } });
             }}
             style={[styles.askCard, { backgroundColor: theme.secondaryContainer ?? theme.cardBg, borderColor: theme.accent }]}
             accessibilityRole="button"
@@ -468,7 +468,7 @@ export default function DashboardScreen({ active = true }: { active?: boolean })
                     setOpeningPlan(false);
                     return;
                   }
-                  router.push({ pathname: "/session", params: { id: entry.sessionId, targetKey } });
+                  router.push({ pathname: "/session", params: { id: entry.sessionId, targetKey, from: "workbench" } });
                   setOpeningPlan(false);
                 }}
               >

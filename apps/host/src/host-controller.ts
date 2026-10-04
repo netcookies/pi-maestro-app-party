@@ -252,6 +252,7 @@ export class HostController {
         this.registerDesktopTarget(record.target);
       }
       this.projectedDesktopTargets.set(key, { ...record.target });
+      this.syncDesktopRuntimeStatus(record.target, record.runtimeStatus);
       if (modelChanged) {
         this.pendingDesktopModels.delete(key);
         this.syncDesktopModel(record.target, record.model);
@@ -309,10 +310,11 @@ export class HostController {
 
   syncDesktopRuntimeStatus(target: DesktopPluginTarget, runtimeStatus: DesktopPluginRuntimeStatus): void {
     const current = this.sessionDirectory.resolve(target);
-    if (!current || current.runtimeStatus === runtimeStatus) return;
+    if (!current) return;
     const key = targetKey(target);
     const previous = this.desktopRuntimeStatuses.get(key);
     this.desktopRuntimeStatuses.set(key, runtimeStatus);
+    if (previous === runtimeStatus) return;
     if (previous === "running" && runtimeStatus === "idle") {
       const notification = {
         eventId: `${this.notificationHostInstanceId}:${++this.notificationSequence}:agent_settled:${key}`,
@@ -641,6 +643,7 @@ export class HostController {
   unregisterDesktopTarget(target: DesktopPluginTarget): void {
     // A reconnect may replace the registration before the old socket closes.
     if (this.desktopPluginRegistry.resolve(target)) return;
+    this.desktopRuntimeStatuses.delete(targetKey(target));
     this.disposeDesktopTailWatcher(target);
     this.clearDesktopExecutionSummary(target);
     const entry = this.sessionDirectory.resolve(target);
@@ -838,7 +841,7 @@ export class HostController {
     for (const target of this.sessionDirectory.list()) this.sessionDirectory.unregister(target.identity);
     this.readerTargets.clear();
     this.projectedDesktopTargets.clear();
-    this.notificationDispatcher.stop();
+    await this.notificationDispatcher.stop();
     this.listeners.clear();
   }
 }

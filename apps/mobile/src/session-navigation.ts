@@ -19,12 +19,12 @@ export function selectSessionTarget(session: HostSessionSummary): OpenedSession 
   };
 }
 
-export function routeForOpenedSession(opened: OpenedSession): {
+export function routeForOpenedSession(opened: OpenedSession, from: "sessions" | "monitor" = "sessions"): {
   pathname: "/session";
-  params: { id: string; targetKey: string };
+  params: { id: string; targetKey: string; from: "sessions" | "monitor" };
 } {
   return {
     pathname: "/session",
-    params: { id: opened.sessionId, targetKey: opened.targetKey },
+    params: { id: opened.sessionId, targetKey: opened.targetKey, from },
   };
 }

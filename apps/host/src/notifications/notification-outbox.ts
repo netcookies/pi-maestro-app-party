@@ -69,7 +69,12 @@ export class NotificationOutbox {
       entry.status = "sending";
       entry.updatedAt = now;
     }
-    if (ready.length > 0) await this.persist();
+    try {
+      if (ready.length > 0) await this.persist();
+    } catch (error) {
+      for (const entry of ready) entry.status = "pending";
+      throw error;
+    }
     return ready.map((entry) => structuredClone(entry));
   }
 
@@ -77,6 +82,7 @@ export class NotificationOutbox {
     await this.load();
     const entry = this.entries.get(eventId);
     if (!entry) return;
+    const previous = structuredClone(entry);
     const now = this.now();
     entry.attempts += 1;
     entry.updatedAt = now;
@@ -89,7 +95,12 @@ export class NotificationOutbox {
       entry.status = "pending";
       entry.nextAttemptAt = now + Math.min(60 * 60_000, 1000 * 2 ** Math.min(10, entry.attempts));
     }
-    await this.persist();
+    try {
+      await this.persist();
+    } catch (error) {
+      this.entries.set(eventId, previous);
+      throw error;
+    }
   }
 
   async recordProviderResult(eventId: string, providerId: string, result: DeliveryResult): Promise<void> {
@@ -100,6 +111,15 @@ export class NotificationOutbox {
     entry.updatedAt = this.now();
     await this.persist();
   }
+  async expire(eventId: string): Promise<void> {
+    await this.load();
+    const entry = this.entries.get(eventId);
+    if (!entry) return;
+    entry.status = "expired";
+    entry.updatedAt = this.now();
+    await this.persist();
+  }
+
   async release(eventId: string): Promise<void> {
     await this.load();
     const entry = this.entries.get(eventId);
@@ -131,8 +151,8 @@ export class NotificationOutbox {
   }
 
   private async persist(): Promise<void> {
-    const snapshot: PersistedOutbox = { schemaVersion: 1, entries: [...this.entries.values()] };
-    this.writeChain = this.writeChain.then(async () => {
+    const snapshot: PersistedOutbox = { schemaVersion: 1, entries: structuredClone([...this.entries.values()]) };
+    this.writeChain = this.writeChain.catch(() => undefined).then(async () => {
       await mkdir(dirname(this.filePath), { recursive: true });
       const tempPath = `${this.filePath}.tmp-${process.pid}-${randomUUID()}`;
       await writeFile(tempPath, JSON.stringify(snapshot), { encoding: "utf8", mode: 0o600 });

@@ -86,6 +86,25 @@ describe("HostController", () => {
     expect(controller.directory.resolve(exact)).not.toHaveProperty("runner");
   });
 
+  it("emits agent_settled when a projected Desktop target transitions from running to idle", async () => {
+    const exact = target("settled", "endpoint-a", "generation-a");
+    const registration = (runtimeStatus: "running" | "idle") => ({
+      target: exact,
+      capabilities: ["prompt"] as const,
+      runtimeStatus,
+      transport: transport(),
+    });
+    controller.desktopPlugins.register(registration("idle"));
+    controller.applyDesktopProjection([registration("idle")]);
+    events = [];
+
+    controller.applyDesktopProjection([registration("running")]);
+    controller.applyDesktopProjection([registration("idle")]);
+
+    expect(events).toContainEqual(expect.objectContaining({ type: "notification_event", kind: "agent_settled", sessionId: exact.sessionId, target: exact }));
+    expect(events.filter((event) => (event as { type?: string; kind?: string }).type === "notification_event" && (event as { kind?: string }).kind === "agent_settled")).toHaveLength(1);
+    await expect(controller.directory.resolve(exact)?.runtimeStatus).toBe("idle");
+  });
   it("routes Desktop commands to the exact target and rejects a sibling generation", async () => {
     const exact = target("same-session", "endpoint-a", "generation-a");
     const sibling = target("same-session", "endpoint-b", "generation-b");
