@@ -19,9 +19,10 @@ import { searchInJsonl } from "./jsonl-pager.js";
 import { JsonlTailWatcher } from "./jsonl-tail-watcher.js";
 import { EventLog } from "./event-log.js";
 import { readFileSync } from "node:fs";
+import { randomUUID } from "node:crypto";
 import { fileURLToPath } from "node:url";
 import { dirname, resolve, join } from "node:path";
-import { homedir } from "node:os";
+import { homedir, tmpdir } from "node:os";
 
 import { NotificationOutbox } from "./notifications/notification-outbox.js";
 import { NotificationConfigStore } from "./notifications/notification-config.js";
@@ -31,6 +32,10 @@ import { notificationEventFromHostEvent } from "./notifications/notification-nor
 
 function targetKey(target: DesktopPluginTarget): string {
   return [target.sessionId, target.endpointId, target.normalizedCwd, target.processGeneration].join("\u0000");
+}
+
+function notificationSessionLabel(sessionId: string): string {
+  return sessionId.length > 12 ? sessionId.slice(0, 8) : sessionId;
 }
 
 function planKey(target: DesktopPluginTarget, requestId: string, kind: DesktopPlanRequest["kind"]): string {
@@ -109,6 +114,7 @@ export class HostController {
     private readonly sessionCatalog: SessionCatalog,
     maestroReader?: MaestroStateReader,
     desktopRegistry?: DesktopBrokerProjectedRegistry,
+    notificationPaths?: { configPath?: string; outboxPath?: string },
   ) {
     this.desktopPluginRegistry = desktopRegistry ?? new DesktopBrokerProjectedRegistry();
     this.maestroReader = maestroReader ?? new MaestroStateReader();
@@ -139,8 +145,9 @@ export class HostController {
         testNotification: (providerId) => this.testNotification(providerId),
       },
     );
-    this.notificationConfig = new NotificationConfigStore(join(homedir(), ".pi", "maestro-mobile-notifications.json"));
-    this.notificationOutbox = new NotificationOutbox(join(homedir(), ".pi", "maestro-mobile-notification-outbox.json"));
+    const notificationRoot = process.env.VITEST ? join(tmpdir(), `maestro-notifications-test-${process.pid}-${randomUUID()}`) : join(homedir(), ".pi");
+    this.notificationConfig = new NotificationConfigStore(notificationPaths?.configPath ?? join(notificationRoot, "maestro-mobile-notifications.json"));
+    this.notificationOutbox = new NotificationOutbox(notificationPaths?.outboxPath ?? join(notificationRoot, "maestro-mobile-notification-outbox.json"));
     this.notificationDispatcher = new NotificationDispatcher(this.notificationOutbox, this.notificationConfig, notificationProviders);
     this.notificationDispatcher.start();
     this.emitToListeners = (event: HostEvent) => {
@@ -321,7 +328,7 @@ export class HostController {
         kind: "agent_settled" as const,
         sessionId: target.sessionId,
         target: { ...target },
-        title: "Agent 回复已完成",
+        title: `Agent 回复已完成 · ${notificationSessionLabel(target.sessionId)}`,
         body: "桌面会话本轮执行已完成",
         occurredAt: new Date().toISOString(),
         dedupeKey: `agent_settled:${key}:${this.notificationSequence}`,

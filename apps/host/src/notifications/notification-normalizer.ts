@@ -9,6 +9,10 @@ export interface NotificationEventContext {
 
 type SupportedPlanKind = "confirm" | "review" | "generic";
 
+function notificationSessionLabel(sessionId: string): string {
+  return sessionId.length > 12 ? sessionId.slice(0, 8) : sessionId;
+}
+
 function stableIdentity(value: unknown): string {
   return JSON.stringify(value);
 }
@@ -32,7 +36,7 @@ export function notificationEventFromHostEvent(event: HostEvent, context: Notifi
       sessionId: event.sessionId,
       target: event.target,
       requestId: event.request.id,
-      title,
+      title: `${title} · ${notificationSessionLabel(event.sessionId)}`,
       body,
       occurredAt: new Date().toISOString(),
       dedupeKey: `ask:${identity}`,
@@ -53,7 +57,7 @@ export function notificationEventFromHostEvent(event: HostEvent, context: Notifi
       target: event.target,
       requestId: event.request.requestId,
       deadlineAt: event.request.deadlineAt,
-      title: `Plan 等待${action}`,
+      title: `Plan 等待${action} · ${notificationSessionLabel(event.sessionId)}`,
       body: event.request.pathLabel || `${event.request.mode} Plan 需要您的处理`,
       occurredAt: new Date().toISOString(),
       dedupeKey: `plan:${identity}`,
@@ -67,7 +71,7 @@ export function notificationEventFromHostEvent(event: HostEvent, context: Notifi
       kind: "session_error",
       sessionId: event.sessionId,
       target: event.target,
-      title: "桌面会话发生错误",
+      title: `桌面会话发生错误 · ${notificationSessionLabel(event.sessionId)}`,
       body: event.error.message,
       occurredAt: new Date().toISOString(),
       dedupeKey: `error:${identity}`,
