@@ -1,4 +1,34 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+
+vi.mock("@react-native-async-storage/async-storage", () => ({
+  default: {
+    getItem: vi.fn(async () => null),
+    setItem: vi.fn(async () => undefined),
+  },
+}));
+
+vi.mock("expo-notifications", () => ({
+  IosAuthorizationStatus: { PROVISIONAL: 3 },
+  setNotificationHandler: vi.fn(),
+  getPermissionsAsync: vi.fn(async () => ({ granted: false })),
+  requestPermissionsAsync: vi.fn(async () => ({ granted: false })),
+  scheduleNotificationAsync: vi.fn(async () => "test-notification"),
+}));
+
+vi.mock("expo-haptics", () => ({
+  impactAsync: vi.fn(async () => undefined),
+  selectionAsync: vi.fn(async () => undefined),
+  notificationAsync: vi.fn(async () => undefined),
+  ImpactFeedbackStyle: { Light: 1, Medium: 2, Heavy: 3 },
+  NotificationFeedbackType: { Success: 1, Warning: 2, Error: 3 },
+}));
+
+vi.mock("react-native", () => ({
+  AppState: { addEventListener: vi.fn(() => ({ remove: vi.fn() })) },
+  Platform: { OS: "ios" },
+  NativeModules: {},
+}));
+
 import { normalizeThinkingResult } from "../src/store";
 
 describe("thinking command result normalization", () => {
