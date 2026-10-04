@@ -1,4 +1,4 @@
-import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
+import type { ExtensionContext, Theme } from "@earendil-works/pi-coding-agent";
 import { Key, matchesKey, type Component, type Focusable } from "@earendil-works/pi-tui";
 import { NotificationConfigStore } from "./notifications/notification-config.js";
 import { notificationProviders } from "./notifications/providers/index.js";
@@ -48,6 +48,7 @@ class ProviderForm implements Component, Focusable {
   focused = true;
   private selected = 0;
   private values: Record<string, string> = {};
+  private editing = false;
   private readonly idEditable: boolean;
 
   constructor(
@@ -55,6 +56,7 @@ class ProviderForm implements Component, Focusable {
     private readonly fields: readonly FormField[],
     private readonly done: (result: ProviderFormResult | undefined) => void,
     private readonly requestRender: () => void,
+    private readonly theme: Theme,
     options: ProviderFormOptions = {},
   ) {
     this.idEditable = options.idEditable ?? true;
@@ -74,8 +76,19 @@ class ProviderForm implements Component, Focusable {
 
   invalidate(): void {}
 
-  render(_width: number): string[] {
-    const lines = [`新增 ${this.kind} Provider`, "", "> id：使用方向键选择字段，Enter 编辑，Esc 取消", ...this.fieldLines(), "", "Enter 提交 · Esc 取消 · ↑↓ 切换字段"];
+  render(width: number): string[] {
+    const inner = Math.max(24, Math.min(100, Math.trunc(width) - 4));
+    const bg = (text: string) => this.theme.bg("customMessageBg", text);
+    const border = this.theme.fg("borderMuted", "│");
+    const horizontal = this.theme.fg("borderMuted", "─".repeat(inner));
+    const title = this.theme.fg("accent", ` Provider ${this.kind} `);
+    const lines = [
+      `${border}${title}${this.theme.fg("borderMuted", "─".repeat(Math.max(0, inner - title.length)))}${border}`,
+      ...this.fieldLines().map((line) => `${border}${bg(` ${line.padEnd(Math.max(0, inner - 2)).slice(0, Math.max(0, inner - 2))} `)}${border}`),
+      `${border}${horizontal}${border}`,
+      `${border}${this.theme.fg("dim", "↑↓ 选择 · Enter 编辑/确认 · Ctrl+S 保存 · Esc 取消").padEnd(inner)}${border}`,
+      `${border}${horizontal}${border}`,
+    ];
     return lines;
   }
 
@@ -86,46 +99,54 @@ class ProviderForm implements Component, Focusable {
       ...this.fields,
     ];
     return all.map((field, index) => {
-      const active = index === this.selected ? ">" : " ";
+      const active = index === this.selected ? (this.editing ? "✎" : "›") : " ";
       const value = this.values[field.id] ?? "";
-      const rendered = field.secret ? (value ? "*".repeat(Math.min(24, value.length)) : "（未设置）") : (value || field.placeholder || "（未设置）");
+      const renderedValue = field.secret ? (value ? "*".repeat(Math.min(24, value.length)) : "（未设置）") : (value || field.placeholder || "（未设置）");
+      const rendered = this.editing && index === this.selected ? `${renderedValue}▌` : renderedValue;
       return `${active} ${field.label}: ${rendered}`;
     });
   }
 
   handleInput(data: string): void {
     const fields: FormField[] = [{ id: "id", label: "Provider ID" }, { id: "name", label: "显示名称" }, ...this.fields];
-    if (matchesKey(data, Key.escape)) { this.done(undefined); return; }
-    if (matchesKey(data, Key.up)) { this.selected = Math.max(0, this.selected - 1); this.requestRender(); return; }
-    if (matchesKey(data, Key.down) || matchesKey(data, Key.tab)) { this.selected = Math.min(fields.length - 1, this.selected + 1); this.requestRender(); return; }
-    if (matchesKey(data, Key.backspace)) {
+    if (matchesKey(data, Key.ctrl("s")) || data === "\x13") {
+      const id = (this.values.id ?? "").trim();
+      const name = (this.values.name ?? id).trim();
+      if (!id || !name) return;
+      const settings = Object.fromEntries(Object.entries(this.values).filter(([key, value]) => key !== "id" && key !== "name" && value !== undefined && value !== ""));
+      this.done({ id, name, settings });
+      return;
+    }
+    if (matchesKey(data, Key.escape)) {
+      if (this.editing) { this.editing = false; this.requestRender(); } else this.done(undefined);
+      return;
+    }
+    if (!this.editing && matchesKey(data, Key.up)) { this.selected = Math.max(0, this.selected - 1); this.requestRender(); return; }
+    if (!this.editing && (matchesKey(data, Key.down) || matchesKey(data, Key.tab))) { this.selected = Math.min(fields.length - 1, this.selected + 1); this.requestRender(); return; }
+    if (this.editing && matchesKey(data, Key.backspace)) {
       if (this.selected === 0 && !this.idEditable) return;
       const field = fields[this.selected]!;
       this.values[field.id] = (this.values[field.id] ?? "").slice(0, -1);
       this.requestRender(); return;
     }
     if (matchesKey(data, Key.enter)) {
-      if (this.selected < fields.length - 1) { this.selected += 1; this.requestRender(); return; }
-      const id = (this.values.id ?? "").trim();
-      const name = (this.values.name ?? id).trim();
-      if (id && name) {
-        const settings = Object.fromEntries(Object.entries(this.values).filter(([key, value]) => key !== "id" && key !== "name" && value !== undefined && value !== ""));
-        this.done({ id, name, settings });
-      }
+      if (this.editing) { this.editing = false; this.requestRender(); }
+      else { this.editing = true; this.requestRender(); }
       return;
     }
-    if (data.length > 0 && !data.includes("\u001b") && !data.includes("\n") && !data.includes("\r")) {
+    if (this.editing && data.length > 0 && !data.includes("\u001b") && !data.includes("\n") && !data.includes("\r")) {
       if (this.selected === 0 && !this.idEditable) return;
       const field = fields[this.selected]!;
       this.values[field.id] = (this.values[field.id] ?? "") + data;
       this.requestRender();
     }
+    return;
   }
 }
 
 async function openProviderForm(ctx: ExtensionContext, kind: NotificationProviderKind, options: ProviderFormOptions = {}): Promise<ProviderFormResult | undefined> {
   if (!ctx.hasUI || typeof ctx.ui.custom !== "function") return undefined;
-  return ctx.ui.custom<ProviderFormResult | undefined>((tui, _theme, _keybindings, done) => new ProviderForm(kind, PROVIDER_FIELDS[kind], done, () => tui.requestRender(), options), {
+  return ctx.ui.custom<ProviderFormResult | undefined>((tui, theme, _keybindings, done) => new ProviderForm(kind, PROVIDER_FIELDS[kind], done, () => tui.requestRender(), theme, options), {
     overlay: true,
     overlayOptions: { anchor: "center", width: "88%", maxHeight: "90%" },
   });
