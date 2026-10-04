@@ -12,6 +12,9 @@ export interface ApplicationLifecycle {
   readMaestroState?(): Promise<unknown>;
   readSettings?(): Promise<unknown>;
   updateSettings?(patch: Record<string, unknown>): Promise<unknown>;
+  readNotificationConfig?(): Promise<unknown>;
+  updateNotificationConfig?(patch: Record<string, unknown>): Promise<unknown>;
+  testNotification?(providerId?: string): Promise<unknown>;
 }
 
 export type SessionOperation =
@@ -79,5 +82,20 @@ export class ApplicationCommandRouter {
   updateSettings(patch: Record<string, unknown>): Promise<unknown> {
     if (!this.lifecycle?.updateSettings) return Promise.reject(new Error("settings unavailable"));
     return this.lifecycle.updateSettings(patch);
+  }
+
+  readNotificationConfig(): Promise<unknown> {
+    if (!this.lifecycle?.readNotificationConfig) return Promise.reject(new Error("notification settings unavailable"));
+    return this.lifecycle.readNotificationConfig();
+  }
+
+  updateNotificationConfig(patch: Record<string, unknown>): Promise<unknown> {
+    if (!this.lifecycle?.updateNotificationConfig) return Promise.reject(new Error("notification settings unavailable"));
+    return this.lifecycle.updateNotificationConfig(patch);
+  }
+
+  testNotification(providerId?: string): Promise<unknown> {
+    if (!this.lifecycle?.testNotification) return Promise.reject(new Error("notification settings unavailable"));
+    return this.lifecycle.testNotification(providerId);
   }
 }

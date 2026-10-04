@@ -23,6 +23,7 @@ import { DEFAULT_DESKTOP_BROKER_PID_FILE, isOwnedProcessCommand } from "./plugin
 import { compareDesktopCurrentStatus, formatDesktopCurrentStatus, type DesktopHostDiagnostic } from "./current-desktop-status.js";
 import { getDesktopPluginRuntimeRecord } from "./plugin/desktop-plugin-runtime-state.js";
 import { getPackageDir, type ExtensionAPI, type ExtensionContext } from "@earendil-works/pi-coding-agent";
+import { runNotificationTui } from "./notification-tui.js";
 
 const PID_FILE = join(homedir(), ".pi", "maestro-mobile.pid");
 const TOKEN_FILE = join(homedir(), ".pi", "maestro-mobile-token");
@@ -399,6 +400,11 @@ export default function maestroHostExtension(pi: ExtensionAPI): void {
         return;
       }
 
+      if (sub === "notify") {
+        await runNotificationTui(ctx);
+        return;
+      }
+
       if (sub === "status" || sub === "default") {
         if (!alive) {
           ctx.ui.notify(`maestro-mobile: 未运行（端口 ${port} 无响应）`, "info");
@@ -505,7 +511,7 @@ export default function maestroHostExtension(pi: ExtensionAPI): void {
         return;
       }
 
-      ctx.ui.notify(`maestro-mobile: 未知子命令 "${sub}"（可用：status / start / stop / qr）`, "warning");
+      ctx.ui.notify(`maestro-mobile: 未知子命令 "${sub}"（可用：status / start / stop / qr / notify）`, "warning");
     },
   });
 }

@@ -1,7 +1,7 @@
 apply plugin: "com.android.application"
 
 // ── 版本号单一来源：apps/mobile/app.json 的 expo.version ──────────────
-// versionCode 由 semver 自动推导（major*10000 + minor*100 + patch），保证单调递增；
+// versionCode 28
 // bump 版本时只改 app.json，iOS Info.plist 由 expo prebuild 同步，Android 从这里读取。
 def appJson = new groovy.json.JsonSlurper().parseText(file("../../app.json").text)
 def appVersion = appJson.expo.version
@@ -183,6 +183,7 @@ android {
 
 dependencies {
     // The version of react-native is set by the React Native Gradle Plugin
+    implementation("com.squareup.okhttp3:okhttp:4.12.0")
     implementation("com.facebook.react:react-android")
 
     def isGifEnabled = (findProperty('expo.gif.enabled') ?: "") == "true";

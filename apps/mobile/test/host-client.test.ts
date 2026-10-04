@@ -155,6 +155,16 @@ describe("HostClient", () => {
     await expect(promise).rejects.toThrow("Session not found");
   });
 
+  it("reconnectNow immediately invalidates stale socket and opens a fresh generation", () => {
+    client.connect();
+    fakeWs._open();
+    expect(client.isConnected).toBe(true);
+    client.reconnectNow();
+    expect(client.connectionState).toBe("connecting");
+    expect(client.isProtocolReady).toBe(false);
+    fakeWs._open();
+    expect(client.isConnected).toBe(true);
+  });
   it("reconnects on close", async () => {
     vi.useFakeTimers();
     client.connect();

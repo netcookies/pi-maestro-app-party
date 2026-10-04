@@ -1,6 +1,51 @@
 import Expo
 import React
 import ReactAppDependencyProvider
+import UIKit
+
+@objc(MaestroBackgroundRuntime)
+final class MaestroBackgroundRuntime: NSObject, RCTBridgeModule {
+  private var taskId: UIBackgroundTaskIdentifier = .invalid
+  private var ended = true
+
+  static func moduleName() -> String! { "MaestroBackgroundRuntime" }
+  static func requiresMainQueueSetup() -> Bool { true }
+
+  @objc(beginGracePeriod:resolver:rejecter:)
+  func beginGracePeriod(
+    _ name: String,
+    resolver resolve: @escaping RCTPromiseResolveBlock,
+    rejecter reject: @escaping RCTPromiseRejectBlock
+  ) {
+    DispatchQueue.main.async {
+      if self.taskId != .invalid { resolve(nil); return }
+      self.ended = false
+      self.taskId = UIApplication.shared.beginBackgroundTask(withName: name) { [weak self] in
+        self?.finishTask()
+      }
+      resolve(nil)
+    }
+  }
+
+  @objc(endGracePeriod:rejecter:)
+  func endGracePeriod(
+    resolver resolve: @escaping RCTPromiseResolveBlock,
+    rejecter reject: @escaping RCTPromiseRejectBlock
+  ) {
+    DispatchQueue.main.async {
+      self.finishTask()
+      resolve(nil)
+    }
+  }
+
+  private func finishTask() {
+    guard !ended else { return }
+    ended = true
+    let current = taskId
+    taskId = .invalid
+    if current != .invalid { UIApplication.shared.endBackgroundTask(current) }
+  }
+}
 
 @UIApplicationMain
 public class AppDelegate: ExpoAppDelegate {

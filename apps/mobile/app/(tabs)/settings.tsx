@@ -8,7 +8,8 @@
  * Pi / pi-maestro-flow / Maestro CLI 版本协议未提供，显示「待 Host 接入」，不编造。
  */
 import React, { useMemo, useState, useEffect } from "react";
-import { View, Text, StyleSheet, ScrollView, TouchableOpacity, TextInput, Animated, ActivityIndicator } from "react-native";
+import { Platform } from "react-native";import { View, Text, StyleSheet, ScrollView, TouchableOpacity, TextInput, Animated, ActivityIndicator } from "react-native";
+
 import { SafeAreaView } from "react-native-safe-area-context";
 import { useRouter } from "expo-router";
 import { useHost } from "../../src/store";
@@ -29,7 +30,7 @@ import { getNotificationSettings, setNotificationSettings } from "../../src/noti
 
 export default function SettingsScreen() {
   const router = useRouter();
-  const { connectionState, isConnected, state, hostUrl: connectedHostUrl, token: connectedToken, connect, disconnect } = useHost();
+  const { connectionState, isConnected, state, hostUrl: connectedHostUrl, token: connectedToken, connect, disconnect, getNotificationConfig, testNotification } = useHost();
   const { theme, themeName, setTheme, customAccent, setCustomAccent, appearanceChoice, setAppearanceChoice } = useTheme();
   const { lang, langChoice, t, setLanguageChoice } = useI18n();
 
@@ -45,15 +46,34 @@ export default function SettingsScreen() {
   // 本地真实通知与提醒偏好
   const [notifAsk, setNotifAsk] = useState(() => getNotificationSettings().askEnabled);
   const [notifSettled, setNotifSettled] = useState(() => getNotificationSettings().settledEnabled);
-
+  const [notificationProviders, setNotificationProviders] = useState<unknown[]>([]);
+  const [notificationTest, setNotificationTest] = useState<string | null>(null);
+  useEffect(() => {
+    if (!isConnected) return;
+    void getNotificationConfig().then(setNotificationProviders).catch(() => setNotificationProviders([]));
+  }, [getNotificationConfig, isConnected]);
   const handleToggleNotifAsk = (val: boolean) => {
     setNotifAsk(val);
     void setNotificationSettings({ askEnabled: val });
   };
-
   const handleToggleNotifSettled = (val: boolean) => {
     setNotifSettled(val);
     void setNotificationSettings({ settledEnabled: val });
+  };
+
+  const saveBackgroundMode = (mode: AppConfig["backgroundConnectionMode"]) => {
+    const next = { ...config, backgroundConnectionMode: mode };
+    setConfig(next);
+    void updateConfig({ backgroundConnectionMode: mode });
+  };
+
+  const runNotificationTest = async () => {
+    try {
+      const result = await testNotification();
+      setNotificationTest(JSON.stringify(result));
+    } catch (error) {
+      setNotificationTest(error instanceof Error ? error.message : String(error));
+    }
   };
 
   const [hostUrl, setHostUrl] = useState(connectedHostUrl);
@@ -448,10 +468,31 @@ export default function SettingsScreen() {
           <View style={[styles.prefDivider, { backgroundColor: theme.dividerLine ?? theme.border }]} />
           <View style={styles.prefRow}>
             <View style={styles.prefMain}>
+              <Text style={styles.prefLabel}>{Platform.OS === "android" ? "后台连接" : "iOS 后台策略"}</Text>
+              <Text style={styles.prefSummary}>{Platform.OS === "android" ? "后台保持连接会显示常驻通知并增加耗电，系统或厂商策略仍可能停止服务。" : "iOS 不保证后台常驻；尽力保持只使用系统允许的短时后台机会。"}</Text>
+            </View>
+            <MiuixSwitch value={config.backgroundConnectionMode === "best_effort"} onValueChange={(value) => saveBackgroundMode(value ? "best_effort" : "power_saving")} accessibilityLabel="后台连接策略" />
+          </View>
+          <View style={styles.prefRow}>
+            <View style={styles.prefMain}>
               <Text style={styles.prefLabel}>{t.notificationSettledTitle}</Text>
               <Text style={styles.prefSummary}>{t.notificationSettledSummary}</Text>
             </View>
             <MiuixSwitch value={notifSettled} onValueChange={handleToggleNotifSettled} accessibilityLabel={t.notificationSettledTitle} />
+          </View>
+          <View style={[styles.prefDivider, { backgroundColor: theme.dividerLine ?? theme.border }]} />
+          <View style={styles.prefRow}>
+            <View style={styles.prefMain}>
+              <Text style={styles.prefLabel}>Host 后台通知渠道</Text>
+              <Text style={styles.prefSummary}>{notificationProviders.length > 0 ? notificationProviders.map((provider) => {
+                const value = provider as { id?: string; kind?: string; eventKinds?: string[] };
+                return `${value.id ?? value.kind ?? "Provider"}: ${(value.eventKinds ?? []).join(", ")}`;
+              }).join("\n") : "未配置 Provider；可在 Host 端配置 PushDeer、ntfy、Bark、Gotify、Telegram 或 Webhook。"}</Text>
+              {notificationTest ? <Text style={styles.prefSummary}>{notificationTest}</Text> : null}
+            </View>
+            <TouchableOpacity onPress={() => void runNotificationTest()} disabled={!isConnected} accessibilityRole="button" accessibilityLabel="测试通知">
+              <Text style={{ color: isConnected ? theme.accent : theme.muted, fontWeight: "700", fontSize: 12 }}>测试</Text>
+            </TouchableOpacity>
           </View>
         </View>
 

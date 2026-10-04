@@ -504,6 +504,20 @@ export class MobileHostServer {
         return;
       }
 
+      if (request.method === "GET" && url.pathname === "/api/notifications") {
+        writeJson(response, 200, await this.controller.readNotificationConfig());
+        return;
+      }
+      if (request.method === "PUT" && url.pathname === "/api/notifications") {
+        const body = await readJsonBody(request);
+        writeJson(response, 200, await this.controller.updateNotificationConfig(body));
+        return;
+      }
+      if (request.method === "POST" && url.pathname === "/api/notifications/test") {
+        writeJson(response, 200, await this.controller.testNotification(url.searchParams.get("providerId") ?? undefined));
+        return;
+      }
+
       if (request.method === "GET" && url.pathname === "/api/desktop/current") {
         const target = desktopTargetFromQuery(url);
         if (target === null) {
@@ -890,6 +904,21 @@ export class MobileHostServer {
           this.sendAck(client, command, await this.controller.application.updateSettings(command.patch));
           break;
         }
+        case "get_notification_config": {
+          if (!client.capabilities.includes("notification_control")) { this.sendUnavailable(client, command, "capability_mismatch"); break; }
+          this.sendAck(client, command, await this.controller.application.readNotificationConfig());
+          break;
+        }
+        case "update_notification_config": {
+          if (!client.capabilities.includes("notification_control")) { this.sendUnavailable(client, command, "capability_mismatch"); break; }
+          this.sendAck(client, command, await this.controller.application.updateNotificationConfig(command.patch));
+          break;
+        }
+        case "test_notification": {
+          if (!client.capabilities.includes("notification_control")) { this.sendUnavailable(client, command, "capability_mismatch"); break; }
+          this.sendAck(client, command, await this.controller.application.testNotification(command.providerId));
+          break;
+        }
         case "set_model": {
           const target = this.targetForCommand(command);
           if (!target) { this.sendUnavailable(client, command, "target_unavailable"); break; }
@@ -1150,6 +1179,20 @@ function desktopTargetFromQuery(url: URL): DesktopPluginTarget | null | undefine
   };
   return isDesktopPluginTarget(target) ? target : null;
 }
+async function readJsonBody(request: IncomingMessage): Promise<Record<string, unknown>> {
+  const chunks: Buffer[] = [];
+  let size = 0;
+  for await (const chunk of request) {
+    const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+    size += buffer.length;
+    if (size > 256 * 1024) throw new Error("request_body_too_large");
+    chunks.push(buffer);
+  }
+  const value: unknown = JSON.parse(Buffer.concat(chunks).toString("utf8"));
+  if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("invalid_json_body");
+  return value as Record<string, unknown>;
+}
+
 function writeJson(response: ServerResponse, status: number, body: unknown): void {
   response.writeHead(status, {
     "Content-Type": "application/json; charset=utf-8",
@@ -1163,7 +1206,7 @@ function writeJson(response: ServerResponse, status: number, body: unknown): voi
 function applyCorsHeaders(response: ServerResponse, origin?: string): void {
   if (origin) {
     response.setHeader("Access-Control-Allow-Origin", origin);
-    response.setHeader("Access-Control-Allow-Methods", "GET,POST,OPTIONS");
+    response.setHeader("Access-Control-Allow-Methods", "GET,POST,PUT,OPTIONS");
     response.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization");
   }
 }

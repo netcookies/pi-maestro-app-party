@@ -39,7 +39,9 @@ export type ProtocolCapability =
   | "monitor_read"
   | "session_filter"
   | "execution_projection_read"
-  | "plan";
+  | "plan"
+  | "notification_control"
+  | "background_transport";
 
 export type OperationStatus = "requested" | "accepted" | "observed" | "failed" | "unknown";
 
@@ -637,6 +639,7 @@ export type HostEvent =
   | { type: "maestro_state"; state: MaestroState; seq: number }
   | { type: "monitor_state"; state: MonitorState; seq: number }
   | { type: "teammate_event"; scheduleId: string; dispatchId?: string; status: string; seq: number }
+  | { type: "notification_event"; eventId: string; kind: "ask_pending" | "plan_pending" | "plan_review_pending" | "plan_confirm_pending" | "agent_settled" | "session_error"; sessionId: string; target?: SessionTargetIdentity; requestId?: string; deadlineAt?: number; title: string; body: string; occurredAt: string; dedupeKey: string; seq: number }
   | { type: "error"; code: string; message: string; seq: number };
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -664,6 +667,9 @@ export type ClientCommandPayload =
   | ({ type: "list_skills" } & TargetedSessionCommand)
   | { type: "get_maestro_settings" }
   | { type: "update_maestro_settings"; key: string; patch: Record<string, unknown> }
+  | { type: "get_notification_config" }
+  | { type: "update_notification_config"; patch: Record<string, unknown> }
+  | { type: "test_notification"; providerId?: string }
   | ({ type: "set_model"; modelId: string; provider?: string } & TargetedSessionCommand)
   | ({ type: "set_thinking"; level: string } & TargetedSessionCommand)
   | ({ type: "compact"; customInstructions?: string } & TargetedSessionCommand)
@@ -803,6 +809,12 @@ export function isHostEvent(value: unknown): value is HostEvent {
     case "teammate_event":
       return isString(value.scheduleId) && isString(value.status)
         && (value.dispatchId === undefined || isString(value.dispatchId));
+    case "notification_event":
+      return isString(value.eventId) && optionalEnum(value.kind, "ask_pending", "plan_pending", "plan_review_pending", "plan_confirm_pending", "agent_settled", "session_error")
+        && value.kind !== undefined && isString(value.sessionId)
+        && (value.target === undefined || (isSessionTargetIdentity(value.target) && value.target.sessionId === value.sessionId))
+        && optionalString(value.requestId) && optionalFiniteNumber(value.deadlineAt)
+        && isString(value.title) && isString(value.body) && isString(value.occurredAt) && isString(value.dedupeKey);
     case "error":
       return isString(value.code) && isString(value.message);
     default:
@@ -816,7 +828,8 @@ export function isClientCommand(value: unknown): value is ClientCommand {
   if (value.target !== undefined && !isSessionTargetIdentity(value.target)) return false;
   if (value.type !== "open_session" && value.type !== "close_session"
     && value.type !== "list_host_sessions"
-    && value.type !== "get_maestro_settings" && value.type !== "get_maestro_state"
+    && value.type !== "get_maestro_settings" && value.type !== "get_notification_config"
+    && value.type !== "update_notification_config" && value.type !== "test_notification" && value.type !== "get_maestro_state"
     && value.type !== "get_monitor_state"
     && value.type !== "get_execution_projections" && value.type !== "ping"
     && value.type !== "update_maestro_settings"
@@ -829,6 +842,8 @@ export function isClientCommand(value: unknown): value is ClientCommand {
         && optionalString(value.query) && (value.includeMonitor === undefined || typeof value.includeMonitor === "boolean")
         && optionalStringArray(value.sessionIds) && optionalStringArray(value.latestForCwds);
     case "get_maestro_settings":
+    case "get_notification_config":
+    case "test_notification":
     case "get_maestro_state":
     case "get_monitor_state":
     case "get_execution_projections":
@@ -856,6 +871,8 @@ export function isClientCommand(value: unknown): value is ClientCommand {
         && (value.type !== "compact" || optionalString(value.customInstructions));
     case "update_maestro_settings":
       return isString(value.key) && isRecord(value.patch);
+    case "update_notification_config":
+      return isRecord(value.patch);
     case "prompt":
       return isString(value.sessionId) && isString(value.message) && optionalImageArray(value.images);
     case "steer":

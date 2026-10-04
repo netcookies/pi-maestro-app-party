@@ -36,6 +36,7 @@ import {
   setNotificationSettings,
   getNotificationSettings,
   initNotificationService,
+  consumePlanNotificationEvent,
 } from "../src/notifications";
 
 describe("notifications service", () => {
@@ -118,6 +119,14 @@ describe("notifications service", () => {
     unsub();
   });
 
+  it("deduplicates plan pending notifications by eventId", async () => {
+    let captured = 0;
+    const unsub = onInAppBanner(() => { captured += 1; });
+    await consumePlanNotificationEvent({ type: "notification_event", eventId: "plan-event-1", dedupeKey: "plan-key-1", kind: "plan_review_pending", sessionId: "plan-session", title: "Plan 等待评审", body: "请处理", });
+    await consumePlanNotificationEvent({ type: "notification_event", eventId: "plan-event-1", dedupeKey: "plan-key-1", kind: "plan_review_pending", sessionId: "plan-session", title: "Plan 等待评审", body: "请处理", });
+    expect(captured).toBe(1);
+    unsub();
+  });
   it("respects preference settings", async () => {
     await setNotificationSettings({ askEnabled: false });
     expect(getNotificationSettings().askEnabled).toBe(false);

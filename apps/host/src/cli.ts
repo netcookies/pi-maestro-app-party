@@ -15,6 +15,7 @@ import { HostController } from "./host-controller.js";
 import { MobileHostServer } from "./server/mobile-host-server.js";
 import { MaestroStateReader } from "./maestro-state.js";
 import { PiSessionCatalog } from "./pi/pi-sdk-runtime.js";
+import { runNotifyCommand } from "./notification-cli.js";
 
 import { randomBytes } from "node:crypto";
 import { readFile, writeFile, unlink, mkdir, chmod } from "node:fs/promises";
@@ -127,6 +128,11 @@ async function unlinkIfOwned(path: string, ownPid: number): Promise<void> {
 
 async function main(): Promise<void> {
   const cli = parseArgs(process.argv.slice(2));
+  if (process.argv[2] === "notify") {
+    await runNotifyCommand(process.argv.slice(2));
+    return;
+  }
+
 
   // P0-3：进程级 handler 必须在任何 await 之前注册。原先它们挂在 listen() 之后，
   // 启动期（token 读写、listen、版本探测）的异常会绕过统一清理路径，以原生栈崩溃。

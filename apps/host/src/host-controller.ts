@@ -19,9 +19,15 @@ import { searchInJsonl } from "./jsonl-pager.js";
 import { JsonlTailWatcher } from "./jsonl-tail-watcher.js";
 import { EventLog } from "./event-log.js";
 import { readFileSync } from "node:fs";
-import { dirname, resolve } from "node:path";
-
 import { fileURLToPath } from "node:url";
+import { dirname, resolve, join } from "node:path";
+import { homedir } from "node:os";
+
+import { NotificationOutbox } from "./notifications/notification-outbox.js";
+import { NotificationConfigStore } from "./notifications/notification-config.js";
+import { NotificationDispatcher } from "./notifications/notification-dispatcher.js";
+import { notificationProviders } from "./notifications/providers/index.js";
+import { notificationEventFromHostEvent } from "./notifications/notification-normalizer.js";
 
 function targetKey(target: DesktopPluginTarget): string {
   return [target.sessionId, target.endpointId, target.normalizedCwd, target.processGeneration].join("\u0000");
@@ -71,6 +77,7 @@ export class HostController {
   private readonly desktopReplayRefreshes = new Map<string, { timer: ReturnType<typeof setTimeout>; refreshing: boolean; replayQueued: boolean; pendingItems: TimelineItem[] }>();
   private readonly pendingDesktopAsks = new Map<string, { target: DesktopPluginTarget; request: DesktopAskRequest; event: Extract<HostEvent, { type: "extension_ui_request" }>; timer: ReturnType<typeof setTimeout> }>();
   private readonly pendingDesktopPlans = new Map<string, { target: DesktopPluginTarget; request: DesktopPlanRequest; timer: ReturnType<typeof setTimeout> }>();
+  private readonly desktopRuntimeStatuses = new Map<string, DesktopPluginRuntimeStatus>();
   private readonly desktopExecutionSourceRevisions = new Map<string, number>();
   private readonly desktopExecutionEventRevisions = new Map<string, number>();
   private desktopExecutionRevision = 0;
@@ -86,6 +93,11 @@ export class HostController {
   private telemetryCache: string | null = null;
   private telemetryInFlight = false;
   private disposed = false;
+  private readonly notificationConfig: NotificationConfigStore;
+  private readonly notificationOutbox: NotificationOutbox;
+  private readonly notificationDispatcher: NotificationDispatcher;
+  private readonly notificationHostInstanceId = `${process.pid}-${Date.now()}`;
+  private notificationSequence = 0;
   private readonly emitToListeners: (event: HostEvent) => void;
   private maestroPollTimer: ReturnType<typeof setInterval> | null = null;
   private maestroDetected = false;
@@ -122,9 +134,36 @@ export class HostController {
         readMaestroState: () => this.readMaestroStateNow(),
         readSettings: () => readSettingsOverview(),
         updateSettings: (patch) => updateSettingsJson(patch),
+        readNotificationConfig: () => this.readNotificationConfig(),
+        updateNotificationConfig: (patch) => this.updateNotificationConfig(patch),
+        testNotification: (providerId) => this.testNotification(providerId),
       },
     );
+    this.notificationConfig = new NotificationConfigStore(join(homedir(), ".pi", "maestro-mobile-notifications.json"));
+    this.notificationOutbox = new NotificationOutbox(join(homedir(), ".pi", "maestro-mobile-notification-outbox.json"));
+    this.notificationDispatcher = new NotificationDispatcher(this.notificationOutbox, this.notificationConfig, notificationProviders);
+    this.notificationDispatcher.start();
     this.emitToListeners = (event: HostEvent) => {
+      const notification = notificationEventFromHostEvent(event, {
+        hostInstanceId: this.notificationHostInstanceId,
+        nextSequence: () => ++this.notificationSequence,
+      });
+      if (notification) {
+        void this.notificationDispatcher.enqueue(notification).catch(() => undefined);
+        const notificationFrame = this.eventLog.record({
+          type: "notification_event",
+          eventId: notification.eventId,
+          kind: notification.kind,
+          sessionId: notification.sessionId,
+          title: notification.title,
+          body: notification.body,
+          occurredAt: notification.occurredAt,
+          dedupeKey: notification.dedupeKey,
+        });
+        for (const listener of this.listeners) {
+          try { listener(notificationFrame); } catch { /* ignore */ }
+        }
+      }
       for (const listener of this.listeners) {
         try { listener(event); } catch { /* ignore */ }
       }
@@ -271,6 +310,27 @@ export class HostController {
   syncDesktopRuntimeStatus(target: DesktopPluginTarget, runtimeStatus: DesktopPluginRuntimeStatus): void {
     const current = this.sessionDirectory.resolve(target);
     if (!current || current.runtimeStatus === runtimeStatus) return;
+    const key = targetKey(target);
+    const previous = this.desktopRuntimeStatuses.get(key);
+    this.desktopRuntimeStatuses.set(key, runtimeStatus);
+    if (previous === "running" && runtimeStatus === "idle") {
+      const notification = {
+        eventId: `${this.notificationHostInstanceId}:${++this.notificationSequence}:agent_settled:${key}`,
+        kind: "agent_settled" as const,
+        sessionId: target.sessionId,
+        target: { ...target },
+        title: "Agent 回复已完成",
+        body: "桌面会话本轮执行已完成",
+        occurredAt: new Date().toISOString(),
+        dedupeKey: `agent_settled:${key}:${this.notificationSequence}`,
+        priority: "normal" as const,
+      };
+      void this.notificationDispatcher.enqueue(notification).catch(() => undefined);
+      const frame = this.eventLog.record({ type: "notification_event", ...notification });
+      for (const listener of this.listeners) {
+        try { listener(frame); } catch { /* ignore */ }
+      }
+    }
     const now = new Date().toISOString();
     const patch: SessionSummaryPatch = runtimeStatus === "running"
       ? { runtimeStatus, activeSince: current.activeSince ?? now, lastActivityAt: now }
@@ -729,6 +789,39 @@ export class HostController {
     }
   }
 
+  async readNotificationConfig() {
+    return this.notificationConfig.redacted();
+  }
+
+  async updateNotificationConfig(patch: Record<string, unknown>) {
+    await this.notificationConfig.patch(patch);
+    return this.notificationConfig.redacted();
+  }
+
+  async testNotification(providerId?: string): Promise<{ ok: boolean; results: { providerId: string; ok: boolean; code: string }[] }> {
+    const config = await this.notificationConfig.read();
+    const selected = providerId ? config.providers.filter((provider) => provider.id === providerId) : config.providers;
+    const results: { providerId: string; ok: boolean; code: string }[] = [];
+    for (const providerConfig of selected) {
+      const provider = notificationProviders.get(providerConfig.kind);
+      if (!provider) {
+        results.push({ providerId: providerConfig.id, ok: false, code: "unsupported_provider" });
+        continue;
+      }
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), 10_000);
+      try {
+        const result = await provider.test(providerConfig, controller.signal);
+        results.push({ providerId: providerConfig.id, ok: result.ok, code: result.code });
+      } catch {
+        results.push({ providerId: providerConfig.id, ok: false, code: "provider_error" });
+      } finally {
+        clearTimeout(timer);
+      }
+    }
+    return { ok: results.length > 0 && results.every((result) => result.ok), results };
+  }
+
   /** 释放所有资源（关闭时调用） */
   async dispose(): Promise<void> {
     this.disposed = true;
@@ -745,7 +838,7 @@ export class HostController {
     for (const target of this.sessionDirectory.list()) this.sessionDirectory.unregister(target.identity);
     this.readerTargets.clear();
     this.projectedDesktopTargets.clear();
-    this.desktopPluginRegistry.clear();
+    this.notificationDispatcher.stop();
     this.listeners.clear();
   }
 }

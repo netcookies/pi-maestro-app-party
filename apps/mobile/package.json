@@ -14,8 +14,9 @@
     "ios": "expo run:ios",
     "web": "expo start --web",
     "prebuild": "expo prebuild",
+    "prebuild:ios": "expo prebuild --platform ios",
     "build:android": "expo prebuild --platform android && cd android && ./gradlew assembleDebug",
-    "build:ios": "expo prebuild --platform ios && cd ios && pod install && IPHONEOS_DEPLOYMENT_TARGET=15.1 xcodebuild -workspace MaestroMobile.xcworkspace -scheme MaestroMobile -configuration Debug -sdk iphonesimulator -derivedDataPath build"
+    "build:ios": "cd ios && RUBYOPT=\"-r$PWD/cocoapods_pathname_workaround.rb\" pod install && xcodebuild -workspace MaestroMobile.xcworkspace -scheme MaestroMobile -configuration Debug -sdk iphonesimulator -derivedDataPath build CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY=\"\" build"
   },
   "dependencies": {
     "@maestro-mobile/shared": "workspace:*",

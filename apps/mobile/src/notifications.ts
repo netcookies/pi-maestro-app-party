@@ -101,6 +101,30 @@ async function scheduleSystemNotification(title: string, body: string, data: Rec
 // 应用内顶部横幅（In-App Notification Banner）事件发布订阅
 // ─────────────────────────────────────────────────────────────────────────────
 
+export interface PlanNotificationEvent {
+  type: "notification_event";
+  eventId: string;
+  kind: "plan_pending" | "plan_review_pending" | "plan_confirm_pending";
+  sessionId: string;
+  title: string;
+  body: string;
+  dedupeKey: string;
+}
+
+const notifiedPlanKeys = new Set<string>();
+
+export async function consumePlanNotificationEvent(event: PlanNotificationEvent): Promise<void> {
+  const key = event.eventId || event.dedupeKey;
+  if (notifiedPlanKeys.has(key)) return;
+  notifiedPlanKeys.add(key);
+  if (currentActiveSessionId === event.sessionId) {
+    void hapticImpactMedium();
+    return;
+  }
+  void hapticImpactMedium();
+  emitInAppBanner({ id: key, type: "ask", title: event.title, body: event.body, sessionId: event.sessionId });
+  void scheduleSystemNotification(event.title, event.body, { type: event.kind, sessionId: event.sessionId, eventId: event.eventId });
+}
 export interface InAppBannerPayload {
   id: string;
   type: "ask" | "settled";

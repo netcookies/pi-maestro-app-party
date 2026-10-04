@@ -151,6 +151,37 @@ export class HostClient {
     this.openSocket();
   }
 
+  suspend(): void {
+    this.closed = true;
+    if (this.reconnectTimer) { clearTimeout(this.reconnectTimer); this.reconnectTimer = null; }
+    this.stopPing();
+    this.protocolReady = false;
+    this.socketGeneration += 1;
+    this.ws?.close();
+    this.ws = null;
+    this.rejectAllPending("closed");
+    this.setState("disconnected");
+  }
+
+  /** Immediately rebuild a stale transport when the app becomes active. */
+  reconnectNow(): void {
+    if (this.closed && this.authFailed) this.authFailed = false;
+    this.closed = false;
+    this.authFailed = false;
+    this.suspectAuthFailure = false;
+    if (this.reconnectTimer) {
+      clearTimeout(this.reconnectTimer);
+      this.reconnectTimer = null;
+    }
+    this.stopPing();
+    this.protocolReady = false;
+    this.socketGeneration += 1;
+    this.ws?.close();
+    this.ws = null;
+    this.rejectAllPending("connection_lost");
+    this.openSocket();
+  }
+
   /** 主动关闭（用户退出） */
   close(): void {
     this.closed = true;
@@ -369,7 +400,7 @@ export class HostClient {
       protocolVersion: MOBILE_PROTOCOL_VERSION,
       clientVersion: this.options.clientVersion ?? MOBILE_RELEASE_VERSION,
       releaseVersion: this.options.releaseVersion ?? MOBILE_RELEASE_VERSION,
-      capabilities: this.options.capabilities ?? ["session_control", "extension_ui", "monitor_read", "session_filter", "execution_projection_read", "plan"],
+      capabilities: this.options.capabilities ?? ["session_control", "extension_ui", "monitor_read", "session_filter", "execution_projection_read", "plan", "notification_control", "background_transport"],
       requestId: `hello-${++this.helloSeq}`,
     };
     this.sendRaw(JSON.stringify(hello));

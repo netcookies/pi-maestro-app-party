@@ -21,6 +21,8 @@ export interface AppConfig {
   searchMaxResults: number;
   /** 消息预览截断长度 */
   previewLength: number;
+  /** iOS short background grace policy; Android foreground service opt-in. */
+  backgroundConnectionMode: "power_saving" | "best_effort";
 }
 
 export const DEFAULT_CONFIG: AppConfig = {
@@ -31,12 +33,13 @@ export const DEFAULT_CONFIG: AppConfig = {
   livePollIntervalMs: 5000,
   searchMaxResults: 30,
   previewLength: 80,
+  backgroundConnectionMode: "power_saving",
 };
 
 const CONFIG_STORAGE_KEY = "maestro-mobile.config";
 
 /** 各字段合法范围（有限正整数约束；clamp 防 0/负/小数/NaN） */
-const CONFIG_LIMITS: Record<keyof AppConfig, { min: number; max: number }> = {
+const CONFIG_LIMITS: Partial<Record<keyof AppConfig, { min: number; max: number }>> = {
   historyPageSize: { min: 5, max: 500 },
   loadMoreThreshold: { min: 4, max: 500 },
   loadCooldownMs: { min: 100, max: 10000 },
@@ -81,8 +84,13 @@ function sanitizeConfig(patch: Partial<AppConfig>): Partial<AppConfig> {
   for (const key of Object.keys(CONFIG_LIMITS) as (keyof AppConfig)[]) {
     const v = patch[key];
     if (typeof v !== "number" || !Number.isFinite(v)) continue;
-    const { min, max } = CONFIG_LIMITS[key];
-    clean[key] = Math.min(max, Math.max(min, Math.round(v)));
+    const limits = CONFIG_LIMITS[key];
+    if (!limits) continue;
+    const { min, max } = limits;
+    (clean as Record<string, unknown>)[key] = Math.min(max, Math.max(min, Math.round(v)));
+  }
+  if (patch.backgroundConnectionMode === "power_saving" || patch.backgroundConnectionMode === "best_effort") {
+    clean.backgroundConnectionMode = patch.backgroundConnectionMode;
   }
   return clean;
 }

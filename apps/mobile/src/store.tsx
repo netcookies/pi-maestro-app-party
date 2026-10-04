@@ -22,6 +22,9 @@ import {
   type DesktopPlanResponse,
 } from "@maestro-mobile/shared";
 import { HostClient, type ConnectionState } from "./host-client";
+import { beginGracePeriod, endGracePeriod, isAndroidRuntime, isIosRuntime, startBackgroundService, stopBackgroundService } from "./background-runtime";
+import { getConfig } from "./config";
+import { consumePlanNotificationEvent } from "./notifications";
 
 import { isServerSessionPresentation, filterSessionsByVisibility } from "./host-session-pagination";
 import { ExtensionUiQueue } from "./extension-ui-queue";
@@ -54,6 +57,7 @@ export interface HostStoreValue {
   token?: string;
   connect(url: string, token?: string): void;
   disconnect(): void;
+  activate(): void;
 
   listHostSessions(options?: { cwd?: string; limit?: number; cursor?: string; query?: string; includeMonitor?: boolean; sessionIds?: string[]; latestForCwds?: string[] }): Promise<HostSessionList>;
   refreshMaestroState(): Promise<MaestroState | null>;
@@ -74,6 +78,8 @@ export interface HostStoreValue {
   sendPrompt(sessionId: string, message: string, images?: { data: string; mime: string }[]): Promise<void>;
   sendSteer(sessionId: string, message: string): Promise<void>;
   sendAbort(sessionId: string): Promise<void>;
+  getNotificationConfig(): Promise<unknown[]>;
+  testNotification(providerId?: string): Promise<unknown>;
   answerDialog(requestId: string, value: string | string[]): void;
   cancelDialog(requestId: string): void;
   respondPlan(requestId: string, response: DesktopPlanResponse, target?: SessionTargetIdentity): void;
@@ -111,6 +117,10 @@ export function HostStoreProvider({ children }: { children: React.ReactNode }) {
   const activeTargetKeysRef = useRef(new Map<string, string>());
   const reloadGenerationRef = useRef(0);
   const requestFlightsRef = useRef(new Map<string, Promise<unknown>>());
+  const hostUrlRef = useRef(hostUrl);
+  const tokenRef = useRef(token);
+  hostUrlRef.current = hostUrl;
+  tokenRef.current = token;
 
   // H4：实时事件微批 — 同一帧内的 WS 事件合并为一次 reducer 执行，
   // 避免流式 delta 逐条触发全局重渲染。16ms 窗口上限（≈1 帧）。
@@ -134,6 +144,10 @@ export function HostStoreProvider({ children }: { children: React.ReactNode }) {
     flushBufferedEvents();
   }, [flushBufferedEvents]);
   const dispatchBuffered = useCallback((event: HostEvent) => {
+    if (event.type === "notification_event" && (event.kind === "plan_pending" || event.kind === "plan_review_pending" || event.kind === "plan_confirm_pending")) {
+      void consumePlanNotificationEvent({ ...event, kind: event.kind });
+    }
+
     if ("target" in event && event.target && isSessionTargetIdentity(event.target)) {
       sessionTargetsRef.current.set(sessionTargetKey(event.target), event.target);
     }
@@ -341,6 +355,70 @@ export function HostStoreProvider({ children }: { children: React.ReactNode }) {
     setConnectionState("disconnected");
   }, [clearBufferedEvents]);
 
+  useEffect(() => {
+    const subscription = require("react-native").AppState.addEventListener("change", (nextState: string) => {
+      if (nextState === "active") {
+        void endGracePeriod();
+        const client = clientRef.current;
+        if (!client) return;
+        if (isAndroidRuntime() && getConfig().backgroundConnectionMode === "best_effort") void stopBackgroundService();
+        if (!client.isConnected || !client.isProtocolReady) {
+          client.reconnectNow();
+          return;
+        }
+        void refreshAfterActivation(client);
+        return;
+      }
+      if (nextState === "background" || nextState === "inactive") {
+        if (isAndroidRuntime() && getConfig().backgroundConnectionMode === "best_effort") {
+          clientRef.current?.suspend();
+          void startBackgroundService(hostUrlRef.current, tokenRef.current);
+        } else if (isIosRuntime() && getConfig().backgroundConnectionMode === "best_effort") void beginGracePeriod();
+      }
+    });
+    return () => subscription?.remove();
+  }, []);
+
+  const refreshAfterActivation = useCallback(async (client: HostClient) => {
+    const generation = stateRef.current.connectionGeneration;
+    const sessionId = activeSessionRef.current;
+    void client.getExecutionProjections().then((result) => {
+      if (clientRef.current !== client || generation !== stateRef.current.connectionGeneration) return;
+      dispatch({ type: "__execution_projections_load", projections: executionProjectionsFromCommandResult(result), revision: result.revision, connectionGeneration: generation });
+    }).catch(() => undefined);
+    void client.sendCommand({ type: "get_maestro_state" }).then((result) => {
+      if (clientRef.current !== client || generation !== stateRef.current.connectionGeneration) return;
+      if (result && typeof result === "object" && Array.isArray((result as { schedules?: unknown }).schedules)) dispatch({ type: "maestro_state", state: result as MaestroState, seq: 0 });
+    }).catch(() => undefined);
+    void client.sendCommand({ type: "list_host_sessions", limit: 100 }).then((result) => {
+      if (clientRef.current !== client || generation !== stateRef.current.connectionGeneration) return;
+      if (!result || typeof result !== "object" || !Array.isArray((result as { sessions?: unknown }).sessions)) return;
+      const list = result as HostSessionList;
+      for (const session of list.sessions) {
+        if (session.target && isSessionTargetIdentity(session.target)) sessionTargetsRef.current.set(sessionTargetKey(session.target), session.target);
+      }
+      dispatch({ type: "__host_session_list_load", list: { ...list, sessions: filterSessionsByVisibility(list.sessions, "session_list") }, connectionGeneration: generation });
+    }).catch(() => undefined);
+    if (sessionId) {
+      const target = targetForSession(sessionId);
+      if (!target) return;
+      const snapshotGeneration = ++reloadGenerationRef.current;
+      const bufferKey = beginSnapshotBuffer(target, snapshotGeneration);
+      void client.getSnapshot(sessionId, target).then((snapshot) => {
+        if (clientRef.current !== client || snapshotGeneration !== reloadGenerationRef.current) return;
+        dispatch({ type: "__snapshot_load", session: snapshot.session, items: snapshot.timeline, seq: snapshot.nextSeq, ...(typeof snapshot.wireSeq === "number" ? { wireSeq: snapshot.wireSeq } : {}), target });
+        releaseSnapshotBuffer(bufferKey, snapshotGeneration, snapshot.wireSeq);
+      }).catch(() => releaseSnapshotBuffer(bufferKey, snapshotGeneration));
+    }
+  }, [beginSnapshotBuffer, dispatch, releaseSnapshotBuffer, targetForSession]);
+
+  const activate = useCallback(() => {
+    const client = clientRef.current;
+    if (!client) return;
+    if (!client.isConnected || !client.isProtocolReady) client.reconnectNow();
+    else void refreshAfterActivation(client);
+  }, [refreshAfterActivation]);
+
   // 冷启动自动连接：App 打开即恢复上次 Host 连接（方向 A 重构后连接卡移入 host-sessions tab，
   // 而 bottom-tabs 默认 lazy mount —— 停留在工作台时永远没人发起连接。这里在 Provider 层兜底，
   // 读单连接参数键；深链配对（pair.tsx）会先写该键再跳转，时序天然正确。
@@ -476,9 +554,15 @@ export function HostStoreProvider({ children }: { children: React.ReactNode }) {
     }
   }, [dispatch, getClient]);
 
-  const clearError = useCallback(() => {
-    dispatch({ type: "__local_error", message: "" });
-  }, [dispatch]);
+  const getNotificationConfig = useCallback(async (): Promise<unknown[]> => {
+    const result = await getClient().sendCommand({ type: "get_notification_config" });
+    return Array.isArray(result) ? result : [];
+  }, [getClient]);
+
+  const testNotification = useCallback(async (providerId?: string): Promise<unknown> => {
+    return getClient().sendCommand({ type: "test_notification", ...(providerId ? { providerId } : {}) });
+  }, [getClient]);
+
 
   const sendPrompt = useCallback(async (sessionId: string, message: string, images?: { data: string; mime: string }[]) => {
     try {
@@ -676,6 +760,10 @@ export function HostStoreProvider({ children }: { children: React.ReactNode }) {
     [planActions],
   );
 
+  const clearError = useCallback(() => {
+    dispatch({ type: "__local_error", message: "" });
+  }, [dispatch]);
+
   const value = useMemo<HostStoreValue>(
     () => ({
       state,
@@ -685,6 +773,7 @@ export function HostStoreProvider({ children }: { children: React.ReactNode }) {
       token,
       connect,
       disconnect,
+      activate,
       listHostSessions,
       refreshMaestroState,
       refreshMonitor,
@@ -702,6 +791,8 @@ export function HostStoreProvider({ children }: { children: React.ReactNode }) {
       sendPrompt,
       sendSteer,
       sendAbort,
+      getNotificationConfig,
+      testNotification,
       answerDialog,
       cancelDialog,
       respondPlan,
@@ -709,7 +800,7 @@ export function HostStoreProvider({ children }: { children: React.ReactNode }) {
       lastError: state.lastError,
       clearError,
     }),
-    [state, connectionState, hostUrl, token, connect, disconnect, listHostSessions, refreshMaestroState, refreshMonitor, refreshExecutionProjections, loadSessionHistory, loadMoreHistory, searchHistory, listModels, listSkills, getMaestroSettings, updateMaestroSettings, fetchSessionUsage, setModel, setThinking, sendPrompt, sendSteer, sendAbort, answerDialog, cancelDialog, respondPlan, cancelPlan, clearError],
+    [state, connectionState, hostUrl, token, connect, disconnect, activate, listHostSessions, refreshMaestroState, refreshMonitor, refreshExecutionProjections, loadSessionHistory, loadMoreHistory, searchHistory, listModels, listSkills, getMaestroSettings, updateMaestroSettings, fetchSessionUsage, setModel, setThinking, sendPrompt, sendSteer, sendAbort, getNotificationConfig, testNotification, answerDialog, cancelDialog, respondPlan, cancelPlan, clearError],
 
   );
 
