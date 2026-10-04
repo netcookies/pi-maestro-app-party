@@ -2,6 +2,20 @@
 
 本文件记录 Maestro Mobile 的显著变更。格式基于 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)。
 
+## [0.9.0] — 2026-10-04
+
+### 测试
+
+- isolate Expo dependencies in store test
+
+### 新增
+
+- add plan notifications and provider management
+
+### 其他
+
+- use canonical version tags
+
 ## [0.8.4] — 2026-10-02
 
 ### 修复
