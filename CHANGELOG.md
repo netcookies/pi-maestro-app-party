@@ -2,6 +2,12 @@
 
 本文件记录 Maestro Mobile 的显著变更。格式基于 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)。
 
+## [0.9.3] — 2026-10-05
+
+### 修复
+
+- synchronize tab pager navigation
+
 ## [0.9.2] — 2026-10-04
 
 ### 修复
