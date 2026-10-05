@@ -9,7 +9,7 @@ import {
   type NativeSyntheticEvent,
   type NativeScrollEvent,
 } from "react-native";
-import { usePathname, useLocalSearchParams } from "expo-router";
+import { useGlobalSearchParams, usePathname, useRootNavigationState } from "expo-router";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useTheme } from "../../src/theme";
 import { useI18n } from "../../src/i18n";
@@ -19,153 +19,149 @@ import DashboardScreen from "./index";
 import HostSessionsScreen from "./host-sessions";
 import MonitorScreen from "./monitor";
 import SettingsScreen from "./settings";
+import {
+  clampTabIndex,
+  decidePagerEnd,
+  getIndexFromPathname,
+  getIndexFromTabParam,
+  getTabsNavigationIdentity,
+  shouldApplyTabsRouteIntent,
+  type TabsEntrySnapshot,
+} from "../../src/tab-pager";
 
-interface TabDef {
-  key: string;
-  icon: LineIconName;
-  labelKey: "tabWorkbench" | "tabSessions" | "tabMonitor" | "tabSettings";
-}
-
-const TABS: TabDef[] = [
-  { key: "sessions", icon: "chat", labelKey: "tabSessions" },
-  { key: "workbench", icon: "workbench", labelKey: "tabWorkbench" },
-  { key: "monitor", icon: "monitor", labelKey: "tabMonitor" },
-  { key: "settings", icon: "settings", labelKey: "tabSettings" },
+const TABS = [
+  { key: "sessions", icon: "chat" as LineIconName, labelKey: "tabSessions" as const },
+  { key: "workbench", icon: "workbench" as LineIconName, labelKey: "tabWorkbench" as const },
+  { key: "monitor", icon: "monitor" as LineIconName, labelKey: "tabMonitor" as const },
+  { key: "settings", icon: "settings" as LineIconName, labelKey: "tabSettings" as const },
 ];
-
 
 export const unstable_settings = { initialRouteName: "index" };
 
 let lastActiveTabIndex = 1;
 
-function getIndexFromPathname(path: string): number | null {
-  if (path.includes("settings")) return 3;
-  if (path.includes("monitor")) return 2;
-  if (path.includes("host-sessions") || path.includes("sessions")) return 0;
-  if (path === "/" || path === "" || path.includes("index") || path.includes("workbench")) return 1;
-  return null; // 非 tabs 路由返回 null，绝不误篡改当前激活的 Tab
-}
-
 export default function TabLayout() {
   const { theme } = useTheme();
   const { t } = useI18n();
-  const insets = useSafeAreaInsets();
   const pathname = usePathname();
-  const params = useLocalSearchParams<{ tab?: string }>();
+  const params = useGlobalSearchParams<{ tab?: string | string[] }>();
+  const navigationState = useRootNavigationState();
+  const insets = useSafeAreaInsets();
 
   const [pageWidth, setPageWidth] = useState(() => Dimensions.get("window").width);
   const [activeIndex, setActiveIndex] = useState(() => {
-    if (params.tab) {
-      if (params.tab === "settings") return 3;
-      if (params.tab === "monitor") return 2;
-      if (params.tab === "sessions" || params.tab === "host-sessions") return 0;
-      if (params.tab === "workbench" || params.tab === "dashboard") return 1;
-    }
-    if (!params.tab && pathname.includes("host-sessions")) return 0;
+    const fromParam = getIndexFromTabParam(params.tab);
+    if (fromParam !== null) return fromParam;
     const fromPath = getIndexFromPathname(pathname);
     return fromPath !== null ? fromPath : lastActiveTabIndex;
   });
   const pagerRef = useRef<ScrollView>(null);
-  const isProgrammaticScroll = useRef(false);
-  const initialPathHandled = useRef(false);
+  const pageWidthRef = useRef(pageWidth);
+  const activeIndexRef = useRef(activeIndex);
+  const pendingTargetRef = useRef<number | null>(null);
+  const userDraggingRef = useRef(false);
+  const actualOffsetRef = useRef(0);
+  const entryRef = useRef<TabsEntrySnapshot | null>(null);
+  const lastTabsEntryRef = useRef<TabsEntrySnapshot | null>(null);
+  const lastTabsRootKeyRef = useRef<string | null>(null);
 
-  // 监听 query 参数中的 tab
+  activeIndexRef.current = activeIndex;
+  pageWidthRef.current = pageWidth;
+
+  const scrollToIndex = useCallback((index: number, animated: boolean) => {
+    const nextIndex = clampTabIndex(index);
+    const width = pageWidthRef.current;
+    if (width <= 0) return;
+    pendingTargetRef.current = nextIndex;
+    pagerRef.current?.scrollTo({ x: nextIndex * width, animated });
+  }, []);
+
+  // Only a focused Tabs route entry can be an external tab intent. A child
+  // route returning to the existing Tabs entry is deliberately ignored.
   useEffect(() => {
-    if (params.tab) {
-      let target: number | null = null;
-      if (params.tab === "settings") target = 3;
-      else if (params.tab === "monitor") target = 2;
-      else if (params.tab === "sessions" || params.tab === "host-sessions") target = 0;
-      else if (params.tab === "workbench" || params.tab === "dashboard") target = 1;
-
-      if (target !== null && target !== activeIndex) {
-        lastActiveTabIndex = target;
-        setActiveIndex(target);
-        if (pageWidth > 0) {
-          isProgrammaticScroll.current = true;
-          pagerRef.current?.scrollTo({ x: target * pageWidth, animated: true });
-          setTimeout(() => {
-            isProgrammaticScroll.current = false;
-          }, 350);
-        }
-      }
+    const identity = getTabsNavigationIdentity(navigationState, pathname, params.tab);
+    if (!identity) return;
+    const previous = entryRef.current;
+    const wasTabsFocused = previous?.isTabsRootFocused ?? false;
+    const shouldApply = shouldApplyTabsRouteIntent(
+      previous,
+      identity,
+      lastTabsRootKeyRef.current,
+      wasTabsFocused,
+      lastTabsEntryRef.current,
+    );
+    entryRef.current = identity;
+    if (identity.isTabsRootFocused) {
+      lastTabsRootKeyRef.current = identity.rootKey;
+      lastTabsEntryRef.current = identity;
     }
-  }, [params.tab, pageWidth]);
+    if (!shouldApply) return;
 
-  // 初始挂载或屏幕宽度就绪时，恢复至记忆的 Tab 位置
+    const target = getIndexFromTabParam(params.tab) ?? getIndexFromPathname(pathname);
+    if (target === null) return;
+    lastActiveTabIndex = target;
+    setActiveIndex(target);
+    activeIndexRef.current = target;
+    scrollToIndex(target, previous !== null);
+  }, [navigationState, params.tab, pathname, scrollToIndex]);
+
+  // Rotation and split-view changes only reposition the current page.
   useEffect(() => {
-    if (activeIndex > 0 && pageWidth > 0) {
-      pagerRef.current?.scrollTo({ x: activeIndex * pageWidth, animated: false });
-    }
-  }, [pageWidth]);
+    if (pageWidth <= 0) return;
+    scrollToIndex(activeIndexRef.current, false);
+  }, [pageWidth, scrollToIndex]);
 
-  // 监听外部路由变化（仅当属于具体某个 tab 路由时响应）
-  useEffect(() => {
-    if (params.tab) return;
-    if (!initialPathHandled.current && pathname.includes("host-sessions")) {
-      initialPathHandled.current = true;
-      return;
-    }
-    initialPathHandled.current = true;
-    const target = getIndexFromPathname(pathname);
-    if (target !== null && target !== activeIndex) {
-      lastActiveTabIndex = target;
-      setActiveIndex(target);
-      if (pageWidth > 0) {
-        isProgrammaticScroll.current = true;
-        pagerRef.current?.scrollTo({ x: target * pageWidth, animated: true });
-        setTimeout(() => {
-          isProgrammaticScroll.current = false;
-        }, 350);
-      }
-    }
-  }, [pathname]);
-
-  const handleTabPress = useCallback(
-    (index: number) => {
-      if (index === activeIndex && getIndexFromPathname(pathname) === index) return;
-      void hapticImpactLight();
-      lastActiveTabIndex = index;
-      setActiveIndex(index);
-      if (pageWidth > 0) {
-        isProgrammaticScroll.current = true;
-        pagerRef.current?.scrollTo({ x: index * pageWidth, animated: true });
-        setTimeout(() => {
-          isProgrammaticScroll.current = false;
-        }, 350);
-      }
-    },
-    [activeIndex, pageWidth],
-  );
+  const handleTabPress = useCallback((index: number) => {
+    const nextIndex = clampTabIndex(index);
+    const sameTab = nextIndex === activeIndexRef.current;
+    if (!sameTab) void hapticImpactLight();
+    lastActiveTabIndex = nextIndex;
+    activeIndexRef.current = nextIndex;
+    setActiveIndex(nextIndex);
+    scrollToIndex(nextIndex, !sameTab);
+  }, [scrollToIndex]);
 
   const handleMomentumScrollEnd = useCallback(
     (e: NativeSyntheticEvent<NativeScrollEvent>) => {
-      if (isProgrammaticScroll.current || pageWidth <= 0) return;
-      const x = e.nativeEvent.contentOffset.x;
-      const nextIndex = Math.max(0, Math.min(TABS.length - 1, Math.round(x / pageWidth)));
-      if (nextIndex !== activeIndex) {
+      const width = pageWidthRef.current;
+      const eventOffset = e.nativeEvent.contentOffset.x;
+      const actualOffset = Math.abs(actualOffsetRef.current - eventOffset) > 1
+        ? actualOffsetRef.current
+        : eventOffset;
+      const decision = decidePagerEnd(
+        actualOffset,
+        width,
+        pendingTargetRef.current,
+        userDraggingRef.current,
+      );
+      if (decision.index === null) {
+        if (decision.pending !== null) pagerRef.current?.scrollTo({ x: decision.pending * width, animated: false });
+        return;
+      }
+      pendingTargetRef.current = decision.pending;
+      userDraggingRef.current = false;
+      const nextIndex = decision.index;
+      if (nextIndex !== activeIndexRef.current) {
         void hapticImpactLight();
         lastActiveTabIndex = nextIndex;
+        activeIndexRef.current = nextIndex;
         setActiveIndex(nextIndex);
       }
     },
-    [activeIndex, pageWidth],
+    [],
   );
 
   return (
     <View
       style={[styles.container, { backgroundColor: theme.bg }]}
       onLayout={(e) => {
-        const w = e.nativeEvent.layout.width;
-        if (w > 0 && Math.abs(w - pageWidth) > 1) {
-          setPageWidth(w);
-          setTimeout(() => {
-            pagerRef.current?.scrollTo({ x: activeIndex * w, animated: false });
-          }, 0);
+        const width = e.nativeEvent.layout.width;
+        if (width > 0 && Math.abs(width - pageWidthRef.current) > 1) {
+          pageWidthRef.current = width;
+          setPageWidth(width);
         }
       }}
     >
-      {/* 方案 B：纯原生连续跟手左右滑动 Pager 容器 */}
       <ScrollView
         ref={pagerRef}
         horizontal
@@ -175,6 +171,13 @@ export default function TabLayout() {
         scrollEventThrottle={16}
         directionalLockEnabled
         keyboardShouldPersistTaps="handled"
+        onScrollBeginDrag={() => {
+          userDraggingRef.current = true;
+          pendingTargetRef.current = null;
+        }}
+        onScroll={(e) => {
+          actualOffsetRef.current = e.nativeEvent.contentOffset.x;
+        }}
         onMomentumScrollEnd={handleMomentumScrollEnd}
         style={styles.pager}
         contentContainerStyle={{ width: pageWidth * 4 }}
@@ -183,7 +186,7 @@ export default function TabLayout() {
           <HostSessionsScreen active={activeIndex === 0} />
         </View>
         <View style={{ width: pageWidth, height: "100%" }}>
-          <DashboardScreen active={activeIndex === 1} />
+          <DashboardScreen active={activeIndex === 1} onSelectTab={handleTabPress} />
         </View>
         <View style={{ width: pageWidth, height: "100%" }}>
           <MonitorScreen active={activeIndex === 2} />
@@ -193,7 +196,6 @@ export default function TabLayout() {
         </View>
       </ScrollView>
 
-      {/* 标准 MIUIX 贴底 Dock 导航栏：带图标微动、双语文字与安全区自动适配 */}
       <View
         style={[
           styles.dockContainer,

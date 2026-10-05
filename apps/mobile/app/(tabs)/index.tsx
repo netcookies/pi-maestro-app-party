@@ -19,6 +19,7 @@ import { LineIcon } from "../../src/components/LineIcon";
 import { SpringCard } from "../../src/components/SpringCard";
 import { PulsingDot } from "../../src/components/PulsingDot";
 import { useTabSwipe } from "../../src/hooks/useTabSwipe";
+import { selectDashboardTab } from "../../src/tab-pager";
 import { useI18n } from "../../src/i18n";
 import {
   aggregateSessionUsage,
@@ -41,12 +42,15 @@ function formatTokens(n: number): string {
   return String(Math.round(n));
 }
 
-export default function DashboardScreen({ active = true }: { active?: boolean }) {
+export default function DashboardScreen({ active = true, onSelectTab }: { active?: boolean; onSelectTab?: (index: number) => void }) {
   const router = useRouter();
   const { state, isConnected, connectionState, fetchSessionUsage, loadSessionHistory, cancelDialog, cancelPlan } = useHost();
   const { theme } = useTheme();
   const { t } = useI18n();
   const styles = React.useMemo(() => makeStyles(theme), [theme]);
+  const selectTab = (index: number, route: "/host-sessions" | "/monitor" | "/settings") => {
+    selectDashboardTab(onSelectTab, index, route, (target) => router.push(target as "/host-sessions" | "/monitor" | "/settings"));
+  };
   const [currentAskIndex, setCurrentAskIndex] = useState(0);
   const [openingAsk, setOpeningAsk] = useState(false);
   const [currentPlanIndex, setCurrentPlanIndex] = useState(0);
@@ -250,7 +254,7 @@ export default function DashboardScreen({ active = true }: { active?: boolean })
         {/* Hero：会话 Tab Current 集合的 Token usage 总和；点击进入会话页。 */}
         <SpringCard
           style={styles.hero}
-          onPress={() => router.push(isConnected ? "/host-sessions" : "/settings")}
+          onPress={() => (isConnected ? selectTab(0, "/host-sessions") : selectTab(3, "/settings"))}
           accessibilityRole="button"
           accessibilityLabel={isConnected ? t.openSessionHint : pairingPrompt}
         >
@@ -307,7 +311,7 @@ export default function DashboardScreen({ active = true }: { active?: boolean })
               <SpringCard
                 key={c.label}
                 style={styles.metric}
-                onPress={() => router.push(targetRoute as any)}
+                onPress={() => selectTab(i === 2 || i === 3 ? 2 : 0, targetRoute)}
                 accessibilityRole="button"
                 accessibilityLabel={`${c.label}: ${c.value}`}
               >

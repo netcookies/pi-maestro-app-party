@@ -27,7 +27,7 @@ export interface ComposerActions {
   openModelPicker(): void;
   openThinkingPicker(): void;
   openPlanPicker(): void;
-  openCompactPicker(): void;
+  openCompactPicker?(): void;
 }
 
 interface Props {
@@ -431,10 +431,12 @@ export function ChatComposer({ actions, sending, isStreaming = false, onAbort, s
               <LineIcon name="plan" size={18} color={theme.muted} />
               <Text style={[styles.toolLabel, { color: theme.muted }]}>Plan</Text>
             </TouchableOpacity>
-            <TouchableOpacity onPress={() => invokeDetailAction(actions.openCompactPicker)} style={styles.fsToolBtn}>
-              <LineIcon name="compress" size={18} color={theme.muted} />
-              <Text style={[styles.toolLabel, { color: theme.muted }]}>Compact</Text>
-            </TouchableOpacity>
+            {actions.openCompactPicker ? (
+              <TouchableOpacity onPress={() => invokeDetailAction(actions.openCompactPicker!)} style={styles.fsToolBtn}>
+                <LineIcon name="compress" size={18} color={theme.muted} />
+                <Text style={[styles.toolLabel, { color: theme.muted }]}>Compact</Text>
+              </TouchableOpacity>
+            ) : null}
             <TouchableOpacity onPress={() => { setFsPanel("skills"); void loadSkills(); }} style={styles.fsToolBtn}>
               <Text style={[styles.slashText, { color: theme.accent }]}>/</Text>
               <Text style={[styles.toolLabel, { color: theme.muted }]}>Skill</Text>

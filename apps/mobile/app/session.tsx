@@ -295,7 +295,7 @@ export default function SessionScreen() {
 
   // TUI 先提交时，Host 会清掉 direct dialog，但 timeline 结果可能稍后才到。
   // 记住已配对的 timeline ID，避免 direct 清理后的短暂空窗重新弹出同一道题。
-  const pairedDirectAskRef = useRef<{ requestId: string; timelineIds: string[] } | undefined>();
+  const pairedDirectAskRef = useRef<{ requestId: string; timelineIds: string[] } | undefined>(undefined);
   useEffect(() => {
     const currentRequestId = directDialog?.request.id;
     const previous = pairedDirectAskRef.current;
@@ -1279,6 +1279,12 @@ function makeStyles(theme: ReturnType<typeof useTheme>["theme"]) {
       borderRadius: MIUIX_RADIUS.lg,
       flexShrink: 1,
       overflow: "hidden",
+    },
+    bubbleTool: {
+      alignSelf: "flex-start",
+      width: "90%",
+      maxWidth: "90%",
+      marginBottom: 10,
     },
     bubbleToolGroup: {
       alignSelf: "flex-start",

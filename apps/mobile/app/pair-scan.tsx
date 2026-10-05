@@ -44,34 +44,6 @@ export default function PairScanScreen() {
   const commitInProgressRef = useRef(false);
   const isActive = useCallback(() => isPairingFlowActive(mountedRef.current, cancelledRef.current, abortControllerRef.current.signal.aborted), []);
 
-  // 支持深度链接直接带参数直连 (maestro-mobile://pair-scan?ws=...&token=...)
-  useEffect(() => {
-    if (!params || (!params.ws && !params.c)) return;
-    if (params.ws) {
-      const targetWs = params.ws;
-      const targetToken = params.token ?? "";
-      let hostDisplay = targetWs.replace(/^wss?:\/\//i, "").replace(/\/ws$/i, "");
-      void saveAndConnect({
-        hostUrl: targetWs,
-        token: targetToken,
-        displayHost: hostDisplay,
-        candidateIps: [],
-        port: "4739",
-      });
-    } else if (params.c) {
-      const rawIps = params.ips ?? "127.0.0.1";
-      const ips = rawIps.split(",").map((s) => s.trim()).filter(isIp);
-      const port = params.p ?? "4739";
-      void exchangeShortCode({
-        hostUrl: `ws://${ips[0] ?? "127.0.0.1"}:${port}/ws`,
-        displayHost: `${ips[0] ?? "127.0.0.1"}:${port}`,
-        candidateIps: ips.length > 0 ? ips : ["127.0.0.1"],
-        port,
-        shortCode: params.c,
-      });
-    }
-  }, [params.ws, params.token, params.c, params.ips, params.p, saveAndConnect, exchangeShortCode]);
-
   useEffect(() => () => {
     mountedRef.current = false;
     cancelledRef.current = true;
@@ -141,7 +113,7 @@ export default function PairScanScreen() {
       setError(cause instanceof Error ? cause.message : "保存配对信息失败");
       setState("error");
     }
-  }, [connect, isActive]);
+  }, [connect, isActive, params.from]);
 
   const processPairing = useCallback(async (info: PairingInfo) => {
     if (!isActive()) return;
@@ -182,6 +154,31 @@ export default function PairScanScreen() {
     const ips = (hit.ips ?? []).filter(isIp);
     await processPairing({ ...info, token: hit.token, candidateIps: ips.length > 0 ? ips : info.candidateIps });
   }, [isActive, processPairing]);
+
+  // Deep-link effects must follow the callbacks used in their dependency list.
+  useEffect(() => {
+    if (!params.ws && !params.c) return;
+    if (params.ws) {
+      const targetWs = params.ws;
+      void saveAndConnect({
+        hostUrl: targetWs,
+        token: params.token ?? "",
+        displayHost: targetWs.replace(/^wss?:\/\//i, "").replace(/\/ws$/i, ""),
+        candidateIps: [],
+        port: "4739",
+      });
+    } else if (params.c) {
+      const ips = (params.ips ?? "127.0.0.1").split(",").map((s) => s.trim()).filter(isIp);
+      const port = params.p ?? "4739";
+      void exchangeShortCode({
+        hostUrl: `ws://${ips[0] ?? "127.0.0.1"}:${port}/ws`,
+        displayHost: `${ips[0] ?? "127.0.0.1"}:${port}`,
+        candidateIps: ips.length > 0 ? ips : ["127.0.0.1"],
+        port,
+        shortCode: params.c,
+      });
+    }
+  }, [params.ws, params.token, params.c, params.ips, params.p, saveAndConnect, exchangeShortCode]);
 
   const handleScanned = useCallback((raw: string) => {
     if (scanLocked.current || state !== "scanning") return;
