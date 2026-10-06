@@ -55,6 +55,7 @@ export function buildTimelineRows(items: readonly TimelineItem[]): TimelineRow[]
   };
 
   for (const item of items) {
+    if (item.kind === "assistant" && !item.text.trim() && !item.error && !(item.images?.length)) continue;
     if (canGroup(item)) {
       group.push(item);
     } else {

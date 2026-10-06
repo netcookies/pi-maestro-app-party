@@ -7,6 +7,15 @@ const item = (id: string, extra: Partial<TimelineItem> = {}): TimelineItem => ({
 });
 
 describe("buildTimelineRows", () => {
+  it("omits empty assistant placeholders without hiding errors or image-only messages", () => {
+    const rows = buildTimelineRows([
+      { id: "empty", kind: "assistant", text: "  ", createdAt: "" },
+      { id: "failed", kind: "assistant", text: "", createdAt: "", error: { code: "provider_error", message: "failed", source: "provider" } },
+      { id: "image", kind: "assistant", text: "", createdAt: "", images: ["/tmp/image.png"] },
+    ]);
+    expect(rows).toHaveLength(2);
+    expect(rows.map((row) => row.type === "item" ? row.item.id : row.id)).toEqual(["failed", "image"]);
+  });
   it("groups consecutive ordinary tools and keeps a stable first-item key", () => {
     const rows = buildTimelineRows([item("a", { toolCallId: "call-a" }), item("b", { toolCallId: "call-b" })]);
     expect(rows).toEqual([{ type: "tool_group", id: "a", items: expect.any(Array), invocationCount: 2, status: "completed" }]);

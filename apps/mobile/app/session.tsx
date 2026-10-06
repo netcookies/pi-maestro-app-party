@@ -587,16 +587,16 @@ export default function SessionScreen() {
 
     if (timelineItem.error) {
       return (
-        <View style={[styles.bubble, styles.bubbleAgent, { borderColor: theme.error, borderWidth: 1 }]}>
+        <View style={styles.bubbleToolGroup}>
           <SessionErrorBlock error={timelineItem.error} fallbackText={timelineItem.text} />
         </View>
       );
     }
 
-    // tool 消息：折叠/展开/全屏卡片（图片路径由 InlineImage 在展开区显示）
+    // tool 消息：单条工具卡片直接占用与工具组相同的行宽，不再套一层带内边距的气泡
     if (isTool) {
       return (
-        <View style={[styles.bubble, styles.bubbleTool]}>
+        <View style={styles.bubbleToolGroup}>
           <CollapsibleTool
             toolName={timelineItem.toolName ?? "tool"}
             text={timelineItem.text}
@@ -1279,12 +1279,6 @@ function makeStyles(theme: ReturnType<typeof useTheme>["theme"]) {
       borderRadius: MIUIX_RADIUS.lg,
       flexShrink: 1,
       overflow: "hidden",
-    },
-    bubbleTool: {
-      alignSelf: "flex-start",
-      width: "90%",
-      maxWidth: "90%",
-      marginBottom: 10,
     },
     bubbleToolGroup: {
       alignSelf: "flex-start",
