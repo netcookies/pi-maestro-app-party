@@ -160,7 +160,6 @@ describe("DesktopBroker", () => {
       requestId: "ask_a|fc_b",
       toolCallId: "call_a|fc_b",
       questions: [{ question: "Continue?" }],
-      deadlineAt: Date.now() + 1000,
     });
     await waitFor(() => frames.some((frame) => (frame as { type?: string }).type === "desktop_broker_ask_request"));
     expect(broker.pendingAskFrames()).toContainEqual(expect.objectContaining({ type: "desktop_broker_ask_request", target, request: expect.objectContaining({ requestId: "ask_a|fc_b", toolCallId: "call_a|fc_b" }) }));
@@ -192,7 +191,7 @@ describe("DesktopBroker", () => {
     });
     await client.connect();
     await waitFor(() => broker?.registry.resolve(target) !== undefined);
-    const request = { type: "desktop_ask_request" as const, requestId: "ask-cancel", toolCallId: "tool-cancel", questions: [{ question: "Cancel?" }], deadlineAt: Date.now() + 1000 };
+    const request = { type: "desktop_ask_request" as const, requestId: "ask-cancel", toolCallId: "tool-cancel", questions: [{ question: "Cancel?" }] };
     await client.sendAskRequest(request);
     await waitFor(() => broker?.pendingAskFrames().length === 1);
     await client.sendAskCancellation(request);
@@ -214,7 +213,7 @@ describe("DesktopBroker", () => {
     });
     await client.connect();
     await waitFor(() => broker?.registry.resolve(target) !== undefined);
-    await client.sendAskRequest({ type: "desktop_ask_request", requestId: "ask-rejected", toolCallId: "tool-rejected", questions: [{ question: "Continue?" }], deadlineAt: Date.now() + 1000 });
+    await client.sendAskRequest({ type: "desktop_ask_request", requestId: "ask-rejected", toolCallId: "tool-rejected", questions: [{ question: "Continue?" }] });
     await waitFor(() => broker?.pendingAskFrames().length === 1);
     await broker.handleHostFrame({ type: "desktop_broker_ask_response", target, response: { type: "desktop_ask_response", requestId: "ask-rejected", toolCallId: "tool-rejected", response: { selected: ["yes"] } } });
     await waitFor(() => frames.some((frame) => frame.type === "desktop_broker_ask_result"));
@@ -226,10 +225,10 @@ describe("DesktopBroker", () => {
     expect(broker.pendingAskFrames()).toHaveLength(0);
   });
 
-  it("returns deadline_exceeded for an answer after Broker ask expiry", async () => {
-    const dir = await mkdtemp(join(tmpdir(), "maestro-broker-ask-expired-"));
+  it("replays a pending no-deadline ask after reconnect with the same request identity", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "maestro-broker-ask-replay-"));
     const frames: DesktopBrokerToHostFrame[] = [];
-    broker = new DesktopBroker({ pluginSocketPath: join(dir, "plugin.sock"), secret: "secret", brokerInstanceId: "broker-expired", onFrame: (frame) => frames.push(frame) });
+    broker = new DesktopBroker({ pluginSocketPath: join(dir, "plugin.sock"), secret: "secret", brokerInstanceId: "broker-ask-replay", onFrame: (frame) => frames.push(frame) });
     await broker.start();
     client = new DesktopPluginIpcClient({
       socketPath: join(dir, "plugin.sock"), secret: "secret", target, capabilities: ["ask-user-question"],
@@ -237,13 +236,34 @@ describe("DesktopBroker", () => {
     });
     await client.connect();
     await waitFor(() => broker?.registry.resolve(target) !== undefined);
-    await client.sendAskRequest({ type: "desktop_ask_request", requestId: "ask-expired", toolCallId: "tool-expired", questions: [{ question: "Continue?" }], deadlineAt: Date.now() + 20 });
+    const request = { type: "desktop_ask_request" as const, requestId: "ask-live", toolCallId: "tool-live", questions: [{ question: "Continue?" }] };
+    await client.sendAskRequest(request);
     await waitFor(() => broker?.pendingAskFrames().length === 1);
-    await new Promise((resolve) => setTimeout(resolve, 40));
-    expect(broker.pendingAskFrames()).toHaveLength(0);
-    await broker.handleHostFrame({ type: "desktop_broker_ask_response", target, response: { type: "desktop_ask_response", requestId: "ask-expired", toolCallId: "wrong-tool", response: { selected: ["yes"] } } });
-    expect(frames).toContainEqual(expect.objectContaining({ type: "desktop_broker_ask_result", target, result: expect.objectContaining({ toolCallId: "wrong-tool", status: "unknown", error: expect.objectContaining({ code: "target_unavailable" }) }) }));
-    await broker.handleHostFrame({ type: "desktop_broker_ask_response", target, response: { type: "desktop_ask_response", requestId: "ask-expired", toolCallId: "tool-expired", response: { selected: ["yes"] } } });
-    expect(frames).toContainEqual(expect.objectContaining({ type: "desktop_broker_ask_result", target, result: expect.objectContaining({ requestId: "ask-expired", toolCallId: "tool-expired", status: "failed", error: expect.objectContaining({ code: "deadline_exceeded" }) }) }));
+    expect(broker.pendingAskFrames()[0]).toMatchObject({ request, target });
+    expect(broker.pendingPlanFrames()).toHaveLength(0);
+    expect(frames).toContainEqual(expect.objectContaining({ type: "desktop_broker_ask_request", request, target }));
+    await broker.handleHostFrame({ type: "desktop_broker_ask_response", target, response: { type: "desktop_ask_response", requestId: request.requestId, toolCallId: request.toolCallId, response: { selected: ["yes"] } } });
+    await waitFor(() => broker?.pendingAskFrames().length === 0);
+  });
+
+  it("rejects a mismatched toolCallId while retaining the active Ask", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "maestro-broker-ask-active-"));
+    const frames: DesktopBrokerToHostFrame[] = [];
+    broker = new DesktopBroker({ pluginSocketPath: join(dir, "plugin.sock"), secret: "secret", brokerInstanceId: "broker-active", onFrame: (frame) => frames.push(frame) });
+    await broker.start();
+    client = new DesktopPluginIpcClient({
+      socketPath: join(dir, "plugin.sock"), secret: "secret", target, capabilities: ["ask-user-question"],
+      onRequest: async (request) => ({ type: "desktop_plugin_result", requestId: request.requestId, operation: request.operation.type, status: "observed" }),
+    });
+    await client.connect();
+    await waitFor(() => broker?.registry.resolve(target) !== undefined);
+    const request = { type: "desktop_ask_request" as const, requestId: "ask-active", toolCallId: "tool-active", questions: [{ question: "Continue?" }] };
+    await client.sendAskRequest(request);
+    await waitFor(() => broker?.pendingAskFrames().length === 1);
+    await broker.handleHostFrame({ type: "desktop_broker_ask_response", target, response: { type: "desktop_ask_response", requestId: request.requestId, toolCallId: "wrong-tool", response: { selected: ["yes"] } } });
+    expect(broker.pendingAskFrames()).toHaveLength(1);
+    expect(frames).toContainEqual(expect.objectContaining({ type: "desktop_broker_ask_result", result: expect.objectContaining({ status: "unknown", error: expect.objectContaining({ code: "target_unavailable" }) }) }));
+    await broker.handleHostFrame({ type: "desktop_broker_ask_response", target, response: { type: "desktop_ask_response", requestId: request.requestId, toolCallId: request.toolCallId, response: { selected: ["yes"] } } });
+    await waitFor(() => broker?.pendingAskFrames().length === 0);
   });
 });

@@ -312,7 +312,6 @@ function desktopAskRequestFromFlow(request: Parameters<FlowAskTransport["open"]>
     requestId: `question:${request.toolCallId}`,
     toolCallId: request.toolCallId,
     questions,
-    deadlineAt: Date.now() + 120_000,
   };
 }
 
@@ -458,14 +457,19 @@ export function createDesktopPluginExtension(options: DesktopPluginExtensionOpti
             if (attempt) await attempt;
             if (pendingAskRequests.get(key) !== pending) return;
             if (!client || !isCurrentSession(generation, sessionAdapter)) {
-              settlePendingAsk(key, { status: "cancelled" });
+              scheduleReconnect(generation);
               return;
             }
             if (pending.sentGeneration === generation) return;
             pending.sentGeneration = generation;
-            await client.sendAskRequest(desktopRequest);
+            try {
+              await client.sendAskRequest(desktopRequest);
+            } catch {
+              pending.sentGeneration = undefined;
+              scheduleReconnect(generation);
+            }
           } catch {
-            settlePendingAsk(key, { status: "cancelled" });
+            scheduleReconnect(generation);
           }
         })();
 
@@ -532,7 +536,9 @@ export function createDesktopPluginExtension(options: DesktopPluginExtensionOpti
             onDisconnected: () => {
               if (client !== candidate) return;
               client = undefined;
-              for (const key of [...pendingAskRequests.keys()]) settlePendingAsk(key, { status: "cancelled" });
+              for (const pending of pendingAskRequests.values()) {
+                pending.sentGeneration = undefined;
+              }
               if (!isCurrentSession(generation, sessionAdapter)) return;
               updateRuntime({ pluginBroker: "disconnected", error: "desktop plugin disconnected" });
               scheduleReconnect(generation);
@@ -584,18 +590,20 @@ export function createDesktopPluginExtension(options: DesktopPluginExtensionOpti
             abandonCandidate(candidate);
             return;
           }
-          for (const [key, pending] of pendingAskRequests) {
+          for (const pending of pendingAskRequests.values()) {
             if (!isCurrentSession(generation, sessionAdapter)) {
               abandonCandidate(candidate);
               return;
             }
-            if (pending.request.deadlineAt <= Date.now()) {
-              settlePendingAsk(key, { status: "cancelled" });
-              continue;
-            }
             if (pending.sentGeneration === generation) continue;
             pending.sentGeneration = generation;
-            await candidate.sendAskRequest(pending.request).catch(() => undefined);
+            try {
+              await candidate.sendAskRequest(pending.request);
+            } catch {
+              pending.sentGeneration = undefined;
+              scheduleReconnect(generation);
+              break;
+            }
           }
         } catch (error) {
           if (candidate) abandonCandidate(candidate);

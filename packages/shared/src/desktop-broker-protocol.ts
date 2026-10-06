@@ -351,7 +351,7 @@ function isDesktopPluginOperation(value: unknown): boolean {
 }
 
 function isDesktopAskRequest(value: unknown): value is DesktopAskRequest {
-  return isRecord(value) && stringFields(value, "requestId", "toolCallId") && finiteNumber(value.deadlineAt) && Array.isArray(value.questions);
+  return isRecord(value) && stringFields(value, "requestId", "toolCallId") && Array.isArray(value.questions);
 }
 
 function isDesktopAskResponse(value: unknown): value is DesktopAskResponse {

@@ -25,7 +25,6 @@ function plan(kind: "review" | "confirm"): HostEvent {
       availableActions: ["confirm"],
       decisionDocuments: [],
       drafts: [],
-      deadlineAt: Date.now() + 60_000,
     },
   };
 }

@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import type { DesktopPlanRequest, SessionTargetIdentity } from "@maestro-mobile/shared";
 import { createInitialState, reduceEvent } from "../src/app-state";
 import { PlanQueue } from "../src/plan-queue";
+import { ExtensionUiQueue } from "../src/extension-ui-queue";
 
 const target: SessionTargetIdentity = {
   sessionId: "session-1",
@@ -27,7 +28,6 @@ function request(overrides: Partial<DesktopPlanRequest> = {}): DesktopPlanReques
     availableActions: ["execute", "modify"],
     decisionDocuments: [],
     drafts: [],
-    deadlineAt: Date.now() + 60_000,
     ...overrides,
   };
 }
@@ -42,6 +42,22 @@ describe("PlanQueue", () => {
     expect(queue.pendingPlans).toHaveLength(1);
     expect(queue.dropAny(entry.request.requestId, target)).toBe(true);
     expect(queue.pendingPlans).toHaveLength(0);
+  });
+
+  it("reopens a response while the authoritative request remains active", () => {
+    const queue = new PlanQueue();
+    const entry = queue.enqueue("session-1", request(), target);
+    queue.answer(entry.request.requestId, entry.request.kind, {
+      type: "desktop_plan_response",
+      requestId: entry.request.requestId,
+      kind: entry.request.kind,
+      status: "edited",
+      markdown: "# New draft",
+      expectedRevision: 4,
+    }, target);
+    expect(queue.pendingPlans).toHaveLength(0);
+    expect(queue.reopen(entry.request.requestId, entry.request.kind, target)).toBe(true);
+    expect(queue.pendingPlans[0].editedMarkdown).toBe("# New draft");
   });
 
   it("preserves a local draft when the server publishes a higher revision", () => {
@@ -80,14 +96,22 @@ describe("PlanQueue", () => {
 });
 
 describe("Plan app state projection", () => {
-  it("projects request, preserves it through reconnect reset, and clears only exact target", () => {
+  it("clears local Plan projection on reconnect reset and restores it from a fresh event", () => {
     const queue = new PlanQueue();
-    const deps = { planQueue: queue };
+    const dialogQueue = new ExtensionUiQueue();
+    const deps = { planQueue: queue, dialogQueue };
     let state = createInitialState();
     state = reduceEvent(state, { type: "desktop_plan_request", sessionId: "session-1", request: request(), target, seq: 1 }, deps);
     expect(state.planRequests).toHaveLength(1);
+    state = reduceEvent(state, { type: "extension_ui_request", sessionId: "session-1", request: { id: "ask-1", sessionId: "session-1", method: "input" }, seq: 1 }, deps);
     state = reduceEvent(state, { type: "__connection_reset" }, deps);
+    expect(state.planRequests).toHaveLength(0);
+    expect(queue.pendingPlans).toHaveLength(0);
+    state = reduceEvent(state, {
+      type: "desktop_plan_request", sessionId: "session-1", request: request(), target, seq: 1,
+    }, deps);
     expect(state.planRequests).toHaveLength(1);
+    expect(state.dialogs).toHaveLength(0);
     state = reduceEvent(state, {
       type: "desktop_plan_cleared",
       sessionId: "session-1",

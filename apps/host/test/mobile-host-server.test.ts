@@ -460,7 +460,7 @@ describe("MobileHostServer", () => {
           if (event.type === "extension_ui_request" && event.request && event.target) resolve({ request: event.request, target: event.target });
         });
       });
-      ctx.controller.onDesktopAskRequest(target, { type: "desktop_ask_request", requestId: "ask-1", toolCallId: "tool-1", questions: [{ question: "Continue?" }], deadlineAt: Date.now() + 10_000 });
+      ctx.controller.onDesktopAskRequest(target, { type: "desktop_ask_request", requestId: "ask-1", toolCallId: "tool-1", questions: [{ question: "Continue?" }] });
       const received = await ask;
       expect(received).toMatchObject({ target, request: { questions: [{ question: "Continue?" }] } });
       const result = new Promise<{ type: string; ok: boolean; in_reply_to: string }>((resolve) => {
@@ -472,12 +472,12 @@ describe("MobileHostServer", () => {
       ws.send(JSON.stringify({ type: "extension_ui_response", id: "answer-1", sessionId: target.sessionId, target, requestId: received.request.id, response: { id: received.request.id, selected: ["yes"] } }));
       expect(await result).toMatchObject({ type: "command_result", ok: true, in_reply_to: "answer-1" });
       expect(answered).toMatchObject({ requestId: "ask-1", toolCallId: "tool-1" });
-      ctx.controller.onDesktopAskRequest(target, { type: "desktop_ask_request", requestId: "ask-2", toolCallId: "tool-2", questions: [{ question: "Later?" }], deadlineAt: Date.now() + 10_000 });
+      ctx.controller.onDesktopAskRequest(target, { type: "desktop_ask_request", requestId: "ask-2", toolCallId: "tool-2", questions: [{ question: "Later?" }] });
       const late = new WebSocket(`${ctx.url}/ws`);
       try {
-        const replay = new Promise<{ target: typeof target; request: { questions: unknown[]; timeout: number } }>((resolve, reject) => {
+        const replay = new Promise<{ target: typeof target; request: { questions: unknown[] } }>((resolve, reject) => {
           late.on("message", (raw) => {
-            const event = JSON.parse(raw.toString()) as { type: string; target?: typeof target; request?: { questions: unknown[]; timeout: number } };
+            const event = JSON.parse(raw.toString()) as { type: string; target?: typeof target; request?: { questions: unknown[] } };
             if (event.type === "extension_ui_request" && event.target && event.request) resolve({ target: event.target, request: event.request });
           });
           late.once("error", reject);

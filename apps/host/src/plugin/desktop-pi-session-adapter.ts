@@ -69,19 +69,23 @@ export class DesktopPiSessionAdapter {
     return [...this.capabilities];
   }
 
-  observeToolCall(event: { toolCallId: string; toolName: string; input?: Record<string, unknown>; expiresAt?: number }): DesktopAskRequest | undefined {
+  observeToolCall(event: { toolCallId: string; toolName: string; input?: Record<string, unknown> }): DesktopAskRequest | undefined {
     if (!this.ask.supported || event.toolName !== "ask-user-question") return undefined;
     const questions = event.input?.questions;
     if (!Array.isArray(questions)) return undefined;
-    if (!this.ask.register(event.toolCallId, questions, event.expiresAt)) return undefined;
+    if (!this.ask.register(event.toolCallId, questions)) return undefined;
     let jsonQuestions: JsonValue[];
     try {
       jsonQuestions = JSON.parse(JSON.stringify(questions)) as JsonValue[];
     } catch {
       return undefined;
     }
-    const expiresAt = event.expiresAt ?? Date.now() + 120_000;
-    return { type: "desktop_ask_request", requestId: `question:${event.toolCallId}`, toolCallId: event.toolCallId, questions: jsonQuestions, deadlineAt: expiresAt };
+    return {
+      type: "desktop_ask_request",
+      requestId: `question:${event.toolCallId}`,
+      toolCallId: event.toolCallId,
+      questions: jsonQuestions,
+    };
   }
 
   async answerAsk(response: DesktopAskResponse): Promise<void> {

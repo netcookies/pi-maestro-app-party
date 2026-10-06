@@ -10,16 +10,12 @@ export interface FlowAskResult {
 }
 
 interface PendingAsk {
-  expiresAt: number;
-  timer: ReturnType<typeof setTimeout>;
-  invalidated?: "expired" | "cancelled";
+  invalidated?: "cancelled";
 }
 
 export interface DesktopFlowAskAdapterOptions {
   toolNames: readonly string[];
   responseDirectory?: string;
-  ttlMs?: number;
-  now?: () => number;
 }
 
 function responseDirectoryFrom(options: DesktopFlowAskAdapterOptions): string | undefined {
@@ -33,14 +29,10 @@ export class DesktopFlowAskAdapter {
   private readonly inFlight = new Set<Promise<FlowAskResult>>();
   private readonly writeTails = new Map<string, Promise<FlowAskResult>>();
   private readonly responseDirectory: string | undefined;
-  private readonly ttlMs: number;
-  private readonly now: () => number;
 
   constructor(options: DesktopFlowAskAdapterOptions) {
     this.supported = options.toolNames.includes("ask-user-question");
     this.responseDirectory = responseDirectoryFrom(options);
-    this.ttlMs = options.ttlMs ?? 120_000;
-    this.now = options.now ?? Date.now;
   }
 
   static fromTools(tools: readonly { name?: string }[]): DesktopFlowAskAdapter {
@@ -51,35 +43,21 @@ export class DesktopFlowAskAdapter {
     return this.pending.size;
   }
 
-  register(toolCallId: string, _questions: unknown[], expiresAt = this.now() + this.ttlMs): boolean {
+  register(toolCallId: string, _questions: unknown[]): boolean {
     if (!this.supported || !this.responseDirectory || !resolveAskResponsePath(toolCallId, this.responseDirectory)) return false;
-    this.expire();
     const previous = this.pending.get(toolCallId);
     if (previous) {
       previous.invalidated = "cancelled";
       this.removePending(toolCallId);
     }
-    const boundedExpiry = Math.min(expiresAt, this.now() + this.ttlMs);
-    const timer = setTimeout(() => {
-      const pending = this.pending.get(toolCallId);
-      if (pending) pending.invalidated = "expired";
-      this.removePending(toolCallId);
-    }, Math.max(1, boundedExpiry - this.now()));
-    timer.unref?.();
-    this.pending.set(toolCallId, { expiresAt: boundedExpiry, timer });
+    this.pending.set(toolCallId, {});
     return true;
   }
 
   async answer(toolCallId: string, response: ExtensionUiResponse): Promise<FlowAskResult> {
-    this.expire();
     if (!this.supported) return { status: "failed", error: { code: "unsupported_capability" } };
     const pending = this.pending.get(toolCallId);
     if (!pending) return { status: "failed", error: { code: "request_not_found" } };
-    if (pending.expiresAt <= this.now()) {
-      pending.invalidated = "expired";
-      this.removePending(toolCallId);
-      return { status: "failed", error: { code: "request_timeout" } };
-    }
     const path = this.responsePath(toolCallId);
     if (!path || !this.responseDirectory) return { status: "failed", error: { code: "request_not_found" } };
     const operation = this.enqueueResponse(path, () => this.writeResponse(toolCallId, pending, response, path));
@@ -111,13 +89,13 @@ export class DesktopFlowAskAdapter {
       if (!this.isActivePending(toolCallId, pending)) {
         await unlink(temporary).catch(() => undefined);
         if (!pending.invalidated && this.pending.get(toolCallId) === pending) this.removePending(toolCallId);
-        return { status: "failed", error: { code: pending.invalidated === "expired" ? "request_timeout" : "request_not_found" } };
+        return { status: "failed", error: { code: pending.invalidated ? "request_cancelled" : "request_not_found" } };
       }
       await rename(temporary, path);
       if (!this.isActivePending(toolCallId, pending)) {
         await unlink(path).catch(() => undefined);
         if (!pending.invalidated && this.pending.get(toolCallId) === pending) this.removePending(toolCallId);
-        return { status: "failed", error: { code: pending.invalidated === "expired" ? "request_timeout" : "request_not_found" } };
+        return { status: "failed", error: { code: pending.invalidated ? "request_cancelled" : "request_not_found" } };
       }
       this.removePending(toolCallId);
       return { status: "accepted", path };
@@ -143,11 +121,6 @@ export class DesktopFlowAskAdapter {
 
   private isActivePending(toolCallId: string, pending: PendingAsk): boolean {
     if (this.pending.get(toolCallId) !== pending || pending.invalidated) return false;
-    if (pending.expiresAt <= this.now()) {
-      pending.invalidated = "expired";
-      this.removePending(toolCallId);
-      return false;
-    }
     return true;
   }
 
@@ -155,20 +128,7 @@ export class DesktopFlowAskAdapter {
     return this.responseDirectory ? resolveAskResponsePath(toolCallId, this.responseDirectory) : undefined;
   }
 
-  private expire(): void {
-    const now = this.now();
-    for (const [toolCallId, pending] of this.pending) {
-      if (pending.expiresAt <= now) {
-        pending.invalidated = "expired";
-        this.removePending(toolCallId);
-      }
-    }
-  }
-
   private removePending(toolCallId: string): void {
-    const pending = this.pending.get(toolCallId);
-    if (!pending) return;
-    clearTimeout(pending.timer);
     this.pending.delete(toolCallId);
   }
 }

@@ -34,6 +34,22 @@ describe("AppState reducer", () => {
     expect(items?.[1].text).toBe("second");
   });
 
+  it("clears local interaction projections on reconnect reset", () => {
+    const queue = new ExtensionUiQueue();
+    const deps = { dialogQueue: queue };
+    let state = createInitialState();
+    state = reduceEvent(state, {
+      type: "extension_ui_request",
+      sessionId: "s1",
+      request: { id: "ask-1", sessionId: "s1", method: "input" },
+      seq: 1,
+    }, deps);
+    expect(state.dialogs).toHaveLength(1);
+    state = reduceEvent(state, { type: "__connection_reset" }, deps);
+    expect(state.dialogs).toHaveLength(0);
+    expect(queue.count).toBe(0);
+  });
+
   it("creates initial state", () => {
     const state = createInitialState();
     expect(state.connectionStatus).toBe("disconnected");
@@ -674,11 +690,12 @@ describe("__dialog_send_failed 与 __local_error（review F-001/F-002）", () =>
     // 上一版修复用 enqueue 重建条目 ⇒ receivedAt 被刷新（实测 revived:1,status:pending,ageMs:0）。
     // 现由 reopen 保留原 receivedAt；已过期 ⇒ 不恢复，只提示无需重试。
     let now = 1000;
-    const queue = new ExtensionUiQueue({ defaultTimeoutMs: 1, now: () => now });
-    queue.enqueue(req);
+    const queue = new ExtensionUiQueue({ now: () => now });
+    const timedRequest = { ...req, timeout: 1 };
+    queue.enqueue(timedRequest);
     createAppActions(queue, () => undefined).answerDialog("r9", "A");
-    now = 5000; // 早已过期：host 侧已放弃这个 ask，复活它只会误导用户
-    const state = reduceEvent(createInitialState(), { type: "__dialog_send_failed", request: req, message: "lost" } as never, { dialogQueue: queue });
+    now = 5000;
+    const state = reduceEvent(createInitialState(), { type: "__dialog_send_failed", request: timedRequest, message: "lost" } as never, { dialogQueue: queue });
     expect(state.dialogs, "过期弹窗不得复活").toHaveLength(0);
     expect(state.lastError).toContain("已超时或已清理");
   });
@@ -701,11 +718,12 @@ describe("__dialog_send_failed 与 __local_error（review F-001/F-002）", () =>
 
   it("S_CONFIRM：窗口内恢复保留原 receivedAt，并按原时限正常过期（不永不过期）", () => {
     let now = 1000;
-    const queue = new ExtensionUiQueue({ defaultTimeoutMs: 10_000, now: () => now });
-    queue.enqueue(req);
+    const queue = new ExtensionUiQueue({ now: () => now });
+    const timedRequest = { ...req, timeout: 10_000 };
+    queue.enqueue(timedRequest);
     createAppActions(queue, () => undefined).answerDialog("r9", "A");
     now = 6000;
-    const state = reduceEvent(createInitialState(), { type: "__dialog_send_failed", request: req, message: "lost" } as never, { dialogQueue: queue });
+    const state = reduceEvent(createInitialState(), { type: "__dialog_send_failed", request: timedRequest, message: "lost" } as never, { dialogQueue: queue });
     expect(state.dialogs.map((d) => d.status)).toEqual(["pending"]);
     expect(queue.get("r9")?.receivedAt, "receivedAt 必须保留原值（enqueue 会刷新）").toBe(1000);
     expect(state.lastError).toBe("lost");

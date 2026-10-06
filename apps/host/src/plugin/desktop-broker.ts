@@ -42,15 +42,13 @@ export class DesktopBroker {
   private readonly frameListeners = new Set<(frame: DesktopBrokerToHostFrame) => void>();
   private readonly snapshotChunkSize: number;
   private readonly unsubscribeRegistry: () => void;
-  private readonly pendingAsks = new Map<string, { target: DesktopPluginTarget; request: DesktopAskRequest; timer: ReturnType<typeof setTimeout> }>();
-  private readonly expiredAsks = new Map<string, { target: DesktopPluginTarget; requestId: string; toolCallId: string; timer: ReturnType<typeof setTimeout> }>();
+  private readonly pendingAsks = new Map<string, { target: DesktopPluginTarget; request: DesktopAskRequest }>();
 
   private askKey(target: DesktopPluginTarget, requestId: string): string {
     return JSON.stringify([target.sessionId, target.endpointId, target.normalizedCwd, target.processGeneration, requestId]);
   }
 
-  private readonly pendingPlanRequests = new Map<string, { target: DesktopPluginTarget; request: DesktopPlanRequest; timer: ReturnType<typeof setTimeout> }>();
-  private readonly expiredPlans = new Map<string, { target: DesktopPluginTarget; requestId: string; kind: "confirm" | "review"; timer: ReturnType<typeof setTimeout> }>();
+  private readonly pendingPlanRequests = new Map<string, { target: DesktopPluginTarget; request: DesktopPlanRequest }>();
 
   private planKey(target: DesktopPluginTarget, requestId: string, kind: DesktopPlanRequest["kind"]): string {
     return JSON.stringify([target.sessionId, target.endpointId, target.normalizedCwd, target.processGeneration, requestId, kind]);
@@ -58,13 +56,11 @@ export class DesktopBroker {
 
   pendingAskFrames(): DesktopBrokerToHostFrame[] {
     return [...this.pendingAsks.values()]
-      .filter(({ request }) => request.deadlineAt > Date.now())
       .map(({ target, request }) => ({ type: "desktop_broker_ask_request", target, request }));
   }
 
   pendingPlanFrames(): DesktopBrokerToHostFrame[] {
     return [...this.pendingPlanRequests.values()]
-      .filter(({ request }) => request.deadlineAt > Date.now())
       .map(({ target, request }) => ({ type: "desktop_broker_plan_request", target, request }));
   }
 
@@ -104,23 +100,19 @@ export class DesktopBroker {
       registry: this.registry,
       supportedEvents: ["model_select", "thinking_level_select", "runtime_status", "session_summary", "execution_summary"],
       onAskRequest: (target, request) => {
-        if (!this.registry.resolve(target) || request.deadlineAt <= Date.now()) return;
+        if (!this.registry.resolve(target)) return;
         const key = this.askKey(target, request.requestId);
         this.clearAsk(key);
         if (this.pendingAsks.size >= 64) this.clearAsk(this.pendingAsks.keys().next().value!);
-        const timer = setTimeout(() => this.expireAsk(key), request.deadlineAt - Date.now());
-        timer.unref?.();
-        this.pendingAsks.set(key, { target: { ...target }, request, timer });
+        this.pendingAsks.set(key, { target: { ...target }, request });
         this.emit({ type: "desktop_broker_ask_request", target, request });
       },
       onPlanRequest: (target, request) => {
-        if (!this.registry.resolve(target) || request.deadlineAt <= Date.now()) return;
+        if (!this.registry.resolve(target)) return;
         const key = this.planKey(target, request.requestId, request.kind);
         this.clearPlan(key);
         if (this.pendingPlanRequests.size >= 64) this.clearPlan(this.pendingPlanRequests.keys().next().value!);
-        const timer = setTimeout(() => this.expirePlan(key), request.deadlineAt - Date.now());
-        timer.unref?.();
-        this.pendingPlanRequests.set(key, { target: { ...target }, request, timer });
+        this.pendingPlanRequests.set(key, { target: { ...target }, request });
         this.emit({ type: "desktop_broker_plan_request", target, request });
       },
       onPlanResponse: (target, response) => {
@@ -155,10 +147,6 @@ export class DesktopBroker {
     this.unsubscribeRegistry();
     for (const key of this.pendingAsks.keys()) this.clearAsk(key);
     for (const key of this.pendingPlanRequests.keys()) this.clearPlan(key);
-    for (const expired of this.expiredPlans.values()) clearTimeout(expired.timer);
-    this.expiredPlans.clear();
-    for (const expired of this.expiredAsks.values()) clearTimeout(expired.timer);
-    this.expiredAsks.clear();
     await this.pluginServer.close();
     await this.registry.flush();
     await this.registry.closeStore();
@@ -210,22 +198,15 @@ export class DesktopBroker {
         const registration = this.registry.resolve(frame.target);
         const key = this.askKey(frame.target, frame.response.requestId);
         const pending = this.pendingAsks.get(key);
-        const expired = this.expiredAsks.get(key);
-        const matchingExpiry = expired?.toolCallId === frame.response.toolCallId;
         const matchingPending = pending?.request.toolCallId === frame.response.toolCallId;
-        const deadlineExceeded = matchingExpiry || (matchingPending && pending.request.deadlineAt <= Date.now());
-        if (!pending || !matchingPending || pending.request.deadlineAt <= Date.now()) {
+        if (!pending || !matchingPending) {
           this.emitAskResult(frame.target, {
             type: "desktop_ask_result",
             requestId: frame.response.requestId,
             toolCallId: frame.response.toolCallId,
-            status: deadlineExceeded ? "failed" : "unknown",
-            error: { code: deadlineExceeded ? "deadline_exceeded" : "target_unavailable", message: "desktop ask request unavailable" },
+            status: "unknown",
+            error: { code: "target_unavailable", message: "desktop ask request unavailable" },
           });
-          if (matchingExpiry) {
-            clearTimeout(expired.timer);
-            this.expiredAsks.delete(key);
-          }
           return;
         }
         if (!registration?.transport.answerAsk) {
@@ -264,12 +245,9 @@ export class DesktopBroker {
         const registration = this.registry.resolve(frame.target);
         const key = this.planKey(frame.target, frame.response.requestId, frame.response.kind);
         const pending = this.pendingPlanRequests.get(key);
-        const expired = this.expiredPlans.get(key);
-        const matchingExpiry = expired?.kind === frame.response.kind;
         const matchingPending = pending?.request.kind === frame.response.kind;
-        if (!pending || !matchingPending || pending.request.deadlineAt <= Date.now()) {
-          this.emitPlanResult(frame.target, { type: "desktop_plan_result", requestId: frame.response.requestId, kind: frame.response.kind, status: "unknown", error: { code: matchingExpiry ? "deadline_exceeded" : "target_unavailable" } });
-          if (matchingExpiry && expired) { clearTimeout(expired.timer); this.expiredPlans.delete(key); }
+        if (!pending || !matchingPending) {
+          this.emitPlanResult(frame.target, { type: "desktop_plan_result", requestId: frame.response.requestId, kind: frame.response.kind, status: "unknown", error: { code: "target_unavailable" } });
           return;
         }
         if (!registration?.transport.answerPlan) {
@@ -336,21 +314,7 @@ export class DesktopBroker {
     }
   }
 
-  private expirePlan(key: string): void {
-    const pending = this.pendingPlanRequests.get(key);
-    if (!pending) return;
-    clearTimeout(pending.timer);
-    this.pendingPlanRequests.delete(key);
-    const timer = setTimeout(() => this.expiredPlans.delete(key), 60_000);
-    timer.unref?.();
-    this.expiredPlans.set(key, { target: { ...pending.target }, requestId: pending.request.requestId, kind: pending.request.kind, timer });
-  }
-
   private clearPlan(key: string): void {
-    const expired = this.expiredPlans.get(key);
-    if (expired) { clearTimeout(expired.timer); this.expiredPlans.delete(key); }
-    const pending = this.pendingPlanRequests.get(key);
-    if (pending) clearTimeout(pending.timer);
     this.pendingPlanRequests.delete(key);
   }
 
@@ -359,24 +323,7 @@ export class DesktopBroker {
     this.emit(frame);
   }
 
-  private expireAsk(key: string): void {
-    const pending = this.pendingAsks.get(key);
-    if (!pending) return;
-    clearTimeout(pending.timer);
-    this.pendingAsks.delete(key);
-    const timer = setTimeout(() => this.expiredAsks.delete(key), 60_000);
-    timer.unref?.();
-    this.expiredAsks.set(key, { target: { ...pending.target }, requestId: pending.request.requestId, toolCallId: pending.request.toolCallId, timer });
-  }
-
   private clearAsk(key: string): void {
-    const expired = this.expiredAsks.get(key);
-    if (expired) {
-      clearTimeout(expired.timer);
-      this.expiredAsks.delete(key);
-    }
-    const pending = this.pendingAsks.get(key);
-    if (pending) clearTimeout(pending.timer);
     this.pendingAsks.delete(key);
   }
 

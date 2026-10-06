@@ -97,18 +97,18 @@ describe("DesktopFlowAskAdapter", () => {
     expect(JSON.parse(await readFile(join(dir, entries[0]), "utf8"))).toEqual({ selected: ["retry"] });
   });
 
-  it("rejects a response that crosses expiry during asynchronous writing", async () => {
+  it("rejects a response after the request is explicitly settled during asynchronous writing", async () => {
     const dir = await mkdtemp(join(tmpdir(), "maestro-ask-inflight-expiry-"));
     dirs.push(dir);
-    let nowCalls = 0;
     const adapter = new DesktopFlowAskAdapter({
       toolNames: ["ask-user-question"],
       responseDirectory: dir,
-      now: () => { nowCalls += 1; return nowCalls <= 5 ? 1000 : 1002; },
     });
-    const raw = "call_inflight|fc_expiry";
-    expect(adapter.register(raw, [], 1001)).toBe(true);
-    await expect(adapter.answer(raw, { selected: ["late"] })).resolves.toMatchObject({ status: "failed", error: { code: "request_timeout" } });
+    const raw = "call_inflight|fc_settled";
+    expect(adapter.register(raw, [])).toBe(true);
+    const answer = adapter.answer(raw, { selected: ["late"] });
+    await adapter.cancelAll();
+    await expect(answer).resolves.toMatchObject({ status: "failed", error: { code: "request_cancelled" } });
     expect(adapter.pendingCount).toBe(0);
     expect(await readdir(dir)).toEqual([]);
   });
@@ -157,7 +157,7 @@ describe("DesktopFlowAskAdapter", () => {
     expect(adapter.register("call-1", [])).toBe(false);
   });
 
-  it("does not create a file when Flow ask is unavailable or the request is stale", async () => {
+  it("does not create a file when Flow ask is unavailable", async () => {
     const dir = await mkdtemp(join(tmpdir(), "maestro-ask-unsupported-"));
     dirs.push(dir);
     const unsupported = new DesktopFlowAskAdapter({ toolNames: [], responseDirectory: dir });
@@ -165,11 +165,6 @@ describe("DesktopFlowAskAdapter", () => {
     await expect(unsupported.answer("call-1", { value: "no" })).resolves.toMatchObject({ status: "failed", error: { code: "unsupported_capability" } });
     expect(await readdir(dir)).toEqual([]);
 
-    let now = 1000;
-    const stale = new DesktopFlowAskAdapter({ toolNames: ["ask-user-question"], responseDirectory: dir, now: () => now, ttlMs: 10 });
-    stale.register("call-2", [], 1005);
-    now = 1006;
-    await expect(stale.answer("call-2", { value: "late" })).resolves.toMatchObject({ status: "failed", error: { code: "request_not_found" } });
     expect(await readdir(dir)).toEqual([]);
   });
 });

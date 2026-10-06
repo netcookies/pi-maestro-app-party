@@ -121,6 +121,7 @@ describe("Desktop plugin Flow Ask transport", () => {
         { question: "Why?" },
       ],
     });
+    expect(askRequest).not.toHaveProperty("deadlineAt");
     expect(fake.handlers.has("tool_call")).toBe(false);
 
     const target = server.registry.list()[0].target as DesktopPluginTarget;

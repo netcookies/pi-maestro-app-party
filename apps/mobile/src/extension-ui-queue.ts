@@ -32,19 +32,15 @@ export interface DialogEntry {
 }
 
 export interface ExtensionUiQueueOptions {
-  /** 弹窗超时（ms），默认 2 分钟 */
-  defaultTimeoutMs?: number;
   now?: () => number;
 }
 
 export class ExtensionUiQueue {
   private readonly dialogs = new Map<string, DialogEntry>();
   private overflowed: ExtensionUiRequest[] = [];
-  private readonly defaultTimeoutMs: number;
   private readonly now: () => number;
 
   constructor(options: ExtensionUiQueueOptions = {}) {
-    this.defaultTimeoutMs = options.defaultTimeoutMs ?? 120_000;
     this.now = options.now ?? Date.now;
   }
 
@@ -53,7 +49,8 @@ export class ExtensionUiQueue {
     const now = this.now();
     for (const [id, entry] of this.dialogs) {
       if (entry.status !== "pending") continue;
-      if (now - entry.receivedAt > (entry.request.timeout ?? this.defaultTimeoutMs)) {
+      const timeout = entry.request.timeout;
+      if (timeout !== undefined && now - entry.receivedAt > timeout) {
         this.dialogs.set(id, { ...entry, status: "expired" });
       }
     }
@@ -130,8 +127,8 @@ export class ExtensionUiQueue {
   reopen(request: ExtensionUiRequest): boolean {
     const existing = this.dialogs.get(request.id);
     if (!existing) return false;
-    const timeout = request.timeout ?? this.defaultTimeoutMs;
-    if (this.now() - existing.receivedAt > timeout) return false;
+    const timeout = request.timeout;
+    if (timeout !== undefined && this.now() - existing.receivedAt > timeout) return false;
     this.dialogs.set(request.id, { ...existing, status: "pending" });
     this.pruneFinished(); // 保持驻留有界；只删终态条目，不会误删刚恢复的 pending
     return true;

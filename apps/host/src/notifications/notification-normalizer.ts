@@ -44,7 +44,6 @@ export function notificationEventFromHostEvent(event: HostEvent, context: Notifi
     });
   }
   if (event.type === "desktop_plan_request") {
-    if (event.request.deadlineAt <= Date.now()) return undefined;
     const requestKind = planKind((event.request as { kind?: unknown }).kind);
     if (!requestKind) return undefined;
     const kind = planNotificationKind(requestKind);
@@ -56,7 +55,6 @@ export function notificationEventFromHostEvent(event: HostEvent, context: Notifi
       sessionId: event.sessionId,
       target: event.target,
       requestId: event.request.requestId,
-      deadlineAt: event.request.deadlineAt,
       title: `Plan 等待${action} · ${notificationSessionLabel(event.sessionId)}`,
       body: event.request.pathLabel || `${event.request.mode} Plan 需要您的处理`,
       occurredAt: new Date().toISOString(),

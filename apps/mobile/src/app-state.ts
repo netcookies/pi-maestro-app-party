@@ -502,12 +502,12 @@ export function reduceEvent(state: AppState, event: AppAction, deps: AppStateDep
   const queue = deps.dialogQueue;
   if (event.type === "__connection_reset") {
     queue?.clearAll();
+    deps.planQueue?.clearAll();
     const fresh = createInitialState();
     return {
       ...fresh,
       connectionStatus: state.connectionStatus,
       connectionGeneration: Math.max(state.connectionGeneration + 1, event.connectionGeneration ?? 0),
-      planRequests: deps.planQueue?.pendingPlans ?? [],
     };
   }
   if (event.type === "__revision") {

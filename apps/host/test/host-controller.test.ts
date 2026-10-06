@@ -128,7 +128,7 @@ describe("HostController", () => {
     controller.desktopPlugins.register({ target: sibling, capabilities: ["ask-user-question"], transport: transport() });
     controller.registerDesktopTarget(exact);
     controller.registerDesktopTarget(sibling);
-    controller.onDesktopAskRequest(exact, { type: "desktop_ask_request", requestId: "ask-1", toolCallId: "tool-1", questions: [{ question: "Continue?" }], deadlineAt: Date.now() + 10_000 });
+    controller.onDesktopAskRequest(exact, { type: "desktop_ask_request", requestId: "ask-1", toolCallId: "tool-1", questions: [{ question: "Continue?" }] });
     const event = events.find((entry) => (entry as { type?: string }).type === "extension_ui_request") as { request: { id: string } };
     expect(event).toBeTruthy();
     await expect(controller.respondToExtensionUi(exact.sessionId, event.request.id, { id: event.request.id, selected: ["yes"] }, sibling)).resolves.toBe(false);
@@ -161,7 +161,6 @@ describe("HostController", () => {
       availableActions: ["execute"],
       decisionDocuments: [],
       drafts: [],
-      deadlineAt: Date.now() + 10_000,
     });
     controller.onDesktopPlanRequest(exact, makeRequest("confirm", 1));
     controller.onDesktopPlanRequest(exact, makeRequest("review", 2));
@@ -183,7 +182,7 @@ describe("HostController", () => {
     controller.onDesktopPlanRequest(exact, {
       type: "desktop_plan_request", requestId: "unregister-request", kind: "confirm", sessionId: exact.sessionId,
       operationId: 1, cwd: exact.normalizedCwd, mode: "plan", markdown: "# Plan", revision: 1,
-      pathLabel: "plans/current.md", availableActions: ["execute"], decisionDocuments: [], drafts: [], deadlineAt: Date.now() + 10_000,
+      pathLabel: "plans/current.md", availableActions: ["execute"], decisionDocuments: [], drafts: [],
     });
     controller.desktopPlugins.unregister(exact);
     controller.unregisterDesktopTarget(exact);

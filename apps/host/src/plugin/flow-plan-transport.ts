@@ -40,7 +40,6 @@ export interface FlowPlanTransport {
 }
 
 const PLAN_TRANSPORT_REGISTRY = Symbol.for("pi-maestro-flow.plan-transports");
-const DEFAULT_PLAN_TIMEOUT_MS = 120_000;
 
 interface PlanTransportRegistry { transports: FlowPlanTransport[]; }
 function registry(): PlanTransportRegistry {
@@ -65,10 +64,7 @@ function keyOf(requestId: string, kind: string): string {
   return JSON.stringify([requestId, kind]);
 }
 
-function desktopRequestFromFlow(
-  request: FlowPlanTransportRequest,
-  deadlineAt = Date.now() + DEFAULT_PLAN_TIMEOUT_MS,
-): DesktopPlanRequest {
+function desktopRequestFromFlow(request: FlowPlanTransportRequest): DesktopPlanRequest {
   return {
     type: "desktop_plan_request",
     requestId: `plan:${request.sessionId}:${request.operationId}`,
@@ -87,7 +83,6 @@ function desktopRequestFromFlow(
     ...(request.modelTransition ? { modelTransition: request.modelTransition } : {}),
     decisionDocuments: [...request.decisionDocuments],
     drafts: [...request.drafts],
-    deadlineAt,
   };
 }
 
@@ -107,7 +102,6 @@ type PlanClient = {
 interface PendingPlan {
   request: DesktopPlanRequest;
   resolve(result: FlowPlanTransportResult): void;
-  timer: ReturnType<typeof setTimeout>;
   removeAbortListener(): void;
 }
 
@@ -121,7 +115,6 @@ export interface DesktopPlanTransport extends FlowPlanTransport {
 export function createDesktopPlanTransport(options: {
   getClient: () => PlanClient | undefined;
   isCurrent: (request: FlowPlanTransportRequest) => boolean;
-  timeoutMs?: number;
 }): DesktopPlanTransport {
   const pending = new Map<string, PendingPlan>();
 
@@ -129,7 +122,6 @@ export function createDesktopPlanTransport(options: {
     const entry = pending.get(key);
     if (!entry) return false;
     pending.delete(key);
-    clearTimeout(entry.timer);
     entry.removeAbortListener();
     entry.resolve(result);
     return true;
@@ -140,16 +132,15 @@ export function createDesktopPlanTransport(options: {
     try {
       await client.sendPlanRequest(entry.request);
     } catch {
-      // A reconnect may replay the still-live request. The deadline remains authoritative.
+      // Keep the operation pending; the next connection replays the same
+      // request identity while the originating TUI remains active.
     }
   };
 
   const transport: DesktopPlanTransport = {
     open(request) {
-      const client = options.getClient();
-      if (!client || !options.isCurrent(request) || request.signal.aborted) return undefined;
-      const timeoutMs = options.timeoutMs ?? DEFAULT_PLAN_TIMEOUT_MS;
-      const desktopRequest = desktopRequestFromFlow(request, Date.now() + timeoutMs);
+      if (!options.isCurrent(request) || request.signal.aborted) return undefined;
+      const desktopRequest = desktopRequestFromFlow(request);
       const key = keyOf(desktopRequest.requestId, desktopRequest.kind);
       if (pending.has(key)) return undefined;
 
@@ -161,13 +152,9 @@ export function createDesktopPlanTransport(options: {
         void cancel();
       };
       const removeAbortListener = (): void => request.signal.removeEventListener("abort", onAbort);
-      const timer = setTimeout(() => {
-        settle(key, { status: "cancelled" });
-      }, timeoutMs);
       const entry: PendingPlan = {
         request: desktopRequest,
         resolve: resolvePromise,
-        timer,
         removeAbortListener,
       };
       const cancel = async (): Promise<void> => {
@@ -181,7 +168,8 @@ export function createDesktopPlanTransport(options: {
 
       request.signal.addEventListener("abort", onAbort, { once: true });
       pending.set(key, entry);
-      void send(client, entry);
+      const client = options.getClient();
+      if (client) void send(client, entry);
       return { promise, cancel };
     },
     handleResponse(response) {
@@ -189,11 +177,7 @@ export function createDesktopPlanTransport(options: {
     },
     async resendPending(client = options.getClient()) {
       if (!client) return;
-      for (const [key, entry] of [...pending]) {
-        if (entry.request.deadlineAt <= Date.now()) {
-          settle(key, { status: "cancelled" });
-          continue;
-        }
+      for (const [, entry] of [...pending]) {
         await send(client, entry);
       }
     },

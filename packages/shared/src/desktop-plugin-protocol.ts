@@ -122,7 +122,6 @@ export interface DesktopAskRequest {
   requestId: string;
   toolCallId: string;
   questions: JsonValue[];
-  deadlineAt: number;
 }
 
 export interface DesktopAskResponse {
@@ -184,7 +183,6 @@ export interface DesktopPlanRequest {
   modelTransition?: DesktopPlanModelTransition;
   decisionDocuments: string[];
   drafts: DesktopPlanDraft[];
-  deadlineAt: number;
 }
 
 export interface DesktopPlanDecision {
@@ -316,9 +314,7 @@ export function isDesktopPluginClientFrame(value: unknown): value is DesktopPlug
         || (value.event === "session_summary" && isDesktopPluginSessionSummary(value.summary))
         || (value.event === "execution_summary" && isDesktopPluginExecutionSummary(value.summary));
     case "desktop_ask_request":
-      return stringFields(value, "requestId", "toolCallId")
-        && finiteNumber(value.deadlineAt)
-        && Array.isArray(value.questions);
+      return stringFields(value, "requestId", "toolCallId") && Array.isArray(value.questions);
     case "desktop_ask_response":
       return stringFields(value, "requestId", "toolCallId") && isExtensionUiResponse(value.response);
     case "desktop_ask_result":
@@ -373,8 +369,7 @@ export function isDesktopPlanRequest(value: unknown): value is DesktopPlanReques
     && (value.workflow === undefined || isDesktopPlanWorkflowOptions(value.workflow))
     && (value.modelTransition === undefined || (isRecord(value.modelTransition) && stringFields(value.modelTransition, "current") && (value.modelTransition.act === undefined || typeof value.modelTransition.act === "string")))
     && Array.isArray(value.decisionDocuments) && value.decisionDocuments.every((item) => typeof item === "string")
-    && Array.isArray(value.drafts) && value.drafts.every(isDesktopPlanDraft)
-    && finiteNumber(value.deadlineAt);
+    && Array.isArray(value.drafts) && value.drafts.every(isDesktopPlanDraft);
 }
 
 export function isDesktopPlanResponse(value: unknown): value is DesktopPlanResponse {

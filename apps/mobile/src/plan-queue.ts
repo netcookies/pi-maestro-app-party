@@ -25,17 +25,7 @@ export class PlanQueue {
     this.now = now;
   }
 
-  private sweepExpired(): void {
-    const now = this.now();
-    for (const [key, entry] of this.plans) {
-      if (entry.status === "pending" && entry.request.deadlineAt <= now) {
-        this.plans.set(key, { ...entry, status: "expired" });
-      }
-    }
-  }
-
   private pruneFinished(): void {
-    this.sweepExpired();
     for (const [key, entry] of this.plans) {
       if (this.plans.size <= MAX_QUEUED_PLANS || entry.status === "pending") continue;
       this.plans.delete(key);
@@ -50,7 +40,6 @@ export class PlanQueue {
   }
 
   get pendingPlans(): PlanEntry[] {
-    this.sweepExpired();
     return [...this.plans.values()].filter((entry) => entry.status === "pending");
   }
 
@@ -79,7 +68,6 @@ export class PlanQueue {
   }
 
   get(requestId: string, kind: DesktopPlanRequest["kind"], target?: SessionTargetIdentity): PlanEntry | undefined {
-    this.sweepExpired();
     for (const entry of this.plans.values()) {
       if (entry.request.requestId !== requestId || entry.request.kind !== kind) continue;
       if (!target || sessionTargetKey(entry.target) === sessionTargetKey(target)) return entry;
@@ -101,7 +89,7 @@ export class PlanQueue {
 
   reopen(requestId: string, kind: DesktopPlanRequest["kind"], target?: SessionTargetIdentity): boolean {
     const entry = this.get(requestId, kind, target);
-    if (!entry || entry.request.deadlineAt <= this.now()) return false;
+    if (!entry) return false;
     const key = keyOf(requestId, kind, entry.target);
     this.plans.set(key, { ...entry, status: "pending" });
     return true;

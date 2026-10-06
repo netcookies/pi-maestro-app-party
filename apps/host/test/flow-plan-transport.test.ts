@@ -75,7 +75,7 @@ describe("Desktop Flow Plan transport", () => {
       decisionDocuments: ["docs/decision.md"],
       drafts: [{ revision: 2, checksum: "sha256:old" }],
     });
-    expect(sent[0].deadlineAt).toBeGreaterThan(Date.now());
+    expect(sent[0]).not.toHaveProperty("deadlineAt");
 
     const response: DesktopPlanResponse = {
       type: "desktop_plan_response",
@@ -163,12 +163,32 @@ describe("Desktop Flow Plan transport", () => {
     expect(transport.pendingCount).toBe(0);
   });
 
-  it("settles on deadline without a client response", async () => {
+  it("registers a Plan while disconnected and replays its identity on reconnect", async () => {
+    let current: ReturnType<typeof clientFor>["client"] | undefined;
+    const transport = createDesktopPlanTransport({ getClient: () => current, isCurrent: () => true });
+    const handle = transport.open(flowRequest(new AbortController().signal, { operationId: 10 }));
+    expect(handle).toBeDefined();
+    expect(transport.pendingCount).toBe(1);
+    const reconnected = clientFor();
+    current = reconnected.client;
+    await transport.resendPending();
+    expect(reconnected.sent).toHaveLength(1);
+    expect(reconnected.sent[0].requestId).toBe("plan:session-1:10");
+    await handle!.cancel("aborted");
+  });
+
+  it("stays pending past the former deadline until explicitly cancelled", async () => {
     vi.useFakeTimers();
     const { client } = clientFor();
-    const transport = createDesktopPlanTransport({ getClient: () => client, isCurrent: () => true, timeoutMs: 25 });
+    const transport = createDesktopPlanTransport({ getClient: () => client, isCurrent: () => true });
     const handle = transport.open(flowRequest(new AbortController().signal));
-    await vi.advanceTimersByTimeAsync(25);
+    await vi.advanceTimersByTimeAsync(120_000);
+    expect(transport.pendingCount).toBe(1);
+    let settled = false;
+    void handle!.promise.then(() => { settled = true; });
+    await Promise.resolve();
+    expect(settled).toBe(false);
+    await handle!.cancel("aborted");
     await expect(handle!.promise).resolves.toEqual({ status: "cancelled" });
     expect(transport.pendingCount).toBe(0);
   });

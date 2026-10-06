@@ -80,8 +80,8 @@ export class HostController {
   private readonly detachedReaderDisposals = new Set<Promise<void>>();
   private readonly desktopTailWatchers = new Map<string, { sessionFile: string; watcher: JsonlTailWatcher }>();
   private readonly desktopReplayRefreshes = new Map<string, { timer: ReturnType<typeof setTimeout>; refreshing: boolean; replayQueued: boolean; pendingItems: TimelineItem[] }>();
-  private readonly pendingDesktopAsks = new Map<string, { target: DesktopPluginTarget; request: DesktopAskRequest; event: Extract<HostEvent, { type: "extension_ui_request" }>; timer: ReturnType<typeof setTimeout> }>();
-  private readonly pendingDesktopPlans = new Map<string, { target: DesktopPluginTarget; request: DesktopPlanRequest; timer: ReturnType<typeof setTimeout> }>();
+  private readonly pendingDesktopAsks = new Map<string, { target: DesktopPluginTarget; request: DesktopAskRequest; event: Extract<HostEvent, { type: "extension_ui_request" }> }>();
+  private readonly pendingDesktopPlans = new Map<string, { target: DesktopPluginTarget; request: DesktopPlanRequest }>();
   private readonly desktopRuntimeStatuses = new Map<string, DesktopPluginRuntimeStatus>();
   private readonly desktopExecutionSourceRevisions = new Map<string, number>();
   private readonly desktopExecutionEventRevisions = new Map<string, number>();
@@ -488,11 +488,9 @@ export class HostController {
   }
 
   onDesktopAskRequest(target: DesktopPluginTarget, request: DesktopAskRequest): void {
-    if (this.disposed || request.deadlineAt <= Date.now() || !this.sessionDirectory.resolve(target, "ask")) return;
+    if (this.disposed || !this.sessionDirectory.resolve(target, "ask")) return;
     const id = JSON.stringify([targetKey(target), request.requestId]);
     if (this.pendingDesktopAsks.has(id)) return;
-    const timer = setTimeout(() => this.clearDesktopAsk(id), request.deadlineAt - Date.now());
-    timer.unref?.();
     const event = this.eventLog.record({
       type: "extension_ui_request",
       sessionId: target.sessionId,
@@ -503,10 +501,9 @@ export class HostController {
         method: "editor",
         title: "Ask",
         questions: request.questions,
-        timeout: request.deadlineAt - Date.now(),
       },
     }) as Extract<HostEvent, { type: "extension_ui_request" }>;
-    this.pendingDesktopAsks.set(id, { target: { ...target }, request, event, timer });
+    this.pendingDesktopAsks.set(id, { target: { ...target }, request, event });
     this.emitToListeners(event);
   }
 
@@ -521,18 +518,16 @@ export class HostController {
   }
 
   onDesktopPlanRequest(target: DesktopPluginTarget, request: DesktopPlanRequest): void {
-    if (this.disposed || request.deadlineAt <= Date.now() || !this.sessionDirectory.resolve(target, "plan")) return;
+    if (this.disposed || !this.sessionDirectory.resolve(target, "plan")) return;
     const id = planKey(target, request.requestId, request.kind);
     if (this.pendingDesktopPlans.has(id)) return;
-    const timer = setTimeout(() => this.clearDesktopPlan(id), request.deadlineAt - Date.now());
-    timer.unref?.();
     const event = this.eventLog.record({
       type: "desktop_plan_request",
       sessionId: target.sessionId,
       target: { ...target },
       request,
     });
-    this.pendingDesktopPlans.set(id, { target: { ...target }, request, timer });
+    this.pendingDesktopPlans.set(id, { target: { ...target }, request });
     this.emitToListeners(event);
   }
 
@@ -559,13 +554,10 @@ export class HostController {
   }
 
   pendingDesktopAskEvents(): HostEvent[] {
-    return [...this.pendingDesktopAsks.values()]
-      .filter(({ request }) => request.deadlineAt > Date.now())
-      .map(({ event, request }) => ({ ...event, request: { ...event.request, timeout: Math.max(1, request.deadlineAt - Date.now()) } }));
+    return [...this.pendingDesktopAsks.values()].map(({ event }) => event);
   }
   pendingDesktopPlanEvents(): HostEvent[] {
     return [...this.pendingDesktopPlans.values()]
-      .filter(({ request }) => request.deadlineAt > Date.now())
       .map(({ request, target }) => this.eventLog.record({ type: "desktop_plan_request", sessionId: target.sessionId, target: { ...target }, request }));
   }
 
@@ -573,7 +565,7 @@ export class HostController {
     if (!target || target.sessionId !== sessionId) return false;
     const id = planKey(target, requestId, response.kind);
     const pending = this.pendingDesktopPlans.get(id);
-    if (!pending || pending.request.kind !== response.kind || pending.request.deadlineAt <= Date.now()) return false;
+    if (!pending || pending.request.kind !== response.kind) return false;
     const registration = this.desktopPluginRegistry.resolve(target);
     if (!registration?.transport.answerPlan) return false;
     const result = await registration.transport.answerPlan({ ...response, requestId } as DesktopPlanResponse);
@@ -585,7 +577,6 @@ export class HostController {
   private clearDesktopPlan(id: string): void {
     const pending = this.pendingDesktopPlans.get(id);
     if (!pending) return;
-    clearTimeout(pending.timer);
     this.pendingDesktopPlans.delete(id);
     if (!this.disposed) this.emitToListeners(this.eventLog.record({ type: "desktop_plan_cleared", sessionId: pending.target.sessionId, requestId: pending.request.requestId, kind: pending.request.kind, target: { ...pending.target } }));
   }
@@ -594,7 +585,6 @@ export class HostController {
   private clearDesktopAsk(id: string): void {
     const pending = this.pendingDesktopAsks.get(id);
     if (!pending) return;
-    clearTimeout(pending.timer);
     this.pendingDesktopAsks.delete(id);
     if (!this.disposed) this.emitToListeners(this.eventLog.record({ type: "extension_ui_cleared", sessionId: pending.target.sessionId, requestId: id, target: pending.target }));
   }
@@ -772,7 +762,7 @@ export class HostController {
     const entry = this.sessionDirectory.resolve(target, "ask");
     if (entry?.kind !== "desktop") return false;
     const pending = this.pendingDesktopAsks.get(requestId);
-    if (!pending || targetKey(pending.target) !== targetKey(target) || pending.request.deadlineAt <= Date.now()) return false;
+    if (!pending || targetKey(pending.target) !== targetKey(target)) return false;
     const result = await this.desktopControlGateway.answerAsk(target, pending.request.requestId, pending.request.toolCallId, response);
     if (result.status !== "accepted") return false;
     this.clearDesktopAsk(requestId);
@@ -836,8 +826,8 @@ export class HostController {
   async dispose(): Promise<void> {
     this.disposed = true;
     this.stopMaestroPoll();
-    for (const pending of this.pendingDesktopAsks.values()) clearTimeout(pending.timer);
     this.pendingDesktopAsks.clear();
+    this.pendingDesktopPlans.clear();
     for (const refresh of this.desktopReplayRefreshes.values()) clearTimeout(refresh.timer);
     this.desktopReplayRefreshes.clear();
     for (const target of this.desktopTailWatchers.keys()) {

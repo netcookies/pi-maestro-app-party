@@ -47,24 +47,33 @@ describe("ExtensionUiQueue", () => {
     expect(queue.answer("unknown", { selected: ["A"] })).toBeUndefined();
   });
 
-  it("expires dialogs after timeout", () => {
+  it("expires dialogs after explicit timeout", () => {
     let now = 1000;
-    queue = new ExtensionUiQueue({ defaultTimeoutMs: 5000, now: () => now });
-    const req = makeRequest();
+    queue = new ExtensionUiQueue({ now: () => now });
+    const req = makeRequest({ timeout: 5000 });
     queue.enqueue(req);
     expect(queue.count).toBe(1);
-
     now = 7000;
     expect(queue.count).toBe(0);
     expect(queue.get(req.id)?.status).toBe("expired");
   });
 
-  it("respects per-request timeout override", () => {
+  it("keeps dialogs without an explicit timeout active", () => {
     let now = 1000;
-    queue = new ExtensionUiQueue({ defaultTimeoutMs: 5000, now: () => now });
+    queue = new ExtensionUiQueue({ now: () => now });
+    const req = makeRequest();
+    queue.enqueue(req);
+    now = 120_000;
+    expect(queue.count).toBe(1);
+    expect(queue.get(req.id)?.status).toBe("pending");
+  });
+
+  it("respects an explicit request timeout", () => {
+    let now = 1000;
+    queue = new ExtensionUiQueue({ now: () => now });
     const req = makeRequest({ timeout: 1000 });
     queue.enqueue(req);
-    now = 3000; // 超过 1000ms 但不到默认 5000ms
+    now = 3000;
     expect(queue.count).toBe(0);
   });
 
@@ -142,10 +151,10 @@ describe("ExtensionUiQueue 回收终态条目（ISS-004）", () => {
 
   it("过期条目在后续入队时被回收，并保持驻留有界", () => {
     let now = 1000;
-    const q = new ExtensionUiQueue({ defaultTimeoutMs: 5000, now: () => now });
+    const q = new ExtensionUiQueue({ now: () => now });
     const ids: string[] = [];
     for (let i = 0; i < CAP + 10; i++) {
-      const req = makeRequest({ id: `e${i}` });
+      const req = makeRequest({ id: `e${i}`, timeout: 5000 });
       q.enqueue(req);
       ids.push(req.id);
     }

@@ -333,7 +333,7 @@ describe("DesktopPlugin IPC and gateway", () => {
       },
     });
     await client.connect();
-    await client.sendAskRequest({ type: "desktop_ask_request", requestId: "question:call_a|fc_b", toolCallId: "call_a|fc_b", questions: [{ question: "Continue?" }], deadlineAt: Date.now() + 1000 });
+    await client.sendAskRequest({ type: "desktop_ask_request", requestId: "question:call_a|fc_b", toolCallId: "call_a|fc_b", questions: [{ question: "Continue?" }] });
     await expect(answer).resolves.toEqual({ toolCallId: "call_a|fc_b", selected: ["yes"] });
   });
   it("forwards an exact ask cancellation to the server", async () => {
@@ -358,7 +358,7 @@ describe("DesktopPlugin IPC and gateway", () => {
       onRequest: async (request) => ({ type: "desktop_plugin_result", requestId: request.requestId, operation: request.operation.type, status: "observed" }),
     });
     await client.connect();
-    const request = { type: "desktop_ask_request" as const, requestId: "question:cancel", toolCallId: "call_cancel", questions: [{ question: "Cancel?" }], deadlineAt: Date.now() + 1000 };
+    const request = { type: "desktop_ask_request" as const, requestId: "question:cancel", toolCallId: "call_cancel", questions: [{ question: "Cancel?" }] };
     await client.sendAskRequest(request);
     await client.sendAskCancellation(request);
     await expect(cancellation).resolves.toEqual({ type: "desktop_ask_result", requestId: "question:cancel", toolCallId: "call_cancel", status: "accepted" });
@@ -389,7 +389,7 @@ describe("DesktopPlugin IPC and gateway", () => {
       onAskResponse: async () => { throw new Error("ask expired in Plugin"); },
     });
     await client.connect();
-    await client.sendAskRequest({ type: "desktop_ask_request", requestId: "question:call-rejected", toolCallId: "call-rejected", questions: [{ question: "Continue?" }], deadlineAt: Date.now() + 1000 });
+    await client.sendAskRequest({ type: "desktop_ask_request", requestId: "question:call-rejected", toolCallId: "call-rejected", questions: [{ question: "Continue?" }] });
     await waitFor(() => receipt !== undefined);
     await expect(receipt).resolves.toMatchObject({ requestId: "question:call-rejected", toolCallId: "call-rejected", status: "failed", error: { code: "plugin_ask_rejected" } });
   });

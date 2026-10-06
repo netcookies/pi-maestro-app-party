@@ -108,7 +108,7 @@ describe("DesktopBrokerHostIpc", () => {
     expect(host.projection.epoch).toBe("broker-1");
 
     await host.close();
-    await pluginClient.sendAskRequest({ type: "desktop_ask_request", requestId: "ask-during-reconnect", toolCallId: "tool-1", questions: [{ question: "Continue?" }], deadlineAt: Date.now() + 10_000 });
+    await pluginClient.sendAskRequest({ type: "desktop_ask_request", requestId: "ask-during-reconnect", toolCallId: "tool-1", questions: [{ question: "Continue?" }] });
     await waitFor(() => broker?.pendingAskFrames().length === 1);
     const replayed: unknown[] = [];
     host = new DesktopBrokerHostIpc({ socketPath: hostSocket, secret: "secret", hostInstanceId: "host-2", onAskRequest: (askTarget, request) => replayed.push({ target: askTarget, request }) });
@@ -323,7 +323,7 @@ describe("DesktopBrokerHostIpc", () => {
     });
     await pluginClient.connect();
     await waitFor(() => host?.projection.resolve(target) !== undefined);
-    await pluginClient.sendAskRequest({ type: "desktop_ask_request", requestId: "ask-host-receipt", toolCallId: "tool-host-receipt", questions: [{ question: "Continue?" }], deadlineAt: Date.now() + 1000 });
+    await pluginClient.sendAskRequest({ type: "desktop_ask_request", requestId: "ask-host-receipt", toolCallId: "tool-host-receipt", questions: [{ question: "Continue?" }] });
     await askSeen;
     const gateway = new DesktopControlGatewayService(host.projection);
     await expect(gateway.answerAsk(target, askRequest!.requestId, askRequest!.toolCallId, { selected: ["yes"] })).resolves.toMatchObject({ status: "accepted" });
