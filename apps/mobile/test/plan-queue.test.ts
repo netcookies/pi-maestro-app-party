@@ -1,6 +1,6 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { DesktopPlanRequest, SessionTargetIdentity } from "@maestro-mobile/shared";
-import { createInitialState, reduceEvent } from "../src/app-state";
+import { createInitialState, reduceEvent, createPlanActions } from "../src/app-state";
 import { PlanQueue } from "../src/plan-queue";
 import { ExtensionUiQueue } from "../src/extension-ui-queue";
 
@@ -94,6 +94,29 @@ describe("PlanQueue", () => {
     expect(queue.pendingPlans[0].request.revision).toBe(4);
   });
 });
+
+describe("Plan app actions", () => {
+  it("rejects a response without the exact target before invoking the responder", () => {
+    const queue = new PlanQueue();
+    const entry = queue.enqueue("session-1", request(), target);
+    const responder = vi.fn();
+    const errors: string[] = [];
+    const actions = createPlanActions(queue, responder, () => undefined, (message) => errors.push(message));
+
+    actions.respondPlan(entry.request.requestId, {
+      type: "desktop_plan_response",
+      requestId: entry.request.requestId,
+      kind: entry.request.kind,
+      status: "decision",
+      decision: { action: "exit-plan" },
+    });
+
+    expect(responder).not.toHaveBeenCalled();
+    expect(queue.pendingPlans).toHaveLength(1);
+    expect(errors[0]).toContain("Exact session target");
+  });
+});
+
 
 describe("Plan app state projection", () => {
   it("clears local Plan projection on reconnect reset and restores it from a fresh event", () => {

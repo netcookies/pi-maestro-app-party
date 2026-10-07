@@ -51,6 +51,7 @@ const ROLLOUT_MUTATING_COMMANDS = new Set([
   "follow_up",
   "abort",
   "extension_ui_response",
+  "desktop_plan_response",
 ]);
 
 function isMutatingCommand(command: ClientCommand): boolean {

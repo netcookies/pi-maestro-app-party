@@ -899,11 +899,20 @@ export function createPlanActions(
   return {
     respondPlan(requestId, response, target) {
       const entry = queue.get(requestId, response.kind, target);
-      if (entry?.status === "pending") send(entry, response);
+      if (entry?.status !== "pending") return;
+      if (!target || target.sessionId !== entry.sessionId) {
+        onSendFailed(`Exact session target is required for plan response ${requestId}`);
+        return;
+      }
+      send(entry, response);
     },
     cancelPlan(requestId, target) {
       const entry = queue.get(requestId, "confirm", target) ?? queue.get(requestId, "review", target);
       if (!entry || entry.status !== "pending") return;
+      if (!target || target.sessionId !== entry.sessionId) {
+        onSendFailed(`Exact session target is required for plan response ${requestId}`);
+        return;
+      }
       send(entry, {
         type: "desktop_plan_response",
         requestId,

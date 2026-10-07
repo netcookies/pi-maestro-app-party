@@ -64,10 +64,12 @@ export default function SessionScreen() {
   const { t } = useI18n();
   const cfg = getConfig();
   const insets = useSafeAreaInsets();
-  const selectedTargetKey = targetKey ?? state.activeSessionTargets.get(id ?? "");
-  const session = selectedTargetKey
-    ? state.targetedSessions.get(selectedTargetKey) ?? state.sessions.get(id ?? "")
-    : state.sessions.get(id ?? "");
+  const routeTargetIsCurrent = Boolean(targetKey && state.targetedSessions.has(targetKey));
+  const selectedTargetKey = routeTargetIsCurrent ? targetKey : state.activeSessionTargets.get(id ?? "");
+  const targetProjectionReady = Boolean(selectedTargetKey && state.targetedSessions.has(selectedTargetKey));
+  const session = targetProjectionReady
+    ? state.targetedSessions.get(selectedTargetKey!)
+    : undefined;
 
   const [executionDetailsOpen, setExecutionDetailsOpen] = useState(false);
   const [detailsExpanded, setDetailsExpanded] = useState(false);
@@ -249,13 +251,19 @@ export default function SessionScreen() {
 
   const styles = useMemo(() => makeStyles(theme), [theme]);
   const timeline = selectedTargetKey
-    ? (state.targetedTimelines.get(selectedTargetKey) ?? state.timelines.get(id ?? "") ?? [])
-    : (state.timelines.get(id ?? "") ?? []);
+    ? (state.targetedTimelines.get(selectedTargetKey) ?? [])
+    : [];
 
-  // 详情页只在没有已加载 snapshot 时补拉，并显式记录三态，避免空 timeline 被误判为已加载。
-  const shouldLoadHistory = Boolean(id) && !state.targetedTimelines.has(selectedTargetKey ?? "") && !state.timelines.has(id ?? "");
+  // 只有 exact target 已解析后才允许请求该 target 的历史；解析期间保持 loading，不能用旧 target 或 session 级 timeline 兜底。
+  const shouldLoadHistory = Boolean(id && selectedTargetKey)
+    && !state.targetedTimelines.has(selectedTargetKey ?? "");
   useEffect(() => {
-    if (!id || !shouldLoadHistory) {
+    if (!id || !selectedTargetKey) {
+      historyStartedRef.current = "";
+      setHistoryState("idle");
+      return;
+    }
+    if (!shouldLoadHistory) {
       setHistoryState("loaded");
       return;
     }
@@ -263,16 +271,20 @@ export default function SessionScreen() {
     let active = true;
     historyStartedRef.current = historyRequestKey;
     setHistoryState("loading");
-    void loadSessionHistory(id, targetKey)
+    void loadSessionHistory(id, selectedTargetKey)
       .then(() => { if (active) setHistoryState("loaded"); })
       .catch(() => { if (active) setHistoryState("error"); });
     return () => { active = false; };
-  }, [historyRequestKey, historyRetry, id, loadSessionHistory, shouldLoadHistory, targetKey]);
+  }, [historyRequestKey, historyRetry, id, loadSessionHistory, selectedTargetKey, shouldLoadHistory]);
 
   const timelineRows = useMemo(() => buildTimelineRows(timeline), [timeline]);
+  const interactionReady = isConnected
+    && targetProjectionReady
+    && Boolean(selectedTargetKey && state.targetedTimelines.has(selectedTargetKey))
+    && historyState === "loaded";
   const renderedRows = useMemo<ListRow[]>(
-    () => historyState === "loaded" ? (hasMore ? [{ type: "load_more", id: LOAD_MORE_ID }, ...timelineRows] : timelineRows) : [],
-    [hasMore, historyState, timelineRows],
+    () => interactionReady && historyState === "loaded" ? (hasMore ? [{ type: "load_more", id: LOAD_MORE_ID }, ...timelineRows] : timelineRows) : [],
+    [hasMore, historyState, interactionReady, timelineRows],
   );
   const [dismissedAskIds, setDismissedAskIds] = useState<Set<string>>(new Set());
 
@@ -310,7 +322,7 @@ export default function SessionScreen() {
   // Prefer the authoritative extension-ui request when available. A readerless
   // Desktop session has no timeline row yet, while a live session may project the
   // same ask through both sources; the helper pairs both IDs to suppress duplicates.
-  const interactionReady = historyState === "loaded" && isConnected;
+  const shouldShowDetailLoading = !interactionReady && historyState !== "error";
   const activeAskWizard = useMemo(() => interactionReady
     ? selectActiveAskWizard(timeline, directDialog?.request, dismissedAskIds)
     : null,
@@ -824,7 +836,7 @@ export default function SessionScreen() {
         data={renderedRows}
         keyExtractor={(item) => item.type === "load_more" ? item.id : item.type === "tool_group" ? `tool-group:${item.id}` : item.item.id}
         renderItem={renderItem}
-        ListEmptyComponent={historyState === "loading" ? (
+        ListEmptyComponent={shouldShowDetailLoading ? (
           <View style={styles.skeletonWrap} accessibilityLabel={t.loadingSessionDetail}>
             {[0, 1, 2, 3, 4].map((index) => (
               <View key={index} style={[styles.skeletonRow, { backgroundColor: theme.cardBg, borderColor: theme.border }]} />

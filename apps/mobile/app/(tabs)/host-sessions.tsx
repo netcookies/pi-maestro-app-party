@@ -73,6 +73,7 @@ export default function HostSessionsScreen({ active = true }: { active?: boolean
   const [error, setError] = useState<string | null>(null);
   const [opening, setOpening] = useState<string | null>(null);
   const refreshedUnknownPatchRef = useRef(new Map<string, number>());
+  const hydratedConnectionGenerationRef = useRef<number | null>(null);
 
   // Host summary 事件只 patch 当前已加载行；注销的 exact target 必须从列表移除，
   // 否则用户会继续点到已关闭 TUI 的 stale card。
@@ -107,11 +108,15 @@ export default function HostSessionsScreen({ active = true }: { active?: boolean
   const loadFirstPage = useCallback(async (refresh = false) => {
     if (!active) return;
     if (!isConnected) {
-      setLoading(false);
+      hydratedConnectionGenerationRef.current = null;
+      sessionsRef.current = [];
+      setSessions([]);
+      setLoading(true);
       return;
     }
     const current = filterStateRef.current;
-    if (!refresh && !current.filter.query && !current.filter.cwds?.length && state.hostSessionList
+    if (!refresh && hydratedConnectionGenerationRef.current === state.connectionGeneration
+      && !current.filter.query && !current.filter.cwds?.length && state.hostSessionList
       && state.hostSessionList.sessions.every((session) => session.presentation?.visibility !== "monitor_tab")) {
       const page = mergeHostSessionPage([], state.hostSessionList, true);
       const scoped = filterSessionSummaries(page.sessions, current.filter);
@@ -125,12 +130,19 @@ export default function HostSessionsScreen({ active = true }: { active?: boolean
       return;
     }
     const token = beginFilterRequest(current);
+    const hadVisibleSessions = sessionsRef.current.length > 0;
     firstPageInFlightRef.current = true;
     lastRequestedCursorRef.current = undefined;
     setLoadingMore(false);
+    sessionsRef.current = [];
+    setSessions([]);
     setError(null);
-    if (refresh || sessionsRef.current.length > 0) setRefreshing(true);
-    else setLoading(true);
+    if (refresh || hadVisibleSessions) {
+      setRefreshing(refresh || hadVisibleSessions);
+      setLoading(true);
+    } else {
+      setLoading(true);
+    }
     try {
       const list = await listHostSessions({
         limit: PAGE_SIZE,
@@ -143,6 +155,7 @@ export default function HostSessionsScreen({ active = true }: { active?: boolean
       const scoped = filterSessionSummaries(page.sessions, current.filter);
       sessionsRef.current = scoped;
       setSessions(scoped);
+      hydratedConnectionGenerationRef.current = state.connectionGeneration;
       nextCursorRef.current = page.nextCursor;
       setNextCursor(page.nextCursor);
       setHasMore(page.hasMore);
@@ -156,7 +169,7 @@ export default function HostSessionsScreen({ active = true }: { active?: boolean
         setRefreshing(false);
       }
     }
-  }, [active, isConnected, listHostSessions, state.hostSessionList]);
+  }, [active, isConnected, listHostSessions, state.connectionGeneration, state.hostSessionList]);
 
   useEffect(() => {
     if (!active) return;
@@ -290,7 +303,7 @@ export default function HostSessionsScreen({ active = true }: { active?: boolean
           <Text style={styles.errorText}>{error}</Text>
         </TouchableOpacity>
       ) : null}
-      {error && sessions.length === 0 ? <View style={styles.errorPanel}><Text style={styles.errorText}>{error}</Text><TouchableOpacity onPress={() => void loadFirstPage()}><Text style={[styles.retryText, { color: theme.accent }]}>{t.retry}</Text></TouchableOpacity></View> : loading && sessions.length === 0 ? <View style={styles.center}><ActivityIndicator color={theme.accent} /><Text style={styles.centerText}>{t.loadingSessions}</Text></View> : (
+      {error && sessions.length === 0 ? <View style={styles.errorPanel}><Text style={styles.errorText}>{error}</Text><TouchableOpacity onPress={() => void loadFirstPage()}><Text style={[styles.retryText, { color: theme.accent }]}>{t.retry}</Text></TouchableOpacity></View> : !isConnected || loading ? <View style={styles.center}><ActivityIndicator color={theme.accent} /><Text style={styles.centerText}>{t.loadingSessions}</Text></View> : (
         <FlatList
           data={rows}
           keyExtractor={(row) => row.key}
