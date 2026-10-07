@@ -2,6 +2,12 @@
 
 本文件记录 Maestro Mobile 的显著变更。格式基于 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)。
 
+## [0.9.5] — 2026-10-07
+
+### 修复
+
+- 收敛移动端会话交互与草稿持久化
+
 ## [0.9.4] — 2026-10-06
 
 ### 修复
