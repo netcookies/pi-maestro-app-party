@@ -21,7 +21,7 @@ import {
   type ExecutionProjection,
   type DesktopPlanResponse,
 } from "@maestro-mobile/shared";
-import { HostClient, type ConnectionState } from "./host-client";
+import { HostClient, type ConnectionState } from "@maestro-mobile/mobile-sdk";
 import { beginGracePeriod, endGracePeriod, isAndroidRuntime, isIosRuntime, startBackgroundService, stopBackgroundService } from "./background-runtime";
 import { getConfig } from "./config";
 import { consumePlanNotificationEvent } from "./notifications";

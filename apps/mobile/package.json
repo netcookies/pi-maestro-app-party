@@ -19,6 +19,7 @@
     "build:ios": "cd ios && RUBYOPT=\"-r$PWD/cocoapods_pathname_workaround.rb\" pod install && xcodebuild -workspace MaestroMobile.xcworkspace -scheme MaestroMobile -configuration Debug -sdk iphonesimulator -derivedDataPath build CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY=\"\" build"
   },
   "dependencies": {
+    "@maestro-mobile/mobile-sdk": "workspace:*",
     "@maestro-mobile/shared": "workspace:*",
     "@react-native-async-storage/async-storage": "^2.1.2",
     "@react-native-masked-view/masked-view": "^0.3.2",

@@ -46,6 +46,7 @@
   "devDependencies": {
     "@earendil-works/pi-coding-agent": "0.99.2",
     "@earendil-works/pi-ai": "0.99.2",
+    "@maestro-mobile/mobile-sdk": "workspace:*",
     "@types/node": "^22.0.0",
     "@types/ws": "^8.18.0",
     "tsx": "^4.20.0",
