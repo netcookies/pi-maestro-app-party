@@ -26,6 +26,7 @@ import { ChatMarkdown } from "../src/components/chat/ChatMarkdown";
 import { splitImageSegments } from "../src/image-paths";
 import { ChatComposer } from "../src/components/ChatComposer";
 import { pickImagesFromLibrary } from "../src/image-picker";
+import { useSessionDraft, draftScopeKey } from "../src/drafts";
 import { selectExecutionSummaryForSession, executionTodoCounts } from "../src/session-execution";
 import { SpringBottomSheet } from "../src/components/SpringBottomSheet";
 import { buildTimelineRows, type TimelineRow } from "../src/timeline-rows";
@@ -58,7 +59,7 @@ function modelNameOf(value: unknown): string | undefined {
 export default function SessionScreen() {
   const { id, targetKey, from } = useLocalSearchParams<{ id: string; targetKey?: string; from?: string }>();
   const router = useRouter();
-  const { state, sendPrompt, sendAbort, answerDialog, cancelDialog, respondPlan, cancelPlan, loadSessionHistory, loadMoreHistory, searchHistory, setThinking, listSkills, isConnected, connectionState, lastError, clearError: dispatchLocalError } = useHost();
+  const { state, hostUrl, sendPrompt, sendAbort, answerDialog, cancelDialog, respondPlan, cancelPlan, loadSessionHistory, loadMoreHistory, searchHistory, setThinking, listSkills, isConnected, connectionState, lastError, clearError: dispatchLocalError } = useHost();
   const { theme } = useTheme();
   const { t } = useI18n();
   const cfg = getConfig();
@@ -147,8 +148,16 @@ export default function SessionScreen() {
       active = false;
     };
   }, [id, isConnected, listSkills]);
-  const [input, setInput] = useState("");
+  const draftTargetKeyRef = useRef(selectedTargetKey ?? targetKey ?? "unresolved");
+  if (selectedTargetKey || targetKey) draftTargetKeyRef.current = selectedTargetKey ?? targetKey!;
+  const draftScope = useMemo(() => draftScopeKey(hostUrl, id ?? "", draftTargetKeyRef.current), [hostUrl, id, selectedTargetKey, targetKey]);
+  const [draftError, setDraftError] = useState<string | null>(null);
+  const draft = useSessionDraft(draftScope, (error) => setDraftError(error instanceof Error ? error.message : String(error)));
   const [sending, setSending] = useState(false);
+  const [historyState, setHistoryState] = useState<"idle" | "loading" | "loaded" | "error">("idle");
+  const [historyRetry, setHistoryRetry] = useState(0);
+  const historyRequestKey = `${id ?? ""}:${selectedTargetKey ?? targetKey ?? ""}:${state.connectionGeneration}`;
+  const historyStartedRef = useRef("");
   const [loadingMore, setLoadingMore] = useState(false);
   const [hasMore, setHasMore] = useState(true);
   const listRef = useRef<FlatList<ListRow>>(null);
@@ -243,17 +252,27 @@ export default function SessionScreen() {
     ? (state.targetedTimelines.get(selectedTargetKey) ?? state.timelines.get(id ?? "") ?? [])
     : (state.timelines.get(id ?? "") ?? []);
 
-  // 详情页只在没有已加载 timeline 时补拉；列表页预加载成功后不重复请求。
-  const shouldLoadHistory = Boolean(id) && timeline.length === 0 && !state.targetedTimelines.has(selectedTargetKey ?? "") && !state.timelines.has(id ?? "");
+  // 详情页只在没有已加载 snapshot 时补拉，并显式记录三态，避免空 timeline 被误判为已加载。
+  const shouldLoadHistory = Boolean(id) && !state.targetedTimelines.has(selectedTargetKey ?? "") && !state.timelines.has(id ?? "");
   useEffect(() => {
-    if (!shouldLoadHistory || !id) return;
-    void loadSessionHistory(id, targetKey).catch(() => {});
-  }, [id, targetKey, loadSessionHistory, shouldLoadHistory]);
+    if (!id || !shouldLoadHistory) {
+      setHistoryState("loaded");
+      return;
+    }
+    if (historyStartedRef.current === historyRequestKey) return;
+    let active = true;
+    historyStartedRef.current = historyRequestKey;
+    setHistoryState("loading");
+    void loadSessionHistory(id, targetKey)
+      .then(() => { if (active) setHistoryState("loaded"); })
+      .catch(() => { if (active) setHistoryState("error"); });
+    return () => { active = false; };
+  }, [historyRequestKey, historyRetry, id, loadSessionHistory, shouldLoadHistory, targetKey]);
 
   const timelineRows = useMemo(() => buildTimelineRows(timeline), [timeline]);
   const renderedRows = useMemo<ListRow[]>(
-    () => hasMore ? [{ type: "load_more", id: LOAD_MORE_ID }, ...timelineRows] : timelineRows,
-    [hasMore, timelineRows],
+    () => historyState === "loaded" ? (hasMore ? [{ type: "load_more", id: LOAD_MORE_ID }, ...timelineRows] : timelineRows) : [],
+    [hasMore, historyState, timelineRows],
   );
   const [dismissedAskIds, setDismissedAskIds] = useState<Set<string>>(new Set());
 
@@ -282,16 +301,20 @@ export default function SessionScreen() {
 
   const isCurrentDialog = useCallback((entry: { request: { sessionId: string }; target?: Parameters<typeof sessionTargetKey>[0]; status: string }) =>
     entry.request.sessionId === id && entry.status === "pending"
-      && (!selectedTargetKey || !entry.target || sessionTargetKey(entry.target) === selectedTargetKey), [id, selectedTargetKey]);
+      && Boolean(selectedTargetKey)
+      && Boolean(entry.target)
+      && sessionTargetKey(entry.target!) === selectedTargetKey, [id, selectedTargetKey]);
 
   const directDialog = useMemo(() => state.dialogs.find(isCurrentDialog), [state.dialogs, isCurrentDialog]);
 
   // Prefer the authoritative extension-ui request when available. A readerless
   // Desktop session has no timeline row yet, while a live session may project the
   // same ask through both sources; the helper pairs both IDs to suppress duplicates.
-  const activeAskWizard = useMemo(() =>
-    selectActiveAskWizard(timeline, directDialog?.request, dismissedAskIds),
-  [timeline, directDialog, dismissedAskIds]);
+  const interactionReady = historyState === "loaded" && isConnected;
+  const activeAskWizard = useMemo(() => interactionReady
+    ? selectActiveAskWizard(timeline, directDialog?.request, dismissedAskIds)
+    : null,
+  [dismissedAskIds, directDialog, interactionReady, timeline]);
 
   // TUI 先提交时，Host 会清掉 direct dialog，但 timeline 结果可能稍后才到。
   // 记住已配对的 timeline ID，避免 direct 清理后的短暂空窗重新弹出同一道题。
@@ -315,6 +338,7 @@ export default function SessionScreen() {
 
   // 待处理单项交互弹窗：优先本地直通 dialog
   const activeAskDialog = useMemo(() => {
+    if (!interactionReady) return null;
     if (activeAskWizard) return null; // 存在问答向导时优先展示向导
     if (directDialog && dismissedAskIds.has(directDialog.request.id)) return null;
     if (directDialog) {
@@ -327,10 +351,11 @@ export default function SessionScreen() {
     return null;
   }, [activeAskWizard, directDialog, dismissedAskIds]);
 
-  const activePlan = useMemo(() => state.planRequests.find((entry) => entry.sessionId === id
+  const activePlan = useMemo(() => interactionReady && Boolean(selectedTargetKey) ? state.planRequests.find((entry) => entry.sessionId === id
     && entry.status === "pending"
-    && (!selectedTargetKey || sessionTargetKey(entry.target) === selectedTargetKey)),
-  [id, selectedTargetKey, state.planRequests]);
+    && Boolean(entry.target)
+    && sessionTargetKey(entry.target) === selectedTargetKey) : undefined,
+  [id, interactionReady, selectedTargetKey, state.planRequests]);
 
   const control = session?.presentation?.control;
   const canPrompt = control?.canPrompt === true;
@@ -386,7 +411,7 @@ export default function SessionScreen() {
 
   // T7：运行态与可交互性完全来自会话状态与服务端 presentation.control，不再做窗口/PID/name 推断
   const isSessionStreaming = session?.runState === "streaming";
-  const composerEnabled = canPrompt && isConnected;
+  const composerEnabled = canPrompt && interactionReady;
 
   // 活跃工作态感知：从用户发送消息开始，贯穿思考（thinking）、工具执行（tool）、模型流式输出，直到完整任务终结
   const [isTurnWorking, setIsTurnWorking] = useState(false);
@@ -512,19 +537,16 @@ export default function SessionScreen() {
     }
   }, [timeline.length, scrollToBottom]);
   const handleSend = async () => {
-    const text = input.trim();
-    if (!text || !id) return;
-    // 断连/重连中禁止发送（输入保留，待恢复连接后再发）
-    if (!isConnected) return;
+    const text = draft.text.trim();
+    if (!text || !id || !isConnected) return;
+    const submission = draft.captureSubmission();
     setIsTurnWorking(true);
     setSending(true);
     try {
       await sendPrompt(id, text);
-      // 发送成功才清空输入；失败（超时/断连 reject）保留草稿，错误由 store.lastError 提示
-      setInput("");
+      draft.completeSubmission(submission);
     } catch {
       setIsTurnWorking(false);
-      // 保留 input 不清空
     } finally {
       setSending(false);
     }
@@ -802,12 +824,25 @@ export default function SessionScreen() {
         data={renderedRows}
         keyExtractor={(item) => item.type === "load_more" ? item.id : item.type === "tool_group" ? `tool-group:${item.id}` : item.item.id}
         renderItem={renderItem}
-        ListEmptyComponent={
-          <View style={styles.emptyWrap}>
-            <Text style={[styles.emptyTitle, { color: theme.muted }]}>暂无消息</Text>
-            <Text style={[styles.emptySub, { color: theme.dim }]}>发送第一条指令开始对话</Text>
+        ListEmptyComponent={historyState === "loading" ? (
+          <View style={styles.skeletonWrap} accessibilityLabel={t.loadingSessionDetail}>
+            {[0, 1, 2, 3, 4].map((index) => (
+              <View key={index} style={[styles.skeletonRow, { backgroundColor: theme.cardBg, borderColor: theme.border }]} />
+            ))}
           </View>
-        }
+        ) : historyState === "error" ? (
+          <View style={styles.emptyWrap}>
+            <Text style={[styles.emptyTitle, { color: theme.error }]}>{t.retrySessionDetail}</Text>
+            <TouchableOpacity onPress={() => { historyStartedRef.current = ""; setHistoryState("idle"); setHistoryRetry((value) => value + 1); }} accessibilityRole="button">
+              <Text style={[styles.emptySub, { color: theme.accent }]}>{t.retry}</Text>
+            </TouchableOpacity>
+          </View>
+        ) : (
+          <View style={styles.emptyWrap}>
+            <Text style={[styles.emptyTitle, { color: theme.muted }]}>{t.noSessionMessages}</Text>
+            <Text style={[styles.emptySub, { color: theme.dim }]}>{t.noSessionMessagesDesc}</Text>
+          </View>
+        )}
         style={[styles.list, { backgroundColor: theme.bg }]}
         contentContainerStyle={styles.listContent}
         onLayout={(e) => {
@@ -924,6 +959,16 @@ export default function SessionScreen() {
         style={{ backgroundColor: theme.headerBg, paddingBottom: Math.max(insets.bottom > 0 ? 4 : 8, 4) }}
       >
       {/* 投递失败必须可见：消息未送达时不能只保留草稿而不告知用户 */}
+      {draftError ? (
+        <TouchableOpacity
+          onPress={() => setDraftError(null)}
+          accessibilityRole="button"
+          accessibilityLabel={t.close}
+          style={{ paddingHorizontal: 20, paddingBottom: 6 }}
+        >
+          <Text style={[styles.toolError, { color: theme.error }]} numberOfLines={3}>{draftError}</Text>
+        </TouchableOpacity>
+      ) : null}
       {lastError ? (
         <TouchableOpacity
           onPress={() => dispatchLocalError()}
@@ -938,12 +983,13 @@ export default function SessionScreen() {
         actions={{
           send: async (text, imgs) => {
             if (!id) return;
-            // 断连时禁止发送；throw 使 ChatComposer 恢复草稿（其内部先清空后发送）
             if (!isConnected) throw new Error("未连接到主机");
+            const submission = draft.captureSubmission();
             setIsTurnWorking(true);
             setSending(true);
             try {
               await sendPrompt(id, text, imgs);
+              draft.completeSubmission(submission);
             } catch (err) {
               setIsTurnWorking(false);
               throw err;
@@ -966,6 +1012,8 @@ export default function SessionScreen() {
         onAbort={canAbort ? handleAbort : undefined}
         sending={sending || !isConnected}
         skills={availableSkills}
+        text={draft.text}
+        onTextChange={draft.setText}
         disabled={!composerEnabled}
         placeholder={composerPlaceholder}
       />
@@ -1220,6 +1268,8 @@ function makeStyles(theme: ReturnType<typeof useTheme>["theme"]) {
     },
     headerStatus: { fontSize: MIUIX_TYPE.footnote2, color: theme.muted, minWidth: 56, textAlign: "right" },
     headerRight: { flexDirection: "row", alignItems: "center", gap: 6, minWidth: 72, justifyContent: "flex-end" },
+    skeletonWrap: { padding: 16, gap: 12 },
+    skeletonRow: { height: 72, borderRadius: MIUIX_RADIUS.md, borderWidth: 1, opacity: 0.8 },
     emptyWrap: { alignItems: "center", paddingVertical: 64, gap: 6 },
     emptyTitle: { fontSize: MIUIX_TYPE.body2, fontWeight: "600" },
     emptySub: { fontSize: MIUIX_TYPE.footnote1 },

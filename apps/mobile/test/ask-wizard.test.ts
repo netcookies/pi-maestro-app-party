@@ -44,6 +44,9 @@ describe("ask wizard source selection", () => {
     expect(selectActiveAskWizard([timelineAsk()], undefined, timelineDismissed)).toBeNull();
   });
 
+  it("does not create a submit-capable wizard from timeline alone", () => {
+    expect(selectActiveAskWizard([timelineAsk()], undefined, new Set())).toBeNull();
+  });
   it("uses the direct request ID for a timeline-backed wizard response", () => {
     const request = direct({ questions: undefined });
     const active = selectActiveAskWizard([timelineAsk()], request, new Set());

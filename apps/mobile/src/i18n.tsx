@@ -162,6 +162,10 @@ export interface I18nDictionary {
   clearSearch: string;
   retry: string;
   loadingSessions: string;
+  loadingSessionDetail: string;
+  retrySessionDetail: string;
+  noSessionMessages: string;
+  noSessionMessagesDesc: string;
   noMatchingSessions: string;
   filterProjects: string;
   allProjects: string;
@@ -382,6 +386,10 @@ export const DICTIONARIES: Record<Language, I18nDictionary> = {
     clearSearch: "清除搜索",
     retry: "重试",
     loadingSessions: "加载会话列表中...",
+    loadingSessionDetail: "正在加载会话详情...",
+    retrySessionDetail: "会话详情加载失败，点击重试",
+    noSessionMessages: "暂无消息",
+    noSessionMessagesDesc: "发送第一条指令开始对话",
     noMatchingSessions: "没有匹配的会话",
     filterProjects: "按项目筛选",
     allProjects: "全部项目",
@@ -600,6 +608,10 @@ export const DICTIONARIES: Record<Language, I18nDictionary> = {
     clearSearch: "Clear search",
     retry: "Retry",
     loadingSessions: "Loading sessions...",
+    loadingSessionDetail: "Loading session...",
+    retrySessionDetail: "Session failed to load. Tap to retry",
+    noSessionMessages: "No messages",
+    noSessionMessagesDesc: "Send the first prompt to start",
     noMatchingSessions: "No matching sessions",
     filterProjects: "Filter by project",
     allProjects: "All projects",

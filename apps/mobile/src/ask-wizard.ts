@@ -66,23 +66,15 @@ export function selectActiveAskWizard(
     : undefined;
   const pairedIds = [directRequest?.id, pairedTimeline?.callId].filter((id): id is string => Boolean(id));
 
-  // A direct request is authoritative while it exists. Timeline IDs are only used
-  // to suppress the readerless projection after the direct request is removed;
-  // otherwise a failed direct response would be hidden permanently by a stale
-  // timeline dismissal.
   if (directRequest?.id && dismissedIds.has(directRequest.id)) return null;
-  if (!directRequest && pairedTimeline && dismissedIds.has(pairedTimeline.callId)) return null;
-  if (directRequest && directQuestions) {
-    return { questions: directQuestions, requestId: directRequest.id, dismissIds: [...new Set(pairedIds)] };
-  }
-  if (fromTimeline && !dismissedIds.has(fromTimeline.callId)) {
-    return {
-      questions: fromTimeline.questions,
-      ...(directRequest ? { requestId: directRequest.id } : {}),
-      dismissIds: [...new Set(pairedIds)],
-    };
-  }
-  return null;
+  if (!directRequest?.id) return null;
+  const questions = directQuestions ?? pairedTimeline?.questions;
+  if (!questions) return null;
+  return {
+    questions,
+    requestId: directRequest.id,
+    dismissIds: [...new Set([directRequest.id, ...(pairedTimeline?.callId ? [pairedTimeline.callId] : [])])],
+  };
 }
 
 export function buildAskWizardPayload(answers: AskAnswer[]): string {

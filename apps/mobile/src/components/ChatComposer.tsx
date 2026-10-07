@@ -43,13 +43,22 @@ interface Props {
   placeholder?: string;
   /** 是否禁用输入（例如桌面未打开对应窗口的历史会话） */
   disabled?: boolean;
+  /** Optional controlled text value from the owning session. */
+  text?: string;
+  /** Called whenever the text changes. */
+  onTextChange?: (text: string) => void;
 }
 
-export function ChatComposer({ actions, sending, isStreaming = false, onAbort, skills = [], placeholder, disabled = false }: Props) {
+export function ChatComposer({ actions, sending, isStreaming = false, onAbort, skills = [], placeholder, disabled = false, text: controlledText, onTextChange }: Props) {
   const { theme } = useTheme();
   const { t } = useI18n();
   const insets = useSafeAreaInsets();
-  const [text, setText] = useState("");
+  const [text, setText] = useState(controlledText ?? "");
+  const textValue = controlledText ?? text;
+  const updateText = (value: string) => {
+    if (controlledText === undefined) setText(value);
+    onTextChange?.(value);
+  };
   const [images, setImages] = useState<{ data: string; mime: string }[]>([]);
   const [showSkills, setShowSkills] = useState(false);
   const [skillsLoading, setSkillsLoading] = useState(false);
@@ -139,7 +148,7 @@ export function ChatComposer({ actions, sending, isStreaming = false, onAbort, s
     .map((skill) => (typeof skill === "string" ? { name: skill, description: undefined } : skill))
     .filter((skill) => typeof skill.name === "string" && skill.name.toLowerCase().includes(skillQuery.toLowerCase()));
 
-  const canSend = (text.trim().length > 0 || images.length > 0) && !sending;
+  const canSend = (textValue.trim().length > 0 || images.length > 0) && !sending;
 
   // 发送失败时恢复草稿；actions.send 在 session 侧已 catch 不一定 reject，这里防御性兜底
   const handleSend = async () => {
@@ -162,14 +171,14 @@ export function ChatComposer({ actions, sending, isStreaming = false, onAbort, s
       ]).start();
     }
 
-    const msg = text.trim();
+    const msg = textValue.trim();
     const imgs = [...images];
-    setText("");
+    if (controlledText === undefined) setText("");
     setImages([]);
     try {
       await actions.send(msg, imgs.length > 0 ? imgs : undefined);
     } catch {
-      setText(msg);
+      if (controlledText === undefined) setText(msg);
       setImages(imgs);
     }
   };
@@ -245,8 +254,8 @@ export function ChatComposer({ actions, sending, isStreaming = false, onAbort, s
         <View style={styles.inputWrap}>
           <TextInput
             style={[styles.input, { backgroundColor: theme.inputBg, color: disabled ? theme.muted : theme.text, borderColor: focused && !disabled ? theme.accent : theme.border }]}
-            value={text}
-            onChangeText={setText}
+            value={textValue}
+            onChangeText={updateText}
             placeholder={placeholder ?? "Message..."}
             placeholderTextColor={theme.dim}
             multiline
@@ -396,8 +405,8 @@ export function ChatComposer({ actions, sending, isStreaming = false, onAbort, s
           {/* 大输入框（自动聚焦） */}
           <TextInput
             style={[styles.fsInput, { backgroundColor: theme.inputBg, color: theme.text, borderColor: theme.border }]}
-            value={text}
-            onChangeText={setText}
+            value={textValue}
+            onChangeText={updateText}
             placeholder={placeholder ?? "Message..."}
             placeholderTextColor={theme.dim}
             multiline
