@@ -5,8 +5,8 @@
   "type": "module",
   "main": "expo-router/entry",
   "scripts": {
-    "typecheck": "tsc --noEmit",
-    "test": "vitest run",
+    "typecheck": "pnpm --filter @maestro-mobile/shared build && tsc --noEmit",
+    "test": "pnpm --filter @maestro-mobile/shared build && vitest run",
     "test:coverage": "vitest run --coverage",
     "dev": "expo start",
     "start": "expo start",

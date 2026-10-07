@@ -6,8 +6,11 @@
   "type": "module",
   "scripts": {
     "build": "pnpm -r build",
+    "prebuild": "pnpm --filter @maestro-mobile/mobile-sdk build",
     "typecheck": "pnpm -r typecheck",
+    "pretypecheck": "pnpm --filter @maestro-mobile/mobile-sdk build",
     "test": "pnpm -r test",
+    "pretest": "pnpm --filter @maestro-mobile/mobile-sdk build",
     "test:coverage": "pnpm -r test:coverage",
     "dev:host": "pnpm --filter maestro-mobile dev",
     "dev:app": "pnpm --filter @maestro-mobile/app dev",

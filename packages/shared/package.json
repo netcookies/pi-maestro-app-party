@@ -12,10 +12,10 @@
     }
   },
   "scripts": {
-    "build": "tsc",
-    "typecheck": "tsc --noEmit",
-    "test": "vitest run",
-    "test:coverage": "vitest run --coverage",
+    "build": "pnpm --filter @maestro-mobile/mobile-sdk build && tsc",
+    "typecheck": "pnpm --filter @maestro-mobile/mobile-sdk build && tsc --noEmit",
+    "test": "pnpm --filter @maestro-mobile/mobile-sdk build && vitest run",
+    "test:coverage": "pnpm --filter @maestro-mobile/mobile-sdk build && vitest run --coverage",
     "dev": "tsc --watch"
   },
   "dependencies": {

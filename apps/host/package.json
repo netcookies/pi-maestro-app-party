@@ -26,13 +26,13 @@
     "README.md"
   ],
   "scripts": {
-    "build": "bash build.sh",
-    "typecheck": "bash scripts/vendor-shared.sh && npx tsc --noEmit; rc=$?; bash scripts/cleanup-vendor.sh; exit $rc",
-    "test": "vitest run",
-    "test:coverage": "vitest run --coverage",
+    "build": "pnpm --filter @maestro-mobile/mobile-sdk build && bash build.sh",
+    "typecheck": "pnpm --filter @maestro-mobile/mobile-sdk build && bash scripts/vendor-shared.sh && npx tsc --noEmit; rc=$?; bash scripts/cleanup-vendor.sh; exit $rc",
+    "test": "pnpm --filter @maestro-mobile/mobile-sdk build && pnpm --filter @maestro-mobile/shared build && vitest run",
+    "test:coverage": "pnpm --filter @maestro-mobile/mobile-sdk build && pnpm --filter @maestro-mobile/shared build && vitest run --coverage",
     "dev": "tsx src/cli.ts",
     "start": "node dist/cli.js",
-    "prepublishOnly": "pnpm --filter @maestro-mobile/shared build && bash build.sh && vitest run"
+    "prepublishOnly": "pnpm --filter @maestro-mobile/mobile-sdk build && pnpm --filter @maestro-mobile/shared build && bash build.sh && vitest run"
   },
   "dependencies": {
     "qrcode-terminal": "^0.12.0",
