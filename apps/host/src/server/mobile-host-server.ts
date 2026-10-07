@@ -17,12 +17,23 @@ import type {
   ProtocolHello,
   JsonValue,
   MobileRolloutMode,
-  DesktopPluginTarget,
-} from "@maestro-mobile/shared";
+} from "@maestro-mobile/mobile-sdk/protocol";
+import type { DesktopPluginTarget } from "@maestro-mobile/shared";
 import type { HostController } from "../host-controller.js";
 import type { SessionTargetIdentity } from "../control/SessionDirectory.js";
 import type { CommandResult as ApplicationCommandResult } from "../application/session-command-service.js";
-import { validateClientCommand, validateProtocolHello, isCompatibleReleaseVersion, isReleaseVersion, isSessionTargetIdentity, isDesktopPluginTarget, MOBILE_RELEASE_VERSION, parseRolloutMode } from "@maestro-mobile/shared";
+import {
+  isCompatibleProtocolVersion,
+  isProtocolRevision,
+  isReleaseVersion,
+  MOBILE_PROTOCOL_MAJOR,
+  MOBILE_PROTOCOL_REVISION,
+  MOBILE_SDK_VERSION,
+  parseRolloutMode,
+  validateClientCommand,
+  validateProtocolHello,
+} from "@maestro-mobile/mobile-sdk/protocol";
+import { isSessionTargetIdentity, isDesktopPluginTarget } from "@maestro-mobile/shared";
 
 const HOST_PROTOCOL_CAPABILITIES: ProtocolCapability[] = [
   "session_control",
@@ -33,6 +44,9 @@ const HOST_PROTOCOL_CAPABILITIES: ProtocolCapability[] = [
   "execution_projection_read",
   "plan",
 ];
+
+/** Legacy clients predate protocolRevision and are bridged only for known releases. */
+const DEFAULT_LEGACY_RELEASE_VERSIONS = ["0.9.5"] as const;
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
@@ -73,10 +87,12 @@ export interface MobileHostServerOptions {
   slowGraceMs?: number;
   /** 心跳周期（ms）：每周期 ping，下周期仍无 pong 则 terminate。默认 30s；测试可注入小值 */
   heartbeatIntervalMs?: number;
-  /** Mobile Protocol v2 release rollout. Defaults to enabled for the current release. */
+  /** Mobile Protocol v2 rollout. Defaults to enabled. */
   rolloutMode?: MobileRolloutMode;
-  /** Expected Mobile/Host release version. Defaults to the shared package version. */
+  /** Host product version used for diagnostics and getReleaseContract(). */
   releaseVersion?: string;
+  /** Exact product releases accepted by the pre-SDK legacy bridge. */
+  legacyReleaseVersions?: readonly string[];
 }
 
 interface ClientSocket {
@@ -134,6 +150,7 @@ export class MobileHostServer {
   private readonly slowGraceMs: number;
   private readonly rolloutMode: MobileRolloutMode;
   private readonly releaseVersion: string;
+  private readonly legacyReleaseVersions: ReadonlySet<string>;
 
   constructor(
     private readonly controller: HostController,
@@ -144,7 +161,10 @@ export class MobileHostServer {
     this.hardLimitBytes = this.options.hardLimitBytes ?? MobileHostServer.HARD_LIMIT_BYTES;
     this.slowGraceMs = this.options.slowGraceMs ?? MobileHostServer.SLOW_GRACE_MS;
     this.rolloutMode = parseRolloutMode(this.options.rolloutMode ?? process.env.MAESTRO_MOBILE_ROLLOUT);
-    this.releaseVersion = this.options.releaseVersion ?? MOBILE_RELEASE_VERSION;
+    // Keep Mobile's product/version diagnostics owned by Host. The SDK version is
+    // independent metadata and must never become the product release gate.
+    this.releaseVersion = this.options.releaseVersion ?? this.controller.getStatus().version;
+    this.legacyReleaseVersions = new Set(this.options.legacyReleaseVersions ?? DEFAULT_LEGACY_RELEASE_VERSIONS);
     this.server = createServer((request, response) => {
       void this.handleHttp(request, response);
     });
@@ -279,26 +299,52 @@ export class MobileHostServer {
       type: "protocol_error",
       code,
       message,
-      supportedVersion: 2,
+      supportedVersion: MOBILE_PROTOCOL_MAJOR,
     }, "required", "protocol_error");
     setTimeout(() => this.closeClient(client, code), 0).unref?.();
   }
 
   private acceptProtocolHello(client: ClientSocket, hello: ProtocolHello): void {
-    const claimedRelease = hello.releaseVersion ?? (isReleaseVersion(hello.clientVersion) ? hello.clientVersion : undefined);
-    if (claimedRelease !== undefined && !isCompatibleReleaseVersion(claimedRelease, this.releaseVersion)) {
-      this.sendProtocolError(client, "release_version_unsupported", `Release ${claimedRelease} is incompatible with ${this.releaseVersion}`);
+    if (!isCompatibleProtocolVersion(hello.protocolVersion)) {
+      this.sendProtocolError(client, "protocol_version_unsupported", `Protocol major ${String(hello.protocolVersion)} is unsupported`);
       return;
     }
+
+    // protocolRevision marks the SDK-era handshake. It is an additive schema
+    // revision, not a product release: only a revision we understand is valid.
+    const isSdkPeer = hello.protocolRevision !== undefined;
+    if (isSdkPeer && !isProtocolRevision(hello.protocolRevision)) {
+      this.sendProtocolError(client, "protocol_version_unsupported", "Protocol revision is malformed");
+      return;
+    }
+    if (isSdkPeer && hello.protocolRevision !== MOBILE_PROTOCOL_REVISION) {
+      this.sendProtocolError(client, "protocol_version_unsupported", `Protocol revision ${hello.protocolRevision} is unsupported`);
+      return;
+    }
+
+    // Pre-SDK clients may optionally identify their product release. Keep the
+    // bridge allowlist explicit and exact; never use an arbitrary client claim
+    // as the release echoed by protocol_ready. A new SDK peer skips this gate.
+    let legacyRelease: string | undefined;
+    if (!isSdkPeer) {
+      const claimedRelease = hello.releaseVersion ?? (isReleaseVersion(hello.clientVersion) ? hello.clientVersion : undefined);
+      if (claimedRelease !== undefined && !this.legacyReleaseVersions.has(claimedRelease)) {
+        this.sendProtocolError(client, "release_version_unsupported", `Legacy release ${claimedRelease} is unsupported`);
+        return;
+      }
+      legacyRelease = claimedRelease;
+    }
+
     client.handshaken = true;
     client.capabilities = hello.capabilities;
     this.sendFrame(client, {
       type: "protocol_ready",
-      protocolVersion: 2,
+      protocolVersion: MOBILE_PROTOCOL_MAJOR,
+      ...(isSdkPeer ? { protocolRevision: MOBILE_PROTOCOL_REVISION, sdkVersion: MOBILE_SDK_VERSION } : {}),
       hostVersion: this.controller.getStatus().version,
       capabilities: this.rolloutMode === "disabled" ? [] : HOST_PROTOCOL_CAPABILITIES,
       revision: this.controller.directory.revision,
-      releaseVersion: this.releaseVersion,
+      ...(legacyRelease !== undefined ? { releaseVersion: legacyRelease } : {}),
       rolloutMode: this.rolloutMode,
     }, "required", "protocol_ready");
     this.sendFrame(client, { type: "host_status", status: "connected", seq: 0 }, "required", "host_status");
@@ -408,8 +454,8 @@ export class MobileHostServer {
     }
   }
 
-  getReleaseContract(): { releaseVersion: string; protocolVersion: 2; rolloutMode: MobileRolloutMode } {
-    return { releaseVersion: this.releaseVersion, protocolVersion: 2, rolloutMode: this.rolloutMode };
+  getReleaseContract(): { releaseVersion: string; protocolVersion: typeof MOBILE_PROTOCOL_MAJOR; rolloutMode: MobileRolloutMode } {
+    return { releaseVersion: this.releaseVersion, protocolVersion: MOBILE_PROTOCOL_MAJOR, rolloutMode: this.rolloutMode };
   }
 
   listen(port: number, hostname = "0.0.0.0"): Promise<void> {

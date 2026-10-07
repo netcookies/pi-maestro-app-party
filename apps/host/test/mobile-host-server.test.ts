@@ -7,6 +7,8 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { randomUUID } from "node:crypto";
 import WebSocket from "ws";
+import { createMobileClient, type WebSocketLike } from "@maestro-mobile/mobile-sdk";
+import { MOBILE_SDK_VERSION } from "@maestro-mobile/mobile-sdk/protocol";
 
 /** 版本断言必须跟 package.json 走：硬编码会在每次发版后失效（CI 构建即此失败）。 */
 const HOST_VERSION = (JSON.parse(await readFile(new URL("../package.json", import.meta.url), "utf8")) as { version: string }).version;
@@ -40,6 +42,41 @@ async function connectV2(url: string): Promise<WebSocket> {
   });
   return ws;
 }
+
+async function exchangeHello(url: string, hello: object): Promise<{ ws: WebSocket; frame: Record<string, unknown> }> {
+  const ws = new WebSocket(`${url}/ws`);
+  const frame = await new Promise<Record<string, unknown>>((resolve, reject) => {
+    const onMessage = (data: WebSocket.RawData) => {
+      const value = JSON.parse(data.toString()) as Record<string, unknown>;
+      if (value.type !== "protocol_ready" && value.type !== "protocol_error") return;
+      ws.off("message", onMessage);
+      resolve(value);
+    };
+    ws.on("message", onMessage);
+    ws.once("error", reject);
+    ws.once("open", () => ws.send(JSON.stringify(hello)));
+  });
+  return { ws, frame };
+}
+
+function createSdkSocket(url: string): WebSocketLike {
+  const socket = new WebSocket(url);
+  const adapter: WebSocketLike = {
+    get readyState() { return socket.readyState; },
+    send: (data) => socket.send(data),
+    close: () => socket.close(),
+    onopen: null,
+    onmessage: null,
+    onclose: null,
+    onerror: null,
+  };
+  socket.on("open", () => adapter.onopen?.());
+  socket.on("message", (data) => adapter.onmessage?.({ data: data.toString() }));
+  socket.on("close", () => adapter.onclose?.());
+  socket.on("error", () => adapter.onerror?.());
+  return adapter;
+}
+
 
 
 async function createTestServer(token?: string, options: ConstructorParameters<typeof MobileHostServer>[1] = {}) {
@@ -221,6 +258,82 @@ describe("MobileHostServer", () => {
       ws.once("open", () => ws.send(JSON.stringify(protocolHello())));
     });
     expect((first as { type: string }).type).toBe("protocol_ready");
+    ws.close();
+  });
+
+  it("accepts SDK handshakes with independent product and SDK versions and no required capability set", async () => {
+    const { ws, frame } = await exchangeHello(ctx.url, {
+      ...protocolHello(),
+      protocolRevision: 0,
+      sdkVersion: "99.7.3",
+      clientVersion: "88.6.4",
+      releaseVersion: "88.6.4",
+      capabilities: [],
+    });
+    expect(frame).toMatchObject({
+      type: "protocol_ready",
+      protocolVersion: 2,
+      protocolRevision: 0,
+      sdkVersion: MOBILE_SDK_VERSION,
+    });
+    // Product releases remain diagnostics for a new SDK peer; they are not echoed
+    // or compared by the protocol gate.
+    expect(frame).not.toHaveProperty("releaseVersion");
+    ws.close();
+  });
+
+  it("completes a real SDK-to-Host handshake and command round trip", async () => {
+    const client = createMobileClient({
+      url: ctx.url.replace(/^http:/, "ws:") + "/ws",
+      wsFactory: createSdkSocket,
+      clientVersion: "88.6.4",
+      sdkVersion: MOBILE_SDK_VERSION,
+      reconnectBaseMs: 60_000,
+    });
+    const connected = new Promise<void>((resolve) => {
+      const off = client.onConnectionState((state) => {
+        if (state === "connected") {
+          off();
+          resolve();
+        }
+      });
+    });
+    client.connect();
+    try {
+      await connected;
+      await expect(client.sendCommand({ type: "ping" })).resolves.toMatchObject({ pong: true });
+    } finally {
+      client.dispose();
+    }
+  });
+
+  it("accepts an allowlisted legacy release and echoes only that release", async () => {
+    const { ws, frame } = await exchangeHello(ctx.url, {
+      ...protocolHello(),
+      releaseVersion: "0.9.5",
+    });
+    expect(frame).toMatchObject({ type: "protocol_ready", releaseVersion: "0.9.5" });
+    expect(frame).not.toHaveProperty("protocolRevision");
+    expect(frame).not.toHaveProperty("sdkVersion");
+    ws.close();
+  });
+
+  it("rejects a legacy release outside the explicit bridge allowlist", async () => {
+    const { ws, frame } = await exchangeHello(ctx.url, {
+      ...protocolHello(),
+      releaseVersion: "0.9.6",
+    });
+    expect(frame).toMatchObject({ type: "protocol_error", code: "release_version_unsupported" });
+    ws.close();
+  });
+
+  it("rejects a malformed protocol revision", async () => {
+    const { ws, frame } = await exchangeHello(ctx.url, {
+      ...protocolHello(),
+      protocolRevision: -1,
+      sdkVersion: MOBILE_SDK_VERSION,
+    });
+    expect(frame).toMatchObject({ type: "protocol_error", code: "protocol_version_unsupported" });
     ws.close();
   });
 

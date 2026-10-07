@@ -1,6 +1,6 @@
 {
-  "name": "@maestro-mobile/shared",
-  "version": "0.9.6",
+  "name": "@maestro-mobile/mobile-sdk",
+  "version": "1.0.0",
   "private": true,
   "type": "module",
   "main": "./dist/index.js",
@@ -9,23 +9,23 @@
     ".": {
       "types": "./dist/index.d.ts",
       "default": "./dist/index.js"
+    },
+    "./protocol": {
+      "types": "./dist/protocol/index.d.ts",
+      "default": "./dist/protocol/index.js"
     }
   },
   "scripts": {
     "build": "tsc",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
-    "test:coverage": "vitest run --coverage",
-    "dev": "tsc --watch"
-  },
-  "dependencies": {
-    "@maestro-mobile/mobile-sdk": "workspace:*"
+    "test:coverage": "vitest run --coverage"
   },
   "devDependencies": {
     "typescript": "^5.8.0",
     "vitest": "^4.1.0"
   },
-  "description": "Maestro Mobile Shared — 协议与类型",
+  "description": "Maestro Mobile Host protocol contract and platform-agnostic SDK",
   "license": "MIT",
   "repository": {
     "type": "git",
