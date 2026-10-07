@@ -369,7 +369,7 @@ export class MobileClient {
     if (m.type === "protocol_ready") {
       if (!isCompatibleProtocolVersion(m.protocolVersion)
         || typeof m.hostVersion !== "string"
-        || (m.protocolRevision !== undefined && (typeof m.protocolRevision !== "number" || !Number.isInteger(m.protocolRevision) || m.protocolRevision < 0))
+        || (m.protocolRevision !== undefined && m.protocolRevision !== MOBILE_PROTOCOL_REVISION)
         || (m.sdkVersion !== undefined && typeof m.sdkVersion !== "string")
         || !Array.isArray(m.capabilities) || !m.capabilities.every((cap) => typeof cap === "string")
         || typeof m.revision !== "number" || !Number.isFinite(m.revision)) {

@@ -34,6 +34,22 @@ describe("MobileClient", () => {
     client.dispose();
   });
 
+  it("rejects an unsupported protocol revision", () => {
+    const socket = new FakeSocket();
+    const errors: string[] = [];
+    const client = createMobileClient({
+      url: "ws://host/ws",
+      wsFactory: () => socket,
+      onConnectionError: (message) => errors.push(message),
+    });
+    client.connect();
+    socket.open();
+    socket.receive({ type: "protocol_ready", protocolVersion: 2, protocolRevision: 1, hostVersion: "1.0.0", capabilities: [], revision: 1 });
+    expect(client.isProtocolReady).toBe(false);
+    expect(errors).toEqual(["invalid or incompatible protocol_ready frame"]);
+    client.dispose();
+  });
+
   it("correlates command results and settles in-flight commands on disconnect", async () => {
     const socket = new FakeSocket();
     const client = createMobileClient({ url: "ws://host/ws", wsFactory: () => socket, reconnectBaseMs: 60_000 });
