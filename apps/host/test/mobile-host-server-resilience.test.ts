@@ -397,17 +397,17 @@ describe("WS heartbeat miss tolerance", () => {
     await conn.opened;
     await conn.nextType("host_status");
 
-    const clients = (ctx.server as unknown as { clients: Set<{ heartbeatMisses: number }> }).clients;
+    const clients = (ctx.server as unknown as { clients: Set<{ heartbeatMisses: number; ws: WebSocket }> }).clients;
     const client = [...clients][0];
-    client.heartbeatMisses = 2; // 模拟已累积 2 次未应答 pong
-
-    // 客户端发送任意一条有效指令或帧
+    // 在同一次 message 派发内观测重置，避免等待响应时下一次 heartbeat tick 改写计数。
+    client.ws.prependOnceListener("message", () => { client.heartbeatMisses = 2; });
+    const reset = new Promise<number>((resolve) => {
+      client.ws.once("message", () => resolve(client.heartbeatMisses));
+    });
     const reply = conn.nextType("command_result");
     conn.ws.send(JSON.stringify({ id: "h1", type: "get_monitor_state" }));
+    expect(await reset).toBe(0);
     await reply;
-
-    // 收到 message 后，heartbeatMisses 必须被立即重置为 0
-    expect(client.heartbeatMisses).toBe(0);
     conn.ws.close();
   });
 });
