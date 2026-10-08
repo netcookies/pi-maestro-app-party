@@ -28,7 +28,7 @@ import {
   updateFilterState,
   type FilterState,
 } from "../../src/filter-state";
-import { canLoadMoreSessions, isCurrentSessionSummary, mergeHostSessionPage, patchHostSessionSummary, removeHostSessionSummary, sessionRoleRevision } from "../../src/host-session-pagination";
+import { canLoadMoreSessions, isCurrentSessionSummary, mergeHostSessionPage, patchHostSessionSummary, removeHostSessionSummary, sessionRoleRevision, shouldShowSessionListSkeleton } from "../../src/host-session-pagination";
 import { routeForOpenedSession, selectSessionTarget } from "../../src/session-navigation";
 
 
@@ -109,9 +109,8 @@ export default function HostSessionsScreen({ active = true }: { active?: boolean
     if (!active) return;
     if (!isConnected) {
       hydratedConnectionGenerationRef.current = null;
-      sessionsRef.current = [];
-      setSessions([]);
-      setLoading(true);
+      setLoading(sessionsRef.current.length === 0);
+      setRefreshing(false);
       return;
     }
     const current = filterStateRef.current;
@@ -134,15 +133,9 @@ export default function HostSessionsScreen({ active = true }: { active?: boolean
     firstPageInFlightRef.current = true;
     lastRequestedCursorRef.current = undefined;
     setLoadingMore(false);
-    sessionsRef.current = [];
-    setSessions([]);
     setError(null);
-    if (refresh || hadVisibleSessions) {
-      setRefreshing(refresh || hadVisibleSessions);
-      setLoading(true);
-    } else {
-      setLoading(true);
-    }
+    setLoading(!hadVisibleSessions);
+    setRefreshing(refresh || hadVisibleSessions);
     try {
       const list = await listHostSessions({
         limit: PAGE_SIZE,
@@ -303,7 +296,7 @@ export default function HostSessionsScreen({ active = true }: { active?: boolean
           <Text style={styles.errorText}>{error}</Text>
         </TouchableOpacity>
       ) : null}
-      {error && sessions.length === 0 ? <View style={styles.errorPanel}><Text style={styles.errorText}>{error}</Text><TouchableOpacity onPress={() => void loadFirstPage()}><Text style={[styles.retryText, { color: theme.accent }]}>{t.retry}</Text></TouchableOpacity></View> : !isConnected || loading ? <View style={styles.center}><ActivityIndicator color={theme.accent} /><Text style={styles.centerText}>{t.loadingSessions}</Text></View> : (
+      {error && sessions.length === 0 ? <View style={styles.errorPanel}><Text style={styles.errorText}>{error}</Text><TouchableOpacity onPress={() => void loadFirstPage()}><Text style={[styles.retryText, { color: theme.accent }]}>{t.retry}</Text></TouchableOpacity></View> : shouldShowSessionListSkeleton({ connected: isConnected, loading, sessionCount: sessions.length }) ? <View style={styles.center}><ActivityIndicator color={theme.accent} /><Text style={styles.centerText}>{t.loadingSessions}</Text></View> : (
         <FlatList
           data={rows}
           keyExtractor={(row) => row.key}

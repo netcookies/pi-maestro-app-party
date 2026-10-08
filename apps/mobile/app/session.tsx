@@ -31,6 +31,7 @@ import { selectExecutionSummaryForSession, executionTodoCounts } from "../src/se
 import { SpringBottomSheet } from "../src/components/SpringBottomSheet";
 import { buildTimelineRows, type TimelineRow } from "../src/timeline-rows";
 import { ToolCallGroup } from "../src/components/ToolCallGroup";
+import { isSessionDetailHydrated } from "../src/session-detail-state";
 
 // Android 需显式开启 LayoutAnimation（模块加载时一次性开启，置于组件外）
 if (Platform.OS === "android" && UIManager.setLayoutAnimationEnabledExperimental) {
@@ -253,6 +254,11 @@ export default function SessionScreen() {
   const timeline = selectedTargetKey
     ? (state.targetedTimelines.get(selectedTargetKey) ?? [])
     : [];
+  const detailHydrated = isSessionDetailHydrated({
+    targetKey: selectedTargetKey,
+    targetProjectionReady,
+    hasTimelineSnapshot: Boolean(selectedTargetKey && state.targetedTimelines.has(selectedTargetKey)),
+  });
 
   // 只有 exact target 已解析后才允许请求该 target 的历史；解析期间保持 loading，不能用旧 target 或 session 级 timeline 兜底。
   const shouldLoadHistory = Boolean(id && selectedTargetKey)
@@ -279,12 +285,10 @@ export default function SessionScreen() {
 
   const timelineRows = useMemo(() => buildTimelineRows(timeline), [timeline]);
   const interactionReady = isConnected
-    && targetProjectionReady
-    && Boolean(selectedTargetKey && state.targetedTimelines.has(selectedTargetKey))
-    && historyState === "loaded";
+    && detailHydrated;
   const renderedRows = useMemo<ListRow[]>(
-    () => interactionReady && historyState === "loaded" ? (hasMore ? [{ type: "load_more", id: LOAD_MORE_ID }, ...timelineRows] : timelineRows) : [],
-    [hasMore, historyState, interactionReady, timelineRows],
+    () => detailHydrated ? (hasMore ? [{ type: "load_more", id: LOAD_MORE_ID }, ...timelineRows] : timelineRows) : [],
+    [detailHydrated, hasMore, timelineRows],
   );
   const [dismissedAskIds, setDismissedAskIds] = useState<Set<string>>(new Set());
 
@@ -322,7 +326,7 @@ export default function SessionScreen() {
   // Prefer the authoritative extension-ui request when available. A readerless
   // Desktop session has no timeline row yet, while a live session may project the
   // same ask through both sources; the helper pairs both IDs to suppress duplicates.
-  const shouldShowDetailLoading = !interactionReady && historyState !== "error";
+  const shouldShowDetailLoading = !detailHydrated && historyState !== "error";
   const activeAskWizard = useMemo(() => interactionReady
     ? selectActiveAskWizard(timeline, directDialog?.request, dismissedAskIds)
     : null,

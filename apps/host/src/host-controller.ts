@@ -554,7 +554,16 @@ export class HostController {
   }
 
   pendingDesktopAskEvents(): HostEvent[] {
-    return [...this.pendingDesktopAsks.values()].map(({ event }) => event);
+    // A replay is a new wire projection, not the original event. Reusing the
+    // original seq lets the Mobile reducer discard the still-pending Ask as a
+    // stale target event after reconnect. Keep the Host-owned request object
+    // and its synthetic UI id untouched; only issue a fresh event envelope.
+    return [...this.pendingDesktopAsks.values()].map(({ event }) => this.eventLog.record({
+      type: "extension_ui_request",
+      sessionId: event.sessionId,
+      ...(event.target ? { target: event.target } : {}),
+      request: event.request,
+    }));
   }
   pendingDesktopPlanEvents(): HostEvent[] {
     return [...this.pendingDesktopPlans.values()]

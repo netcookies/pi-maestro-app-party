@@ -30,8 +30,8 @@ const PKG_FILES = [
 ];
 const APP_JSON_PATH = resolve(ROOT, "apps/mobile/app.json");
 const INFO_PLIST_PATH = resolve(ROOT, "apps/mobile/ios/MaestroMobile/Info.plist");
-/** release 契约版本常量：isCompatibleReleaseVersion 要求全等，漏同步会让 Host 拒绝新版手机端。 */
-const SHARED_RELEASE_PATH = resolve(ROOT, "packages/shared/src/release.ts");
+/** Product metadata mirrored into the SDK; protocol and SDK package versions remain independent. */
+const SDK_RELEASE_PATH = resolve(ROOT, "packages/mobile-sdk/src/release.ts");
 
 const args = process.argv.slice(2);
 const target = args[0];
@@ -108,22 +108,20 @@ if (readFileSync(APP_JSON_PATH, "utf8")) {
   console.log(`  ✓ 更新 apps/mobile/app.json`);
 }
 
-// 5. 更新 packages/shared/src/release.ts 的 MOBILE_RELEASE_VERSION 常量
-//    必须与 package.json 同步：Host 用它作为 release 契约版本，而 isCompatibleReleaseVersion
-//    是「全等」比较，漂移会让新版手机端握手被拒（release_version_unsupported）。
+// 5. 更新 canonical SDK 的 MOBILE_PRODUCT_VERSION。shared/release.ts 是 facade，
+//    不能再作为产品版本来源；SDK 包自身版本与产品版本保持独立。
 try {
-  const releaseSrc = readFileSync(SHARED_RELEASE_PATH, "utf8");
-  const pattern = /(export const MOBILE_RELEASE_VERSION = ")[^"]+(" as const;)/;
-  // 先判“能否匹配”再比结果：版本相同时替换结果与原串相等（幂等场景），
-  // 不能用 updated === releaseSrc 区分「未匹配」与「匹配但值未变」。
+  const releaseSrc = readFileSync(SDK_RELEASE_PATH, "utf8");
+  const pattern = /(export const MOBILE_PRODUCT_VERSION = ")[^"]+(" as const;)/;
   if (!pattern.test(releaseSrc)) {
-    console.warn(`  ! 未匹配 MOBILE_RELEASE_VERSION，请检查 packages/shared/src/release.ts`);
-  } else {
-    writeFileSync(SHARED_RELEASE_PATH, releaseSrc.replace(pattern, `$1${newVersion}$2`), "utf8");
-    console.log(`  ✓ 更新 packages/shared/src/release.ts (MOBILE_RELEASE_VERSION)`);
+    console.error("✗ 未匹配 MOBILE_PRODUCT_VERSION，请检查 packages/mobile-sdk/src/release.ts");
+    process.exit(1);
   }
+  writeFileSync(SDK_RELEASE_PATH, releaseSrc.replace(pattern, `$1${newVersion}$2`), "utf8");
+  console.log(`  ✓ 更新 packages/mobile-sdk/src/release.ts (MOBILE_PRODUCT_VERSION)`);
 } catch (err) {
-  console.warn(`  ! 更新 release.ts 警告: ${err.message}`);
+  console.error(`✗ 更新 SDK product version 失败: ${err.message}`);
+  process.exit(1);
 }
 
 // 6. 更新 apps/mobile/ios/MaestroMobile/Info.plist

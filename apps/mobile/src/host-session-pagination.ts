@@ -188,6 +188,14 @@ export function shouldBlockSessionListError(sessionCount: number): boolean {
   return sessionCount === 0;
 }
 
+export function shouldShowSessionListSkeleton(input: {
+  connected: boolean;
+  loading: boolean;
+  sessionCount: number;
+}): boolean {
+  return input.sessionCount === 0 && (!input.connected || input.loading);
+}
+
 export function isLoadMoreResponseCurrent(input: {
   expectedGeneration: number;
   currentGeneration: number;

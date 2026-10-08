@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { HostSessionList, HostSessionSummary, WorkspaceWindowProjection } from "@maestro-mobile/shared";
-import { canLoadMoreSessions, filterSessionsByVisibility, isLoadMoreResponseCurrent, isServerSessionPresentation, isTargetedResponseCurrent, mergeHostSessionPage, mergeSessionPresentation, mergeTargetedHostSessions, patchHostSessionSummary, removeHostSessionSummary, sessionRoleRevision, shouldBlockSessionListError, shouldRequestTargetedSummaries } from "../src/host-session-pagination";
+import { canLoadMoreSessions, filterSessionsByVisibility, isLoadMoreResponseCurrent, isServerSessionPresentation, isTargetedResponseCurrent, mergeHostSessionPage, mergeSessionPresentation, mergeTargetedHostSessions, patchHostSessionSummary, removeHostSessionSummary, sessionRoleRevision, shouldBlockSessionListError, shouldRequestTargetedSummaries, shouldShowSessionListSkeleton } from "../src/host-session-pagination";
 
 function session(id: string, title = id): HostSessionSummary {
   return {
@@ -226,6 +226,13 @@ describe("host session pagination", () => {
   it("only blocks list failures when no cached sessions remain", () => {
     expect(shouldBlockSessionListError(0)).toBe(true);
     expect(shouldBlockSessionListError(1)).toBe(false);
+  });
+
+  it("shows a skeleton only before the first visible session list rows", () => {
+    expect(shouldShowSessionListSkeleton({ connected: true, loading: true, sessionCount: 0 })).toBe(true);
+    expect(shouldShowSessionListSkeleton({ connected: true, loading: true, sessionCount: 1 })).toBe(false);
+    expect(shouldShowSessionListSkeleton({ connected: true, loading: false, sessionCount: 0 })).toBe(false);
+    expect(shouldShowSessionListSkeleton({ connected: false, loading: true, sessionCount: 1 })).toBe(false);
   });
 
   it("stops when hasMore has no usable next cursor", () => {

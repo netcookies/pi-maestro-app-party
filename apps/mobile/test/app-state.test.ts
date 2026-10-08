@@ -50,6 +50,41 @@ describe("AppState reducer", () => {
     expect(queue.count).toBe(0);
   });
 
+  it("hydrates a replayed Desktop Ask after reconnect reset with its exact target", () => {
+    const target = { sessionId: "ask-replay", endpointId: "desktop-a", normalizedCwd: "/work/app", processGeneration: "generation-a" };
+    const request = {
+      id: JSON.stringify([target.sessionId, target.endpointId, target.normalizedCwd, target.processGeneration, "raw-request-id"]),
+      sessionId: target.sessionId,
+      method: "editor" as const,
+      title: "Ask",
+      questions: [{ question: "Continue?" }],
+    };
+    const queue = new ExtensionUiQueue();
+    const deps = { dialogQueue: queue };
+    let state = reduceEvent(createInitialState(), {
+      type: "extension_ui_request",
+      sessionId: target.sessionId,
+      target,
+      request,
+      seq: 10,
+    }, deps);
+    expect(state.dialogs).toHaveLength(1);
+
+    state = reduceEvent(state, { type: "__connection_reset", connectionGeneration: 1 }, deps);
+    expect(queue.count).toBe(0);
+    expect(state.dialogs).toHaveLength(0);
+
+    state = reduceEvent(state, {
+      type: "extension_ui_request",
+      sessionId: target.sessionId,
+      target,
+      request,
+      seq: 11,
+    }, deps);
+    expect(state.dialogs).toHaveLength(1);
+    expect(state.dialogs[0]).toMatchObject({ request, target, status: "pending" });
+  });
+
   it("creates initial state", () => {
     const state = createInitialState();
     expect(state.connectionStatus).toBe("disconnected");

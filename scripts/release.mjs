@@ -132,7 +132,7 @@ const version = bumpVersion(prevVersion, bump);
 const date = new Date().toISOString().slice(0, 10);
 console.log(`✓ 版本 ${prevVersion} → ${version}`);
 
-run(`node scripts/bump-version.mjs ${version}`);
+if (run(`node scripts/bump-version.mjs ${version}`).status !== 0) die("版本同步失败, 终止发布");
 
 // 3. CHANGELOG
 const groups = collectChanges(prevVersion ? `v${prevVersion}` : "");

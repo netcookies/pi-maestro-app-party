@@ -1,7 +1,7 @@
 import { describe, expect, it, beforeEach, afterEach, vi } from "vitest";
 import { HostController } from "../src/host-controller.js";
 import { MaestroStateReader } from "../src/maestro-state.js";
-import type { DesktopPlanRequest, DesktopPlanResponse } from "@maestro-mobile/shared";
+import type { DesktopPlanRequest, DesktopPlanResponse, HostEvent } from "@maestro-mobile/shared";
 import type { DesktopPluginTransport } from "../src/plugin/desktop-plugin-registry.js";
 import { mkdir, rm, writeFile, appendFile, readFile } from "node:fs/promises";
 import { join } from "node:path";
@@ -134,6 +134,39 @@ describe("HostController", () => {
     await expect(controller.respondToExtensionUi(exact.sessionId, event.request.id, { id: event.request.id, selected: ["yes"] }, sibling)).resolves.toBe(false);
     await expect(controller.respondToExtensionUi(exact.sessionId, event.request.id, { id: event.request.id, selected: ["yes"] }, exact)).resolves.toBe(true);
     expect(answerAsk).toHaveBeenCalledTimes(1);
+  });
+
+  it("replays a pending Desktop Ask with a fresh wire sequence and the same Host-owned identity", async () => {
+    const exact = target("ask-replay", "endpoint-a", "generation-a");
+    const answerAsk = vi.fn(async (response: { requestId: string; toolCallId: string }) => ({
+      type: "desktop_ask_result" as const,
+      requestId: response.requestId,
+      toolCallId: response.toolCallId,
+      status: "accepted" as const,
+    }));
+    controller.desktopPlugins.register({ target: exact, capabilities: ["ask-user-question"], transport: { ...transport(), answerAsk } });
+    controller.registerDesktopTarget(exact);
+
+    controller.onDesktopAskRequest(exact, {
+      type: "desktop_ask_request",
+      requestId: "raw-request-id",
+      toolCallId: "raw-tool-call-id",
+      questions: [{ question: "Continue?" }],
+    });
+    const first = controller.pendingDesktopAskEvents()[0] as Extract<HostEvent, { type: "extension_ui_request" }>;
+    const replay = controller.pendingDesktopAskEvents()[0] as Extract<HostEvent, { type: "extension_ui_request" }>;
+
+    expect(replay.seq).toBeGreaterThan(first.seq);
+    expect(replay.target).toEqual(exact);
+    expect(replay.request).toEqual(first.request);
+    await expect(controller.respondToExtensionUi(exact.sessionId, replay.request.id, {
+      id: replay.request.id,
+      value: "answer",
+    }, exact)).resolves.toBe(true);
+    expect(answerAsk).toHaveBeenCalledWith(expect.objectContaining({
+      requestId: "raw-request-id",
+      toolCallId: "raw-tool-call-id",
+    }));
   });
 
   it("correlates Plan responses by exact target, request ID, and kind", async () => {
