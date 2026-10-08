@@ -559,7 +559,7 @@ describe("AppState reducer", () => {
   it("keeps app revision monotonic and rejects stale server presentation updates", () => {
     const presentation = (revision: number) => ({
       role: "session" as const, visibility: "session_list" as const,
-      control: { mode: "readonly" as const, canPrompt: false, canSteer: false, canFollowUp: false, canAbort: false, canAnswerAsk: false },
+      control: { mode: "readonly" as const, canPrompt: false, canSteer: false, canFollowUp: false, canAbort: false, canAnswerAsk: false, canPlan: false },
       revision,
     });
     let state = reduceEvent(createInitialState(), { type: "__revision", revision: 5 });

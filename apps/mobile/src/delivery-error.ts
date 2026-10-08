@@ -1,12 +1,6 @@
-/**
- * 投递失败的可读化映射。
- *
- * Host 侧 Desktop Plugin 用稳定的 `code` 表示「未投递」，并把具体原因放在 `message`
- * （见 desktop-pi-session-adapter.ts 的 delivery_failed）。移动端 HostClient 在命令失败时
- * 以 `message ?? code` 构造 Error，因此这里收到的是原因串。
- *
- * 未知原因一律回落到通用文案，不能吞掉失败（否则用户只看到消息没发出去）。
- */
+import { CommandFailedError } from "@maestro-mobile/mobile-sdk";
+
+/** 结构化 SDK 错误优先；旧版调用方的字符串错误保留兼容映射。 */
 export function describeSendFailure(raw: unknown): string {
   const message = typeof raw === "string" ? raw : raw instanceof Error ? raw.message : String(raw ?? "");
   const known: Record<string, string> = {
@@ -19,6 +13,10 @@ export function describeSendFailure(raw: unknown): string {
     desktop_confirmation_unavailable: "无法发送：与目标会话的连接已中断",
     host_command_failed: "无法发送：主机执行失败",
   };
+  if (raw instanceof CommandFailedError) {
+    return known[raw.details?.code ?? ""] ?? known[raw.message] ?? known[raw.code]
+      ?? (message.length > 0 ? `发送失败：${message}` : "发送失败：未知原因");
+  }
   if (known[message]) return known[message];
   // 兼容形如 "Error: delivery_failed" 或带前缀的错误串
   for (const [code, text] of Object.entries(known)) {

@@ -30,6 +30,7 @@ import {
   isSessionListHydrated,
   type PendingAskItem,
 } from "../../src/dashboard-logic";
+import { monitorWindowKey } from "../../src/monitor-data";
 import { sessionTargetKey, type SessionExecutionSummary, type SessionUsageSummary, type MonitorWindowSummary } from "@maestro-mobile/shared";
 
 /** 2x2 指标卡定义 */
@@ -123,12 +124,7 @@ export default function DashboardScreen({ active = true, onSelectTab }: { active
       for (const projection of state.workspaceWindowProjections.values()) {
         for (const window of projection.data.windows) {
           if (window.presentation?.visibility !== "monitor_tab") continue;
-          const key = sessionTargetKey({
-            sessionId: window.sessionId,
-            endpointId: window.endpointId,
-            normalizedCwd: window.cwd ?? "",
-            processGeneration: window.identity.ownerNonce || window.identity.ownerId,
-          });
+          const key = window.target ? sessionTargetKey(window.target) : monitorWindowKey(window);
           windows.set(key, window);
         }
       }

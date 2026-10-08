@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { CommandFailedError } from "@maestro-mobile/mobile-sdk";
 import { describeSendFailure } from "../src/delivery-error.js";
 
 describe("describeSendFailure", () => {
@@ -18,6 +19,12 @@ describe("describeSendFailure", () => {
 
   it("matches a code embedded in a longer error string", () => {
     expect(describeSendFailure(new Error("Error: delivery_failed"))).toContain("未投递");
+  });
+
+  it("uses the structured code instead of guessing from free-form text", () => {
+    const error = new CommandFailedError({ type: "command_result", in_reply_to: "cmd", ok: false,
+      status: "failed", revision: 1, error: { code: "target_unavailable", message: "delivery_failed appears in an unrelated explanation" } });
+    expect(describeSendFailure(error)).toContain("不可用");
   });
 
   it("never swallows an unknown failure", () => {

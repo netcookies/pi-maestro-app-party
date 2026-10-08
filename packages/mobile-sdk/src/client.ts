@@ -6,6 +6,7 @@
  */
 import type {
   ClientCommand,
+  CommandResult,
   ExecutionProjection,
   ExtensionUiResponse,
   HostEvent,
@@ -16,6 +17,8 @@ import type {
 import type { DesktopPlanResponse } from "./mobile-plan-protocol.js";
 import {
   isCompatibleProtocolVersion,
+  isHostFrame,
+  isHostEvent,
   MOBILE_PRODUCT_VERSION,
   MOBILE_PROTOCOL_MAJOR,
   MOBILE_PROTOCOL_REVISION,
@@ -84,6 +87,24 @@ export class ProtocolNotReadyError extends Error {
   constructor() {
     super("Protocol v2 handshake is not ready");
     this.name = "ProtocolNotReadyError";
+  }
+}
+
+export class CommandFailedError extends Error {
+  readonly code: string;
+  readonly status: CommandResult["status"];
+  readonly details: NonNullable<CommandResult["error"]>["details"];
+  readonly revision: number;
+  readonly requestId: string;
+
+  constructor(result: CommandResult) {
+    super(result.error?.message ?? result.error?.code ?? "Command failed");
+    this.name = "CommandFailedError";
+    this.code = result.error?.code ?? "command_failed";
+    this.status = result.status;
+    this.details = result.error?.details;
+    this.revision = result.revision;
+    this.requestId = result.in_reply_to;
   }
 }
 
@@ -368,12 +389,9 @@ export class MobileClient {
     if (!message || typeof message !== "object") return;
     const m = message as Record<string, unknown>;
     if (m.type === "protocol_ready") {
-      if (!isCompatibleProtocolVersion(m.protocolVersion)
-        || typeof m.hostVersion !== "string"
-        || (m.protocolRevision !== undefined && m.protocolRevision !== MOBILE_PROTOCOL_REVISION)
-        || (m.sdkVersion !== undefined && typeof m.sdkVersion !== "string")
-        || !Array.isArray(m.capabilities) || !m.capabilities.every((cap) => typeof cap === "string")
-        || typeof m.revision !== "number" || !Number.isFinite(m.revision)) {
+      if (!isHostFrame(message) || message.type !== "protocol_ready"
+        || !isCompatibleProtocolVersion(message.protocolVersion)
+        || (message.protocolRevision !== undefined && message.protocolRevision !== MOBILE_PROTOCOL_REVISION)) {
         this.emitError("invalid or incompatible protocol_ready frame");
         return;
       }
@@ -381,7 +399,7 @@ export class MobileClient {
       this.connectedAt = Date.now();
       this.startPing();
       this.setState("connected");
-      this.emitRevision(m.revision);
+      this.emitRevision(message.revision);
       if (this.resetTimer) clearTimeout(this.resetTimer);
       this.resetTimer = setTimeout(() => {
         if (generation === this.socketGeneration && this.ws && Date.now() - this.connectedAt >= 30_000) this.reconnectAttempt = 0;
@@ -389,6 +407,7 @@ export class MobileClient {
       return;
     }
     if (m.type === "protocol_error") {
+      if (!isHostFrame(message)) return;
       this.protocolReady = false;
       this.stopPing();
       this.setState("disconnected");
@@ -399,6 +418,7 @@ export class MobileClient {
       return;
     }
     if (m.type === "command_result") {
+      if (!isHostFrame(message)) return;
       if (typeof m.revision === "number" && Number.isFinite(m.revision)) this.emitRevision(m.revision);
       this.resolveCommand(m);
       return;
@@ -407,7 +427,7 @@ export class MobileClient {
       this.resolveCommand(m, m.snapshot);
       return;
     }
-    if (typeof m.type === "string" && typeof m.seq === "number") this.emitEvent(message as HostEvent);
+    if (isHostEvent(message)) this.emitEvent(message);
   }
 
   private resolveCommand(message: Record<string, unknown>, value?: unknown): void {
@@ -417,8 +437,10 @@ export class MobileClient {
     this.pendingCommands.delete(inReplyTo);
     if (message.ok === true) pending.resolve(value ?? message.result ?? null);
     else {
-      const err = message.error as { code?: string; message?: string } | undefined;
-      pending.reject(new Error(err?.message ?? err?.code ?? "Command failed"));
+      const frame: unknown = message;
+      pending.reject(isHostFrame(frame) && frame.type === "command_result"
+        ? new CommandFailedError(frame)
+        : new Error("Command failed"));
     }
   }
 

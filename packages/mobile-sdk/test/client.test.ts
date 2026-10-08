@@ -1,9 +1,12 @@
 import { describe, expect, it } from "vitest";
 import {
   CommandConnectionLostError,
+  CommandFailedError,
   createMobileClient,
   type WebSocketLike,
 } from "../src/client.js";
+
+import { isSessionPresentation } from "../src/protocol/index.js";
 
 class FakeSocket implements WebSocketLike {
   readyState = 0;
@@ -18,6 +21,18 @@ class FakeSocket implements WebSocketLike {
   open(): void { this.readyState = 1; this.onopen?.(); }
   receive(value: unknown): void { this.onmessage?.({ data: JSON.stringify(value) }); }
 }
+
+describe("SessionPresentation contract", () => {
+  const presentation = { role: "session", visibility: "session_list", revision: 1,
+    control: { mode: "readonly", canPrompt: false, canSteer: false, canFollowUp: false,
+      canAbort: false, canAnswerAsk: false, canPlan: false } };
+  it("accepts canonical control and rejects obsolete modes or incomplete fields", () => {
+    expect(isSessionPresentation(presentation)).toBe(true);
+    expect(isSessionPresentation({ ...presentation, revision: -1 })).toBe(false);
+    expect(isSessionPresentation({ ...presentation, control: { ...presentation.control, mode: "host" } })).toBe(false);
+    expect(isSessionPresentation({ ...presentation, control: { ...presentation.control, canPlan: undefined } })).toBe(false);
+  });
+});
 
 describe("MobileClient", () => {
   it("negotiates protocol independently of product and SDK versions", () => {
@@ -65,6 +80,42 @@ describe("MobileClient", () => {
     const pending = client.sendCommand({ type: "ping" });
     socket.close();
     await expect(pending).rejects.toBeInstanceOf(CommandConnectionLostError);
+    client.dispose();
+  });
+
+  it("ignores malformed event and result frames without consuming a pending request", async () => {
+    const socket = new FakeSocket();
+    const events: unknown[] = [];
+    const client = createMobileClient({ url: "ws://host/ws", wsFactory: () => socket, onEvent: (event) => events.push(event) });
+    client.connect();
+    socket.open();
+    socket.receive({ type: "protocol_ready", protocolVersion: 2, hostVersion: "1.0.0", capabilities: [], revision: 1 });
+    socket.receive({ type: "extension_ui_request", seq: 1 });
+    socket.receive({ type: "session_error", sessionId: "s", error: {}, seq: 2 });
+    socket.receive({ type: "unknown_event", seq: 3 });
+    expect(events).toEqual([]);
+
+    const command = client.sendCommand({ type: "ping" });
+    const { id } = JSON.parse(socket.sent[1]) as { id: string };
+    socket.receive({ type: "command_result", in_reply_to: id, ok: true });
+    socket.receive({ type: "command_result", in_reply_to: id, ok: true, status: "observed", revision: 2, result: "valid" });
+    await expect(command).resolves.toBe("valid");
+    client.dispose();
+  });
+
+  it("preserves structured command errors for consumers", async () => {
+    const socket = new FakeSocket();
+    const client = createMobileClient({ url: "ws://host/ws", wsFactory: () => socket });
+    client.connect();
+    socket.open();
+    socket.receive({ type: "protocol_ready", protocolVersion: 2, hostVersion: "1.0.0", capabilities: [], revision: 1 });
+    const command = client.sendCommand({ type: "ping" });
+    const { id } = JSON.parse(socket.sent[1]) as { id: string };
+    const details = { code: "provider_unavailable", message: "offline", source: "provider", httpStatus: 503 };
+    socket.receive({ type: "command_result", in_reply_to: id, ok: false, status: "failed", revision: 2,
+      error: { code: "delivery_failed", message: "missing_model_auth", details } });
+    await expect(command).rejects.toBeInstanceOf(CommandFailedError);
+    await expect(command).rejects.toMatchObject({ code: "delivery_failed", message: "missing_model_auth", status: "failed", revision: 2, requestId: id, details });
     client.dispose();
   });
 

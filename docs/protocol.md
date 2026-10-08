@@ -1,13 +1,29 @@
 # 协议
 
-WebSocket 消息契约（`packages/shared/src/protocol.ts` 为唯一权威源，本文是人读摘要）。Host 负责移动端 transport、只读会话/历史读取与状态 projection；Host 从不创建、附着或控制 Pi `AgentSession`。
+WebSocket 消息契约（`packages/mobile-sdk/src/protocol.ts` 为唯一权威源，通过 `@maestro-mobile/mobile-sdk/protocol` 导出；`packages/shared/src/protocol.ts` 仅保留兼容转发，本文是人读摘要）。Host 负责移动端 transport、只读会话/历史读取与状态 projection；Host 从不创建、附着或控制 Pi `AgentSession`。
 跨进程插件契约见 [Desktop Plugin 协议](#desktop-plugin-协议)（`packages/shared/src/desktop-plugin-protocol.ts`）。
 
-版本常量：`MOBILE_PROTOCOL_VERSION = 2`、`MOBILE_RELEASE_VERSION = 0.4.0`、`DESKTOP_PLUGIN_PROTOCOL_VERSION = 2`、`DESKTOP_BROKER_PROTOCOL_VERSION = 1`。
+版本常量：`MOBILE_PROTOCOL_MAJOR = 2`、`MOBILE_PROTOCOL_REVISION = 0`、`MOBILE_SDK_VERSION = 1.0.0`、`DESKTOP_PLUGIN_PROTOCOL_VERSION = 2`、`DESKTOP_BROKER_PROTOCOL_VERSION = 1`。产品版本以 `packages/mobile-sdk/src/release.ts` 的 `MOBILE_PRODUCT_VERSION` 为准，仅用于诊断与 legacy bridge，不要求 Host 与 App 产品版本相等。
 
 Desktop Plugin v1 不再兼容：旧 TUI 必须 reload/restart 后使用 v2；Host 不提供 direct Plugin socket 或替代控制路径。Broker 是 Plugin live registry 的唯一 owner，Desktop Plugin/Broker 是唯一 live control path，Host 只消费认证的 projection。
 
-版本只在 **breaking wire change**（破坏性线协议变更）时递增。可选字段和新事件若能通过 capability/`supportedEvents` 协商且旧端可以安全忽略，则保持当前协议版本。`runtime_status` 属于 v2 内的协商式增量；`0.4.0` 是产品 release version，不是协议版本。
+版本只在 **breaking wire change**（破坏性线协议变更）时递增。可选字段和新事件若能通过 capability/`supportedEvents` 协商且旧端可以安全忽略，则保持当前协议版本。`runtime_status` 属于 v2 内的协商式增量；产品 release version 与 SDK version 均不是协议兼容门禁。
+
+## 代码职责边界
+
+变更前先追踪生产者、协议、SDK 和消费者，确定唯一 owner，再修改所属层。
+
+| 层 | 职责 | 约束 |
+|---|---|---|
+| Mobile 协议 | wire 类型、校验、错误码、exact target、版本与 capability 语义 | 唯一实现位于 `mobile-sdk/protocol`，不依赖 Host 或 App |
+| Mobile SDK | 平台无关 transport、握手、重连、deadline、请求关联与通用数据流恢复 | 不依赖 React、Expo、AsyncStorage 或 Node 专有实现；保留结构化错误 |
+| Host | 服务端认证、限流、权威 projection、只读历史与 Broker gateway | 保留服务端安全门禁，不补造客户端身份或控制权 |
+| App | 平台适配、UI、i18n、本地偏好/草稿/诊断与视图派生 | 消费协议校验与 SDK，不自写握手、重连或 wire schema |
+| Desktop Plugin/Broker | Desktop 契约与 live authority | 契约仍位于 `packages/shared`，保持 exact target 与单一控制路径 |
+
+通用契约缺失先补协议，可复用客户端语义放 SDK；展示问题留在 App。兼容 facade 可保留，禁止另建类型或校验器副本。测试在责任层验证，并覆盖直接受影响的消费者。
+
+当前迁移债务：App 的 snapshot/live 衔接、wire watermark 与恢复代际尚未全部迁入 SDK，迁移时须保留页面加载取消和 React 投影语义。
 
 ## 会话状态模型
 
@@ -51,7 +67,7 @@ Current 不代表控制权限。`sleeping + readonly` 仍不可操作；Mobile �
 4. Desktop Plugin 断线并注销后，历史索引才投影为 `history`。
 5. `sleeping` 来自断开的 workspace telemetry，只能搭配 `readonly` 投影；可以进入 Current 观察，但不能进入控制授权。
 
-这些规则的机器权威位于 `packages/shared/src/protocol.ts`；Host 负责生成一致的 projection，Mobile 只消费组合，不重新推断身份或控制权。
+这些规则的机器权威位于 `packages/mobile-sdk/src/protocol.ts`；Host 负责生成一致的 projection，Mobile 只消费组合，不重新推断身份或控制权。
 
 ## 会话归属与 exact target
 

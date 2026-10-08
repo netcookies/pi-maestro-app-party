@@ -33,7 +33,7 @@ import type {
 import { ExtensionUiQueue, type DialogEntry } from "./extension-ui-queue";
 import { PlanQueue, type PlanEntry } from "./plan-queue";
 import { parseHostStatusMeta, type HostStatusMeta } from "./host-status";
-import { sessionTargetKey, isSessionTargetIdentity } from "@maestro-mobile/shared";
+import { sessionTargetKey, isSessionTargetIdentity, isSessionPresentation } from "@maestro-mobile/mobile-sdk/protocol";
 
 export const MAX_SESSION_SUMMARY_PATCHES = 256;
 
@@ -252,21 +252,6 @@ export type AppAction =
 
 function revisionOf(value: unknown): number | undefined {
   return typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : undefined;
-}
-
-function isSessionPresentation(value: unknown): value is SessionPresentation {
-  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
-  const p = value as Record<string, unknown>;
-  const control = p.control;
-  if (!control || typeof control !== "object" || Array.isArray(control)) return false;
-  const c = control as Record<string, unknown>;
-  return (p.role === "session" || p.role === "monitor")
-    && (p.visibility === "session_list" || p.visibility === "monitor_tab" || p.visibility === "hidden")
-    && revisionOf(p.revision) !== undefined
-    && (c.mode === "host" || c.mode === "desktop_plugin" || c.mode === "readonly")
-    && typeof c.canPrompt === "boolean" && typeof c.canSteer === "boolean"
-    && typeof c.canFollowUp === "boolean" && typeof c.canAbort === "boolean"
-    && typeof c.canAnswerAsk === "boolean";
 }
 
 function withRevision(state: AppState, revision: number | undefined): AppState {

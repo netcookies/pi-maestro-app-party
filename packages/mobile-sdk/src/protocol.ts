@@ -749,6 +749,19 @@ export class ProtocolError extends Error {
   }
 }
 
+export function isSessionPresentation(value: unknown): value is SessionPresentation {
+  if (!isRecord(value) || !isRecord(value.control)) return false;
+  const control = value.control;
+  return (value.role === "session" || value.role === "monitor")
+    && (value.visibility === "session_list" || value.visibility === "monitor_tab" || value.visibility === "hidden")
+    && isNonNegativeInteger(value.revision)
+    && (control.mode === "desktop_plugin" || control.mode === "readonly")
+    && typeof control.canPrompt === "boolean" && typeof control.canSteer === "boolean"
+    && typeof control.canFollowUp === "boolean" && typeof control.canAbort === "boolean"
+    && typeof control.canAnswerAsk === "boolean" && typeof control.canPlan === "boolean"
+    && (value.monitorWindowCount === undefined || isNonNegativeInteger(value.monitorWindowCount));
+}
+
 export function isHostEvent(value: unknown): value is HostEvent {
   if (!isRecord(value) || !isFiniteNumber(value.seq) || typeof value.type !== "string") return false;
   switch (value.type) {

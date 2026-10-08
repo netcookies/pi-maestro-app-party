@@ -16,7 +16,7 @@ function page(sessions: HostSessionSummary[], extra: Partial<HostSessionList> = 
 describe("host session pagination", () => {
   it("accepts and scopes only server-provided session presentations", () => {
     const visible = session("visible");
-    visible.presentation = { role: "session", visibility: "session_list", control: { mode: "readonly", canPrompt: false, canSteer: false, canFollowUp: false, canAbort: false, canAnswerAsk: false }, revision: 3 };
+    visible.presentation = { role: "session", visibility: "session_list", control: { mode: "readonly", canPrompt: false, canSteer: false, canFollowUp: false, canAbort: false, canAnswerAsk: false, canPlan: false }, revision: 3 };
     const monitor = session("monitor");
     monitor.presentation = { ...visible.presentation, role: "monitor", visibility: "monitor_tab" };
     expect(isServerSessionPresentation(visible.presentation)).toBe(true);
@@ -50,7 +50,7 @@ describe("host session pagination", () => {
           presentation: {
             role,
             visibility: role === "monitor" ? "monitor_tab" : "session_list",
-            control: { mode: "readonly", canPrompt: false, canSteer: false, canFollowUp: false, canAbort: false, canAnswerAsk: false },
+            control: { mode: "readonly", canPrompt: false, canSteer: false, canFollowUp: false, canAbort: false, canAnswerAsk: false, canPlan: false },
             revision: 1,
           },
         }],
@@ -66,7 +66,7 @@ describe("host session pagination", () => {
   it("switches the same sessionId between tabs without collapsing exact-target siblings", () => {
     const sessionTarget = { sessionId: "shared-session", endpointId: "endpoint-a", normalizedCwd: "/project", processGeneration: "generation-a" };
     const monitorTarget = { sessionId: "shared-session", endpointId: "endpoint-b", normalizedCwd: "/project", processGeneration: "generation-b" };
-    const basePresentation = { control: { mode: "readonly" as const, canPrompt: false, canSteer: false, canFollowUp: false, canAbort: false, canAnswerAsk: false }, revision: 1 };
+    const basePresentation = { control: { mode: "readonly" as const, canPrompt: false, canSteer: false, canFollowUp: false, canAbort: false, canAnswerAsk: false, canPlan: false }, revision: 1 };
     const sessionRow = { ...session("shared-session", "session"), endpointId: sessionTarget.endpointId, target: sessionTarget, targetKey: JSON.stringify([sessionTarget.sessionId, sessionTarget.endpointId, sessionTarget.normalizedCwd, sessionTarget.processGeneration]), presentation: { ...basePresentation, role: "session" as const, visibility: "session_list" as const } };
     const monitorRow = { ...session("shared-session", "monitor"), endpointId: monitorTarget.endpointId, target: monitorTarget, targetKey: JSON.stringify([monitorTarget.sessionId, monitorTarget.endpointId, monitorTarget.normalizedCwd, monitorTarget.processGeneration]), presentation: { ...basePresentation, role: "monitor" as const, visibility: "monitor_tab" as const } };
 
@@ -96,7 +96,7 @@ describe("host session pagination", () => {
 
   it("keeps the newest server presentation when responses race", () => {
     const current = session("s");
-    current.presentation = { role: "session", visibility: "session_list", control: { mode: "readonly", canPrompt: false, canSteer: false, canFollowUp: false, canAbort: false, canAnswerAsk: false }, revision: 4 };
+    current.presentation = { role: "session", visibility: "session_list", control: { mode: "readonly", canPrompt: false, canSteer: false, canFollowUp: false, canAbort: false, canAnswerAsk: false, canPlan: false }, revision: 4 };
     const stale = { ...current, title: "stale", presentation: { ...current.presentation, revision: 3 } };
     expect(mergeSessionPresentation(current, stale)).toBe(current);
   });

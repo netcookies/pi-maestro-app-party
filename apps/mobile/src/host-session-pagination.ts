@@ -8,20 +8,8 @@ export function sessionRoleRevision(projections: Iterable<WorkspaceWindowProject
       .map((window) => [window.sessionId, window.endpointId, window.presentation?.role, window.presentation?.revision]),
   );
 }
-export function isServerSessionPresentation(value: unknown): value is SessionPresentation {
-  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
-  const p = value as Record<string, unknown>;
-  const c = p.control;
-  if (!c || typeof c !== "object" || Array.isArray(c)) return false;
-  const control = c as Record<string, unknown>;
-  return (p.role === "session" || p.role === "monitor")
-    && (p.visibility === "session_list" || p.visibility === "monitor_tab" || p.visibility === "hidden")
-    && typeof p.revision === "number" && Number.isFinite(p.revision)
-    && (control.mode === "host" || control.mode === "desktop_plugin" || control.mode === "readonly")
-    && typeof control.canPrompt === "boolean" && typeof control.canSteer === "boolean"
-    && typeof control.canFollowUp === "boolean" && typeof control.canAbort === "boolean"
-    && typeof control.canAnswerAsk === "boolean";
-}
+import { isSessionPresentation as isServerSessionPresentation } from "@maestro-mobile/mobile-sdk/protocol";
+export { isServerSessionPresentation };
 
 export function filterSessionsByVisibility(
   sessions: readonly HostSessionSummary[],
