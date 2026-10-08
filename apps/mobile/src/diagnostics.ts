@@ -84,6 +84,7 @@ function persistSoon(): void {
   pendingPersist = true;
   if (persistPromise) return;
   persistPromise = Promise.resolve().then(async () => {
+    await loadDiagnostics();
     while (pendingPersist) {
       pendingPersist = false;
       await AsyncStorage.setItem(DIAGNOSTICS_STORAGE_KEY, JSON.stringify(buffer.snapshot())).catch(() => {});
@@ -131,14 +132,10 @@ export async function loadDiagnostics(): Promise<void> {
   if (!hydrationPromise) {
     const generationAtStart = hydrationGeneration;
     hydrationPromise = AsyncStorage.getItem(DIAGNOSTICS_STORAGE_KEY).then((raw) => {
-      if (!raw) {
-        return;
-      }
+      if (!raw || generationAtStart !== hydrationGeneration) return;
       try {
         const parsed: unknown = JSON.parse(raw);
-        if (!Array.isArray(parsed)) {
-          return;
-        }
+        if (!Array.isArray(parsed)) return;
         const persisted = parsed.filter((item): item is DiagnosticEntry => {
           if (!item || typeof item !== "object") return false;
           const value = item as Partial<DiagnosticEntry>;
@@ -146,17 +143,13 @@ export async function loadDiagnostics(): Promise<void> {
             && (value.kind === "connection_error" || value.kind === "notification" || value.kind === "ask" || value.kind === "plan" || value.kind === "local")
             && typeof value.source === "string" && typeof value.message === "string";
         });
-        if (generationAtStart === hydrationGeneration) {
-          const merged = [...buffer.snapshot(), ...persisted]
-            .sort((a, b) => (Date.parse(b.timestamp) || 0) - (Date.parse(a.timestamp) || 0));
-          buffer.replace(merged);
-          publish();
-          persistSoon();
-        }
+        buffer.replace([...buffer.snapshot(), ...persisted]);
+        publish();
       } catch {
         /* malformed persisted diagnostics are discarded */
       }
     }).catch(() => {
+      // 诊断读取失败时仍允许记录本次运行事件。
     }).then(() => undefined);
   }
   await hydrationPromise;
