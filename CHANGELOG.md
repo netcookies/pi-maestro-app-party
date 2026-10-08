@@ -2,6 +2,23 @@
 
 本文件记录 Maestro Mobile 的显著变更。格式基于 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)。
 
+## [0.10.0] — 2026-10-08
+
+### 测试
+
+- align client fixtures with protocol receipts
+- observe heartbeat reset within message dispatch
+
+### 修复
+
+- preserve diagnostics across hydration and clear
+- enforce protocol boundaries and preserve command errors
+- increase Gradle release build memory
+
+### 新增
+
+- add diagnostics and connection UX
+
 ## [0.9.7] — 2026-10-08
 
 ### 修复
