@@ -2,6 +2,22 @@
 
 本文件记录 Maestro Mobile 的显著变更。格式基于 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)。
 
+## [0.9.7] — 2026-10-08
+
+### 修复
+
+- stabilize reconnect and session hydration
+- bootstrap SDK workspace artifacts
+- reject unsupported protocol revisions
+
+### 其他
+
+- 清理旧版发布产物
+
+### 新增
+
+- 抽取独立 Mobile protocol SDK
+
 ## [0.9.6] — 2026-10-07
 
 ### 修复

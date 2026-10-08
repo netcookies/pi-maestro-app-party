@@ -7,7 +7,7 @@ export type MobileProtocolVersion = typeof MOBILE_PROTOCOL_VERSION;
 /** Independent client runtime package version. It is diagnostic metadata, not a handshake gate. */
 export const MOBILE_SDK_VERSION = "1.0.0" as const;
 /** Product/app version used for diagnostics and legacy release bridging only. */
-export const MOBILE_PRODUCT_VERSION = "0.9.6" as const;
+export const MOBILE_PRODUCT_VERSION = "0.9.7" as const;
 /** @deprecated Use MOBILE_PRODUCT_VERSION for product metadata. */
 export const MOBILE_RELEASE_VERSION = MOBILE_PRODUCT_VERSION;
 
