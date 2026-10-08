@@ -8,6 +8,7 @@ import {
   isSameLocalDay,
   deriveDashboardMetrics,
   getWindowContextPressure,
+  isSessionListHydrated,
 } from "../src/dashboard-logic.js";
 import type { MonitorWindowSummary, MaestroState, MaestroScheduleSummary, SessionState, SessionUsageSummary } from "@maestro-mobile/shared";
 
@@ -39,6 +40,12 @@ function makeSchedule(overrides: Partial<MaestroScheduleSummary> = {}): MaestroS
   };
 }
 
+describe("isSessionListHydrated", () => {
+  it("requires a host session list snapshot", () => {
+    expect(isSessionListHydrated(null)).toBe(false);
+    expect(isSessionListHydrated({ sessions: [], hasMore: false, total: 0 })).toBe(true);
+  });
+});
 describe("windowKey", () => {
   it("composes workspace and owner id", () => {
     expect(windowKey(makeWindow())).toBe("ws1-o1");

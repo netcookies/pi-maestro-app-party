@@ -548,6 +548,19 @@ export default function SettingsScreen() {
               {isConnected ? t.hostReady : t.notConnected}
             </Text>
           </View>
+          <View style={[styles.prefDivider, { backgroundColor: theme.dividerLine ?? theme.border }]} />
+          <TouchableOpacity
+            style={styles.prefRow}
+            onPress={() => router.push("/diagnostics")}
+            accessibilityRole="button"
+            accessibilityLabel={t.diagnosticsTitle}
+          >
+            <View style={styles.prefMain}>
+              <Text style={styles.prefLabel}>{t.diagnosticsTitle}</Text>
+              <Text style={styles.prefSummary}>{t.diagnosticsEntryCount}</Text>
+            </View>
+            <LineIcon name="chevronRight" size={18} color={theme.muted} />
+          </TouchableOpacity>
         </View>
       </ScrollView>
 

@@ -388,7 +388,12 @@ export function ChatComposer({ actions, sending, isStreaming = false, onAbort, s
 
       {/* 全屏编辑弹窗 */}
       <Modal visible={fullscreenEdit} animationType="slide" onRequestClose={() => setFullscreenEdit(false)}>
-        <View style={[styles.fsRoot, { backgroundColor: theme.bg }]}>
+        <KeyboardAvoidingView
+          style={styles.fsRoot}
+          behavior={Platform.OS === "ios" ? "padding" : "height"}
+          keyboardVerticalOffset={Platform.OS === "ios" ? insets.top : 0}
+        >
+        <View style={[styles.fsContent, { backgroundColor: theme.bg }]}>
           {/* 右上角最小化 */}
           <View style={[styles.fsTopBar, { paddingTop: Math.max(insets.top, 16) }]}>
             <Text style={[styles.fsTitle, { color: theme.muted }]}>Edit</Text>
@@ -580,8 +585,8 @@ export function ChatComposer({ actions, sending, isStreaming = false, onAbort, s
             </Animated.View>
           )}
         </View>
+        </KeyboardAvoidingView>
       </Modal>
-
       <Modal visible={showSkills} transparent animationType="slide" onRequestClose={() => setShowSkills(false)}>
         <View style={styles.modalOverlay}>
           {/* 点击外部半透明遮罩关闭抽屉 */}
@@ -690,6 +695,7 @@ const styles = StyleSheet.create({
   },
   expandIcon: { fontSize: 13, fontWeight: "700" },
   fsRoot: { flex: 1 },
+  fsContent: { flex: 1 },
   fsTopBar: {
     flexDirection: "row",
     justifyContent: "flex-end",

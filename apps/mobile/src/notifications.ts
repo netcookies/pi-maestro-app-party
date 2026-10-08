@@ -1,6 +1,7 @@
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import * as Notifications from "expo-notifications";
 import { hapticNotificationSuccess, hapticImpactMedium } from "./utils/haptics";
+import { recordDiagnostic } from "./diagnostics";
 
 const NOTIF_ASK_KEY = "maestro-mobile.notif-ask-enabled";
 const NOTIF_SETTLED_KEY = "maestro-mobile.notif-settled-enabled";
@@ -127,10 +128,10 @@ export async function consumePlanNotificationEvent(event: PlanNotificationEvent)
 }
 export interface InAppBannerPayload {
   id: string;
-  type: "ask" | "settled";
+  type: "ask" | "settled" | "error";
   title: string;
   body: string;
-  sessionId: string;
+  sessionId?: string;
   toolCallId?: string;
 }
 
@@ -146,6 +147,15 @@ export function emitInAppBanner(payload: InAppBannerPayload | null) {
   for (const fn of bannerListeners) {
     try { fn(payload); } catch {}
   }
+}
+
+export function emitInAppError(message: string): void {
+  emitInAppBanner({
+    id: `error-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+    type: "error",
+    title: "",
+    body: message.slice(0, 240),
+  });
 }
 
 /** 启动时初始化通知服务与偏好 */
@@ -215,6 +225,7 @@ export async function notifyAgentSettled(
   const lastTime = notifiedSettleTimes.get(sessionId) ?? 0;
   if (now - lastTime < 10_000) return;
   notifiedSettleTimes.set(sessionId, now);
+  recordDiagnostic({ kind: "notification", source: "notification", message: summary ?? projectName ?? sessionId });
 
   // 如果用户当前正停留在该会话页看着它生成完毕，仅给轻微成功震动，不弹通知横幅
   if (currentActiveSessionId === sessionId) {

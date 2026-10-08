@@ -259,6 +259,7 @@ export class MobileClient {
     try {
       ws = factory(wsUrl, this.options.token);
     } catch {
+      this.emitError("transport_open_failed");
       this.scheduleReconnect();
       return;
     }

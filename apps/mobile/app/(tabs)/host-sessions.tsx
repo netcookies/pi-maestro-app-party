@@ -271,9 +271,17 @@ export default function HostSessionsScreen({ active = true }: { active?: boolean
           <View style={styles.topHeader}>
             <View style={styles.headerTitleWrap}>
               <Text style={[styles.topHeaderTitle, { color: theme.text }]}>{t.tabSessions}</Text>
-              <Text style={[styles.topHeaderSub, { color: theme.muted }]} numberOfLines={1}>
-                {hostUrl ? hostUrl.replace(/^wss?:\/\//, "").replace(/\/ws$/, "") : connectionState}
-              </Text>
+              <View style={styles.headerSubtitleWrap}>
+                <Text style={[styles.topHeaderSub, { color: theme.muted }]} numberOfLines={1}>
+                  {hostUrl ? hostUrl.replace(/^wss?:\/\//, "").replace(/\/ws$/, "") : connectionState}
+                </Text>
+                <ActivityIndicator
+                  animating={refreshing || (loading && sessions.length > 0)}
+                  color={theme.accent}
+                  size="small"
+                  style={styles.headerRefreshIndicator}
+                />
+              </View>
             </View>
             <View style={styles.headerActions}>
               <TouchableOpacity onPress={() => setSearchOpen((value) => !value)} accessibilityRole="button" accessibilityLabel={t.searchPlaceholder} style={styles.iconButton}>
@@ -303,7 +311,7 @@ export default function HostSessionsScreen({ active = true }: { active?: boolean
           renderItem={({ item }) => item.type === "group" ? <View style={styles.group}><Text style={styles.groupTitle}>{cwdName(item.cwd)} · {item.count}</Text><Text style={styles.groupPath} numberOfLines={1}>{item.cwd}</Text></View> : <HostSessionCard session={item.session} opening={opening === (item.session.targetKey ?? item.session.id)} onPress={() => void handleOpen(item.session)} />}
           contentContainerStyle={styles.list}
           keyboardShouldPersistTaps="handled"
-          refreshing={refreshing}
+          refreshing={false}
           onRefresh={() => void loadFirstPage(true)}
           onEndReached={() => void loadMore()}
           onEndReachedThreshold={0.35}
@@ -408,7 +416,9 @@ function makeStyles(theme: ReturnType<typeof useTheme>["theme"]) {
     topHeader: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", paddingHorizontal: 20, paddingVertical: 12 },
     headerTitleWrap: { flex: 1, minWidth: 0 },
     topHeaderTitle: { fontSize: 20, fontWeight: "700" },
-    topHeaderSub: { fontSize: 11, fontFamily: "monospace", marginTop: 2 },
+    headerSubtitleWrap: { position: "relative", height: 14, justifyContent: "center" },
+    topHeaderSub: { fontSize: 11, lineHeight: 14, fontFamily: "monospace", marginTop: 2, paddingRight: 20 },
+    headerRefreshIndicator: { position: "absolute", right: 0, top: 0, width: 14, height: 14 },
     headerActions: { flexDirection: "row", gap: 8, marginLeft: 12 },
     iconButton: { width: 36, height: 36, borderRadius: 18, alignItems: "center", justifyContent: "center", borderWidth: 1, borderColor: theme.border },
     filterCount: { position: "absolute", right: -3, top: -4, color: "#fff", backgroundColor: theme.warning, fontSize: 9, minWidth: 14, height: 14, borderRadius: 7, textAlign: "center", overflow: "hidden" },

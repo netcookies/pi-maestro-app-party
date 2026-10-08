@@ -13,6 +13,7 @@
 import type {
   MaestroState,
   MonitorState,
+  HostSessionList,
   MonitorAttentionSummary,
   MonitorWindowSummary,
   SessionExecutionSummary,
@@ -20,6 +21,11 @@ import type {
   SessionTargetIdentity,
   SessionUsageSummary,
 } from "@maestro-mobile/shared";
+
+/** A session list snapshot marks target projection hydration for the active connection. */
+export function isSessionListHydrated(list: HostSessionList | null): boolean {
+  return list !== null;
+}
 
 /** extension-ui 队列中待处理弹窗的最小投影（解耦 DialogEntry 结构） */
 export interface PendingAskItem {

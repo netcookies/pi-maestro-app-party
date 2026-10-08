@@ -10,12 +10,14 @@ import {
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useRouter } from "expo-router";
 import { useTheme, hexToRgba } from "../theme";
+import { useI18n } from "../i18n";
 import { onInAppBanner, type InAppBannerPayload } from "../notifications";
 
 export function InAppNotificationBanner() {
   const { theme } = useTheme();
   const insets = useSafeAreaInsets();
   const router = useRouter();
+  const { t } = useI18n();
   const [banner, setBanner] = useState<InAppBannerPayload | null>(null);
 
   const translateY = useRef(new Animated.Value(-120)).current;
@@ -68,6 +70,8 @@ export function InAppNotificationBanner() {
   if (!banner) return null;
 
   const isAsk = banner.type === "ask";
+  const isError = banner.type === "error";
+  const bannerTitle = banner.title || (isError ? t.connectionError : isAsk ? t.askTitle : t.notificationSettledTitle);
 
   return (
     <Animated.View
@@ -88,13 +92,13 @@ export function InAppNotificationBanner() {
           styles.container,
           {
             backgroundColor: theme.cardBg ?? "#FFFFFF",
-            borderColor: isAsk ? theme.accent : theme.success,
+            borderColor: isError ? theme.error : isAsk ? theme.accent : theme.success,
             shadowColor: "#000",
           },
         ]}
         onPress={() => {
           dismiss();
-          router.push({ pathname: "/session", params: { id: banner.sessionId } });
+          if (banner.sessionId) router.push({ pathname: "/session", params: { id: banner.sessionId } });
         }}
       >
         <View style={styles.content}>
@@ -103,16 +107,16 @@ export function InAppNotificationBanner() {
               style={[
                 styles.badge,
                 {
-                  backgroundColor: isAsk ? hexToRgba(theme.accent, 0.16) : hexToRgba(theme.success, 0.16),
+                  backgroundColor: isError ? hexToRgba(theme.error, 0.16) : isAsk ? hexToRgba(theme.accent, 0.16) : hexToRgba(theme.success, 0.16),
                 },
               ]}
             >
-              <Text style={[styles.badgeText, { color: isAsk ? theme.accent : theme.success }]}>
-                {isAsk ? "待确认" : "完成"}
+              <Text style={[styles.badgeText, { color: isError ? theme.error : isAsk ? theme.accent : theme.success }]}>
+                {isError ? t.connectionError : isAsk ? t.askTitle : t.notificationSettledTitle}
               </Text>
             </View>
             <Text style={[styles.title, { color: theme.text }]} numberOfLines={1}>
-              {banner.title}
+              {bannerTitle}
             </Text>
           </View>
           <Text style={[styles.body, { color: theme.muted }]} numberOfLines={2}>

@@ -24,7 +24,8 @@ import {
 import { HostClient, type ConnectionState } from "@maestro-mobile/mobile-sdk";
 import { beginGracePeriod, endGracePeriod, isAndroidRuntime, isIosRuntime, startBackgroundService, stopBackgroundService } from "./background-runtime";
 import { getConfig } from "./config";
-import { consumePlanNotificationEvent } from "./notifications";
+import { consumePlanNotificationEvent, emitInAppError } from "./notifications";
+import { recordDiagnostic } from "./diagnostics";
 
 import { isServerSessionPresentation, filterSessionsByVisibility } from "./host-session-pagination";
 import { ExtensionUiQueue } from "./extension-ui-queue";
@@ -146,6 +147,14 @@ export function HostStoreProvider({ children }: { children: React.ReactNode }) {
   const dispatchBuffered = useCallback((event: HostEvent) => {
     if (event.type === "notification_event" && (event.kind === "plan_pending" || event.kind === "plan_review_pending" || event.kind === "plan_confirm_pending")) {
       void consumePlanNotificationEvent({ ...event, kind: event.kind });
+    } else if (event.type === "extension_ui_request") {
+      recordDiagnostic({ kind: "ask", source: "host", message: event.request.message ?? event.request.title ?? event.request.method });
+    } else if (event.type === "desktop_plan_request") {
+      recordDiagnostic({ kind: "plan", source: "host", message: `${event.request.kind} plan ${event.request.requestId}` });
+    } else if (event.type === "session_error") {
+      recordDiagnostic({ kind: "connection_error", source: "host", message: event.error.message });
+    } else if (event.type === "error" || event.type === "command_error") {
+      recordDiagnostic({ kind: "connection_error", source: "host", message: event.message });
     }
 
     if ("target" in event && event.target && isSessionTargetIdentity(event.target)) {
@@ -256,11 +265,14 @@ export function HostStoreProvider({ children }: { children: React.ReactNode }) {
       // 但 lastError 原本只由 host 推的事件写入，本地 reject 进不了 reducer）。
       // ISS-20260910 review F-002：走本地内部事件而非合成 host `error` 帧，避免 seq 占位 0 的域歧义。
       onConnectionError: (message) => {
+        recordDiagnostic({ kind: "connection_error", source: "connection", message });
+        emitInAppError(message);
         dispatch({ type: "__local_error", message });
       },
       onStateChange: (s) => {
         setConnectionState(s);
         if (s === "disconnected" || s === "reconnecting") {
+          recordDiagnostic({ kind: "local", source: "connection", message: s });
           clearBufferedEvents();
           dispatch({ type: "__connection_reset", connectionGeneration: stateRef.current.connectionGeneration + 1 });
         }

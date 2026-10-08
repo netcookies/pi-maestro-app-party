@@ -27,6 +27,7 @@ import {
   getActiveUsageTargets,
   selectMissingUsageTargets,
   getCacheHitPercent,
+  isSessionListHydrated,
   type PendingAskItem,
 } from "../../src/dashboard-logic";
 import { sessionTargetKey, type SessionExecutionSummary, type SessionUsageSummary, type MonitorWindowSummary } from "@maestro-mobile/shared";
@@ -98,6 +99,7 @@ export default function DashboardScreen({ active = true, onSelectTab }: { active
   const canOpenPairing = connectionState === "disconnected";
 
   // 待处理 ask 弹窗投影（聚合 extension-ui 队列 pending 项，以及来自 monitor windows 的交互等待）
+  const pendingActionsReady = isSessionListHydrated(state.hostSessionList);
   const pendingAsks = React.useMemo<PendingAskItem[]>(() => {
     const list: PendingAskItem[] = state.dialogs
       .filter((d) => d.status === "pending")
@@ -337,14 +339,15 @@ export default function DashboardScreen({ active = true, onSelectTab }: { active
         {/* 待处理 Ask 弹窗卡片（支持多条队列角标与前后切换） */}
         {pendingAsks.length > 0 && pendingAsks[currentAskIndex] && (
           <TouchableOpacity
-            activeOpacity={0.92}
+            activeOpacity={pendingActionsReady ? 0.92 : 1}
+            disabled={!pendingActionsReady}
             onPress={() => {
               const ask = pendingAsks[currentAskIndex];
-              if (!ask?.target) return;
+              if (!pendingActionsReady || !ask?.target) return;
               const targetKey = sessionTargetKey(ask.target);
               router.push({ pathname: "/session", params: { id: ask.sessionId, targetKey, from: "workbench" } });
             }}
-            style={[styles.askCard, { backgroundColor: theme.secondaryContainer ?? theme.cardBg, borderColor: theme.warning }]}
+            style={[styles.askCard, { backgroundColor: theme.secondaryContainer ?? theme.cardBg, borderColor: theme.warning, opacity: pendingActionsReady ? 1 : 0.62 }]}
           >
             <View style={styles.askHeader}>
               <View style={styles.askTitleWrap}>
@@ -426,12 +429,14 @@ export default function DashboardScreen({ active = true, onSelectTab }: { active
         {/* 待处理 Plan 卡片：携带完整 target key，避免同 sessionId 的 sibling 误路由 */}
         {pendingPlans.length > 0 && pendingPlans[currentPlanIndex] && (
           <TouchableOpacity
-            activeOpacity={0.92}
+            activeOpacity={pendingActionsReady ? 0.92 : 1}
+            disabled={!pendingActionsReady}
             onPress={() => {
+              if (!pendingActionsReady) return;
               const entry = pendingPlans[currentPlanIndex];
               if (entry) router.push({ pathname: "/session", params: { id: entry.sessionId, targetKey: sessionTargetKey(entry.target), from: "workbench" } });
             }}
-            style={[styles.askCard, { backgroundColor: theme.secondaryContainer ?? theme.cardBg, borderColor: theme.accent }]}
+            style={[styles.askCard, { backgroundColor: theme.secondaryContainer ?? theme.cardBg, borderColor: theme.accent, opacity: pendingActionsReady ? 1 : 0.62 }]}
             accessibilityRole="button"
             accessibilityLabel={`待处理计划 ${currentPlanIndex + 1} / ${pendingPlans.length}`}
           >

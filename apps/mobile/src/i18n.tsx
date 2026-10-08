@@ -92,6 +92,17 @@ export interface I18nDictionary {
   secHub: string;
   secParams: string;
   secVersion: string;
+  diagnosticsTitle: string;
+  diagnosticsEntryCount: string;
+  diagnosticsEmpty: string;
+  diagnosticsClear: string;
+  diagnosticsKindConnection: string;
+  diagnosticsKindNotification: string;
+  diagnosticsKindAsk: string;
+  diagnosticsKindPlan: string;
+  diagnosticsKindLocal: string;
+  reconnecting: string;
+  protocolIncompatible: string;
   versionApp: string;
   versionHost: string;
   versionPi: string;
@@ -176,6 +187,7 @@ export interface I18nDictionary {
   noMonitorSessions: string;
   noMonitorSessionsDesc: string;
   openSessionDetail: string;
+  connectionError: string;
   promptCapability: string;
   steerCapability: string;
   followUpCapability: string;
@@ -316,6 +328,17 @@ export const DICTIONARIES: Record<Language, I18nDictionary> = {
     secHub: "服务器管理",
     secParams: "性能参数",
     secVersion: "版本信息",
+    diagnosticsTitle: "诊断日志",
+    diagnosticsEntryCount: "条记录",
+    diagnosticsEmpty: "暂无诊断记录",
+    diagnosticsClear: "清空日志",
+    diagnosticsKindConnection: "连接错误",
+    diagnosticsKindNotification: "通知",
+    diagnosticsKindAsk: "Ask",
+    diagnosticsKindPlan: "Plan",
+    diagnosticsKindLocal: "本地事件",
+    reconnecting: "正在重连",
+    protocolIncompatible: "协议不兼容",
     versionApp: "Maestro Mobile 客户端",
     versionHost: "桌面主机服务 (Host)",
     versionPi: "Pi 智能体会话引擎",
@@ -400,6 +423,7 @@ export const DICTIONARIES: Record<Language, I18nDictionary> = {
     noMonitorSessions: "暂无监督会话",
     noMonitorSessionsDesc: "Host 标记为监督视图 (monitor_tab) 的会话会出现在这里",
     openSessionDetail: "打开会话详情",
+    connectionError: "连接错误",
     promptCapability: "对话",
     steerCapability: "介入",
     followUpCapability: "追问",
@@ -538,6 +562,17 @@ export const DICTIONARIES: Record<Language, I18nDictionary> = {
     secHub: "Server Management",
     secParams: "Performance",
     secVersion: "Version",
+    diagnosticsTitle: "Diagnostics",
+    diagnosticsEntryCount: "entries",
+    diagnosticsEmpty: "No diagnostic entries",
+    diagnosticsClear: "Clear logs",
+    diagnosticsKindConnection: "Connection error",
+    diagnosticsKindNotification: "Notification",
+    diagnosticsKindAsk: "Ask",
+    diagnosticsKindPlan: "Plan",
+    diagnosticsKindLocal: "Local event",
+    reconnecting: "Reconnecting",
+    protocolIncompatible: "Protocol incompatible",
     versionApp: "Maestro Mobile Client",
     versionHost: "Desktop Host Server",
     versionPi: "Pi Agent Session Engine",
@@ -622,6 +657,7 @@ export const DICTIONARIES: Record<Language, I18nDictionary> = {
     noMonitorSessions: "No monitored sessions",
     noMonitorSessionsDesc: "Sessions the host marks monitor_tab appear here",
     openSessionDetail: "Open session detail",
+    connectionError: "Connection error",
     promptCapability: "Prompt",
     steerCapability: "Steer",
     followUpCapability: "Follow-up",
