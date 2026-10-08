@@ -109,6 +109,8 @@ describe("HostClient", () => {
       type: "command_result",
       in_reply_to: sent.id,
       ok: true,
+      status: "observed",
+      revision: 1,
       result: { closed: true },
     }));
 
@@ -132,6 +134,8 @@ describe("HostClient", () => {
       type: "command_result",
       in_reply_to: sent.id,
       ok: true,
+      status: "observed",
+      revision: 1,
       result: { session: { id: "s1" }, timeline: [], nextSeq: 1 },
     }));
     await expect(promise).resolves.toMatchObject({ session: { id: "s1" }, timeline: [] });
@@ -150,6 +154,8 @@ describe("HostClient", () => {
       type: "command_result",
       in_reply_to: sent.id,
       ok: false,
+      status: "failed",
+      revision: 1,
       error: { code: "session_not_found", message: "Session not found" },
     }));
     await expect(promise).rejects.toThrow("Session not found");
@@ -206,6 +212,8 @@ describe("HostClient", () => {
       type: "command_result",
       in_reply_to: sent.id,
       ok: true,
+      status: "accepted",
+      revision: 1,
       result: null,
     }));
     await promise;
