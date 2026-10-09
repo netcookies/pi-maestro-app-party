@@ -275,15 +275,15 @@ export default function HostSessionsScreen({ active = true }: { active?: boolean
                 <Text style={[styles.topHeaderSub, { color: theme.muted }]} numberOfLines={1}>
                   {hostUrl ? hostUrl.replace(/^wss?:\/\//, "").replace(/\/ws$/, "") : connectionState}
                 </Text>
-                <ActivityIndicator
-                  animating={refreshing || (loading && sessions.length > 0)}
-                  color={theme.accent}
-                  size="small"
-                  style={styles.headerRefreshIndicator}
-                />
               </View>
             </View>
             <View style={styles.headerActions}>
+              <ActivityIndicator
+                animating={refreshing || (loading && sessions.length > 0)}
+                color={theme.accent}
+                size="small"
+                style={styles.headerRefreshIndicator}
+              />
               <TouchableOpacity onPress={() => setSearchOpen((value) => !value)} accessibilityRole="button" accessibilityLabel={t.searchPlaceholder} style={styles.iconButton}>
                 <LineIcon name="search" size={18} color={theme.text} />
               </TouchableOpacity>
@@ -416,10 +416,10 @@ function makeStyles(theme: ReturnType<typeof useTheme>["theme"]) {
     topHeader: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", paddingHorizontal: 20, paddingVertical: 12 },
     headerTitleWrap: { flex: 1, minWidth: 0 },
     topHeaderTitle: { fontSize: 20, fontWeight: "700" },
-    headerSubtitleWrap: { position: "relative", height: 14, justifyContent: "center" },
-    topHeaderSub: { fontSize: 11, lineHeight: 14, fontFamily: "monospace", marginTop: 2, paddingRight: 20 },
-    headerRefreshIndicator: { position: "absolute", right: 0, top: 0, width: 14, height: 14 },
-    headerActions: { flexDirection: "row", gap: 8, marginLeft: 12 },
+    headerSubtitleWrap: { height: 14, justifyContent: "center" },
+    topHeaderSub: { fontSize: 11, lineHeight: 14, fontFamily: "monospace", marginTop: 2 },
+    headerRefreshIndicator: { width: 20, height: 36 },
+    headerActions: { flexDirection: "row", alignItems: "center", gap: 8, marginLeft: 12 },
     iconButton: { width: 36, height: 36, borderRadius: 18, alignItems: "center", justifyContent: "center", borderWidth: 1, borderColor: theme.border },
     filterCount: { position: "absolute", right: -3, top: -4, color: "#fff", backgroundColor: theme.warning, fontSize: 9, minWidth: 14, height: 14, borderRadius: 7, textAlign: "center", overflow: "hidden" },
     searchRow: { flexDirection: "row", alignItems: "center", gap: 8, marginHorizontal: 16, marginBottom: 10, paddingHorizontal: 10, height: 40, borderRadius: MIUIX_RADIUS.md, backgroundColor: theme.inputBg },

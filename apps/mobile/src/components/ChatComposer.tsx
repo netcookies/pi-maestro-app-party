@@ -10,7 +10,7 @@
 import React, { useState, useRef, useEffect } from "react";
 import {
   View, Text, TextInput, TouchableOpacity, StyleSheet, Modal, FlatList, Image, ScrollView, Alert,
-  Animated, AccessibilityInfo, Pressable, KeyboardAvoidingView, Platform, Easing,
+  Animated, AccessibilityInfo, Keyboard, Pressable, KeyboardAvoidingView, Platform, Easing,
 } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useTheme } from "../theme";
@@ -65,8 +65,15 @@ export function ChatComposer({ actions, sending, isStreaming = false, onAbort, s
   const [loadedSkills, setLoadedSkills] = useState<(string | { name: string; description?: string })[]>(Array.isArray(skills) ? skills : []);
   const [skillQuery, setSkillQuery] = useState("");
   const [focused, setFocused] = useState(false);
+  const [keyboardVisible, setKeyboardVisible] = useState(Keyboard.isVisible());
   const [fullscreenEdit, setFullscreenEdit] = useState(false);
   const [fsPanel, setFsPanel] = useState<null | "skills">(null);
+
+  useEffect(() => {
+    const show = Keyboard.addListener("keyboardDidShow", () => setKeyboardVisible(true));
+    const hide = Keyboard.addListener("keyboardDidHide", () => setKeyboardVisible(false));
+    return () => { show.remove(); hide.remove(); };
+  }, []);
 
   // 运行态 Spinning 进度环无限旋转动画
   const spinAnim = useRef(new Animated.Value(0)).current;
@@ -391,7 +398,7 @@ export function ChatComposer({ actions, sending, isStreaming = false, onAbort, s
         <KeyboardAvoidingView
           style={styles.fsRoot}
           behavior={Platform.OS === "ios" ? "padding" : "height"}
-          keyboardVerticalOffset={Platform.OS === "ios" ? insets.top : 0}
+          keyboardVerticalOffset={0}
         >
         <View style={[styles.fsContent, { backgroundColor: theme.bg }]}>
           {/* 右上角最小化 */}
@@ -426,7 +433,7 @@ export function ChatComposer({ actions, sending, isStreaming = false, onAbort, s
               {
                 borderTopColor: theme.border,
                 backgroundColor: theme.headerBg,
-                paddingBottom: Math.max(insets.bottom, 12),
+                paddingBottom: keyboardVisible ? 0 : Math.max(insets.bottom, 12),
               },
             ]}
           >

@@ -50,6 +50,7 @@ export interface AppTheme {
   /** 导航 */
   headerBg: string;
   headerText: string;
+  statusBarStyle?: "dark" | "light";
   /** 卡片内部嵌套块背景 */
   cardInner?: string;
   /** Miuix 语义扩展槽（全部可选，旧主题可不提供） */
@@ -87,7 +88,7 @@ export const THEMES: Record<string, AppTheme> = {
     inputBg: "#F1F5F9", buttonPrimary: "#8B5CF6", buttonDanger: "#EF4444",
     mdHeading: "#0F172A", mdLink: "#8B5CF6", mdCode: "#7C3AED",
     mdCodeBlock: "#0F172A", mdCodeBlockBg: "#F8F9FA", mdQuote: "#64748B", mdQuoteBorder: "#E2E8F0", mdHr: "#E2E8F0",
-    headerBg: "#FFFFFF", headerText: "#0F172A",
+    headerBg: "#FFFFFF", headerText: "#0F172A", statusBarStyle: "dark",
     surfaceVariant: "#F8F9FA", onSurfaceVariantSummary: "#64748B",
     tertiaryContainer: "#F3E8FF", onTertiaryContainer: "#7C3AED",
     secondaryContainer: "#F1F5F9", onSecondaryContainer: "#64748B",
@@ -108,7 +109,7 @@ export const THEMES: Record<string, AppTheme> = {
     inputBg: "#181C24", buttonPrimary: "#8B5CF6", buttonDanger: "#EF4444",
     mdHeading: "#F3F4F6", mdLink: "#A78BFA", mdCode: "#C4B5FD",
     mdCodeBlock: "#F3F4F6", mdCodeBlockBg: "#181C24", mdQuote: "#8B949E", mdQuoteBorder: "#202530", mdHr: "#202530",
-    headerBg: "#12151B", headerText: "#E6EDF3",
+    headerBg: "#12151B", headerText: "#E6EDF3", statusBarStyle: "light",
     surfaceVariant: "#181C24", onSurfaceVariantSummary: "#8B949E",
     tertiaryContainer: "#2E1A47", onTertiaryContainer: "#A78BFA",
     secondaryContainer: "#181C24", onSecondaryContainer: "#8B949E",
@@ -129,7 +130,7 @@ export const THEMES: Record<string, AppTheme> = {
     inputBg: "#0d1117", buttonPrimary: "#238636", buttonDanger: "#da3633",
     mdHeading: "#e6edf3", mdLink: "#58a6ff", mdCode: "#79c0ff",
     mdCodeBlock: "#c9d1d9", mdCodeBlockBg: "#0d1117", mdQuote: "#8b949e", mdQuoteBorder: "#30363d", mdHr: "#21262d",
-    headerBg: "#161b22", headerText: "#e6edf3",
+    headerBg: "#161b22", headerText: "#e6edf3", statusBarStyle: "light",
   },
 
   // ── Ocean（cockpit-ocean 配色）──
@@ -144,7 +145,7 @@ export const THEMES: Record<string, AppTheme> = {
     inputBg: "#1d2233", buttonPrimary: "#22352f", buttonDanger: "#3b2732",
     mdHeading: "#c0caf5", mdLink: "#7aa2f7", mdCode: "#7dcfff",
     mdCodeBlock: "#c8d3f5", mdCodeBlockBg: "#202940", mdQuote: "#828bb8", mdQuoteBorder: "#3b4261", mdHr: "#3b4261",
-    headerBg: "#1d2233", headerText: "#c8d3f5",
+    headerBg: "#1d2233", headerText: "#c8d3f5", statusBarStyle: "light",
   },
 
   // ── Notion（cockpit-notion 思路：浅色）──
@@ -159,7 +160,7 @@ export const THEMES: Record<string, AppTheme> = {
     inputBg: "#f7f7f5", buttonPrimary: "#2383e2", buttonDanger: "#e5484d",
     mdHeading: "#37352f", mdLink: "#3b82f6", mdCode: "#eb5757",
     mdCodeBlock: "#37352f", mdCodeBlockBg: "#f1f1ef", mdQuote: "#787774", mdQuoteBorder: "#e9e9e7", mdHr: "#e9e9e7",
-    headerBg: "#ffffff", headerText: "#37352f",
+    headerBg: "#ffffff", headerText: "#37352f", statusBarStyle: "dark",
   },
 
   // ── Zen（cockpit-zen 思路：低饱和）──
@@ -174,7 +175,7 @@ export const THEMES: Record<string, AppTheme> = {
     inputBg: "#222326", buttonPrimary: "#4c1d95", buttonDanger: "#9f1239",
     mdHeading: "#f5f3ff", mdLink: "#a78bfa", mdCode: "#f0abfc",
     mdCodeBlock: "#d4d4d8", mdCodeBlockBg: "#1a1b1e", mdQuote: "#8b8d98", mdQuoteBorder: "#3f3f46", mdHr: "#3f3f46",
-    headerBg: "#222326", headerText: "#d4d4d8",
+    headerBg: "#222326", headerText: "#d4d4d8", statusBarStyle: "light",
   },
 };
 

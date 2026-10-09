@@ -7,6 +7,9 @@ import { DesktopPluginIpcServer } from "../src/plugin/desktop-plugin-ipc.js";
 import { DesktopControlGatewayService } from "../src/control/desktop-control-gateway.js";
 import { DesktopPluginRegistry } from "../src/plugin/desktop-plugin-registry.js";
 import { createDesktopPluginExtension } from "../src/plugin/desktop-plugin-extension.js";
+import { getDesktopPluginRuntimeRecord } from "../src/plugin/desktop-plugin-runtime-state.js";
+import { HostController } from "../src/host-controller.js";
+import { MaestroStateReader } from "../src/maestro-state.js";
 
 /** 最小假 Pi API/ctx：只保真 extension 实际使用的成员，避免用宽泛 mock 掩盖真实调用。 */
 function fakePi(options: { models: { provider: string; id: string; name: string }[]; availableModels?: { provider: string; id: string; name: string }[]; skills?: { name: string; description?: string }[]; model?: unknown; configuredAuth?: boolean; entries?: unknown[] }) {
@@ -146,6 +149,7 @@ describe("Desktop Plugin extension (TUI side)", () => {
     fake.emit("agent_start", { type: "agent_start" });
     await waitFor(() => runtimeStatuses.at(-1) === "running");
     fake.emit("agent_end", { type: "agent_end", messages: [] });
+    fake.emit("agent_settled", { type: "agent_settled" });
     await waitFor(() => runtimeStatuses.at(-1) === "idle");
 
     // Host → TUI: 必须命中 provider/id 并用同一个进程的 API 切换模型
@@ -185,6 +189,60 @@ describe("Desktop Plugin extension (TUI side)", () => {
     });
     await waitFor(() => received.some((model) => model.provider === "provider-b"));
     expect(received.at(-1)).toEqual({ provider: "provider-b", id: "shared-id", name: "Model B", reasoning: false, vision: true });
+  });
+
+  it.each([
+    { name: "normal completion", stopReasons: ["stop"] },
+    { name: "successful retry", stopReasons: ["error", "error", "stop"] },
+    { name: "retry exhaustion", stopReasons: ["error", "error", "error"] },
+    { name: "retry cancellation", stopReasons: ["error", "aborted"] },
+    { name: "queued continuation", stopReasons: ["stop", "stop"] },
+  ])("notifies Host only after final settlement: $name", async ({ stopReasons }) => {
+    const dir = await mkdtemp(join(tmpdir(), "maestro-ext-settled-"));
+    const controller = new HostController({ listSessions: async () => [] }, new MaestroStateReader({ projectRoot: dir }));
+    const notifications: unknown[] = [];
+    controller.onEvent((event) => {
+      if (event.type === "notification_event" && event.kind === "agent_settled") notifications.push(event);
+    });
+    const registry = new DesktopPluginRegistry();
+    server = new DesktopPluginIpcServer({
+      socketPath: join(dir, "plugin.sock"),
+      secret: "test-secret",
+      registry,
+      supportedEvents: ["session_summary"],
+      onConnected: (target) => {
+        controller.desktopPlugins.register(registry.resolve(target)!);
+        controller.applyDesktopProjection(registry.list());
+      },
+      onSessionSummary: () => { controller.applyDesktopProjection(registry.list()); },
+    });
+    await server.start();
+    const fake = fakePi({ models: [] });
+    createDesktopPluginExtension({ socketPath: join(dir, "plugin.sock"), secret: "test-secret" })(fake.pi as never);
+    try {
+      fake.emit("session_start", { type: "session_start", reason: "startup" });
+      await waitFor(() => controller.desktopPlugins.list().length > 0);
+      const target = controller.desktopPlugins.list()[0].target;
+      await waitFor(() => controller.directory.resolve(target)?.runtimeStatus === "idle");
+
+      for (const stopReason of stopReasons) {
+        fake.emit("agent_start", { type: "agent_start" });
+        await waitFor(() => controller.directory.resolve(target)?.runtimeStatus === "running");
+        const message = { role: "assistant", stopReason, content: [], ...(stopReason === "error" ? { errorMessage: "503 Service Unavailable" } : {}) };
+        fake.emit("message_end", { type: "message_end", message });
+        fake.emit("agent_end", { type: "agent_end", messages: [message] });
+        expect(getDesktopPluginRuntimeRecord()?.localStatus).toBe("running");
+        expect(notifications).toEqual([]);
+      }
+
+      fake.emit("agent_settled", { type: "agent_settled" });
+      await waitFor(() => controller.directory.resolve(target)?.runtimeStatus === "idle");
+      expect(notifications).toEqual([expect.objectContaining({ kind: "agent_settled", sessionId: target.sessionId, target })]);
+      expect(getDesktopPluginRuntimeRecord()?.summary?.activeSince).toBeNull();
+    } finally {
+      await fake.emitAsync("session_shutdown", { type: "session_shutdown" });
+      await controller.dispose();
+    }
   });
 
   it("publishes bounded same-process Todo, teammate, and background execution data", async () => {
@@ -512,7 +570,7 @@ describe("Desktop Plugin extension (TUI side)", () => {
     // 流式中=入队 steer，与 host 侧「streaming 自动降级为 steer」语义一致。
     const gateway = new DesktopControlGatewayService(registry);
     // `sendUserMessage` 是 fire-and-forget；`accepted` 只表示 Pi 接受异步处理请求。
-    // 只有 agent_start/agent_end 事件才能建立后续的 `running`/`idle` 生命周期证据。
+    // 只有 agent_start/agent_settled 事件才能建立最终的 running/idle 生命周期证据。
     await expect(gateway.execute({ requestId: "d1", target, kind: "prompt", message: "hello" })).resolves.toMatchObject({ status: "accepted" });
     expect(fake.sent.at(-1)?.options).toEqual({ deliverAs: "steer" });
 
@@ -526,6 +584,7 @@ describe("Desktop Plugin extension (TUI side)", () => {
     fake.emit("agent_start", { type: "agent_start" });
     await waitFor(() => runtimeStatuses.at(-1) === "running");
     fake.emit("agent_end", { type: "agent_end", messages: [] });
+    fake.emit("agent_settled", { type: "agent_settled" });
     await waitFor(() => runtimeStatuses.at(-1) === "idle");
   });
 

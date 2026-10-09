@@ -42,7 +42,7 @@ function RootNavigator() {
 
   return (
     <View style={{ flex: 1, backgroundColor: theme.bg }}>
-      <StatusBar style={theme.bg === "#f7f7f5" || theme.name === "notion" ? "dark" : "light"} />
+      <StatusBar style={theme.statusBarStyle ?? "light"} />
       <Stack
         id="root"
         screenOptions={{

@@ -112,8 +112,8 @@ export default function ModelSelectScreen() {
   });
 
   return (
-    <SafeAreaView style={[styles.container, { backgroundColor: theme.bg }]} edges={["top", "bottom"]}>
-      {/* 顶部标题栏 */}
+    <View style={[styles.container, { backgroundColor: theme.bg }]}>
+      <SafeAreaView style={{ backgroundColor: theme.headerBg }} edges={["top"]}>
       <View style={[styles.header, { borderBottomColor: theme.border, backgroundColor: theme.headerBg }]}>
         <TouchableOpacity
           onPress={() => router.back()}
@@ -146,7 +146,9 @@ export default function ModelSelectScreen() {
           )}
         </TouchableOpacity>
       </View>
+      </SafeAreaView>
 
+      <SafeAreaView style={styles.container} edges={["bottom"]}>
       {applyError ? (
         <Text style={{ color: theme.error, fontSize: 12, paddingHorizontal: 16, paddingTop: 8 }}>
           {applyError}
@@ -255,7 +257,8 @@ export default function ModelSelectScreen() {
           }}
         />
       )}
-    </SafeAreaView>
+      </SafeAreaView>
+    </View>
   );
 }
 

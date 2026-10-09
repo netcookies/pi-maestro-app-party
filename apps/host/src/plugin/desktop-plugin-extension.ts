@@ -925,7 +925,8 @@ export function createDesktopPluginExtension(options: DesktopPluginExtensionOpti
       lastActivityAt = new Date().toISOString();
       publishSummary();
     });
-    pi.on("agent_end", (_event, ctx) => {
+    // agent_end 只结束单次尝试，自动重试、压缩恢复和队列续跑结束后才上报空闲。
+    pi.on("agent_settled", (_event, ctx) => {
       latestUsage = usageFromSessionEntries(sessionEntriesOf(ctx)) ?? latestUsage;
       latestContext = readContextUsage(ctx);
       publishRuntimeStatus("idle");
