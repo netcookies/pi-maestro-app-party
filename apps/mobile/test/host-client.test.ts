@@ -238,21 +238,25 @@ describe("HostClient", () => {
   it("token 错误：反复快速被断 + health 401 → 停止重连并报明确错误", async () => {
     // fetch mock：health 返回 401（host 在，token 错）
     const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response(null, { status: 401 }));
-    const ws = createFakeWs();
+    const first = createFakeWs();
+    const second = createFakeWs();
+    const sockets = [first, second];
     const localErrors: string[] = [];
     const c = new HostClient({
       url: "ws://192.168.1.5:4739/ws",
-      token: "wrong",
-      wsFactory: () => ws,
+      reconnectBaseMs: 1,
+      reconnectMaxMs: 1,
+      wsFactory: () => sockets.shift()!,
       onEvent: (e) => { events.push(e); },
       onConnectionError: (m) => { localErrors.push(m); },
     });
     c.connect();
     // 第一次被断：attempt=0 不标记（可能 host 未启动）
-    ws._close();
+    first._close();
     expect(c.connectionState).toBe("reconnecting");
-    // 第二次快速被断：attempt>=1 → 疑似 → health 探测确认
-    ws._close();
+    // 第二次快速断开真实的新 socket，触发 health 探测。
+    await vi.waitFor(() => expect(sockets.length).toBe(0));
+    second._close();
     // 等待 verifyAuthFailure 完成后确认 authFailed
     await vi.waitFor(() => expect(c.connectionState).toBe("disconnected"));
     // RV-002：auth 失败走本地错误通道，不再向 host 事件流投一个缺 seq 的 error 帧

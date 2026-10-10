@@ -71,18 +71,6 @@ export interface AppState {
   dialogs: DialogEntry[];
   planRequests: PlanEntry[];
   lastError: string | null;
-  /** Latest Host-global wire sequence observed for each exact target. */
-  targetEventSeq: Map<string, number>;
-  /** Latest target wire event represented by SessionSnapshot session/timeline data. */
-  targetProjectionEventSeq: Map<string, number>;
-  /** Latest untargeted projection wire event for each session. */
-  sessionProjectionEventSeq: Map<string, number>;
-  /** Runner-local exclusive nextSeq retained only against snapshots from the same exact target/session. */
-  snapshotNextSeq: Map<string, number>;
-  /** Host-global exclusive watermark for the latest accepted snapshot of each target/session. */
-  snapshotWireSeq: Map<string, number>;
-  /** Latest Host-global wire sequence observed for untargeted events. */
-  eventSeq: number;
   revision: number;
 }
 
@@ -113,12 +101,6 @@ export function createInitialState(): AppState {
     dialogs: [],
     planRequests: [],
     lastError: null,
-    targetEventSeq: new Map(),
-    targetProjectionEventSeq: new Map(),
-    sessionProjectionEventSeq: new Map(),
-    snapshotNextSeq: new Map(),
-    snapshotWireSeq: new Map(),
-    eventSeq: 0,
     revision: 0,
   };
 }
@@ -142,9 +124,8 @@ export interface SnapshotLoadEvent {
   type: "__snapshot_load";
   session: SessionState;
   items: TimelineItem[];
-  /** Runner-local exclusive nextSeq. */
-  seq: number;
-  /** Host-global exclusive event sequence sampled before the snapshot query. */
+  /** Accepted by the SDK; retained temporarily for local action compatibility. */
+  seq?: number;
   wireSeq?: number;
   target?: SessionTargetIdentity;
 }
@@ -159,6 +140,17 @@ export interface HistoryPrependEvent {
 }
 
 /** 内部事件：H4 微批 — 同一帧内的多个 HostEvent 顺序折叠为一次状态更新 */
+export interface SnapshotTransactionEvent {
+  type: "__snapshot_transaction";
+  snapshot: SnapshotLoadEvent;
+  events: HostEvent[];
+}
+
+export interface MaestroLoadEvent {
+  type: "__maestro_load";
+  state: MaestroState;
+}
+
 export interface EventBatchEvent {
   type: "__event_batch";
   events: HostEvent[];
@@ -238,6 +230,8 @@ export type AppAction =
   | HostEvent
   | InternalEvent
   | SnapshotLoadEvent
+  | SnapshotTransactionEvent
+  | MaestroLoadEvent
   | HistoryPrependEvent
   | EventBatchEvent
   | DialogSendFailedEvent
@@ -276,12 +270,16 @@ function acceptsProjection<T extends ExecutionProjection>(existing: T | undefine
 export function reduceEvent(state: AppState, event: AppAction, deps: AppStateDeps = {}): AppState {
   if (event && (event as EventBatchEvent).type === "__event_batch") {
     let s = state;
-    for (const e of (event as EventBatchEvent).events) {
-      s = reduceEvent(s, e, deps);
-    }
+    for (const e of (event as EventBatchEvent).events) s = reduceEvent(s, e, deps);
     return s;
   }
-    if (event.type === "__execution_projections_load") {
+  if (event.type === "__snapshot_transaction") {
+    let next = reduceEvent(state, event.snapshot, deps);
+    for (const live of event.events) next = reduceEvent(next, live, deps);
+    return next;
+  }
+  if (event.type === "__maestro_load") return { ...state, maestro: event.state };
+  if (event.type === "__execution_projections_load") {
     if (event.connectionGeneration !== state.connectionGeneration || (state.executionProjectionsLoaded && event.revision < state.executionProjectionRevision)) return state;
     const todoProjections = new Map<string, TodoProjection>();
     const teammateProjections = new Map<string, TeammateProjection>();
@@ -399,34 +397,14 @@ export function reduceEvent(state: AppState, event: AppAction, deps: AppStateDep
     return { ...state, sessions, targetedSessions, activeSessionTargets, hostSessionUsage, hostSessionList: event.list };
   }
 
-    if (event.type === "__snapshot_load") {
-      // Snapshot nextSeq belongs to the selected runner. It must never be compared with
-    // Host-global wire event seq, even when both values happen to be numeric.
+  if (event.type === "__snapshot_load") {
     const targetKey = event.target ? sessionTargetKey(event.target) : undefined;
-    const snapshotKey = targetKey ? `target:${targetKey}` : `session:${event.session.id}`;
-    const previousSnapshotNextSeq = state.snapshotNextSeq.get(snapshotKey) ?? 0;
-    const previousSnapshotWireSeq = state.snapshotWireSeq.get(snapshotKey) ?? 0;
-    if (event.seq > 0 && event.seq < previousSnapshotNextSeq) return state;
-    if (event.seq > 0 && event.seq === previousSnapshotNextSeq
-      && (event.wireSeq === undefined || event.wireSeq <= previousSnapshotWireSeq)) return state;
-    if (event.seq === 0 && event.wireSeq !== undefined && event.wireSeq <= previousSnapshotWireSeq) return state;
-    const seenWireSeq = targetKey
-      ? (state.targetProjectionEventSeq.get(targetKey) ?? 0)
-      : (state.sessionProjectionEventSeq.get(event.session.id) ?? 0);
-    if (event.wireSeq !== undefined && event.wireSeq > 0 && event.wireSeq <= seenWireSeq) return state;
-    // A legacy readerless snapshot has no runner or wire ordering authority. Once a live
-    // projection exists, keep it instead of replacing it with an unordered readonly view.
-    if (event.seq === 0 && event.wireSeq === undefined
-      && (targetKey ? state.targetEventSeq.has(targetKey) : state.sessions.has(event.session.id))) return state;
     const sessions = new Map(state.sessions);
     sessions.set(event.session.id, event.session);
     const targetedSessions = new Map(state.targetedSessions);
     const activeSessionTargets = new Map(state.activeSessionTargets);
     const timelines = new Map(state.timelines);
     const targetedTimelines = new Map(state.targetedTimelines);
-    const targetEventSeq = new Map(state.targetEventSeq);
-    const snapshotNextSeq = new Map(state.snapshotNextSeq);
-    const snapshotWireSeq = new Map(state.snapshotWireSeq);
     const items = event.items.length > 0 ? event.items : [];
     if (targetKey) {
       targetedSessions.set(targetKey, event.session);
@@ -435,8 +413,6 @@ export function reduceEvent(state: AppState, event: AppAction, deps: AppStateDep
     } else {
       timelines.set(event.session.id, items);
     }
-    if (event.seq > 0) snapshotNextSeq.set(snapshotKey, event.seq);
-    if (event.wireSeq !== undefined) snapshotWireSeq.set(snapshotKey, event.wireSeq);
     return {
       ...state,
       sessions,
@@ -447,42 +423,7 @@ export function reduceEvent(state: AppState, event: AppAction, deps: AppStateDep
       sessionAlerts: targetKey
         ? new Map([...state.sessionAlerts].filter(([key]) => key !== targetKey))
         : state.sessionAlerts,
-      targetEventSeq,
-      snapshotNextSeq,
-      snapshotWireSeq,
     };
-  }
-  const eventSeq = "seq" in event && typeof event.seq === "number" ? event.seq : undefined;
-  const targetKey = "target" in event && event.target && isSessionTargetIdentity(event.target)
-    ? sessionTargetKey(event.target)
-    : event.type === "session_execution_updated" && isSessionTargetIdentity(event.summary?.target)
-      ? sessionTargetKey(event.summary.target)
-      : undefined;
-  const projectionSessionId = event.type === "session_updated"
-    ? event.session.id
-    : event.type === "timeline_item" || event.type === "timeline_snapshot" || event.type === "timeline_delta"
-      ? event.sessionId
-      : undefined;
-  const previousTargetSeq = targetKey ? (state.targetEventSeq.get(targetKey) ?? 0) : state.eventSeq;
-  if (eventSeq !== undefined && eventSeq > 0 && eventSeq <= previousTargetSeq) return state;
-  if (targetKey && eventSeq !== undefined && eventSeq > previousTargetSeq) {
-    const targetEventSeq = new Map(state.targetEventSeq);
-    targetEventSeq.set(targetKey, eventSeq);
-    if (projectionSessionId) {
-      const targetProjectionEventSeq = new Map(state.targetProjectionEventSeq);
-      targetProjectionEventSeq.set(targetKey, eventSeq);
-      state = { ...state, targetEventSeq, targetProjectionEventSeq };
-    } else {
-      state = { ...state, targetEventSeq };
-    }
-  } else if (!targetKey && eventSeq !== undefined && eventSeq > state.eventSeq) {
-    if (projectionSessionId) {
-      const sessionProjectionEventSeq = new Map(state.sessionProjectionEventSeq);
-      sessionProjectionEventSeq.set(projectionSessionId, eventSeq);
-      state = { ...state, eventSeq, sessionProjectionEventSeq };
-    } else {
-      state = { ...state, eventSeq };
-    }
   }
   const queue = deps.dialogQueue;
   if (event.type === "__connection_reset") {
@@ -492,7 +433,7 @@ export function reduceEvent(state: AppState, event: AppAction, deps: AppStateDep
     return {
       ...fresh,
       connectionStatus: state.connectionStatus,
-      connectionGeneration: Math.max(state.connectionGeneration + 1, event.connectionGeneration ?? 0),
+      connectionGeneration: event.connectionGeneration ?? state.connectionGeneration + 1,
     };
   }
   if (event.type === "__revision") {

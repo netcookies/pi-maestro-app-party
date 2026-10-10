@@ -119,6 +119,23 @@ describe("MobileClient", () => {
     client.dispose();
   });
 
+  it("ignores an old socket close after reconnectNow establishes a newer generation", () => {
+    const first = new FakeSocket();
+    const second = new FakeSocket();
+    const sockets = [first, second];
+    const client = createMobileClient({ url: "ws://host/ws", wsFactory: () => sockets.shift()! });
+    client.connect();
+    first.open();
+    first.receive({ type: "protocol_ready", protocolVersion: 2, hostVersion: "1.0.0", capabilities: [], revision: 1 });
+    client.reconnectNow();
+    second.open();
+    second.receive({ type: "protocol_ready", protocolVersion: 2, hostVersion: "1.0.0", capabilities: [], revision: 2 });
+    expect(client.isProtocolReady).toBe(true);
+    first.onclose?.();
+    expect(client.isProtocolReady).toBe(true);
+    expect(client.connectionState).toBe("connected");
+    client.dispose();
+  });
   it("removes event listeners on unsubscribe and dispose", () => {
     const socket = new FakeSocket();
     const events: string[] = [];

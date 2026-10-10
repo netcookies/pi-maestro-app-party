@@ -23,7 +23,7 @@ Desktop Plugin v1 不再兼容：旧 TUI 必须 reload/restart 后使用 v2；Ho
 
 通用契约缺失先补协议，可复用客户端语义放 SDK；展示问题留在 App。兼容 facade 可保留，禁止另建类型或校验器副本。测试在责任层验证，并覆盖直接受影响的消费者。
 
-当前迁移债务：App 的 snapshot/live 衔接、wire watermark 与恢复代际尚未全部迁入 SDK，迁移时须保留页面加载取消和 React 投影语义。
+当前恢复契约：`createMobileRecovery`（`packages/mobile-sdk`）统一负责连接代次、exact-target snapshot flight、snapshot/live buffer、`wireSeq` cut、legacy snapshot 保护、请求取消/替代和 bounded buffer。App 只消费 `onUpdate` 的 reset、live event、atomic snapshot transaction 与 bootstrap projection，继续负责页面 loading cancellation、React/domain projection、16ms UI microbatch 和本地缓存；`nextSeq`（runner-local）与 `wireSeq`（Host-global）仍不可混用。
 
 ## 会话状态模型
 

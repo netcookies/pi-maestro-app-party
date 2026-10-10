@@ -60,7 +60,7 @@ function modelNameOf(value: unknown): string | undefined {
 export default function SessionScreen() {
   const { id, targetKey, from } = useLocalSearchParams<{ id: string; targetKey?: string; from?: string }>();
   const router = useRouter();
-  const { state, hostUrl, sendPrompt, sendAbort, answerDialog, cancelDialog, respondPlan, cancelPlan, loadSessionHistory, loadMoreHistory, searchHistory, setThinking, listSkills, isConnected, connectionState, lastError, clearError: dispatchLocalError } = useHost();
+  const { state, hostUrl, sendPrompt, sendAbort, answerDialog, cancelDialog, respondPlan, cancelPlan, selectSessionTarget, loadSessionHistory, loadMoreHistory, searchHistory, setThinking, listSkills, isConnected, connectionState, lastError, clearError: dispatchLocalError } = useHost();
   const { theme } = useTheme();
   const { t } = useI18n();
   const cfg = getConfig();
@@ -260,6 +260,11 @@ export default function SessionScreen() {
     hasTimelineSnapshot: Boolean(selectedTargetKey && state.targetedTimelines.has(selectedTargetKey)),
   });
 
+  useEffect(() => {
+    selectSessionTarget(id ?? null, selectedTargetKey);
+    return () => selectSessionTarget(null);
+  }, [id, selectedTargetKey, selectSessionTarget]);
+
   // 只有 exact target 已解析后才允许请求该 target 的历史；解析期间保持 loading，不能用旧 target 或 session 级 timeline 兜底。
   const shouldLoadHistory = Boolean(id && selectedTargetKey)
     && !state.targetedTimelines.has(selectedTargetKey ?? "");
@@ -275,12 +280,17 @@ export default function SessionScreen() {
     }
     if (historyStartedRef.current === historyRequestKey) return;
     let active = true;
+    const controller = new AbortController();
     historyStartedRef.current = historyRequestKey;
     setHistoryState("loading");
-    void loadSessionHistory(id, selectedTargetKey)
+    void loadSessionHistory(id, selectedTargetKey, { signal: controller.signal })
       .then(() => { if (active) setHistoryState("loaded"); })
       .catch(() => { if (active) setHistoryState("error"); });
-    return () => { active = false; };
+    return () => {
+      active = false;
+      controller.abort();
+      if (historyStartedRef.current === historyRequestKey) historyStartedRef.current = "";
+    };
   }, [historyRequestKey, historyRetry, id, loadSessionHistory, selectedTargetKey, shouldLoadHistory]);
 
   const timelineRows = useMemo(() => buildTimelineRows(timeline), [timeline]);

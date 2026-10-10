@@ -90,6 +90,11 @@ export class ProtocolNotReadyError extends Error {
   }
 }
 
+export class CommandCancelledError extends Error {
+  readonly code = "command_cancelled";
+  constructor() { super("Command waiter cancelled locally"); this.name = "CommandCancelledError"; }
+}
+
 export class CommandFailedError extends Error {
   readonly code: string;
   readonly status: CommandResult["status"];
@@ -173,6 +178,7 @@ export class MobileClient {
   }
 
   connect(): void {
+    if (this.ws || this.reconnectTimer) return;
     this.closed = false;
     this.authFailed = false;
     this.openSocket();
@@ -200,6 +206,7 @@ export class MobileClient {
     this.socketGeneration += 1;
     this.ws?.close();
     this.ws = null;
+    this.setState("reconnecting");
     this.rejectAllPending("connection_lost");
     this.openSocket();
   }
@@ -226,23 +233,29 @@ export class MobileClient {
     this.revisionListeners.clear();
   }
 
-  sendCommand(command: ClientCommand & { id?: string }, timeoutMs = 30_000): Promise<unknown> {
+  sendCommand(command: ClientCommand & { id?: string }, timeoutMs = 30_000, signal?: AbortSignal): Promise<unknown> {
+    if (signal?.aborted) return Promise.reject(new CommandCancelledError());
     if (!this.protocolReady || !this.ws || this.ws.readyState !== WS_OPEN) {
       return Promise.reject(new ProtocolNotReadyError());
     }
     const id = command.id ?? `cmd-${++this.commandSeq}`;
     const payload = { ...command, id };
     return new Promise((resolve, reject) => {
+      const cleanup = () => { clearTimeout(timer); signal?.removeEventListener("abort", abort); };
+      const abort = () => { this.pendingCommands.delete(id); cleanup(); reject(new CommandCancelledError()); };
       const timer = setTimeout(() => {
         this.pendingCommands.delete(id);
+        cleanup();
         reject(new Error(`Command timeout: ${payload.type}`));
       }, timeoutMs);
       this.pendingCommands.set(id, {
         commandType: payload.type,
-        resolve: (result) => { clearTimeout(timer); resolve(result); },
-        reject: (error) => { clearTimeout(timer); reject(error); },
+        resolve: (result) => { cleanup(); resolve(result); },
+        reject: (error) => { cleanup(); reject(error); },
       });
-      this.sendRaw(JSON.stringify(payload));
+      signal?.addEventListener("abort", abort, { once: true });
+      try { this.sendRaw(JSON.stringify(payload)); }
+      catch (error) { this.pendingCommands.delete(id); cleanup(); reject(error); }
     });
   }
 
@@ -254,12 +267,12 @@ export class MobileClient {
     return this.sendCommand({ type: "desktop_plan_response", sessionId, requestId, response, target });
   }
 
-  getExecutionProjections(): Promise<{ projections: ExecutionProjection[]; revision: number }> {
-    return this.sendCommand({ type: "get_execution_projections" }) as Promise<{ projections: ExecutionProjection[]; revision: number }>;
+  getExecutionProjections(options?: { signal?: AbortSignal }): Promise<{ projections: ExecutionProjection[]; revision: number }> {
+    return this.sendCommand({ type: "get_execution_projections" }, 30_000, options?.signal) as Promise<{ projections: ExecutionProjection[]; revision: number }>;
   }
 
-  getSnapshot(sessionId: string, target: SessionTargetIdentity): Promise<SessionSnapshot> {
-    return this.sendCommand({ type: "get_snapshot", sessionId, target }) as Promise<SessionSnapshot>;
+  getSnapshot(sessionId: string, target: SessionTargetIdentity, options?: { signal?: AbortSignal }): Promise<SessionSnapshot> {
+    return this.sendCommand({ type: "get_snapshot", sessionId, target }, 30_000, options?.signal) as Promise<SessionSnapshot>;
   }
 
   private openSocket(): void {
@@ -298,11 +311,14 @@ export class MobileClient {
       this.handleRawMessage(data.data, generation);
     };
     ws.onclose = () => {
+      if (generation !== this.socketGeneration) return;
+      this.socketGeneration += 1;
+      this.ws = null;
       this.stopPing();
       this.protocolReady = false;
-      if (this.closed || generation !== this.socketGeneration) return;
+      if (this.closed) return;
       this.rejectAllPending("connection_lost");
-      if (this.state !== "connected" && Date.now() - this.connectStartedAt < 2_000 && this.reconnectAttempt >= 1) {
+      if (this.state !== "connected" && this.reconnectAttempt >= 1) {
         this.suspectAuthFailure = true;
       }
       this.scheduleReconnect();
@@ -328,7 +344,9 @@ export class MobileClient {
     if (this.closed) return;
     if (this.suspectAuthFailure) {
       this.suspectAuthFailure = false;
+      this.setState("reconnecting");
       void this.verifyAuthFailure();
+      return;
     }
     this.setState("reconnecting");
     const delay = calculateBackoffDelay(this.reconnectBaseMs, this.reconnectMaxMs, this.reconnectAttempt, this.random);
@@ -364,7 +382,8 @@ export class MobileClient {
         this.emitError("token 校验失败 —— 在 PC 终端执行 /maestro-mobile qr 重新扫码配对");
       }
     } catch {
-      // Network failure is not evidence of an invalid token.
+      // Network failure is not evidence of an invalid token; resume normal backoff.
+      if (!this.closed && this.state !== "connected") this.scheduleReconnect();
     }
   }
 

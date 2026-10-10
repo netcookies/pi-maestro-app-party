@@ -21,7 +21,7 @@ import {
   type ExecutionProjection,
   type DesktopPlanResponse,
 } from "@maestro-mobile/shared";
-import { HostClient, type ConnectionState } from "@maestro-mobile/mobile-sdk";
+import { HostClient, createMobileRecovery, type ConnectionState, type RecoveryCoordinator } from "@maestro-mobile/mobile-sdk";
 import { beginGracePeriod, endGracePeriod, isAndroidRuntime, isIosRuntime, startBackgroundService, stopBackgroundService } from "./background-runtime";
 import { getConfig } from "./config";
 import { consumePlanNotificationEvent, emitInAppError } from "./notifications";
@@ -38,6 +38,7 @@ import {
   updateStartupSnapshot,
 } from "./mobile-startup-cache";
 import { singleFlight, stableRequestKey } from "./request-coordinator";
+import { projectRecoveryUpdate } from "./recovery-projection";
 
 import {
   createInitialState,
@@ -64,7 +65,8 @@ export interface HostStoreValue {
   refreshMaestroState(): Promise<MaestroState | null>;
   refreshMonitor(): Promise<MonitorState>;
   refreshExecutionProjections(): Promise<ExecutionProjection[]>;
-  loadSessionHistory(sessionId: string, targetKey?: string): Promise<void>;
+  loadSessionHistory(sessionId: string, targetKey?: string, options?: { signal?: AbortSignal }): Promise<void>;
+  selectSessionTarget(sessionId: string | null, targetKey?: string): void;
   loadMoreHistory(sessionId: string, count?: number): Promise<{ items: TimelineItem[]; hasMore: boolean; totalEntries: number }>;
   searchHistory(sessionId: string, keyword: string, maxResults?: number, previewLength?: number): Promise<{ matches: { index: number; text: string; kind: string }[]; totalEntries: number }>;
   listModels(sessionId: string): Promise<{ id: string; provider: string; name: string; reasoning: boolean; vision: boolean }[]>;
@@ -100,10 +102,6 @@ export function normalizeThinkingResult(result: unknown): { ok: boolean; error?:
 
 const HostStoreContext = createContext<HostStoreValue | null>(null);
 
-function isSnapshotProjectionEvent(event: HostEvent): boolean {
-  return event.type === "session_updated" || event.type === "timeline_item" || event.type === "timeline_delta";
-}
-
 export function HostStoreProvider({ children }: { children: React.ReactNode }) {
   const queueRef = useRef(new ExtensionUiQueue());
   const planQueueRef = useRef(new PlanQueue());
@@ -116,7 +114,7 @@ export function HostStoreProvider({ children }: { children: React.ReactNode }) {
   /** Current active exact target for each session id; sibling targets are retained by target key. */
   const sessionTargetsRef = useRef(new Map<string, SessionTargetIdentity>());
   const activeTargetKeysRef = useRef(new Map<string, string>());
-  const reloadGenerationRef = useRef(0);
+  const recoveryRef = useRef<RecoveryCoordinator | null>(null);
   const requestFlightsRef = useRef(new Map<string, Promise<unknown>>());
   const hostUrlRef = useRef(hostUrl);
   const tokenRef = useRef(token);
@@ -126,7 +124,6 @@ export function HostStoreProvider({ children }: { children: React.ReactNode }) {
   // H4：实时事件微批 — 同一帧内的 WS 事件合并为一次 reducer 执行，
   // 避免流式 delta 逐条触发全局重渲染。16ms 窗口上限（≈1 帧）。
   const eventBufferRef = useRef<HostEvent[]>([]);
-  const snapshotEventBuffersRef = useRef(new Map<string, { generation: number; events: HostEvent[] }>());
   const flushTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const flushBufferedEvents = useCallback(() => {
     flushTimerRef.current = null;
@@ -160,13 +157,6 @@ export function HostStoreProvider({ children }: { children: React.ReactNode }) {
     if ("target" in event && event.target && isSessionTargetIdentity(event.target)) {
       sessionTargetsRef.current.set(sessionTargetKey(event.target), event.target);
     }
-    if ("target" in event && event.target && isSnapshotProjectionEvent(event)) {
-      const pendingSnapshot = snapshotEventBuffersRef.current.get(sessionTargetKey(event.target));
-      if (pendingSnapshot) {
-        pendingSnapshot.events.push(event);
-        return;
-      }
-    }
     // 高优先级事件直发：连接状态/错误/弹窗不能等 16ms
     if (
       event.type === "host_status" || event.type === "host_info" || event.type === "error"
@@ -190,7 +180,6 @@ export function HostStoreProvider({ children }: { children: React.ReactNode }) {
     if (flushTimerRef.current) clearTimeout(flushTimerRef.current);
     flushTimerRef.current = null;
     eventBufferRef.current = [];
-    snapshotEventBuffersRef.current.clear();
   }, []);
 
   const [state, dispatch] = useReducer(
@@ -225,30 +214,10 @@ export function HostStoreProvider({ children }: { children: React.ReactNode }) {
     return { target };
   }, [targetForSession]);
 
-  const beginSnapshotBuffer = useCallback((target: SessionTargetIdentity | undefined, generation: number): string | undefined => {
-    flushPendingEvents();
-    if (!target) return undefined;
-    const key = sessionTargetKey(target);
-    const existing = snapshotEventBuffersRef.current.get(key);
-    snapshotEventBuffersRef.current.set(key, { generation, events: existing?.events ?? [] });
-    return key;
-  }, [flushPendingEvents]);
-
-  const releaseSnapshotBuffer = useCallback((key: string | undefined, generation: number, wireSeq?: number) => {
-    if (!key) return;
-    const pending = snapshotEventBuffersRef.current.get(key);
-    if (!pending || pending.generation !== generation) return;
-    snapshotEventBuffersRef.current.delete(key);
-    const events = wireSeq === undefined
-      ? pending.events
-      : pending.events.filter((event) => event.seq >= wireSeq);
-    if (events.length === 1) dispatch(events[0]);
-    else if (events.length > 1) dispatch({ type: "__event_batch", events });
-  }, []);
-
   const connect = useCallback((url: string, tok?: string) => {
     clearBufferedEvents();
     requestFlightsRef.current.clear();
+    recoveryRef.current?.dispose();
     clientRef.current?.close();
     sessionTargetsRef.current.clear();
     activeTargetKeysRef.current.clear();
@@ -259,7 +228,6 @@ export function HostStoreProvider({ children }: { children: React.ReactNode }) {
       token: tok,
       reconnectBaseMs: 1000,
       reconnectMaxMs: 15000,
-      onEvent: dispatchBuffered,
       onRevisionChange: (revision) => dispatch({ type: "__revision", revision }),
       // ISS-002：断连导致的命令失败必须提示到 UI（app/session.tsx 承诺「错误由 store.lastError 提示」，
       // 但 lastError 原本只由 host 推的事件写入，本地 reject 进不了 reducer）。
@@ -274,88 +242,30 @@ export function HostStoreProvider({ children }: { children: React.ReactNode }) {
         if (s === "disconnected" || s === "reconnecting") {
           recordDiagnostic({ kind: "local", source: "connection", message: s });
           clearBufferedEvents();
-          dispatch({ type: "__connection_reset", connectionGeneration: stateRef.current.connectionGeneration + 1 });
-        }
-        // P2-2：断线重连成功后，为重连前活动的会话补拉 snapshot（代次号防陈旧响应覆盖新状态）
-        if (s === "connected") {
-          const projectionConnectionGeneration = stateRef.current.connectionGeneration;
-          void singleFlight(
-            requestFlightsRef.current,
-            stableRequestKey("get_execution_projections", { generation: projectionConnectionGeneration }),
-            () => client.getExecutionProjections(),
-          )
-            .then((result) => {
-              const projections = executionProjectionsFromCommandResult(result);
-              if (clientRef.current !== client || stateRef.current.connectionGeneration !== projectionConnectionGeneration) return;
-              dispatch({ type: "__execution_projections_load", projections, revision: result.revision, connectionGeneration: projectionConnectionGeneration });
-              void updateStartupSnapshot(startupCacheIdentity(url, tok), { executionProjections: projections });
-            })
-            .catch(() => undefined);
-          void singleFlight(
-            requestFlightsRef.current,
-            stableRequestKey("get_maestro_state", { generation: projectionConnectionGeneration }),
-            () => client.sendCommand({ type: "get_maestro_state" }),
-          )
-            .then((result) => {
-              if (result && typeof result === "object" && Array.isArray((result as { schedules?: unknown }).schedules)) {
-                dispatch({ type: "maestro_state", state: result as MaestroState, seq: 0 });
-                void updateStartupSnapshot(startupCacheIdentity(url, tok), { maestro: result as MaestroState });
-              }
-            })
-            .catch(() => undefined);
-          void singleFlight(
-            requestFlightsRef.current,
-            stableRequestKey("list_host_sessions", { generation: projectionConnectionGeneration, options: { limit: 100 } }),
-            () => client.sendCommand({ type: "list_host_sessions", limit: 100 }),
-          )
-            .then((result) => {
-              if (clientRef.current !== client || stateRef.current.connectionGeneration !== projectionConnectionGeneration) return;
-              if (!result || typeof result !== "object" || !Array.isArray((result as { sessions?: unknown }).sessions)) return;
-              const list = result as HostSessionList;
-              for (const session of list.sessions) {
-                if (!session.target || !isSessionTargetIdentity(session.target)
-                  || session.target.sessionId !== session.sessionId
-                  || session.target.endpointId !== session.endpointId
-                  || (session.targetKey !== undefined && session.targetKey !== sessionTargetKey(session.target))) continue;
-                const key = sessionTargetKey(session.target);
-                sessionTargetsRef.current.set(key, session.target);
-              }
-              void updateStartupSnapshot(startupCacheIdentity(url, tok), { sessions: list });
-              dispatch({
-                type: "__host_session_list_load",
-                list: { ...list, sessions: filterSessionsByVisibility(list.sessions, "session_list") },
-                connectionGeneration: projectionConnectionGeneration,
-              });
-            })
-            .catch(() => undefined);
-          const sessionId = activeSessionRef.current;
-          if (sessionId && client.isConnected) {
-            const generation = ++reloadGenerationRef.current;
-            const target = targetForSession(sessionId);
-            if (!target) return;
-            const snapshotBufferKey = beginSnapshotBuffer(target, generation);
-            void client
-              .getSnapshot(sessionId, target)
-              .then((snapshot) => {
-                if (generation !== reloadGenerationRef.current) {
-                  releaseSnapshotBuffer(snapshotBufferKey, generation);
-                  return;
-                }
-                dispatch({ type: "__snapshot_load", session: snapshot.session, items: snapshot.timeline, seq: snapshot.nextSeq, ...(typeof snapshot.wireSeq === "number" ? { wireSeq: snapshot.wireSeq } : {}), target });
-                releaseSnapshotBuffer(snapshotBufferKey, generation, snapshot.wireSeq);
-              })
-              .catch(() => releaseSnapshotBuffer(snapshotBufferKey, generation));
-          }
         }
       },
     });
     clientRef.current = client;
+    recoveryRef.current = createMobileRecovery(client, {
+      onUpdate: (update) => {
+        if (update.type === "reset") clearBufferedEvents();
+        projectRecoveryUpdate(update, { dispatch, flushPendingEvents, clearPendingEvents: clearBufferedEvents, dispatchBuffered, sessionTargets: sessionTargetsRef.current });
+        if (update.type === "bootstrap") {
+          const identity = startupCacheIdentity(url, tok);
+          if (update.query === "execution_projections") void updateStartupSnapshot(identity, { executionProjections: update.result.projections });
+          else if (update.query === "maestro_state") void updateStartupSnapshot(identity, { maestro: update.result });
+          else void updateStartupSnapshot(identity, { sessions: update.result });
+        }
+      },
+    });
     client.connect();
-  }, [beginSnapshotBuffer, clearBufferedEvents, dispatchBuffered, releaseSnapshotBuffer, targetForSession]);
+  }, [clearBufferedEvents, dispatchBuffered, flushPendingEvents, targetForSession]);
 
   const disconnect = useCallback(() => {
     clearBufferedEvents();
     requestFlightsRef.current.clear();
+    recoveryRef.current?.dispose();
+    recoveryRef.current = null;
     clientRef.current?.close();
     clientRef.current = null;
     queueRef.current.clearAll();
@@ -378,7 +288,7 @@ export function HostStoreProvider({ children }: { children: React.ReactNode }) {
           client.reconnectNow();
           return;
         }
-        void refreshAfterActivation(client);
+        void recoveryRef.current?.refresh();
         return;
       }
       if (nextState === "background" || nextState === "inactive") {
@@ -391,45 +301,12 @@ export function HostStoreProvider({ children }: { children: React.ReactNode }) {
     return () => subscription?.remove();
   }, []);
 
-  const refreshAfterActivation = useCallback(async (client: HostClient) => {
-    const generation = stateRef.current.connectionGeneration;
-    const sessionId = activeSessionRef.current;
-    void client.getExecutionProjections().then((result) => {
-      if (clientRef.current !== client || generation !== stateRef.current.connectionGeneration) return;
-      dispatch({ type: "__execution_projections_load", projections: executionProjectionsFromCommandResult(result), revision: result.revision, connectionGeneration: generation });
-    }).catch(() => undefined);
-    void client.sendCommand({ type: "get_maestro_state" }).then((result) => {
-      if (clientRef.current !== client || generation !== stateRef.current.connectionGeneration) return;
-      if (result && typeof result === "object" && Array.isArray((result as { schedules?: unknown }).schedules)) dispatch({ type: "maestro_state", state: result as MaestroState, seq: 0 });
-    }).catch(() => undefined);
-    void client.sendCommand({ type: "list_host_sessions", limit: 100 }).then((result) => {
-      if (clientRef.current !== client || generation !== stateRef.current.connectionGeneration) return;
-      if (!result || typeof result !== "object" || !Array.isArray((result as { sessions?: unknown }).sessions)) return;
-      const list = result as HostSessionList;
-      for (const session of list.sessions) {
-        if (session.target && isSessionTargetIdentity(session.target)) sessionTargetsRef.current.set(sessionTargetKey(session.target), session.target);
-      }
-      dispatch({ type: "__host_session_list_load", list: { ...list, sessions: filterSessionsByVisibility(list.sessions, "session_list") }, connectionGeneration: generation });
-    }).catch(() => undefined);
-    if (sessionId) {
-      const target = targetForSession(sessionId);
-      if (!target) return;
-      const snapshotGeneration = ++reloadGenerationRef.current;
-      const bufferKey = beginSnapshotBuffer(target, snapshotGeneration);
-      void client.getSnapshot(sessionId, target).then((snapshot) => {
-        if (clientRef.current !== client || snapshotGeneration !== reloadGenerationRef.current) return;
-        dispatch({ type: "__snapshot_load", session: snapshot.session, items: snapshot.timeline, seq: snapshot.nextSeq, ...(typeof snapshot.wireSeq === "number" ? { wireSeq: snapshot.wireSeq } : {}), target });
-        releaseSnapshotBuffer(bufferKey, snapshotGeneration, snapshot.wireSeq);
-      }).catch(() => releaseSnapshotBuffer(bufferKey, snapshotGeneration));
-    }
-  }, [beginSnapshotBuffer, dispatch, releaseSnapshotBuffer, targetForSession]);
-
   const activate = useCallback(() => {
     const client = clientRef.current;
     if (!client) return;
     if (!client.isConnected || !client.isProtocolReady) client.reconnectNow();
-    else void refreshAfterActivation(client);
-  }, [refreshAfterActivation]);
+    else void recoveryRef.current?.refresh();
+  }, []);
 
   // 冷启动自动连接：App 打开即恢复上次 Host 连接（方向 A 重构后连接卡移入 host-sessions tab，
   // 而 bottom-tabs 默认 lazy mount —— 停留在工作台时永远没人发起连接。这里在 Provider 层兜底，
@@ -671,7 +548,7 @@ export function HostStoreProvider({ children }: { children: React.ReactNode }) {
     await getClient().sendCommand({ type: "abort", sessionId, ...targetOptions(sessionId) });
   }, [getClient, targetOptions]);
 
-  const loadSessionHistory = useCallback(async (sessionId: string, targetKey?: string): Promise<void> => {
+  const loadSessionHistory = useCallback(async (sessionId: string, targetKey?: string, options?: { signal?: AbortSignal }): Promise<void> => {
     const target = targetForSession(sessionId, targetKey);
     if (!target) {
       const error = new Error(`Exact session target is required for ${sessionId}`);
@@ -680,22 +557,17 @@ export function HostStoreProvider({ children }: { children: React.ReactNode }) {
     }
     if (targetKey) activeTargetKeysRef.current.set(sessionId, targetKey);
     activeSessionRef.current = sessionId;
-    const generation = ++reloadGenerationRef.current;
-    const snapshotBufferKey = beginSnapshotBuffer(target, generation);
-    try {
-      const snapshot = await getClient().getSnapshot(sessionId, target);
-      if (generation !== reloadGenerationRef.current) {
-        releaseSnapshotBuffer(snapshotBufferKey, generation);
-        return;
-      }
-      dispatch({ type: "__snapshot_load", session: snapshot.session, items: snapshot.timeline, seq: snapshot.nextSeq, ...(typeof snapshot.wireSeq === "number" ? { wireSeq: snapshot.wireSeq } : {}), ...(target ? { target } : {}) });
-      releaseSnapshotBuffer(snapshotBufferKey, generation, snapshot.wireSeq);
-    } catch (error) {
-      releaseSnapshotBuffer(snapshotBufferKey, generation);
-      dispatch({ type: "__local_error", message: error instanceof Error ? error.message : String(error) });
-      throw error;
-    }
-  }, [beginSnapshotBuffer, getClient, dispatch, releaseSnapshotBuffer, targetForSession]);
+    const recovery = recoveryRef.current;
+    if (!recovery) throw new Error("Recovery coordinator not initialized");
+    recovery.setActiveTarget(target);
+    await recovery.recoverSession(target, options);
+  }, [targetForSession]);
+
+  const selectSessionTarget = useCallback((sessionId: string | null, targetKey?: string) => {
+    if (sessionId && targetKey) activeTargetKeysRef.current.set(sessionId, targetKey);
+    activeSessionRef.current = sessionId;
+    recoveryRef.current?.setActiveTarget(sessionId ? targetForSession(sessionId, targetKey) ?? null : null);
+  }, [targetForSession]);
 
   const loadMoreHistory = useCallback(async (sessionId: string, count?: number): Promise<{ items: TimelineItem[]; hasMore: boolean; totalEntries: number }> => {
     const target = targetForSession(sessionId);
@@ -791,6 +663,7 @@ export function HostStoreProvider({ children }: { children: React.ReactNode }) {
       refreshMonitor,
       refreshExecutionProjections,
       loadSessionHistory,
+      selectSessionTarget,
       loadMoreHistory,
       searchHistory,
       listModels,
@@ -812,7 +685,7 @@ export function HostStoreProvider({ children }: { children: React.ReactNode }) {
       lastError: state.lastError,
       clearError,
     }),
-    [state, connectionState, hostUrl, token, connect, disconnect, activate, listHostSessions, refreshMaestroState, refreshMonitor, refreshExecutionProjections, loadSessionHistory, loadMoreHistory, searchHistory, listModels, listSkills, getMaestroSettings, updateMaestroSettings, fetchSessionUsage, setModel, setThinking, sendPrompt, sendSteer, sendAbort, getNotificationConfig, testNotification, answerDialog, cancelDialog, respondPlan, cancelPlan, clearError],
+    [state, connectionState, hostUrl, token, connect, disconnect, activate, listHostSessions, refreshMaestroState, refreshMonitor, refreshExecutionProjections, loadSessionHistory, selectSessionTarget, loadMoreHistory, searchHistory, listModels, listSkills, getMaestroSettings, updateMaestroSettings, fetchSessionUsage, setModel, setThinking, sendPrompt, sendSteer, sendAbort, getNotificationConfig, testNotification, answerDialog, cancelDialog, respondPlan, cancelPlan, clearError],
 
   );
 
