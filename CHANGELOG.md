@@ -2,6 +2,12 @@
 
 本文件记录 Maestro Mobile 的显著变更。格式基于 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)。
 
+## [0.11.0] — 2026-10-10
+
+### 新增
+
+- 迁移移动端恢复编排到 SDK
+
 ## [0.10.1] — 2026-10-09
 
 ### 修复
