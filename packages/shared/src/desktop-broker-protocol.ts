@@ -17,6 +17,7 @@ import type {
   DesktopPluginTarget,
 } from "./desktop-plugin-protocol.js";
 import {
+  DESKTOP_PEER_FEATURE,
   DESKTOP_PLUGIN_PROTOCOL_VERSION,
   isDesktopPluginModel,
   isDesktopPluginExecutionSummary,
@@ -58,6 +59,7 @@ export interface DesktopBrokerTargetRecord {
   /** Session JSONL metadata; exact target identity remains the four target fields. */
   sessionFile?: string;
   capabilities: DesktopPluginCapability[];
+  features?: string[];
   model?: DesktopPluginModel;
   thinkingLevel?: string;
   runtimeStatus: DesktopPluginRuntimeStatus;
@@ -301,6 +303,7 @@ function isDesktopBrokerTargetRecord(value: unknown): value is DesktopBrokerTarg
     && isDesktopPluginTarget(value.target)
     && optionalString(value, "sessionFile")
     && isDesktopPluginCapabilityArray(value.capabilities)
+    && (value.features === undefined || Array.isArray(value.features) && value.features.every((feature) => feature === DESKTOP_PEER_FEATURE))
     && (value.model === undefined || isDesktopPluginModel(value.model))
     && optionalString(value, "thinkingLevel")
     && (value.runtimeStatus === "running" || value.runtimeStatus === "idle")

@@ -5,6 +5,8 @@ import { randomUUID } from "node:crypto";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import type { ImageContent, Model, TextContent } from "@earendil-works/pi-ai";
 import type { BackgroundJobSummary, DesktopPluginEvent, DesktopPluginExecutionSummary, DesktopPluginModel, DesktopPluginRuntimeStatus, DesktopPluginSessionSummary, DesktopPluginTarget, DesktopAskRequest, DesktopPlanResponse, JsonValue, MonitorTodoSummary, TeammateAgentState } from "@maestro-mobile/shared";
+import { DESKTOP_PEER_FEATURE } from "@maestro-mobile/shared";
+import { registerDesktopPeerCommand } from "./desktop-peer-extension.js";
 import { DesktopPluginIpcClient } from "./desktop-plugin-ipc.js";
 import {
   beginDesktopPluginRuntimeRecord,
@@ -332,6 +334,7 @@ function flowResultFromDesktopResponse(response: unknown): FlowAskTransportResul
 export function createDesktopPluginExtension(options: DesktopPluginExtensionOptions = {}) {
   return function desktopPluginExtension(pi: ExtensionAPI): void {
     let client: DesktopPluginIpcClient | undefined;
+    const peerCommand = registerDesktopPeerCommand(pi, () => client);
     let adapter: DesktopPiSessionAdapter | undefined;
     let reconnectTimer: ReturnType<typeof setTimeout> | undefined;
     let stopping = false;
@@ -520,6 +523,12 @@ export function createDesktopPluginExtension(options: DesktopPluginExtensionOpti
             target: sessionAdapter.target,
             ...(sessionFile ? { sessionFile } : {}),
             capabilities: sessionAdapter.getCapabilities(),
+            features: [DESKTOP_PEER_FEATURE],
+            onPeerDelivery: (delivery) => {
+              if (!isCurrentSession(generation, sessionAdapter)) return Promise.reject(new Error("target_unavailable"));
+              return peerCommand.receive(delivery);
+            },
+            onPeerReply: (reply) => peerCommand.onReply(reply),
             onRequest: (request) => sessionAdapter.execute(request),
             onAskResponse: async (response) => {
               const key = askCorrelationKey(response.requestId, response.toolCallId);
@@ -536,6 +545,7 @@ export function createDesktopPluginExtension(options: DesktopPluginExtensionOpti
             onDisconnected: () => {
               if (client !== candidate) return;
               client = undefined;
+              peerCommand.clear();
               for (const pending of pendingAskRequests.values()) {
                 pending.sentGeneration = undefined;
               }
@@ -620,6 +630,7 @@ export function createDesktopPluginExtension(options: DesktopPluginExtensionOpti
     };
 
     pi.on("session_start", (_event, ctx: ExtensionContext) => {
+      peerCommand.clear();
       sessionGeneration += 1;
       stopping = false;
       if (reconnectTimer) {
@@ -933,6 +944,7 @@ export function createDesktopPluginExtension(options: DesktopPluginExtensionOpti
     });
 
     pi.on("session_shutdown", async () => {
+      peerCommand.clear();
       const shutdownTarget = activeTarget;
       activeTarget = undefined;
       if (shutdownTarget) clearDesktopTargetIdentity(shutdownTarget);

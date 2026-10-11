@@ -4,6 +4,11 @@ import { access, chmod, mkdir, unlink } from "node:fs/promises";
 import net, { type Socket, type Server } from "node:net";
 import type {
   DesktopPluginCapability,
+  DesktopPeerAck,
+  DesktopPeerDelivery,
+  DesktopPeerRequest,
+  DesktopPeerReply,
+  DesktopPeerResult,
   DesktopAskRequest,
   DesktopPluginEvent,
   DesktopAskResponse,
@@ -29,6 +34,14 @@ import {
   isDesktopPluginServerFrame,
   validateDesktopPluginClientFrame,
   validateDesktopPluginServerFrame,
+  DESKTOP_PEER_FEATURE,
+  DESKTOP_PEER_MAX_DEADLINE_MS,
+  DESKTOP_PEER_MAX_PEERS,
+  isDesktopPeerAck,
+  isDesktopPeerRequest,
+  isDesktopPeerReply,
+  isDesktopPeerResult,
+  isDesktopPeerDelivery,
 } from "@maestro-mobile/shared";
 import { DesktopPluginRegistry, type DesktopPluginTransport } from "./desktop-plugin-registry.js";
 
@@ -57,6 +70,8 @@ export interface DesktopPluginIpcServerOptions {
   onAskRequest?: (target: DesktopPluginTarget, request: DesktopAskRequest) => void;
   onAskResponse?: (target: DesktopPluginTarget, response: DesktopAskResponse) => void;
   onPlanRequest?: (target: DesktopPluginTarget, request: DesktopPlanRequest) => void;
+  onPeerRequest?: (target: DesktopPluginTarget, request: DesktopPeerRequest, reply: (result: DesktopPeerResult) => void) => void;
+  onPeerReply?: (target: DesktopPluginTarget, reply: DesktopPeerReply) => void;
   onPlanResponse?: (target: DesktopPluginTarget, response: DesktopPlanResponse) => void;
   onDisconnected?: (target: DesktopPluginTarget) => void;
 }
@@ -73,6 +88,9 @@ export interface DesktopPluginIpcClientOptions {
   onRequest: (request: DesktopPluginRequest) => Promise<DesktopPluginResult>;
   onAskResponse?: (response: DesktopAskResponse) => Promise<void>;
   onPlanResponse?: (response: DesktopPlanResponse) => Promise<void>;
+  features?: string[];
+  onPeerDelivery?: (delivery: DesktopPeerDelivery) => Promise<void>;
+  onPeerReply?: (reply: DesktopPeerReply) => void;
   onDisconnected?: () => void;
 }
 
@@ -177,6 +195,7 @@ export class JsonLineConnection {
 class ServerTransport implements DesktopPluginTransport {
   private readonly pending = new Map<string, { resolve: (result: DesktopPluginResult) => void; reject: (error: Error) => void; timer: ReturnType<typeof setTimeout> }>();
   private readonly pendingAskResponses = new Map<string, { requestId: string; toolCallId: string; resolve: (result: DesktopAskResult) => void; reject: (error: Error) => void; timer: ReturnType<typeof setTimeout> }>();
+  private readonly pendingPeerDeliveries = new Map<string, { resolve: (ack: DesktopPeerAck) => void; reject: (error: Error) => void; cleanup: () => void }>();
   private readonly pendingPlanResponses = new Map<string, { requestId: string; kind: "confirm" | "review"; resolve: (result: DesktopPlanResult) => void; timer: ReturnType<typeof setTimeout> }>();
   private closed = false;
 
@@ -205,6 +224,36 @@ class ServerTransport implements DesktopPluginTransport {
         reject(error instanceof Error ? error : new Error("desktop plugin disconnected"));
       }
     });
+  }
+
+  deliverPeerMessage(delivery: DesktopPeerDelivery, signal: AbortSignal): Promise<"acknowledged" | "rejected"> {
+    if (this.closed) return Promise.reject(new Error("disconnected"));
+    return new Promise<DesktopPeerAck>((resolve, reject) => {
+      const finishError = (code: string) => { cleanup(); this.pendingPeerDeliveries.delete(delivery.deliveryId); reject(new Error(code)); };
+      const onAbort = () => finishError("disconnected");
+      const timer = setTimeout(() => finishError("deadline_exceeded"), Math.max(1, delivery.deadlineAt - Date.now()));
+      const cleanup = () => { clearTimeout(timer); signal.removeEventListener("abort", onAbort); };
+      this.pendingPeerDeliveries.set(delivery.deliveryId, { resolve, reject, cleanup });
+      signal.addEventListener("abort", onAbort, { once: true });
+      if (signal.aborted) { onAbort(); return; }
+      try { this.connection.send(delivery); } catch { finishError("disconnected"); }
+    }).then((ack) => ack.status);
+  }
+  handlePeerAck(ack: DesktopPeerAck): void {
+    const pending = this.pendingPeerDeliveries.get(ack.deliveryId);
+    if (!pending) return;
+    pending.cleanup(); this.pendingPeerDeliveries.delete(ack.deliveryId); pending.resolve(ack);
+  }
+
+
+  sendPeerReply(reply: DesktopPeerReply): boolean {
+    if (this.closed) return false;
+    try {
+      this.connection.send(reply);
+      return true;
+    } catch {
+      return false;
+    }
   }
 
   answerAsk(response: DesktopAskResponse): Promise<DesktopAskResult> {
@@ -280,6 +329,8 @@ class ServerTransport implements DesktopPluginTransport {
   close(): void {
     if (this.closed) return;
     this.closed = true;
+    for (const pending of this.pendingPeerDeliveries.values()) { pending.cleanup(); pending.reject(new Error("disconnected")); }
+    this.pendingPeerDeliveries.clear();
     for (const pending of this.pending.values()) {
       clearTimeout(pending.timer);
       pending.reject(new Error("desktop plugin disconnected"));
@@ -304,6 +355,7 @@ export class DesktopPluginIpcServer {
   private readonly server: Server;
   private readonly connections = new Set<JsonLineConnection>();
   private readonly targets = new Map<JsonLineConnection, DesktopPluginTarget>();
+  private readonly negotiatedFeatures = new Map<JsonLineConnection, Set<string>>();
   private started = false;
   private closed = false;
 
@@ -359,6 +411,7 @@ export class DesktopPluginIpcServer {
       if (target) {
         this.registry.unregister(target, transport);
         this.targets.delete(connection);
+        this.negotiatedFeatures.delete(connection);
         this.options.onDisconnected?.(target);
       }
     };
@@ -373,6 +426,18 @@ export class DesktopPluginIpcServer {
           this.options.onConnected?.(registeredTarget);
         });
         return;
+      }
+      if (raw && typeof raw === "object" && ((raw as { type?: unknown }).type === "desktop_peer_list" || (raw as { type?: unknown }).type === "desktop_peer_send")) {
+        if (isDesktopPeerRequest(raw) && target && this.negotiatedFeatures.get(connection)?.has(DESKTOP_PEER_FEATURE)) { this.options.onPeerRequest?.(target, raw, (result) => { try { connection.send(result); } catch { /* source disconnected */ } }); return; }
+        this.sendError(connection, "invalid_frame", undefined); return;
+      }
+      if (raw && typeof raw === "object" && (raw as { type?: unknown }).type === "desktop_peer_ack") {
+        if (isDesktopPeerAck(raw) && this.negotiatedFeatures.get(connection)?.has(DESKTOP_PEER_FEATURE)) { transport?.handlePeerAck(raw); return; }
+        this.sendError(connection, "invalid_frame", undefined); return;
+      }
+      if (raw && typeof raw === "object" && (raw as { type?: unknown }).type === "desktop_peer_reply") {
+        if (isDesktopPeerReply(raw) && target && this.negotiatedFeatures.get(connection)?.has(DESKTOP_PEER_FEATURE)) { this.options.onPeerReply?.(target, raw); return; }
+        this.sendError(connection, "invalid_frame", undefined); return;
       }
       if (raw && typeof raw === "object" && (raw as { type?: unknown }).type === "desktop_plugin_goodbye") {
         connection.close(new Error("desktop plugin goodbye"));
@@ -511,13 +576,16 @@ export class DesktopPluginIpcServer {
       capabilities: hello.capabilities,
       releaseVersion: expectedRelease,
       ...(this.options.supportedEvents ? { supportedEvents: [...this.options.supportedEvents] } : {}),
+      ...(this.options.onPeerRequest && hello.features?.includes(DESKTOP_PEER_FEATURE) ? { supportedFeatures: [DESKTOP_PEER_FEATURE] } : {}),
     });
     this.registry.register({
       target,
       ...(hello.sessionFile ? { sessionFile: hello.sessionFile } : {}),
       capabilities: hello.capabilities,
+      features: this.options.onPeerRequest ? hello.features?.filter((feature) => feature === DESKTOP_PEER_FEATURE) : [],
       transport,
     });
+    this.negotiatedFeatures.set(connection, new Set(this.options.onPeerRequest ? hello.features?.filter((feature) => feature === DESKTOP_PEER_FEATURE) ?? [] : []));
     onAuthenticated(target, transport);
   }
 
@@ -530,6 +598,8 @@ export class DesktopPluginIpcClient {
   private connection: JsonLineConnection | undefined;
   private ready: Promise<void> | undefined;
   private closed = false;
+  private readonly pendingPeer = new Map<string, { resolve: (result: DesktopPeerResult) => void; timer: ReturnType<typeof setTimeout> }>();
+  private supportsPeerMessaging = false;
   private supportsThinkingLevelSelect = false;
   private supportsRuntimeStatus = false;
   private supportsSessionSummary = false;
@@ -559,6 +629,7 @@ export class DesktopPluginIpcClient {
               return finishError(new Error("desktop plugin release unsupported"));
             }
             authenticated = true;
+            this.supportsPeerMessaging = frame.supportedFeatures?.includes(DESKTOP_PEER_FEATURE) ?? false;
             this.supportsThinkingLevelSelect = frame.supportedEvents?.includes("thinking_level_select") ?? false;
             this.supportsRuntimeStatus = frame.supportedEvents?.includes("runtime_status") ?? false;
             this.supportsSessionSummary = frame.supportedEvents?.includes("session_summary") ?? false;
@@ -566,6 +637,22 @@ export class DesktopPluginIpcClient {
             if (timer) clearTimeout(timer);
             resolve();
           }
+          return;
+        }
+        if (isDesktopPeerResult(raw)) { const pending = this.pendingPeer.get(raw.requestId); if (pending) { clearTimeout(pending.timer); this.pendingPeer.delete(raw.requestId); pending.resolve(raw); } return; }
+        if (isDesktopPeerDelivery(raw)) {
+          const target = this.options.target;
+          if (!this.supportsPeerMessaging || !this.options.onPeerDelivery || raw.deadlineAt <= Date.now()
+            || raw.target.sessionId !== target.sessionId || raw.target.endpointId !== target.endpointId
+            || raw.target.normalizedCwd !== target.normalizedCwd || raw.target.processGeneration !== target.processGeneration) {
+            connection.send({ type: "desktop_peer_ack", deliveryId: raw.deliveryId, status: "rejected" }); return;
+          }
+          const reply = (status: DesktopPeerAck["status"]) => { try { connection.send({ type: "desktop_peer_ack", deliveryId: raw.deliveryId, status }); } catch { /* disconnected */ } };
+          void this.options.onPeerDelivery(raw).then(() => reply("acknowledged"), () => reply("rejected"));
+          return;
+        }
+        if (isDesktopPeerReply(raw) && this.supportsPeerMessaging && this.options.onPeerReply) {
+          this.options.onPeerReply(raw);
           return;
         }
         if (isDesktopPluginClientFrame(raw) && raw.type === "desktop_ask_response") {
@@ -617,6 +704,9 @@ export class DesktopPluginIpcClient {
             void this.handlePlanResponse(frame);
             return;
           }
+          if (frame.type === "desktop_plugin_receipt" || frame.type === "desktop_plugin_result") {
+            return;
+          }
           if (frame.type === "desktop_plugin_error") {
             finishError(new Error(frame.code));
             return;
@@ -624,6 +714,9 @@ export class DesktopPluginIpcClient {
         }
         finishError(new Error("invalid desktop plugin frame"));
       }, (error) => {
+        this.closed = true;
+        this.clearPeerRequests();
+        this.clearPeerRequests();
         if (!authenticated) {
           reject(error ?? new Error("desktop plugin disconnected"));
         }
@@ -643,6 +736,7 @@ export class DesktopPluginIpcClient {
             ...(this.options.sessionFile ? { sessionFile: this.options.sessionFile } : {}),
             processGeneration: target.processGeneration,
             capabilities: this.options.capabilities,
+            ...(this.options.features ? { features: this.options.features } : {}),
             clientNonce: randomBytes(16).toString("hex"),
             secret: this.options.secret,
             releaseVersion: this.options.releaseVersion ?? MOBILE_RELEASE_VERSION,
@@ -691,6 +785,37 @@ export class DesktopPluginIpcClient {
         }
       }
     })();
+  }
+
+  private clearPeerRequests(): void {
+    for (const [requestId, pending] of this.pendingPeer) { clearTimeout(pending.timer); pending.resolve({ type: "desktop_peer_result", requestId, status: "unknown", error: { code: "disconnected" } }); }
+    this.pendingPeer.clear();
+  }
+
+  async requestPeers(request: DesktopPeerRequest): Promise<DesktopPeerResult> {
+    const fail = (code: string): DesktopPeerResult => ({ type: "desktop_peer_result", requestId: request.requestId, status: "failed", error: { code } });
+    if (!isDesktopPeerRequest(request)) return fail("invalid_frame");
+    if (this.closed || !this.isConnected) return fail("disconnected");
+    await this.connect();
+    if (!this.supportsPeerMessaging) return fail("feature_not_negotiated");
+    if (request.deadlineAt <= Date.now() || request.deadlineAt > Date.now() + DESKTOP_PEER_MAX_DEADLINE_MS) return fail("deadline_exceeded");
+    if (this.pendingPeer.has(request.requestId)) return fail("duplicate_request");
+    if (this.pendingPeer.size >= DESKTOP_PEER_MAX_PEERS) return fail("busy");
+    return new Promise((resolve) => {
+      const timer = setTimeout(() => { this.pendingPeer.delete(request.requestId); resolve({ type: "desktop_peer_result", requestId: request.requestId, status: "unknown", error: { code: "deadline_exceeded" } }); }, request.deadlineAt - Date.now());
+      this.pendingPeer.set(request.requestId, { resolve, timer });
+      try { this.connection?.send(request); } catch { clearTimeout(timer); this.pendingPeer.delete(request.requestId); resolve(fail("disconnected")); }
+    });
+  }
+
+  sendPeerReply(reply: DesktopPeerReply): boolean {
+    if (!this.connection || this.closed || !this.supportsPeerMessaging) return false;
+    try {
+      this.connection.send(reply);
+      return true;
+    } catch {
+      return false;
+    }
   }
 
   async sendModelSelect(event: Extract<DesktopPluginEvent, { event: "model_select" }>): Promise<void> {
@@ -769,6 +894,7 @@ export class DesktopPluginIpcClient {
   close(): void {
     if (this.closed) return;
     this.closed = true;
+    this.clearPeerRequests();
     this.connection?.close();
   }
 

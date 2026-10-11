@@ -15,13 +15,18 @@ import { MaestroStateReader } from "../src/maestro-state.js";
 function fakePi(options: { models: { provider: string; id: string; name: string }[]; availableModels?: { provider: string; id: string; name: string }[]; skills?: { name: string; description?: string }[]; model?: unknown; configuredAuth?: boolean; entries?: unknown[] }) {
   let sessionEntries = options.entries ?? [];
   const handlers = new Map<string, ((event: unknown, ctx: unknown) => unknown)[]>();
+
   const eventHandlers = new Map<string, ((payload: unknown) => void)[]>();
+  const registeredCommands = new Map<string, { handler: (args: string, ctx: unknown) => unknown }>();
   const setModelCalls: unknown[] = [];
   const setThinkingCalls: string[] = [];
   let thinkingLevel = "medium";
   let sessionId = "tui-session";
   const sent: { content: unknown; options?: { deliverAs?: string } }[] = [];
   const pi = {
+    registerCommand: (name: string, command: { handler: (args: string, ctx: unknown) => unknown }) => registeredCommands.set(name, command),
+    registeredCommands,
+    sendMessage: () => undefined,
     events: {
       on(event: string, handler: (payload: unknown) => void) {
         eventHandlers.set(event, [...(eventHandlers.get(event) ?? []), handler]);

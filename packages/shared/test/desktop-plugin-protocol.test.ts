@@ -3,6 +3,9 @@ import {
   DESKTOP_PLUGIN_PROTOCOL_VERSION,
   isDesktopPluginClientFrame,
   isDesktopPluginServerFrame,
+  isDesktopPeerRequest,
+  isDesktopPeerDelivery,
+  DESKTOP_PEER_MAX_MESSAGE_BYTES,
 } from "../src/desktop-plugin-protocol.js";
 import { validateDesktopPluginClientFrame } from "../src/validation.js";
 import {
@@ -24,6 +27,15 @@ describe("Desktop Plugin IPC protocol", () => {
     clientNonce: "nonce-1",
     secret: "secret-1",
   };
+
+  it("validates bounded peer messaging as an additive negotiated protocol", () => {
+    const target = { sessionId: "s", endpointId: "e", normalizedCwd: "/work", processGeneration: "g" };
+    const request = { type: "desktop_peer_send", requestId: "r", deadlineAt: Date.now() + 1000, target, message: "hello" };
+    expect(isDesktopPeerRequest(request)).toBe(true);
+    expect(isDesktopPeerRequest({ ...request, message: "x".repeat(DESKTOP_PEER_MAX_MESSAGE_BYTES + 1) })).toBe(false);
+    expect(isDesktopPeerDelivery({ type: "desktop_peer_delivery", requestId: "r", deliveryId: "d", source: target, target, deadlineAt: Date.now() + 1000, message: "hello" })).toBe(true);
+    expect(isDesktopPluginClientFrame({ type: "desktop_peer_ack", deliveryId: "d", status: "acknowledged" })).toBe(true);
+  });
 
   it("accepts authenticated identity and optional session metadata", () => {
     expect(isDesktopPluginClientFrame(hello)).toBe(true);

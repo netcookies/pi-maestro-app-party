@@ -1,5 +1,7 @@
 import { normalize } from "node:path";
 import type {
+  DesktopPeerDelivery,
+  DesktopPeerReply,
   DesktopAskResponse,
   DesktopAskResult,
   DesktopPlanResponse,
@@ -22,6 +24,8 @@ import {
 } from "./desktop-plugin-registry-store.js";
 
 export interface DesktopPluginTransport {
+  deliverPeerMessage?(delivery: DesktopPeerDelivery, signal: AbortSignal): Promise<"acknowledged" | "rejected">;
+  sendPeerReply?(reply: DesktopPeerReply): boolean;
   request(request: DesktopPluginRequest): Promise<DesktopPluginResult>;
   answerAsk?(response: DesktopAskResponse): Promise<DesktopAskResult>;
   answerPlan?(response: DesktopPlanResponse): Promise<DesktopPlanResult>;
@@ -31,6 +35,7 @@ export interface DesktopPluginRegistration {
   target: DesktopPluginTarget;
   sessionFile?: string;
   capabilities: readonly DesktopPluginCapability[];
+  features?: readonly string[];
   transport: DesktopPluginTransport;
   model?: DesktopPluginModel;
   thinkingLevel?: string;
@@ -66,7 +71,9 @@ function cloneRecord(registration: DesktopPluginRegistration): DesktopBrokerTarg
     target: { ...registration.target },
     ...(registration.sessionFile ? { sessionFile: registration.sessionFile } : {}),
     capabilities: [...registration.capabilities],
+    ...(registration.features ? { features: [...registration.features] } : {}),
     ...(registration.model ? { model: { ...registration.model } } : {}),
+
     ...(registration.thinkingLevel ? { thinkingLevel: registration.thinkingLevel } : {}),
     runtimeStatus: registration.runtimeStatus,
     ...(registration.summary ? { summary: structuredClone(registration.summary) } : {}),
@@ -113,6 +120,7 @@ export class DesktopPluginRegistry {
       ...registration,
       target,
       capabilities: [...registration.capabilities],
+      ...(registration.features ? { features: [...registration.features] } : {}),
       runtimeStatus: registration.runtimeStatus ?? "idle",
       ...(registration.executionSummary ? { executionSummary: structuredClone(registration.executionSummary) } : {}),
       connectedAt: registration.connectedAt ?? new Date().toISOString(),
@@ -197,6 +205,7 @@ export class DesktopPluginRegistry {
       ...registration,
       target: { ...registration.target },
       capabilities: [...registration.capabilities],
+      ...(registration.features ? { features: [...registration.features] } : {}),
       ...(registration.model ? { model: { ...registration.model } } : {}),
       ...(registration.thinkingLevel ? { thinkingLevel: registration.thinkingLevel } : {}),
       ...(registration.summary ? { summary: structuredClone(registration.summary) } : {}),

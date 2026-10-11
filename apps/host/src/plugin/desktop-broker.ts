@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { isAbsolute, normalize } from "node:path";
 import net from "node:net";
 import type {
   DesktopAskRequest,
@@ -11,6 +12,10 @@ import type {
   DesktopBrokerPlanResult,
 
   DesktopBrokerToHostFrame,
+  DesktopPeerDelivery,
+  DesktopPeerReply,
+  DesktopPeerRequest,
+  DesktopPeerResult,
   DesktopHostToBrokerFrame,
   DesktopPluginCapability,
   DesktopPluginResult,
@@ -20,6 +25,10 @@ import {
   DESKTOP_BROKER_MAX_SNAPSHOT_RECORDS,
   DESKTOP_BROKER_PROTOCOL_VERSION,
   isDesktopHostToBrokerFrame,
+  DESKTOP_PEER_FEATURE,
+  DESKTOP_PEER_MAX_DEADLINE_MS,
+  DESKTOP_PEER_MAX_PEERS,
+  DESKTOP_PEER_MAX_MESSAGE_BYTES,
   MOBILE_RELEASE_VERSION,
 } from "@maestro-mobile/shared";
 import { JsonLineConnection, DesktopPluginIpcServer } from "./desktop-plugin-ipc.js";
@@ -33,6 +42,7 @@ export interface DesktopBrokerOptions {
   registry?: DesktopPluginRegistry;
   snapshotChunkSize?: number;
   onFrame?: (frame: DesktopBrokerToHostFrame) => void;
+  crossCwdAllowRules?: readonly { sourceCwd: string; targetCwd: string }[];
 }
 
 export class DesktopBroker {
@@ -42,6 +52,9 @@ export class DesktopBroker {
   private readonly frameListeners = new Set<(frame: DesktopBrokerToHostFrame) => void>();
   private readonly snapshotChunkSize: number;
   private readonly unsubscribeRegistry: () => void;
+  private readonly pendingPeerSends = new Map<string, { source: DesktopPluginTarget; target: DesktopPluginTarget; controller: AbortController }>();
+  private readonly completedPeerRequests = new Map<string, { result: DesktopPeerResult; expiresAt: number }>();
+  private readonly peerSends = new Map<string, { source: DesktopPluginTarget; target: DesktopPluginTarget; deadlineAt: number }>();
   private readonly pendingAsks = new Map<string, { target: DesktopPluginTarget; request: DesktopAskRequest }>();
 
   private askKey(target: DesktopPluginTarget, requestId: string): string {
@@ -65,6 +78,7 @@ export class DesktopBroker {
   }
 
   constructor(private readonly options: DesktopBrokerOptions) {
+    if (options.crossCwdAllowRules?.some((rule) => !isAbsolute(rule.sourceCwd) || !isAbsolute(rule.targetCwd))) throw new Error("peer allow rules require absolute cwd paths");
     this.brokerInstanceId = options.brokerInstanceId ?? randomUUID();
     this.snapshotChunkSize = options.snapshotChunkSize ?? DESKTOP_BROKER_MAX_SNAPSHOT_RECORDS;
     if (!Number.isSafeInteger(this.snapshotChunkSize) || this.snapshotChunkSize < 1 || this.snapshotChunkSize > DESKTOP_BROKER_MAX_SNAPSHOT_RECORDS) {
@@ -77,6 +91,14 @@ export class DesktopBroker {
     if (options.onFrame) this.frameListeners.add(options.onFrame);
     this.unsubscribeRegistry = this.registry.subscribe((change) => {
       if (change.mutation.kind === "remove") {
+        for (const pending of this.pendingPeerSends.values()) {
+          const removed = change.mutation.target;
+          if (this.samePeerTarget(pending.source, removed) || this.samePeerTarget(pending.target, removed)) pending.controller.abort();
+        }
+        for (const [id, pending] of this.peerSends) {
+          const removed = change.mutation.target;
+          if (pending.deadlineAt <= Date.now() || this.samePeerTarget(pending.source, removed) || this.samePeerTarget(pending.target, removed)) this.peerSends.delete(id);
+        }
         for (const [key, pending] of this.pendingAsks) {
           if (this.askKey(pending.target, pending.request.requestId) === key
             && this.askKey(change.mutation.target, pending.request.requestId) === key) this.clearAsk(key);
@@ -98,6 +120,13 @@ export class DesktopBroker {
       socketPath: options.pluginSocketPath,
       secret: options.secret,
       registry: this.registry,
+      onPeerRequest: (source, request, reply) => { void this.handlePeerRequest(source, request).then(reply); },
+      onPeerReply: (source, reply) => this.handlePeerReply(source, reply),
+      onDisconnected: (target) => {
+        for (const pending of this.pendingPeerSends.values()) {
+          if (this.samePeerTarget(pending.source, target) || this.samePeerTarget(pending.target, target)) pending.controller.abort();
+        }
+      },
       supportedEvents: ["model_select", "thinking_level_select", "runtime_status", "session_summary", "execution_summary"],
       onAskRequest: (target, request) => {
         if (!this.registry.resolve(target)) return;
@@ -134,6 +163,68 @@ export class DesktopBroker {
     });
   }
 
+  async handlePeerRequest(source: DesktopPluginTarget, request: DesktopPeerRequest): Promise<DesktopPeerResult> {
+    const fail = (status: "failed" | "unknown", code: string): DesktopPeerResult => ({ type: "desktop_peer_result", requestId: request.requestId, status, error: { code } });
+    if (!isAbsolute(source.normalizedCwd) || normalize(source.normalizedCwd) !== source.normalizedCwd) return fail("failed", "invalid_target");
+    if (request.type === "desktop_peer_send" && (!isAbsolute(request.target.normalizedCwd) || normalize(request.target.normalizedCwd) !== request.target.normalizedCwd)) return fail("failed", "invalid_target");
+    if (request.deadlineAt <= Date.now() || request.deadlineAt > Date.now() + DESKTOP_PEER_MAX_DEADLINE_MS) return fail("unknown", "deadline_exceeded");
+    const sourceRegistration = this.registry.resolve(source);
+    if (!sourceRegistration?.features?.includes(DESKTOP_PEER_FEATURE)) return fail("failed", "feature_not_negotiated");
+    const records = this.registry.snapshotRecords().filter((record) => !this.samePeerTarget(record.target, source));
+    if (request.type === "desktop_peer_list") {
+      const eligible = records.filter((record) => this.peerAuthorized(source, record.target) && record.features?.includes(DESKTOP_PEER_FEATURE));
+      const peers = eligible.slice(0, DESKTOP_PEER_MAX_PEERS).map((record) => record.target);
+      return { type: "desktop_peer_result", requestId: request.requestId, status: "listed", peers, truncated: eligible.length > peers.length };
+    }
+    if (Buffer.byteLength(request.message, "utf8") > DESKTOP_PEER_MAX_MESSAGE_BYTES) return fail("failed", "message_too_large");
+    if (!isAbsolute(request.target.normalizedCwd) || normalize(request.target.normalizedCwd) !== request.target.normalizedCwd) return fail("failed", "invalid_target");
+    const registration = this.registry.resolve(request.target);
+    if (!registration) return fail("unknown", "target_unavailable");
+    if (!this.peerAuthorized(source, registration.target)) return fail("failed", "cross_cwd_not_authorized");
+    if (!registration.features?.includes(DESKTOP_PEER_FEATURE) || !registration.transport.deliverPeerMessage) return fail("failed", "feature_not_negotiated");
+    const key = JSON.stringify([source.sessionId, source.endpointId, source.normalizedCwd, source.processGeneration, request.requestId]);
+    for (const [completedKey, completed] of this.completedPeerRequests) if (completed.expiresAt <= Date.now()) this.completedPeerRequests.delete(completedKey);
+    const completed = this.completedPeerRequests.get(key);
+    if (completed) return completed.result;
+    if (this.pendingPeerSends.has(key)) return fail("failed", "duplicate_request");
+    const controller = new AbortController();
+    this.pendingPeerSends.set(key, { source, target: request.target, controller });
+    const deliveryId = randomUUID();
+    const delivery: DesktopPeerDelivery = { type: "desktop_peer_delivery", requestId: request.requestId, deliveryId, source: { ...source }, target: { ...registration.target }, deadlineAt: request.deadlineAt, message: request.message };
+    this.peerSends.set(deliveryId, { source: { ...source }, target: { ...registration.target }, deadlineAt: request.deadlineAt });
+    setTimeout(() => this.peerSends.delete(deliveryId), Math.max(1, request.deadlineAt - Date.now())).unref?.();
+    try {
+      const status = await registration.transport.deliverPeerMessage(delivery, controller.signal);
+      if (controller.signal.aborted || this.registry.resolve(source)?.transport !== sourceRegistration.transport || this.registry.resolve(request.target)?.transport !== registration.transport) return fail("unknown", "disconnected");
+      if (Date.now() >= request.deadlineAt) return fail("unknown", "deadline_exceeded");
+      const receipt: DesktopPeerResult = { type: "desktop_peer_result", requestId: request.requestId, status, deliveryId };
+      if (this.completedPeerRequests.size >= DESKTOP_PEER_MAX_PEERS) this.completedPeerRequests.delete(this.completedPeerRequests.keys().next().value!);
+      this.completedPeerRequests.set(key, { result: receipt, expiresAt: Math.min(request.deadlineAt, Date.now() + DESKTOP_PEER_MAX_DEADLINE_MS) });
+      return receipt;
+    } catch (error) {
+      return fail("unknown", error instanceof Error && error.message === "deadline_exceeded" ? "deadline_exceeded" : "disconnected");
+    } finally {
+      this.pendingPeerSends.delete(key);
+    }
+  }
+
+  private handlePeerReply(source: DesktopPluginTarget, reply: DesktopPeerReply): void {
+    const pending = this.peerSends.get(reply.deliveryId);
+    if (!pending || pending.deadlineAt <= Date.now() || !this.samePeerTarget(pending.target, source)) return;
+    const registration = this.registry.resolve(pending.source);
+    if (!registration || !registration.features?.includes(DESKTOP_PEER_FEATURE) || !registration.transport.sendPeerReply) return;
+    if (registration.transport.sendPeerReply(reply)) this.peerSends.delete(reply.deliveryId);
+  }
+
+  private samePeerTarget(left: DesktopPluginTarget, right: DesktopPluginTarget): boolean {
+    return left.sessionId === right.sessionId && left.endpointId === right.endpointId && left.normalizedCwd === right.normalizedCwd && left.processGeneration === right.processGeneration;
+  }
+
+  private peerAuthorized(source: DesktopPluginTarget, target: DesktopPluginTarget): boolean {
+    if (source.normalizedCwd === target.normalizedCwd) return true;
+    return this.options.crossCwdAllowRules?.some((rule) => normalize(rule.sourceCwd) === source.normalizedCwd && normalize(rule.targetCwd) === target.normalizedCwd) ?? false;
+  }
+
   subscribe(listener: (frame: DesktopBrokerToHostFrame) => void): () => void {
     this.frameListeners.add(listener);
     return () => this.frameListeners.delete(listener);
@@ -144,6 +235,9 @@ export class DesktopBroker {
   }
 
   async close(): Promise<void> {
+    for (const pending of this.pendingPeerSends.values()) pending.controller.abort();
+    this.completedPeerRequests.clear();
+    this.peerSends.clear();
     this.unsubscribeRegistry();
     for (const key of this.pendingAsks.keys()) this.clearAsk(key);
     for (const key of this.pendingPlanRequests.keys()) this.clearPlan(key);

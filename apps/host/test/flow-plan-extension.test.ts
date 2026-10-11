@@ -34,6 +34,7 @@ function planTransports(): FlowPlanTransport[] {
 
 function fakePi() {
   const handlers = new Map<string, Handler[]>();
+  const registeredCommands = new Map<string, { handler: (args: string, ctx: unknown) => unknown }>();
   const ctx = {
     cwd: "/work/app",
     sessionManager: {
@@ -51,6 +52,7 @@ function fakePi() {
     abort: () => {},
   };
   const pi = {
+    registerCommand: (name: string, command: { handler: (args: string, ctx: unknown) => unknown }) => registeredCommands.set(name, command),
     on(event: string, handler: Handler) {
       handlers.set(event, [...(handlers.get(event) ?? []), handler]);
     },
@@ -65,6 +67,7 @@ function fakePi() {
     pi,
     ctx,
     handlers,
+    registeredCommands,
     emit(event: string, payload: unknown) {
       for (const handler of handlers.get(event) ?? []) handler(payload, ctx);
     },

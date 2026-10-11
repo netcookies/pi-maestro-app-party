@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 import { chmod, readFile, unlink, writeFile } from "node:fs/promises";
+import { isAbsolute, normalize } from "node:path";
 import { DesktopBroker, DesktopBrokerHostClient } from "./plugin/desktop-broker.js";
 import {
   DEFAULT_DESKTOP_BROKER_HOST_SOCKET,
@@ -15,6 +16,7 @@ interface BrokerArgs {
   hostSocket: string;
   registry: string;
   pidFile: string;
+  crossCwdAllowRules: readonly { sourceCwd: string; targetCwd: string }[];
 }
 
 function parseArgs(argv: string[]): BrokerArgs {
@@ -28,13 +30,36 @@ function parseArgs(argv: string[]): BrokerArgs {
     values.set(key, value);
     index += 1;
   }
+  const allowRules = (values.get("allow-cross-cwd") ?? "").split(";").filter(Boolean).map((entry) => {
+    const separator = entry.indexOf("=>");
+    if (separator <= 0 || separator === entry.length - 2) throw new Error("invalid --allow-cross-cwd rule; expected source=>target");
+    const sourceCwd = normalize(entry.slice(0, separator));
+    const targetCwd = normalize(entry.slice(separator + 2));
+    if (!isAbsolute(sourceCwd) || !isAbsolute(targetCwd)) throw new Error("cross-cwd allow rules require absolute paths");
+    return { sourceCwd, targetCwd };
+  });
   return {
     secretFile: values.get("secret-file") ?? DEFAULT_DESKTOP_BROKER_SECRET_FILE,
     pluginSocket: values.get("plugin-socket") ?? DEFAULT_DESKTOP_BROKER_PLUGIN_SOCKET,
     hostSocket: values.get("host-socket") ?? DEFAULT_DESKTOP_BROKER_HOST_SOCKET,
     registry: values.get("registry") ?? DEFAULT_DESKTOP_BROKER_REGISTRY_FILE,
     pidFile: values.get("pid-file") ?? DEFAULT_DESKTOP_BROKER_PID_FILE,
+    crossCwdAllowRules: allowRules,
   };
+}
+
+function parseAllowRules(value: string | undefined): readonly { sourceCwd: string; targetCwd: string }[] {
+  if (!value) return [];
+  const parsed: unknown = JSON.parse(value);
+  if (!Array.isArray(parsed)) throw new Error("peer cwd allow rules must be a JSON array");
+  return parsed.map((rule) => {
+    if (typeof rule !== "object" || rule === null || Array.isArray(rule)
+      || typeof rule.sourceCwd !== "string" || typeof rule.targetCwd !== "string"
+      || !isAbsolute(rule.sourceCwd) || !isAbsolute(rule.targetCwd)) {
+      throw new Error("peer cwd allow rules require absolute sourceCwd and targetCwd");
+    }
+    return { sourceCwd: normalize(rule.sourceCwd), targetCwd: normalize(rule.targetCwd) };
+  });
 }
 
 async function readSecret(path: string): Promise<string> {
@@ -50,6 +75,7 @@ async function main(): Promise<void> {
     pluginSocketPath: args.pluginSocket,
     registryPath: args.registry,
     secret,
+    crossCwdAllowRules: [...args.crossCwdAllowRules, ...parseAllowRules(process.env.PI_MAESTRO_PEER_CWD_ALLOW_RULES)],
   });
   const hostClient = new DesktopBrokerHostClient(broker, { socketPath: args.hostSocket, secret });
   let shuttingDown = false;
