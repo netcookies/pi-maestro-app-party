@@ -29,7 +29,7 @@ export type DesktopPluginCapability =
   | "plan";
 
 /** Additive Plugin-to-Broker feature, independent of Host commands. */
-export const DESKTOP_PEER_FEATURE = "peer-message-v1" as const;
+export const DESKTOP_PEER_FEATURE = "peer-message-v2" as const;
 export const DESKTOP_PEER_MAX_MESSAGE_BYTES = 16_384;
 export const DESKTOP_PEER_MAX_DEADLINE_MS = 30_000;
 export const DESKTOP_PEER_MAX_PEERS = 64;
@@ -61,18 +61,12 @@ export interface DesktopPeerDelivery {
 export interface DesktopPeerAck {
   type: "desktop_peer_ack";
   deliveryId: string;
-  status: "acknowledged" | "rejected";
-}
-export interface DesktopPeerReply {
-  type: "desktop_peer_reply";
-  deliveryId: string;
-  replyId: string;
-  message: string;
+  status: "accepted" | "rejected";
 }
 export interface DesktopPeerResult {
   type: "desktop_peer_result";
   requestId: string;
-  status: "listed" | "candidates" | "acknowledged" | "rejected" | "failed" | "unknown" | "access_listed" | "access_granted" | "access_revoked";
+  status: "listed" | "candidates" | "accepted" | "rejected" | "failed" | "unknown" | "access_listed" | "access_granted" | "access_revoked";
   peers?: DesktopPluginTarget[];
   candidates?: DesktopPluginTarget[];
   grants?: DesktopPeerAccessGrant[];
@@ -113,11 +107,7 @@ export function isDesktopPeerDelivery(value: unknown): value is DesktopPeerDeliv
 }
 export function isDesktopPeerAck(value: unknown): value is DesktopPeerAck {
   return isRecord(value) && value.type === "desktop_peer_ack" && stringFields(value, "deliveryId")
-    && (value.status === "acknowledged" || value.status === "rejected");
-}
-export function isDesktopPeerReply(value: unknown): value is DesktopPeerReply {
-  return isRecord(value) && value.type === "desktop_peer_reply"
-    && stringFields(value, "deliveryId", "replyId") && isDesktopPeerMessage(value.message);
+    && (value.status === "accepted" || value.status === "rejected");
 }
 export function isDesktopPeerResult(value: unknown): value is DesktopPeerResult {
   if (!isRecord(value) || value.type !== "desktop_peer_result" || !stringFields(value, "requestId")) return false;
@@ -132,7 +122,7 @@ export function isDesktopPeerResult(value: unknown): value is DesktopPeerResult 
   if (value.status === "access_revoked") return stringFields(value, "grantId");
   if (value.authorization !== undefined && (!isRecord(value.authorization)
     || !isAbsoluteNormalizedCwd(value.authorization.sourceCwd) || !isAbsoluteNormalizedCwd(value.authorization.targetCwd))) return false;
-  if (value.status === "acknowledged" || value.status === "rejected") return stringFields(value, "deliveryId");
+  if (value.status === "accepted" || value.status === "rejected") return stringFields(value, "deliveryId");
   return (value.status === "failed" || value.status === "unknown") && isRecord(value.error) && stringFields(value.error, "code");
 }
 
@@ -338,7 +328,6 @@ export interface DesktopPluginGoodbye {
 export type DesktopPluginClientFrame =
   | DesktopPeerRequest
   | DesktopPeerAck
-  | DesktopPeerReply
   | DesktopPluginHello
   | DesktopPluginRequest
   | DesktopPluginEvent
@@ -399,7 +388,6 @@ export interface DesktopPluginError {
 
 export type DesktopPluginServerFrame =
   | DesktopPeerDelivery
-  | DesktopPeerReply
   | DesktopPeerResult
   | DesktopPluginChallenge
   | DesktopPluginReady
@@ -420,7 +408,6 @@ export function isDesktopPluginClientFrame(value: unknown): value is DesktopPlug
     case "desktop_peer_access_grant":
     case "desktop_peer_access_revoke": return isDesktopPeerRequest(value);
     case "desktop_peer_ack": return isDesktopPeerAck(value);
-    case "desktop_peer_reply": return isDesktopPeerReply(value);
     case "desktop_plugin_hello":
       return value.protocolVersion === DESKTOP_PLUGIN_PROTOCOL_VERSION
         && stringFields(value, "endpointId", "sessionId", "normalizedCwd", "processGeneration", "clientNonce", "secret")
@@ -539,7 +526,6 @@ export function isDesktopPluginServerFrame(value: unknown): value is DesktopPlug
   if (!isRecord(value) || typeof value.type !== "string") return false;
   switch (value.type) {
     case "desktop_peer_delivery": return isDesktopPeerDelivery(value);
-    case "desktop_peer_reply": return isDesktopPeerReply(value);
     case "desktop_peer_result": return isDesktopPeerResult(value);
     case "desktop_plugin_challenge":
       return value.protocolVersion === DESKTOP_PLUGIN_PROTOCOL_VERSION && stringFields(value, "nonce");

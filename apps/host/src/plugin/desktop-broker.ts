@@ -16,7 +16,6 @@ import type {
   DesktopPeerDelivery,
   DesktopPeerAccessGrant,
   DesktopPeerAccessDirection,
-  DesktopPeerReply,
   DesktopPeerRequest,
   DesktopPeerResult,
   DesktopHostToBrokerFrame,
@@ -59,7 +58,6 @@ export class DesktopBroker {
   private readonly unsubscribeRegistry: () => void;
   private readonly pendingPeerSends = new Map<string, { source: DesktopPluginTarget; target: DesktopPluginTarget; controller: AbortController }>();
   private readonly completedPeerRequests = new Map<string, { result: DesktopPeerResult; expiresAt: number }>();
-  private readonly peerSends = new Map<string, { source: DesktopPluginTarget; target: DesktopPluginTarget; deadlineAt: number }>();
   private readonly pendingAsks = new Map<string, { target: DesktopPluginTarget; request: DesktopAskRequest }>();
   private readonly persistentPeerAccess = new Map<string, DesktopPeerAccessGrant>();
   private readonly managedPeerAccess: DesktopPeerAccessGrant[];
@@ -150,10 +148,6 @@ export class DesktopBroker {
           const removed = change.mutation.target;
           if (this.samePeerTarget(pending.source, removed) || this.samePeerTarget(pending.target, removed)) pending.controller.abort();
         }
-        for (const [id, pending] of this.peerSends) {
-          const removed = change.mutation.target;
-          if (pending.deadlineAt <= Date.now() || this.samePeerTarget(pending.source, removed) || this.samePeerTarget(pending.target, removed)) this.peerSends.delete(id);
-        }
         for (const [key, pending] of this.pendingAsks) {
           if (this.askKey(pending.target, pending.request.requestId) === key
             && this.askKey(change.mutation.target, pending.request.requestId) === key) this.clearAsk(key);
@@ -176,7 +170,6 @@ export class DesktopBroker {
       secret: options.secret,
       registry: this.registry,
       onPeerRequest: (source, request, reply) => { void this.handlePeerRequest(source, request).then(reply); },
-      onPeerReply: (source, reply) => this.handlePeerReply(source, reply),
       onDisconnected: (target) => {
         for (const pending of this.pendingPeerSends.values()) {
           if (this.samePeerTarget(pending.source, target) || this.samePeerTarget(pending.target, target)) pending.controller.abort();
@@ -255,7 +248,6 @@ export class DesktopBroker {
         return fail("failed", code);
       }
       for (const pending of this.pendingPeerSends.values()) if (!this.peerAuthorized(pending.source, pending.target)) pending.controller.abort();
-      for (const [deliveryId, pending] of this.peerSends) if (!this.peerAuthorized(pending.source, pending.target)) this.peerSends.delete(deliveryId);
       return { type: "desktop_peer_result", requestId: request.requestId, status: "access_revoked", grantId: request.grantId };
     }
     if (request.type === "desktop_peer_list") {
@@ -285,8 +277,6 @@ export class DesktopBroker {
     this.pendingPeerSends.set(key, { source, target: request.target, controller });
     const deliveryId = randomUUID();
     const delivery: DesktopPeerDelivery = { type: "desktop_peer_delivery", requestId: request.requestId, deliveryId, source: { ...source }, target: { ...registration.target }, deadlineAt: request.deadlineAt, message: request.message };
-    this.peerSends.set(deliveryId, { source: { ...source }, target: { ...registration.target }, deadlineAt: request.deadlineAt });
-    setTimeout(() => this.peerSends.delete(deliveryId), Math.max(1, request.deadlineAt - Date.now())).unref?.();
     try {
       const status = await registration.transport.deliverPeerMessage(delivery, controller.signal);
       if (controller.signal.aborted || !this.peerAuthorized(source, registration.target)) return fail("failed", "authorization_required");
@@ -301,14 +291,6 @@ export class DesktopBroker {
     } finally {
       this.pendingPeerSends.delete(key);
     }
-  }
-
-  private handlePeerReply(source: DesktopPluginTarget, reply: DesktopPeerReply): void {
-    const pending = this.peerSends.get(reply.deliveryId);
-    if (!pending || pending.deadlineAt <= Date.now() || !this.samePeerTarget(pending.target, source) || !this.peerAuthorized(pending.source, pending.target)) return;
-    const registration = this.registry.resolve(pending.source);
-    if (!registration || !registration.features?.includes(DESKTOP_PEER_FEATURE) || !registration.transport.sendPeerReply) return;
-    if (registration.transport.sendPeerReply(reply)) this.peerSends.delete(reply.deliveryId);
   }
 
   private samePeerTarget(left: DesktopPluginTarget, right: DesktopPluginTarget): boolean {
@@ -334,7 +316,6 @@ export class DesktopBroker {
   async close(): Promise<void> {
     for (const pending of this.pendingPeerSends.values()) pending.controller.abort();
     this.completedPeerRequests.clear();
-    this.peerSends.clear();
     this.unsubscribeRegistry();
     for (const key of this.pendingAsks.keys()) this.clearAsk(key);
     for (const key of this.pendingPlanRequests.keys()) this.clearPlan(key);

@@ -1,18 +1,18 @@
 import { randomUUID } from "node:crypto";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import type { DesktopPeerAccessDirection, DesktopPeerDelivery, DesktopPeerReply, DesktopPeerRequest, DesktopPeerResult } from "@maestro-mobile/shared";
+import type { DesktopPeerAccessDirection, DesktopPeerDelivery, DesktopPeerRequest, DesktopPeerResult } from "@maestro-mobile/shared";
 import { DESKTOP_PEER_MAX_DEADLINE_MS, DESKTOP_PEER_MAX_PEERS, isDesktopPeerRequest } from "@maestro-mobile/shared";
 import type { DesktopPluginIpcClient } from "./desktop-plugin-ipc.js";
 
-/** Online inbox only: a receipt requires the target's explicit ack command. */
+/** Online inbox only: successful receipt means the target Plugin accepted the delivery into its local inbox. */
 export function registerDesktopPeerCommand(pi: ExtensionAPI, getClient: () => DesktopPluginIpcClient | undefined) {
-  const inbox = new Map<string, { delivery: DesktopPeerDelivery; acknowledge: () => void; reject: () => void }>();
+  const inbox = new Map<string, { delivery: DesktopPeerDelivery; timer: ReturnType<typeof setTimeout> }>();
   const display = (content: unknown): void => {
     pi.sendMessage({ customType: "desktop-peer", content: JSON.stringify(content, null, 2), display: true }, { triggerTurn: false });
   };
 
-  pi.registerCommand("desktop-message", {
-    description: 'Online Broker messaging: list | candidates | access | revoke <grantId> | inbox | ack <deliveryId> | reply <deliveryId> <message> | send {"target":{...},"message":"...","timeoutMs":30000}',
+  pi.registerCommand("mb-peer", {
+    description: 'Online Broker peer: list | candidates | access | revoke <grantId> | inbox | send {"target":{...},"message":"...","timeoutMs":30000}',
     handler: async (args, ctx) => {
       const space = args.indexOf(" ");
       const action = (space < 0 ? args : args.slice(0, space)).trim() || "list";
@@ -40,28 +40,7 @@ export function registerDesktopPeerCommand(pi: ExtensionAPI, getClient: () => De
           display(await client.requestPeers({ type: "desktop_peer_access_revoke", requestId: randomUUID(), deadlineAt: Date.now() + 2_000, grantId: body }));
           return;
         }
-        if (action === "ack") {
-          const pending = inbox.get(body);
-          if (!pending || pending.delivery.deadlineAt <= Date.now()) throw new Error("delivery_unavailable");
-          pending.acknowledge();
-          display({ status: "acknowledged", deliveryId: body });
-          return;
-        }
-        if (action === "reply") {
-          const split = body.indexOf(" ");
-          if (split <= 0) throw new Error("invalid_reply");
-          const deliveryId = body.slice(0, split);
-          const message = body.slice(split + 1);
-          const pending = inbox.get(deliveryId);
-          if (!pending || pending.delivery.deadlineAt <= Date.now()) throw new Error("delivery_unavailable");
-          if (!isDesktopPeerRequest({ type: "desktop_peer_send", requestId: "reply", deadlineAt: Date.now() + 1_000, target: pending.delivery.source, message })) throw new Error("invalid_reply");
-          const client = getClient();
-          if (!client) throw new Error("disconnected");
-          if (!client.sendPeerReply({ type: "desktop_peer_reply", deliveryId, replyId: randomUUID(), message })) throw new Error("reply_not_queued");
-          pending.acknowledge();
-          display({ status: "reply_sent", deliveryId });
-          return;
-        }
+        if (action === "ack" || action === "reply") throw new Error("unknown_action");
         const requestId = randomUUID();
         let request: DesktopPeerRequest;
         if (action === "list") request = { type: "desktop_peer_list", requestId, deadlineAt: Date.now() + 2000 };
@@ -91,7 +70,7 @@ export function registerDesktopPeerCommand(pi: ExtensionAPI, getClient: () => De
           }
           const grant = await client?.requestPeers({ type: "desktop_peer_access_grant", requestId: randomUUID(), deadlineAt: Date.now() + 2_000, target: (request as Extract<DesktopPeerRequest, { type: "desktop_peer_send" }>).target, direction });
           display(grant ?? { type: "desktop_peer_result", requestId, status: "failed", error: { code: "disconnected" } });
-          ctx.ui.notify(grant?.status === "access_granted" ? "授权已保存；请重新执行 /desktop-message send。" : "授权未保存，消息未发送。", grant?.status === "access_granted" ? "info" : "warning");
+          ctx.ui.notify(grant?.status === "access_granted" ? "授权已保存；请重新执行 /mb-peer send。" : "授权未保存，消息未发送。", grant?.status === "access_granted" ? "info" : "warning");
           return;
         }
         display(result);
@@ -104,22 +83,13 @@ export function registerDesktopPeerCommand(pi: ExtensionAPI, getClient: () => De
   return {
     receive(delivery: DesktopPeerDelivery): Promise<void> {
       if (inbox.size >= DESKTOP_PEER_MAX_PEERS || inbox.has(delivery.deliveryId) || delivery.deadlineAt <= Date.now()) return Promise.reject(new Error("inbox_unavailable"));
-      return new Promise<void>((resolve, reject) => {
-        const finish = (accepted: boolean) => {
-          clearTimeout(timer);
-          inbox.delete(delivery.deliveryId);
-          if (accepted) resolve(); else reject(new Error("delivery_unavailable"));
-        };
-        const timer = setTimeout(() => finish(false), Math.max(1, delivery.deadlineAt - Date.now()));
-        inbox.set(delivery.deliveryId, { delivery, acknowledge: () => finish(true), reject: () => finish(false) });
-        try { display(delivery); } catch { /* /desktop-message inbox still exposes the authoritative pending delivery. */ }
-      });
-    },
-    onReply(reply: DesktopPeerReply): void {
-      display(reply);
+      const timer = setTimeout(() => inbox.delete(delivery.deliveryId), Math.max(1, delivery.deadlineAt - Date.now()));
+      inbox.set(delivery.deliveryId, { delivery, timer });
+      try { display(delivery); } catch { /* The queued delivery remains available through /mb-peer inbox. */ }
+      return Promise.resolve();
     },
     clear(): void {
-      for (const pending of inbox.values()) pending.reject();
+      for (const pending of inbox.values()) clearTimeout(pending.timer);
       inbox.clear();
     },
   };

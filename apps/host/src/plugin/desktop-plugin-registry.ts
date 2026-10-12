@@ -1,7 +1,6 @@
 import { normalize } from "node:path";
 import type {
   DesktopPeerDelivery,
-  DesktopPeerReply,
   DesktopAskResponse,
   DesktopAskResult,
   DesktopPlanResponse,
@@ -24,8 +23,7 @@ import {
 } from "./desktop-plugin-registry-store.js";
 
 export interface DesktopPluginTransport {
-  deliverPeerMessage?(delivery: DesktopPeerDelivery, signal: AbortSignal): Promise<"acknowledged" | "rejected">;
-  sendPeerReply?(reply: DesktopPeerReply): boolean;
+  deliverPeerMessage?(delivery: DesktopPeerDelivery, signal: AbortSignal): Promise<"accepted" | "rejected">;
   request(request: DesktopPluginRequest): Promise<DesktopPluginResult>;
   answerAsk?(response: DesktopAskResponse): Promise<DesktopAskResult>;
   answerPlan?(response: DesktopPlanResponse): Promise<DesktopPlanResult>;

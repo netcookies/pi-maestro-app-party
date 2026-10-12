@@ -7,7 +7,6 @@ import type {
   DesktopPeerAck,
   DesktopPeerDelivery,
   DesktopPeerRequest,
-  DesktopPeerReply,
   DesktopPeerResult,
   DesktopAskRequest,
   DesktopPluginEvent,
@@ -39,7 +38,6 @@ import {
   DESKTOP_PEER_MAX_PEERS,
   isDesktopPeerAck,
   isDesktopPeerRequest,
-  isDesktopPeerReply,
   isDesktopPeerResult,
   isDesktopPeerDelivery,
 } from "@maestro-mobile/shared";
@@ -71,7 +69,6 @@ export interface DesktopPluginIpcServerOptions {
   onAskResponse?: (target: DesktopPluginTarget, response: DesktopAskResponse) => void;
   onPlanRequest?: (target: DesktopPluginTarget, request: DesktopPlanRequest) => void;
   onPeerRequest?: (target: DesktopPluginTarget, request: DesktopPeerRequest, reply: (result: DesktopPeerResult) => void) => void;
-  onPeerReply?: (target: DesktopPluginTarget, reply: DesktopPeerReply) => void;
   onPlanResponse?: (target: DesktopPluginTarget, response: DesktopPlanResponse) => void;
   onDisconnected?: (target: DesktopPluginTarget) => void;
 }
@@ -90,7 +87,6 @@ export interface DesktopPluginIpcClientOptions {
   onPlanResponse?: (response: DesktopPlanResponse) => Promise<void>;
   features?: string[];
   onPeerDelivery?: (delivery: DesktopPeerDelivery) => Promise<void>;
-  onPeerReply?: (reply: DesktopPeerReply) => void;
   onDisconnected?: () => void;
 }
 
@@ -226,7 +222,7 @@ class ServerTransport implements DesktopPluginTransport {
     });
   }
 
-  deliverPeerMessage(delivery: DesktopPeerDelivery, signal: AbortSignal): Promise<"acknowledged" | "rejected"> {
+  deliverPeerMessage(delivery: DesktopPeerDelivery, signal: AbortSignal): Promise<"accepted" | "rejected"> {
     if (this.closed) return Promise.reject(new Error("disconnected"));
     return new Promise<DesktopPeerAck>((resolve, reject) => {
       const finishError = (code: string) => { cleanup(); this.pendingPeerDeliveries.delete(delivery.deliveryId); reject(new Error(code)); };
@@ -243,17 +239,6 @@ class ServerTransport implements DesktopPluginTransport {
     const pending = this.pendingPeerDeliveries.get(ack.deliveryId);
     if (!pending) return;
     pending.cleanup(); this.pendingPeerDeliveries.delete(ack.deliveryId); pending.resolve(ack);
-  }
-
-
-  sendPeerReply(reply: DesktopPeerReply): boolean {
-    if (this.closed) return false;
-    try {
-      this.connection.send(reply);
-      return true;
-    } catch {
-      return false;
-    }
   }
 
   answerAsk(response: DesktopAskResponse): Promise<DesktopAskResult> {
@@ -436,7 +421,6 @@ export class DesktopPluginIpcServer {
         this.sendError(connection, "invalid_frame", undefined); return;
       }
       if (raw && typeof raw === "object" && (raw as { type?: unknown }).type === "desktop_peer_reply") {
-        if (isDesktopPeerReply(raw) && target && this.negotiatedFeatures.get(connection)?.has(DESKTOP_PEER_FEATURE)) { this.options.onPeerReply?.(target, raw); return; }
         this.sendError(connection, "invalid_frame", undefined); return;
       }
       if (raw && typeof raw === "object" && (raw as { type?: unknown }).type === "desktop_plugin_goodbye") {
@@ -647,12 +631,8 @@ export class DesktopPluginIpcClient {
             || raw.target.normalizedCwd !== target.normalizedCwd || raw.target.processGeneration !== target.processGeneration) {
             connection.send({ type: "desktop_peer_ack", deliveryId: raw.deliveryId, status: "rejected" }); return;
           }
-          const reply = (status: DesktopPeerAck["status"]) => { try { connection.send({ type: "desktop_peer_ack", deliveryId: raw.deliveryId, status }); } catch { /* disconnected */ } };
-          void this.options.onPeerDelivery(raw).then(() => reply("acknowledged"), () => reply("rejected"));
-          return;
-        }
-        if (isDesktopPeerReply(raw) && this.supportsPeerMessaging && this.options.onPeerReply) {
-          this.options.onPeerReply(raw);
+          const receipt = (status: DesktopPeerAck["status"]) => { try { connection.send({ type: "desktop_peer_ack", deliveryId: raw.deliveryId, status }); } catch { /* disconnected */ } };
+          void this.options.onPeerDelivery(raw).then(() => receipt("accepted"), () => receipt("rejected"));
           return;
         }
         if (isDesktopPluginClientFrame(raw) && raw.type === "desktop_ask_response") {
@@ -806,16 +786,6 @@ export class DesktopPluginIpcClient {
       this.pendingPeer.set(request.requestId, { resolve, timer });
       try { this.connection?.send(request); } catch { clearTimeout(timer); this.pendingPeer.delete(request.requestId); resolve(fail("disconnected")); }
     });
-  }
-
-  sendPeerReply(reply: DesktopPeerReply): boolean {
-    if (!this.connection || this.closed || !this.supportsPeerMessaging) return false;
-    try {
-      this.connection.send(reply);
-      return true;
-    } catch {
-      return false;
-    }
   }
 
   async sendModelSelect(event: Extract<DesktopPluginEvent, { event: "model_select" }>): Promise<void> {

@@ -36,7 +36,9 @@ describe("Desktop Plugin IPC protocol", () => {
     expect(isDesktopPeerRequest(request)).toBe(true);
     expect(isDesktopPeerRequest({ ...request, message: "x".repeat(DESKTOP_PEER_MAX_MESSAGE_BYTES + 1) })).toBe(false);
     expect(isDesktopPeerDelivery({ type: "desktop_peer_delivery", requestId: "r", deliveryId: "d", source: target, target, deadlineAt: Date.now() + 1000, message: "hello" })).toBe(true);
-    expect(isDesktopPluginClientFrame({ type: "desktop_peer_ack", deliveryId: "d", status: "acknowledged" })).toBe(true);
+    expect(isDesktopPluginClientFrame({ type: "desktop_peer_ack", deliveryId: "d", status: "accepted" })).toBe(true);
+    expect(isDesktopPluginClientFrame({ type: "desktop_peer_reply", deliveryId: "d", replyId: "r", message: "reply" })).toBe(false);
+    expect(isDesktopPeerResult({ type: "desktop_peer_result", requestId: "r", status: "accepted", deliveryId: "d" })).toBe(true);
   });
 
   it("validates peer authorization operations and structured results", () => {

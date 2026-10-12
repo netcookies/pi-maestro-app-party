@@ -528,7 +528,6 @@ export function createDesktopPluginExtension(options: DesktopPluginExtensionOpti
               if (!isCurrentSession(generation, sessionAdapter)) return Promise.reject(new Error("target_unavailable"));
               return peerCommand.receive(delivery);
             },
-            onPeerReply: (reply) => peerCommand.onReply(reply),
             onRequest: (request) => sessionAdapter.execute(request),
             onAskResponse: async (response) => {
               const key = askCorrelationKey(response.requestId, response.toolCallId);
