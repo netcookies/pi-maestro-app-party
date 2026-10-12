@@ -8,7 +8,14 @@ import type { DesktopPluginIpcClient } from "./desktop-plugin-ipc.js";
 export function registerDesktopPeerCommand(pi: ExtensionAPI, getClient: () => DesktopPluginIpcClient | undefined) {
   const inbox = new Map<string, { delivery: DesktopPeerDelivery; timer: ReturnType<typeof setTimeout> }>();
   let generation = 0;
-  const peerLabel = (peer: DesktopPluginTarget): string => `${peer.sessionId.slice(0, 6)} · ${peer.normalizedCwd}`;
+  const formatCwd = (cwd: string): string => {
+    const parts = cwd.split(/[\\/]+/).filter(Boolean);
+    if (parts.length <= 3) return cwd;
+    const root = cwd.startsWith("/") ? "/" : "";
+    return `${root}${parts[0]}/.../${parts.at(-1)}`;
+  };
+  const peerLabel = (peer: DesktopPluginTarget): string => `${peer.sessionId} · ${formatCwd(peer.normalizedCwd)}`;
+  const peerDescription = (peer: DesktopPluginTarget): string => `cwd=${formatCwd(peer.normalizedCwd)} · endpoint=${peer.endpointId} · generation=${peer.processGeneration}`;
   const listPeers = async () => {
     const client = getClient();
     const currentGeneration = generation;
@@ -30,7 +37,7 @@ export function registerDesktopPeerCommand(pi: ExtensionAPI, getClient: () => De
     return { client, generation: currentGeneration, peers: result.peers ?? [], grants: result.grants ?? [] };
   };
   const display = (content: unknown): void => {
-    pi.sendMessage({ customType: "desktop-peer", content: JSON.stringify(content, null, 2), display: true }, { triggerTurn: false });
+    pi.sendMessage({ customType: "mb-peer", content: JSON.stringify(content, null, 2), display: true }, { triggerTurn: false });
   };
 
   pi.registerCommand("mb-peer", {
@@ -45,7 +52,7 @@ export function registerDesktopPeerCommand(pi: ExtensionAPI, getClient: () => De
           return peers.filter((peer) => peer.sessionId.startsWith(sendMatch[1]!)).map((peer) => ({
             value: `send ${peer.sessionId} `,
             label: peerLabel(peer),
-            description: `${peer.sessionId} · ${peer.endpointId} · ${peer.processGeneration}`,
+            description: peerDescription(peer),
           }));
         } catch { return null; }
       }
@@ -56,7 +63,7 @@ export function registerDesktopPeerCommand(pi: ExtensionAPI, getClient: () => De
           return peers.filter((peer) => peer.normalizedCwd !== client.target.normalizedCwd && peer.sessionId.startsWith(accessMatch[1]!)).map((peer) => ({
             value: `access ${peer.sessionId} `,
             label: peerLabel(peer),
-            description: `${peer.sessionId} · ${peer.endpointId} · ${peer.processGeneration}`,
+            description: peerDescription(peer),
           }));
         } catch { return null; }
       }
@@ -84,13 +91,17 @@ export function registerDesktopPeerCommand(pi: ExtensionAPI, getClient: () => De
         if (action === "inbox") { display([...inbox.values()].map(({ delivery }) => delivery)); return; }
         if (action === "access") {
           const access = await listAccess();
-          if (!body) { display({ peers: access.peers, grants: access.grants }); return; }
+          if (!body) {
+            const peers = access.peers.filter((peer) => peer.normalizedCwd !== access.client.target.normalizedCwd);
+            display({ peers: peers.map((peer) => ({ ...peer, displayCwd: formatCwd(peer.normalizedCwd) })), grants: access.grants });
+            return;
+          }
           const matches = access.peers.filter((peer) => peer.normalizedCwd !== access.client.target.normalizedCwd && (peer.sessionId === body || peer.sessionId.startsWith(body)));
           if (!matches.length) throw new Error("peer_not_found: 请用 /mb-peer access 查看在线会话。");
           let target = matches[0]!;
           if (matches.length > 1) {
             if (!ctx.ui.select) throw new Error("ambiguous_peer: 请使用完整 sessionId；同一会话有多个 endpoint 时需交互选择。");
-            const labels = matches.map((peer) => `${peerLabel(peer)} · ${peer.sessionId} · ${peer.endpointId} · ${peer.processGeneration}`);
+            const labels = matches.map((peer) => `${peerLabel(peer)} · ${peerDescription(peer)}`);
             const selected = await ctx.ui.select("选择授权 peer", labels);
             if (!selected) return;
             const index = labels.indexOf(selected);
@@ -137,7 +148,7 @@ export function registerDesktopPeerCommand(pi: ExtensionAPI, getClient: () => De
           let target = matches[0]!;
           if (matches.length > 1) {
             if (!ctx.ui.select) throw new Error("ambiguous_peer: 请使用完整 sessionId；同一会话有多个 endpoint 时需交互选择。");
-            const labels = matches.map((peer, index) => `${index + 1}. ${peerLabel(peer)} · ${peer.sessionId} · ${peer.endpointId} · ${peer.processGeneration}`);
+            const labels = matches.map((peer, index) => `${index + 1}. ${peerLabel(peer)} · ${peerDescription(peer)}`);
             const selected = await ctx.ui.select("选择 peer 目标", labels);
             if (!selected) return;
             const index = labels.indexOf(selected);
@@ -181,7 +192,10 @@ export function registerDesktopPeerCommand(pi: ExtensionAPI, getClient: () => De
       if (inbox.size >= DESKTOP_PEER_MAX_PEERS || inbox.has(delivery.deliveryId) || delivery.deadlineAt <= Date.now()) return Promise.reject(new Error("inbox_unavailable"));
       const timer = setTimeout(() => inbox.delete(delivery.deliveryId), Math.max(1, delivery.deadlineAt - Date.now()));
       inbox.set(delivery.deliveryId, { delivery, timer });
-      try { display(delivery); } catch { /* The queued delivery remains available through /mb-peer inbox. */ }
+      try {
+        const content = `← 收到来自 peer ${delivery.source.sessionId.slice(0, 8)} 的消息 · 消息\n${delivery.message}\n\n回复请使用 /mb-peer send ${delivery.source.sessionId} <回复内容>。`;
+        pi.sendMessage({ customType: "mb-peer", content, display: true }, { triggerTurn: true, deliverAs: "steer" });
+      } catch { /* The queued delivery remains available through /mb-peer inbox. */ }
       return Promise.resolve();
     },
     clear(): void {

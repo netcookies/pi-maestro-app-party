@@ -11,13 +11,14 @@ function setup(result: (request: DesktopPeerRequest) => DesktopPeerResult | Prom
   let handler: (args: string, ctx: unknown) => Promise<void> = async () => undefined;
   let complete: NonNullable<RegisteredCommand["getArgumentCompletions"]> = () => null;
   const messages: unknown[] = [];
+  const messageOptions: unknown[] = [];
   const requests: DesktopPeerRequest[] = [];
   let commandName = "";
   const pi = {
     registerCommand: (name: string, _command: { handler: typeof handler; getArgumentCompletions: typeof complete }) => {
       commandName = name; handler = _command.handler; complete = _command.getArgumentCompletions;
     },
-    sendMessage: (message: unknown) => messages.push(message),
+    sendMessage: (message: unknown, options?: unknown) => { messages.push(message); messageOptions.push(options); },
   };
   const client = { target: { ...target, normalizedCwd: "/work/app" }, requestPeers: async (request: DesktopPeerRequest) => { requests.push(request); return result(request); } };
   let connected = true;
@@ -25,7 +26,7 @@ function setup(result: (request: DesktopPeerRequest) => DesktopPeerResult | Prom
   const notify = vi.fn();
   const run = async (command: string, confirm?: (title: string, message: string) => Promise<boolean>, select?: (title: string, options: string[]) => Promise<string | undefined>) =>
     handler(command, { ui: { notify, confirm, select } });
-  return { run, requests, messages, notify, peerCommand, complete: (prefix: string) => complete(prefix), disconnect: () => { connected = false; peerCommand.clear(); }, get commandName() { return commandName; } };
+  return { run, requests, messages, messageOptions, notify, peerCommand, complete: (prefix: string) => complete(prefix), disconnect: () => { connected = false; peerCommand.clear(); }, get commandName() { return commandName; } };
 }
 
 describe("desktop peer target input and completion", () => {
@@ -34,6 +35,26 @@ describe("desktop peer target input and completion", () => {
   const respond = (peers: DesktopPluginTarget[]) => (request: DesktopPeerRequest): DesktopPeerResult => request.type === "desktop_peer_list"
     ? { type: "desktop_peer_result", requestId: request.requestId, status: "listed", peers }
     : { type: "desktop_peer_result", requestId: request.requestId, status: "accepted", deliveryId: "delivery" };
+
+  it("shows full target identity in completion and access excludes only the current cwd", async () => {
+    const remote = {
+      ...peer,
+      normalizedCwd: "/Users/isulewli/Projects/WorkSpace4AI",
+      endpointId: "desktop-workspace4ai",
+      processGeneration: "generation-workspace4ai",
+    };
+    const state = setup((request) => request.type === "desktop_peer_access_list"
+      ? { type: "desktop_peer_result", requestId: request.requestId, status: "access_listed", peers: [remote], grants: [], truncated: false }
+      : { type: "desktop_peer_result", requestId: request.requestId, status: "listed", peers: [remote] });
+    await state.run("access");
+    expect(state.messages.at(-1)).toMatchObject({ content: expect.stringContaining(remote.sessionId) });
+    expect(state.messages.at(-1)).toMatchObject({ content: expect.stringContaining('"displayCwd": "/Users/.../WorkSpace4AI"') });
+    expect(await state.complete("access ")).toEqual([{
+      value: `access ${remote.sessionId} `,
+      label: `${remote.sessionId} · /Users/.../WorkSpace4AI`,
+      description: `cwd=/Users/.../WorkSpace4AI · endpoint=${remote.endpointId} · generation=${remote.processGeneration}`,
+    }]);
+  });
 
   it("resolves short/full IDs to the exact four fields", async () => {
     const state = setup(respond([peer]));
@@ -54,11 +75,11 @@ describe("desktop peer target input and completion", () => {
     expect(await state.complete("s")).toContainEqual({ value: "send ", label: "send" });
     expect(state.requests).toHaveLength(0);
     expect(await state.complete("send 39")).toEqual([{
-      value: `send ${peer.sessionId} `, label: `39a52f · ${peer.normalizedCwd}`,
-      description: `${peer.sessionId} · ${peer.endpointId} · ${peer.processGeneration}`,
+      value: `send ${peer.sessionId} `, label: `${peer.sessionId} · ${peer.normalizedCwd}`,
+      description: `cwd=${peer.normalizedCwd} · endpoint=${peer.endpointId} · generation=${peer.processGeneration}`,
     }]);
     peers = [other];
-    expect(await state.complete("send ")).toMatchObject([{ value: `send ${other.sessionId} `, label: "39a52f · /work/other" }]);
+    expect(await state.complete("send ")).toMatchObject([{ value: `send ${other.sessionId} `, label: `${other.sessionId} · /work/other` }]);
     expect(await state.complete("send unknown")).toEqual([]);
     expect(await state.complete("send 39a52f message")).toEqual([]);
     expect(await state.complete('send {"target":')).toBeNull();
@@ -70,7 +91,8 @@ describe("desktop peer target input and completion", () => {
     const select = vi.fn(async (_title: string, options: string[]) => options[1]);
     await state.run("send 39a52f chosen", undefined, select);
     expect(select.mock.calls[0]?.[1]).toEqual([
-      expect.stringContaining(`${peer.sessionId} · ${peer.endpointId}`), expect.stringContaining(`${other.sessionId} · ${other.endpointId}`),
+      expect.stringContaining(`${peer.sessionId} · ${peer.normalizedCwd} · cwd=${peer.normalizedCwd} · endpoint=${peer.endpointId}`),
+      expect.stringContaining(`${other.sessionId} · ${other.normalizedCwd} · cwd=${other.normalizedCwd} · endpoint=${other.endpointId}`),
     ]);
     expect(state.requests.at(-1)).toMatchObject({ type: "desktop_peer_send", target: other });
     const exact = setup(respond([{ ...peer, sessionId: "39a52f" }, peer]));
@@ -83,7 +105,7 @@ describe("desktop peer target input and completion", () => {
     const state = setup(respond([peer, duplicate]));
     const completions = await state.complete("send 39a52f");
     expect(completions).toMatchObject([
-      { description: expect.stringContaining("endpoint · generation") }, { description: expect.stringContaining("endpoint-2 · generation-2") },
+      { description: expect.stringContaining("endpoint=endpoint · generation=generation") }, { description: expect.stringContaining("endpoint=endpoint-2 · generation=generation-2") },
     ]);
     await state.run("send 39a52f ambiguous");
     await state.run("send 39a52f cancelled", undefined, async () => undefined);
@@ -235,6 +257,24 @@ describe("desktop peer TUI authorization", () => {
     expect(state.requests.map((request) => request.type)).toEqual(["desktop_peer_list", "desktop_peer_send", "desktop_peer_access_grant"]);
     expect(state.requests[2]).toMatchObject({ direction: "bidirectional", target });
     expect(state.notify).toHaveBeenCalledWith(expect.stringContaining("重新执行"), "info");
+  });
+
+  it("shows mb-peer sender and message in the transcript and injects a replyable prompt", async () => {
+    const state = setup((request) => ({ type: "desktop_peer_result", requestId: request.requestId, status: "listed", peers: [] }));
+    const delivery: DesktopPeerDelivery = {
+      type: "desktop_peer_delivery",
+      requestId: "request",
+      deliveryId: "prompt-delivery",
+      source: { sessionId: "source-session", endpointId: "source-endpoint", normalizedCwd: "/source/project", processGeneration: "source-generation" },
+      target,
+      deadlineAt: Date.now() + 5_000,
+      message: "请检查 WorkSpace4AI 的构建失败原因。",
+    };
+    await expect(state.peerCommand.receive(delivery)).resolves.toBeUndefined();
+    expect(state.messageOptions[0]).toEqual({ triggerTurn: true, deliverAs: "steer" });
+    expect(state.messages[0]).toMatchObject({ customType: "mb-peer", content: expect.stringContaining("← 收到来自 peer source-s 的消息 · 消息") });
+    expect(state.messages[0]).toMatchObject({ content: expect.stringContaining(delivery.message) });
+    expect(state.messages[0]).toMatchObject({ content: expect.stringContaining("/mb-peer send source-session <回复内容>") });
   });
 
   it("automatically accepts and retains deliveries in the inbox until clear", async () => {
