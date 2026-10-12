@@ -2,6 +2,16 @@
 
 本文件记录 Maestro Mobile 的显著变更。格式基于 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)。
 
+## [0.14.0] — 2026-10-12
+
+### 新增
+
+- replace peer candidates with access discovery
+
+### 文档
+
+- 重构双语 README 与用户文档
+
 ## [0.13.0] — 2026-10-12
 
 ### 新增
