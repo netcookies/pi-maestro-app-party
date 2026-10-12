@@ -75,7 +75,7 @@ export class DesktopBroker {
     try {
       const parsed: unknown = JSON.parse(await readFile(this.options.peerAccessPath, "utf8"));
       if (!Array.isArray(parsed) || parsed.some((grant) => !isDesktopPeerAccessGrant(grant) || grant.managed)) throw new Error("invalid peer access file");
-      if (parsed.length > DESKTOP_PEER_MAX_PEERS) throw new Error("too many peer grants");
+      if (parsed.length + this.managedPeerAccess.length > DESKTOP_PEER_MAX_PEERS) throw new Error("too many peer grants");
       for (const grant of parsed) {
         const key = this.accessKey(grant.sourceCwd, grant.targetCwd);
         if (this.persistentPeerAccess.has(key)) throw new Error("duplicate peer grant");
@@ -220,7 +220,11 @@ export class DesktopBroker {
     const sourceRegistration = this.registry.resolve(source);
     if (!sourceRegistration?.features?.includes(DESKTOP_PEER_FEATURE)) return fail("failed", "feature_not_negotiated");
     const records = this.registry.snapshotRecords().filter((record) => !this.samePeerTarget(record.target, source));
-    if (request.type === "desktop_peer_access_list") return { type: "desktop_peer_result", requestId: request.requestId, status: "access_listed", grants: this.allPeerAccess() };
+    if (request.type === "desktop_peer_access_list") {
+      const eligible = records.filter((record) => record.features?.includes(DESKTOP_PEER_FEATURE));
+      const peers = eligible.slice(0, DESKTOP_PEER_MAX_PEERS).map((record) => record.target);
+      return { type: "desktop_peer_result", requestId: request.requestId, status: "access_listed", peers, grants: this.allPeerAccess(), truncated: eligible.length > peers.length };
+    }
     if (request.type === "desktop_peer_access_grant") {
       const registration = this.registry.resolve(request.target);
       if (!registration) return fail("unknown", "target_unavailable");
@@ -228,7 +232,7 @@ export class DesktopBroker {
       const grant: DesktopPeerAccessGrant = { grantId: randomUUID(), sourceCwd: source.normalizedCwd, targetCwd: registration.target.normalizedCwd, direction: request.direction, createdAt: Date.now(), managed: false };
       try {
         await this.changePeerAccess((next) => {
-          if (!next.has(this.accessKey(grant.sourceCwd, grant.targetCwd)) && next.size >= DESKTOP_PEER_MAX_PEERS) throw new Error("peer_access_limit");
+          if (!next.has(this.accessKey(grant.sourceCwd, grant.targetCwd)) && next.size + this.managedPeerAccess.length >= DESKTOP_PEER_MAX_PEERS) throw new Error("peer_access_limit");
           next.set(this.accessKey(grant.sourceCwd, grant.targetCwd), grant);
         });
       } catch (error) { return fail("failed", error instanceof Error && error.message === "peer_access_limit" ? "peer_access_limit" : "peer_access_persist_failed"); }
@@ -254,11 +258,6 @@ export class DesktopBroker {
       const eligible = records.filter((record) => this.peerAuthorized(source, record.target) && record.features?.includes(DESKTOP_PEER_FEATURE));
       const peers = eligible.slice(0, DESKTOP_PEER_MAX_PEERS).map((record) => record.target);
       return { type: "desktop_peer_result", requestId: request.requestId, status: "listed", peers, truncated: eligible.length > peers.length };
-    }
-    if (request.type === "desktop_peer_candidates") {
-      const eligible = records.filter((record) => !this.peerAuthorized(source, record.target) && record.features?.includes(DESKTOP_PEER_FEATURE));
-      const candidates = eligible.slice(0, DESKTOP_PEER_MAX_PEERS).map((record) => record.target);
-      return { type: "desktop_peer_result", requestId: request.requestId, status: "candidates", candidates, truncated: eligible.length > candidates.length };
     }
     if (Buffer.byteLength(request.message, "utf8") > DESKTOP_PEER_MAX_MESSAGE_BYTES) return fail("failed", "message_too_large");
     if (!isAbsolute(request.target.normalizedCwd) || normalize(request.target.normalizedCwd) !== request.target.normalizedCwd) return fail("failed", "invalid_target");

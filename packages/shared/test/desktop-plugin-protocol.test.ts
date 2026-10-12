@@ -45,7 +45,6 @@ describe("Desktop Plugin IPC protocol", () => {
     const target = { sessionId: "s", endpointId: "e", normalizedCwd: "/work/b", processGeneration: "g" };
     const base = { requestId: "r", deadlineAt: Date.now() + 1000 };
     expect(isDesktopPluginClientFrame({ type: "desktop_peer_access_list", ...base })).toBe(true);
-    expect(isDesktopPluginClientFrame({ type: "desktop_peer_candidates", ...base })).toBe(true);
     expect(isDesktopPeerRequest({ type: "desktop_peer_access_grant", ...base, target, direction: "bidirectional" })).toBe(true);
     expect(isDesktopPeerRequest({ type: "desktop_peer_access_grant", ...base, target, direction: "all" })).toBe(false);
     expect(isDesktopPluginClientFrame({ type: "desktop_peer_access_revoke", ...base, grantId: "grant-1" })).toBe(true);
@@ -58,7 +57,7 @@ describe("Desktop Plugin IPC protocol", () => {
       expect(isDesktopPeerAccessGrant({ grantId: "grant-1", sourceCwd: cwd, targetCwd: "/work/b", direction: "one_way", createdAt: Date.now(), managed: false })).toBe(true);
     }
     expect(isDesktopPeerResult({ type: "desktop_peer_result", requestId: "r", status: "failed", error: { code: "authorization_required" }, authorization: { sourceCwd: "/work/a", targetCwd: "/work/b" } })).toBe(true);
-    expect(isDesktopPeerResult({ type: "desktop_peer_result", requestId: "r", status: "candidates", candidates: [target], truncated: false })).toBe(true);
+    expect(isDesktopPeerResult({ type: "desktop_peer_result", requestId: "r", status: "access_listed", peers: [target], grants: [], truncated: false })).toBe(true);
     expect(isDesktopPeerResult({ type: "desktop_peer_result", requestId: "r", status: "access_granted", grant: { grantId: "grant-1", sourceCwd: "/work/a", targetCwd: "/work/b", direction: "one_way", createdAt: Date.now(), managed: false } })).toBe(true);
   });
 

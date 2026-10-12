@@ -19,7 +19,7 @@ function setup(result: (request: DesktopPeerRequest) => DesktopPeerResult | Prom
     },
     sendMessage: (message: unknown) => messages.push(message),
   };
-  const client = { requestPeers: async (request: DesktopPeerRequest) => { requests.push(request); return result(request); } };
+  const client = { target: { ...target, normalizedCwd: "/work/app" }, requestPeers: async (request: DesktopPeerRequest) => { requests.push(request); return result(request); } };
   let connected = true;
   const peerCommand = registerDesktopPeerCommand(pi as unknown as ExtensionAPI, () => connected ? client as unknown as DesktopPluginIpcClient : undefined);
   const notify = vi.fn();
@@ -93,7 +93,7 @@ describe("desktop peer target input and completion", () => {
     expect(state.requests.at(-1)).toMatchObject({ type: "desktop_peer_send", target: duplicate });
   });
 
-  it("rejects unknown peers, incomplete commands and truncated lists without sending or querying candidates", async () => {
+  it("rejects unknown peers, incomplete commands and truncated lists without sending or querying extra peers", async () => {
     const state = setup(respond([]));
     await state.run("send unknown hello");
     await state.run("send 39a52f");
@@ -162,22 +162,10 @@ describe("desktop peer target input and completion", () => {
 });
 
 describe("desktop peer TUI authorization", () => {
-  it("never queries candidates without interactive approval", async () => {
-    const state = setup((request) => ({ type: "desktop_peer_result", requestId: request.requestId, status: "candidates", candidates: [target], truncated: false }));
-    await state.run("candidates");
-    await state.run("candidates", async () => false);
-    expect(state.requests).toHaveLength(0);
-    await state.run("candidates", async () => true);
-    expect(state.requests.map((request) => request.type)).toEqual(["desktop_peer_candidates"]);
-    expect(state.commandName).toBe("mb-peer");
-
-    expect(JSON.stringify(state.messages)).toContain(target.processGeneration);
-  });
-
-  it("discovers unauthorized targets only after approval and retains the separate grant confirmation", async () => {
+  it("discovers unauthorized targets through access and retains the separate grant confirmation", async () => {
     const state = setup((request) => {
       if (request.type === "desktop_peer_list") return { type: "desktop_peer_result", requestId: request.requestId, status: "listed", peers: [] };
-      if (request.type === "desktop_peer_candidates") return { type: "desktop_peer_result", requestId: request.requestId, status: "candidates", candidates: [target] };
+      if (request.type === "desktop_peer_access_list") return { type: "desktop_peer_result", requestId: request.requestId, status: "access_listed", peers: [target], grants: [], truncated: false };
       if (request.type === "desktop_peer_send") return { type: "desktop_peer_result", requestId: request.requestId, status: "failed", error: { code: "authorization_required" }, authorization: { sourceCwd: "/work/app", targetCwd: target.normalizedCwd } };
       return { type: "desktop_peer_result", requestId: request.requestId, status: "access_granted" };
     });
@@ -186,14 +174,31 @@ describe("desktop peer TUI authorization", () => {
     const confirm = vi.fn(async (title: string) => title === "显示未授权 peer");
     await state.run("send peer hello", confirm);
     expect(confirm.mock.calls.map((call) => call[0])).toEqual(["显示未授权 peer", "跨工作目录授权"]);
-    expect(state.requests.map((request) => request.type)).toEqual(["desktop_peer_list", "desktop_peer_list", "desktop_peer_candidates", "desktop_peer_send"]);
+    expect(state.requests.map((request) => request.type)).toEqual(["desktop_peer_list", "desktop_peer_list", "desktop_peer_access_list", "desktop_peer_send"]);
     expect(state.requests.at(-1)).toMatchObject({ target, message: "hello" });
     await state.run("send peer hello", async () => true, async () => "允许双向");
-    expect(state.requests.slice(-4).map((request) => request.type)).toEqual(["desktop_peer_list", "desktop_peer_candidates", "desktop_peer_send", "desktop_peer_access_grant"]);
+    expect(state.requests.slice(-3).map((request) => request.type)).toEqual(["desktop_peer_access_list", "desktop_peer_send", "desktop_peer_access_grant"]);
     expect(state.requests.at(-1)).toMatchObject({ target, direction: "bidirectional" });
   });
 
-  it("does not query candidates after the session changes during discovery approval", async () => {
+  it("completes access targets and revoke grant IDs", async () => {
+    const grant = { grantId: "grant-1234", sourceCwd: "/elsewhere", targetCwd: "/work/app", direction: "bidirectional" as const, createdAt: Date.now(), managed: false };
+    const sameCwd = { ...target, sessionId: "same-cwd-session", normalizedCwd: "/work/app" };
+    const state = setup((request) => request.type === "desktop_peer_access_list"
+      ? { type: "desktop_peer_result", requestId: request.requestId, status: "access_listed", peers: [sameCwd, target], grants: [grant], truncated: false }
+      : { type: "desktop_peer_result", requestId: request.requestId, status: "access_granted", grant });
+    expect(await state.complete("access ")).toMatchObject([{ value: `access ${target.sessionId} ` }]);
+    expect(await state.complete("revoke grant")).toEqual([]);
+    const owned = { ...grant, sourceCwd: "/work/app", targetCwd: "/another" };
+    const revokeState = setup((request) => request.type === "desktop_peer_access_list"
+      ? { type: "desktop_peer_result", requestId: request.requestId, status: "access_listed", peers: [target], grants: [owned], truncated: false }
+      : { type: "desktop_peer_result", requestId: request.requestId, status: "access_granted", grant: owned });
+    expect(await revokeState.complete("revoke grant")).toMatchObject([{ value: "revoke grant-1234", label: expect.stringContaining("/another") }]);
+    await state.run(`access ${target.sessionId}`, undefined, async () => "允许双向");
+    expect(state.requests.at(-1)).toMatchObject({ type: "desktop_peer_access_grant", target, direction: "bidirectional" });
+  });
+
+  it("does not query extra peers after the session changes during discovery approval", async () => {
     const state = setup((request) => ({ type: "desktop_peer_result", requestId: request.requestId, status: "listed", peers: [] }));
     await state.run("send peer hello", async () => { state.peerCommand.clear(); return true; });
     expect(state.requests.map((request) => request.type)).toEqual(["desktop_peer_list"]);

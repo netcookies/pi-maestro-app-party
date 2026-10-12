@@ -51,8 +51,7 @@ describe("DesktopBroker peer messaging", () => {
     const broker = new DesktopBroker({ pluginSocketPath: "/tmp/not-started.sock", secret: "secret", registry, peerAccessPath: accessPath });
     try {
       const hidden = await broker.handlePeerRequest(source, { type: "desktop_peer_list", requestId: "list-before", deadlineAt: Date.now() + 1000 });
-      expect(hidden).toMatchObject({ status: "listed", peers: [] });
-      expect(await broker.handlePeerRequest(source, { type: "desktop_peer_candidates", requestId: "candidates", deadlineAt: Date.now() + 1000 })).toMatchObject({ status: "candidates", candidates: [peer] });
+    expect(await broker.handlePeerRequest(source, { type: "desktop_peer_access_list", requestId: "access-before", deadlineAt: Date.now() + 1000 })).toMatchObject({ status: "access_listed", peers: [peer], grants: [] });
       const denied = await broker.handlePeerRequest(source, { type: "desktop_peer_send", requestId: "send-before", deadlineAt: Date.now() + 1000, target: peer, message: "hello" });
       expect(denied).toMatchObject({ status: "failed", error: { code: "authorization_required" }, authorization: { sourceCwd: "/work/app", targetCwd: "/other" } });
       const grant = await broker.handlePeerRequest(source, { type: "desktop_peer_access_grant", requestId: "grant", deadlineAt: Date.now() + 1000, target: peer, direction: "one_way" });
@@ -95,7 +94,7 @@ describe("DesktopBroker peer messaging", () => {
       expect(await readFile(accessPath, "utf8")).toBe("not json");
       const managed = new DesktopBroker({ pluginSocketPath: "/tmp/not-started.sock", secret: "secret", registry, peerAccessPath: join(dir, "empty.json"), crossCwdAllowRules: [{ sourceCwd: "/work/app", targetCwd: "/other" }] });
       const grants = await managed.handlePeerRequest(source, { type: "desktop_peer_access_list", requestId: "access", deadlineAt: Date.now() + 1000 });
-      expect(grants).toMatchObject({ status: "access_listed", grants: [{ managed: true, sourceCwd: "/work/app", targetCwd: "/other" }] });
+    expect(grants).toMatchObject({ status: "access_listed", peers: [peer], grants: [{ managed: true, sourceCwd: "/work/app", targetCwd: "/other" }] });
       const grantId = (grants as { grants: Array<{ grantId: string }> }).grants[0].grantId;
       expect(await managed.handlePeerRequest(source, { type: "desktop_peer_access_revoke", requestId: "revoke", deadlineAt: Date.now() + 1000, grantId })).toMatchObject({ status: "failed", error: { code: "managed_grant" } });
       await managed.close();
@@ -381,8 +380,7 @@ describe("DesktopBroker", () => {
       broker = new DesktopBroker({ pluginSocketPath: socketPath, secret: "secret", peerAccessPath: accessPath, brokerInstanceId: "broker-peer-access" });
       await broker.start();
       await connect();
-      expect(await sourceClient.requestPeers({ type: "desktop_peer_list", requestId: "list-before", deadlineAt: Date.now() + 2_000 })).toMatchObject({ status: "listed", peers: [] });
-      expect(await sourceClient.requestPeers({ type: "desktop_peer_candidates", requestId: "candidates", deadlineAt: Date.now() + 2_000 })).toMatchObject({ status: "candidates", candidates: [peer] });
+      expect(await sourceClient.requestPeers({ type: "desktop_peer_access_list", requestId: "access", deadlineAt: Date.now() + 2_000 })).toMatchObject({ status: "access_listed", peers: [peer], grants: [] });
       expect(await sourceClient.requestPeers({ type: "desktop_peer_send", requestId: "denied", deadlineAt: Date.now() + 2_000, target: peer, message: "not delivered" })).toMatchObject({ status: "failed", error: { code: "authorization_required" } });
       const grant = await sourceClient.requestPeers({ type: "desktop_peer_access_grant", requestId: "grant", deadlineAt: Date.now() + 2_000, target: peer, direction: "bidirectional" });
       expect(grant).toMatchObject({ status: "access_granted", grant: { managed: false, direction: "bidirectional" } });
@@ -410,7 +408,7 @@ describe("DesktopBroker", () => {
       await broker.start();
       await connect();
       expect(await sourceClient.requestPeers({ type: "desktop_peer_list", requestId: "list-restored", deadlineAt: Date.now() + 2_000 })).toMatchObject({ status: "listed", peers: [peer] });
-      expect(await sourceClient.requestPeers({ type: "desktop_peer_access_list", requestId: "access", deadlineAt: Date.now() + 2_000 })).toMatchObject({ status: "access_listed", grants: [{ managed: false, direction: "bidirectional" }] });
+      expect(await sourceClient.requestPeers({ type: "desktop_peer_access_list", requestId: "access", deadlineAt: Date.now() + 2_000 })).toMatchObject({ status: "access_listed", peers: [peer], grants: [{ managed: false, direction: "bidirectional" }] });
       const restoredDelivery = await peerClient.requestPeers({ type: "desktop_peer_send", requestId: "send-restored", deadlineAt: Date.now() + 2_000, target: source, message: "after restart" });
       expect(restoredDelivery.status).toBe("accepted");
       expect(await sourceInbox.read()).toContainEqual(expect.objectContaining({ deliveryId: restoredDelivery.deliveryId, source: peer, target: source, message: "after restart" }));
