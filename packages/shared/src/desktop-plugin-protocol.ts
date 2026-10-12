@@ -1,3 +1,4 @@
+import { isAbsolute, normalize } from "node:path";
 import type {
   ExtensionUiResponse,
   JsonValue,
@@ -32,9 +33,22 @@ export const DESKTOP_PEER_FEATURE = "peer-message-v1" as const;
 export const DESKTOP_PEER_MAX_MESSAGE_BYTES = 16_384;
 export const DESKTOP_PEER_MAX_DEADLINE_MS = 30_000;
 export const DESKTOP_PEER_MAX_PEERS = 64;
+export type DesktopPeerAccessDirection = "one_way" | "bidirectional";
+export interface DesktopPeerAccessGrant {
+  grantId: string;
+  sourceCwd: string;
+  targetCwd: string;
+  direction: DesktopPeerAccessDirection;
+  createdAt: number;
+  managed: boolean;
+}
 export type DesktopPeerRequest =
   | { type: "desktop_peer_list"; requestId: string; deadlineAt: number }
-  | { type: "desktop_peer_send"; requestId: string; deadlineAt: number; target: DesktopPluginTarget; message: string };
+  | { type: "desktop_peer_send"; requestId: string; deadlineAt: number; target: DesktopPluginTarget; message: string }
+  | { type: "desktop_peer_access_list"; requestId: string; deadlineAt: number }
+  | { type: "desktop_peer_candidates"; requestId: string; deadlineAt: number }
+  | { type: "desktop_peer_access_grant"; requestId: string; deadlineAt: number; target: DesktopPluginTarget; direction: DesktopPeerAccessDirection }
+  | { type: "desktop_peer_access_revoke"; requestId: string; deadlineAt: number; grantId: string };
 export interface DesktopPeerDelivery {
   type: "desktop_peer_delivery";
   requestId: string;
@@ -58,17 +72,35 @@ export interface DesktopPeerReply {
 export interface DesktopPeerResult {
   type: "desktop_peer_result";
   requestId: string;
-  status: "listed" | "acknowledged" | "rejected" | "failed" | "unknown";
+  status: "listed" | "candidates" | "acknowledged" | "rejected" | "failed" | "unknown" | "access_listed" | "access_granted" | "access_revoked";
   peers?: DesktopPluginTarget[];
+  candidates?: DesktopPluginTarget[];
+  grants?: DesktopPeerAccessGrant[];
+  grant?: DesktopPeerAccessGrant;
+  authorization?: { sourceCwd: string; targetCwd: string };
+  grantId?: string;
   truncated?: boolean;
   deliveryId?: string;
   error?: { code: string };
 }
 export function isDesktopPeerRequest(value: unknown): value is DesktopPeerRequest {
-  return isRecord(value) && stringFields(value, "requestId") && typeof value.requestId === "string" && value.requestId.length <= 128
-    && finiteNumber(value.deadlineAt)
-    && (value.type === "desktop_peer_list" || (value.type === "desktop_peer_send"
-      && isDesktopPluginTarget(value.target) && isDesktopPeerMessage(value.message)));
+  const common = isRecord(value) && stringFields(value, "requestId") && typeof value.requestId === "string" && value.requestId.length <= 128
+    && finiteNumber(value.deadlineAt);
+  if (!common) return false;
+  if (value.type === "desktop_peer_list" || value.type === "desktop_peer_access_list" || value.type === "desktop_peer_candidates") return true;
+  if (value.type === "desktop_peer_send") return isDesktopPluginTarget(value.target) && isDesktopPeerMessage(value.message);
+  if (value.type === "desktop_peer_access_grant") return isDesktopPluginTarget(value.target)
+    && (value.direction === "one_way" || value.direction === "bidirectional");
+  return value.type === "desktop_peer_access_revoke" && typeof value.grantId === "string" && value.grantId.length > 0 && value.grantId.length <= 128;
+}
+function isAbsoluteNormalizedCwd(value: unknown): value is string {
+  return typeof value === "string" && value.length <= 4096 && isAbsolute(value) && normalize(value) === value;
+}
+export function isDesktopPeerAccessGrant(value: unknown): value is DesktopPeerAccessGrant {
+  return isRecord(value) && stringFields(value, "grantId", "sourceCwd", "targetCwd")
+    && isAbsoluteNormalizedCwd(value.sourceCwd) && isAbsoluteNormalizedCwd(value.targetCwd)
+    && (value.direction === "one_way" || value.direction === "bidirectional")
+    && finiteNumber(value.createdAt) && typeof value.managed === "boolean";
 }
 export function isDesktopPeerMessage(value: unknown): value is string {
   return typeof value === "string" && value.length > 0
@@ -92,6 +124,14 @@ export function isDesktopPeerResult(value: unknown): value is DesktopPeerResult 
   if (value.deliveryId !== undefined && !stringFields(value, "deliveryId")) return false;
   if (value.status === "listed") return Array.isArray(value.peers) && value.peers.length <= DESKTOP_PEER_MAX_PEERS
     && value.peers.every(isDesktopPluginTarget) && typeof value.truncated === "boolean";
+  if (value.status === "candidates") return Array.isArray(value.candidates) && value.candidates.length <= DESKTOP_PEER_MAX_PEERS
+    && value.candidates.every(isDesktopPluginTarget) && typeof value.truncated === "boolean";
+  if (value.status === "access_listed") return Array.isArray(value.grants) && value.grants.length <= DESKTOP_PEER_MAX_PEERS
+    && value.grants.every(isDesktopPeerAccessGrant);
+  if (value.status === "access_granted") return isDesktopPeerAccessGrant(value.grant);
+  if (value.status === "access_revoked") return stringFields(value, "grantId");
+  if (value.authorization !== undefined && (!isRecord(value.authorization)
+    || !isAbsoluteNormalizedCwd(value.authorization.sourceCwd) || !isAbsoluteNormalizedCwd(value.authorization.targetCwd))) return false;
   if (value.status === "acknowledged" || value.status === "rejected") return stringFields(value, "deliveryId");
   return (value.status === "failed" || value.status === "unknown") && isRecord(value.error) && stringFields(value.error, "code");
 }
@@ -374,7 +414,11 @@ export function isDesktopPluginClientFrame(value: unknown): value is DesktopPlug
   if (!isRecord(value) || typeof value.type !== "string") return false;
   switch (value.type) {
     case "desktop_peer_list":
-    case "desktop_peer_send": return isDesktopPeerRequest(value);
+    case "desktop_peer_send":
+    case "desktop_peer_access_list":
+    case "desktop_peer_candidates":
+    case "desktop_peer_access_grant":
+    case "desktop_peer_access_revoke": return isDesktopPeerRequest(value);
     case "desktop_peer_ack": return isDesktopPeerAck(value);
     case "desktop_peer_reply": return isDesktopPeerReply(value);
     case "desktop_plugin_hello":

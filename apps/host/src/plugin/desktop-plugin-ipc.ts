@@ -427,7 +427,7 @@ export class DesktopPluginIpcServer {
         });
         return;
       }
-      if (raw && typeof raw === "object" && ((raw as { type?: unknown }).type === "desktop_peer_list" || (raw as { type?: unknown }).type === "desktop_peer_send")) {
+      if (raw && typeof raw === "object" && ["desktop_peer_list", "desktop_peer_send", "desktop_peer_access_list", "desktop_peer_candidates", "desktop_peer_access_grant", "desktop_peer_access_revoke"].includes(String((raw as { type?: unknown }).type))) {
         if (isDesktopPeerRequest(raw) && target && this.negotiatedFeatures.get(connection)?.has(DESKTOP_PEER_FEATURE)) { this.options.onPeerRequest?.(target, raw, (result) => { try { connection.send(result); } catch { /* source disconnected */ } }); return; }
         this.sendError(connection, "invalid_frame", undefined); return;
       }

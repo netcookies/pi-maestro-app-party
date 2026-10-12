@@ -8,6 +8,7 @@ import {
   DEFAULT_DESKTOP_BROKER_PLUGIN_SOCKET,
   DEFAULT_DESKTOP_BROKER_REGISTRY_FILE,
   DEFAULT_DESKTOP_BROKER_SECRET_FILE,
+  DEFAULT_DESKTOP_PEER_ACCESS_FILE,
 } from "./plugin/desktop-broker-supervisor.js";
 
 interface BrokerArgs {
@@ -15,6 +16,7 @@ interface BrokerArgs {
   pluginSocket: string;
   hostSocket: string;
   registry: string;
+  peerAccessFile: string;
   pidFile: string;
   crossCwdAllowRules: readonly { sourceCwd: string; targetCwd: string }[];
 }
@@ -43,6 +45,7 @@ function parseArgs(argv: string[]): BrokerArgs {
     pluginSocket: values.get("plugin-socket") ?? DEFAULT_DESKTOP_BROKER_PLUGIN_SOCKET,
     hostSocket: values.get("host-socket") ?? DEFAULT_DESKTOP_BROKER_HOST_SOCKET,
     registry: values.get("registry") ?? DEFAULT_DESKTOP_BROKER_REGISTRY_FILE,
+    peerAccessFile: values.get("peer-access-file") ?? DEFAULT_DESKTOP_PEER_ACCESS_FILE,
     pidFile: values.get("pid-file") ?? DEFAULT_DESKTOP_BROKER_PID_FILE,
     crossCwdAllowRules: allowRules,
   };
@@ -74,6 +77,7 @@ async function main(): Promise<void> {
   const broker = new DesktopBroker({
     pluginSocketPath: args.pluginSocket,
     registryPath: args.registry,
+    peerAccessPath: args.peerAccessFile,
     secret,
     crossCwdAllowRules: [...args.crossCwdAllowRules, ...parseAllowRules(process.env.PI_MAESTRO_PEER_CWD_ALLOW_RULES)],
   });

@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from "vitest";
-import { mkdtemp, readFile, stat } from "node:fs/promises";
+import { mkdtemp, readFile, rm, stat } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import type { DesktopPluginResult, DesktopPluginTarget } from "@maestro-mobile/shared";
@@ -36,6 +36,106 @@ async function waitFor(check: () => boolean): Promise<void> {
 }
 
 describe("DesktopBroker peer messaging", () => {
+  it("persists exact cwd grants, enforces direction, and restores them after Broker restart", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "maestro-peer-access-"));
+    const accessPath = join(dir, "peer-access.json");
+    const registry = new DesktopPluginRegistry();
+    const source = { ...target };
+    const peer = { ...target, sessionId: "session-2", endpointId: "endpoint-2", normalizedCwd: "/other", processGeneration: "generation-2" };
+    registry.register({ target: source, capabilities: [], features: ["peer-message-v1"], transport: transport() });
+    registry.register({ target: peer, capabilities: [], features: ["peer-message-v1"], transport: { ...transport(), deliverPeerMessage: async () => "acknowledged" as const } });
+    const broker = new DesktopBroker({ pluginSocketPath: "/tmp/not-started.sock", secret: "secret", registry, peerAccessPath: accessPath });
+    try {
+      const hidden = await broker.handlePeerRequest(source, { type: "desktop_peer_list", requestId: "list-before", deadlineAt: Date.now() + 1000 });
+      expect(hidden).toMatchObject({ status: "listed", peers: [] });
+      expect(await broker.handlePeerRequest(source, { type: "desktop_peer_candidates", requestId: "candidates", deadlineAt: Date.now() + 1000 })).toMatchObject({ status: "candidates", candidates: [peer] });
+      const denied = await broker.handlePeerRequest(source, { type: "desktop_peer_send", requestId: "send-before", deadlineAt: Date.now() + 1000, target: peer, message: "hello" });
+      expect(denied).toMatchObject({ status: "failed", error: { code: "authorization_required" }, authorization: { sourceCwd: "/work/app", targetCwd: "/other" } });
+      const grant = await broker.handlePeerRequest(source, { type: "desktop_peer_access_grant", requestId: "grant", deadlineAt: Date.now() + 1000, target: peer, direction: "one_way" });
+      expect(grant).toMatchObject({ status: "access_granted", grant: { sourceCwd: "/work/app", targetCwd: "/other", direction: "one_way", managed: false } });
+      expect((await stat(accessPath)).mode & 0o777).toBe(0o600);
+      expect(JSON.parse(await readFile(accessPath, "utf8"))).toHaveLength(1);
+      expect(await broker.handlePeerRequest(source, { type: "desktop_peer_list", requestId: "list-after", deadlineAt: Date.now() + 1000 })).toMatchObject({ status: "listed", peers: [peer] });
+      const reverse = await broker.handlePeerRequest(peer, { type: "desktop_peer_list", requestId: "reverse", deadlineAt: Date.now() + 1000 });
+      expect(reverse).toMatchObject({ status: "listed", peers: [] });
+      await broker.close();
+      registry.register({ target: source, capabilities: [], features: ["peer-message-v1"], transport: transport() });
+      registry.register({ target: peer, capabilities: [], features: ["peer-message-v1"], transport: { ...transport(), deliverPeerMessage: async () => "acknowledged" as const } });
+      const restored = new DesktopBroker({ pluginSocketPath: "/tmp/not-started.sock", secret: "secret", registry, peerAccessPath: accessPath });
+      expect(await restored.handlePeerRequest(source, { type: "desktop_peer_list", requestId: "restored", deadlineAt: Date.now() + 1000 })).toMatchObject({ status: "listed", peers: [peer] });
+      const grantId = (grant as { grant?: { grantId: string } }).grant!.grantId;
+      const revoked = await restored.handlePeerRequest(source, { type: "desktop_peer_access_revoke", requestId: "revoke", deadlineAt: Date.now() + 1000, grantId });
+      expect(revoked).toMatchObject({ status: "access_revoked", grantId });
+      expect(await restored.handlePeerRequest(source, { type: "desktop_peer_list", requestId: "list-revoked", deadlineAt: Date.now() + 1000 })).toMatchObject({ status: "listed", peers: [] });
+      await restored.close();
+      registry.register({ target: source, capabilities: [], features: ["peer-message-v1"], transport: transport() });
+      registry.register({ target: peer, capabilities: [], features: ["peer-message-v1"], transport: transport() });
+      const revokedRestart = new DesktopBroker({ pluginSocketPath: "/tmp/not-started.sock", secret: "secret", registry, peerAccessPath: accessPath });
+      expect(await revokedRestart.handlePeerRequest(source, { type: "desktop_peer_list", requestId: "revoked-restart", deadlineAt: Date.now() + 1000 })).toMatchObject({ status: "listed", peers: [] });
+      await revokedRestart.close();
+    } finally { await rm(dir, { recursive: true, force: true }); }
+  });
+
+  it("refuses Broker startup for corrupt authorization state and protects managed grants from revoke", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "maestro-peer-access-corrupt-"));
+    const accessPath = join(dir, "peer-access.json");
+    const registry = new DesktopPluginRegistry();
+    const source = { ...target };
+    const peer = { ...target, sessionId: "session-2", endpointId: "endpoint-2", normalizedCwd: "/other", processGeneration: "generation-2" };
+    registry.register({ target: source, capabilities: [], features: ["peer-message-v1"], transport: transport() });
+    registry.register({ target: peer, capabilities: [], features: ["peer-message-v1"], transport: transport() });
+    try {
+      await (await import("node:fs/promises")).writeFile(accessPath, "not json");
+      const corrupt = new DesktopBroker({ pluginSocketPath: join(dir, "socket"), secret: "secret", registry, peerAccessPath: accessPath });
+      await expect(corrupt.start()).rejects.toThrow("Broker startup refused");
+      expect(await readFile(accessPath, "utf8")).toBe("not json");
+      const managed = new DesktopBroker({ pluginSocketPath: "/tmp/not-started.sock", secret: "secret", registry, peerAccessPath: join(dir, "empty.json"), crossCwdAllowRules: [{ sourceCwd: "/work/app", targetCwd: "/other" }] });
+      const grants = await managed.handlePeerRequest(source, { type: "desktop_peer_access_list", requestId: "access", deadlineAt: Date.now() + 1000 });
+      expect(grants).toMatchObject({ status: "access_listed", grants: [{ managed: true, sourceCwd: "/work/app", targetCwd: "/other" }] });
+      const grantId = (grants as { grants: Array<{ grantId: string }> }).grants[0].grantId;
+      expect(await managed.handlePeerRequest(source, { type: "desktop_peer_access_revoke", requestId: "revoke", deadlineAt: Date.now() + 1000, grantId })).toMatchObject({ status: "failed", error: { code: "managed_grant" } });
+      await managed.close();
+    } finally { await rm(dir, { recursive: true, force: true }); }
+  });
+
+  it("serializes concurrent changes and refuses another cwd's revoke", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "maestro-peer-concurrent-"));
+    const registry = new DesktopPluginRegistry();
+    const peerA = { ...target, sessionId: "a", endpointId: "a", processGeneration: "a", normalizedCwd: "/a" };
+    const peerB = { ...target, sessionId: "b", endpointId: "b", processGeneration: "b", normalizedCwd: "/b" };
+    for (const item of [target, peerA, peerB]) registry.register({ target: item, capabilities: [], features: ["peer-message-v1"], transport: transport() });
+    const accessPath = join(dir, "peer-access.json");
+    const broker = new DesktopBroker({ pluginSocketPath: join(dir, "socket"), secret: "secret", registry, peerAccessPath: accessPath });
+    try {
+      const [first, second] = await Promise.all([peerA, peerB].map((peer, index) => broker.handlePeerRequest(target, { type: "desktop_peer_access_grant", requestId: `grant-${index}`, deadlineAt: Date.now() + 5000, target: peer, direction: "one_way" })));
+      expect(first.status).toBe("access_granted");
+      expect(second.status).toBe("access_granted");
+      expect(JSON.parse(await readFile(accessPath, "utf8"))).toHaveLength(2);
+      const grantId = first.grant!.grantId;
+      expect(await broker.handlePeerRequest(peerB, { type: "desktop_peer_access_revoke", requestId: "foreign", deadlineAt: Date.now() + 1000, grantId })).toMatchObject({ status: "failed", error: { code: "grant_not_owned" } });
+      expect(await broker.handlePeerRequest(target, { type: "desktop_peer_list", requestId: "still-allowed", deadlineAt: Date.now() + 1000 })).toMatchObject({ status: "listed", peers: expect.arrayContaining([peerA, peerB]) });
+    } finally { await broker.close(); await rm(dir, { recursive: true, force: true }); }
+  });
+
+  it("blocks an in-flight delivery after access is revoked", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "maestro-peer-revoke-"));
+    const registry = new DesktopPluginRegistry();
+    const peer = { ...target, sessionId: "peer", endpointId: "peer", processGeneration: "peer", normalizedCwd: "/other" };
+    let release!: () => void;
+    const delivered = new Promise<void>((resolve) => { release = resolve; });
+    registry.register({ target, capabilities: [], features: ["peer-message-v1"], transport: transport() });
+    registry.register({ target: peer, capabilities: [], features: ["peer-message-v1"], transport: { ...transport(), deliverPeerMessage: async () => { await delivered; return "acknowledged" as const; } } });
+    const broker = new DesktopBroker({ pluginSocketPath: join(dir, "socket"), secret: "secret", registry, peerAccessPath: join(dir, "peer-access.json") });
+    try {
+      const granted = await broker.handlePeerRequest(target, { type: "desktop_peer_access_grant", requestId: "grant", deadlineAt: Date.now() + 1000, target: peer, direction: "one_way" });
+      const pending = broker.handlePeerRequest(target, { type: "desktop_peer_send", requestId: "send", deadlineAt: Date.now() + 2000, target: peer, message: "hello" });
+      await Promise.resolve();
+      expect(await broker.handlePeerRequest(target, { type: "desktop_peer_access_revoke", requestId: "revoke", deadlineAt: Date.now() + 1000, grantId: granted.grant!.grantId })).toMatchObject({ status: "access_revoked" });
+      release();
+      expect(await pending).toMatchObject({ status: "failed", error: { code: "authorization_required" } });
+    } finally { release(); await broker.close(); await rm(dir, { recursive: true, force: true }); }
+  });
+
   it("lists feature-negotiated peers and requires an exact authorized target receipt", async () => {
     const registry = new DesktopPluginRegistry();
     const source = { ...target };
@@ -80,7 +180,7 @@ describe("DesktopBroker peer messaging", () => {
     registry.register({ target: peer, capabilities: [], features: ["peer-message-v1"], transport: transport() });
     const broker = new DesktopBroker({ pluginSocketPath: "/tmp/not-started.sock", secret: "secret", registry });
     const result = await broker.handlePeerRequest(source, { type: "desktop_peer_send", requestId: "cross", deadlineAt: Date.now() + 1000, target: peer, message: "hello" });
-    expect(result).toMatchObject({ status: "failed", error: { code: "cross_cwd_not_authorized" } });
+    expect(result).toMatchObject({ status: "failed", error: { code: "authorization_required" }, authorization: { sourceCwd: source.normalizedCwd, targetCwd: peer.normalizedCwd } });
     await broker.close();
   });
 });
@@ -230,39 +330,63 @@ describe("DesktopBroker", () => {
     expect(broker.registry.revision).toBe(1);
   });
 
-  it("routes online peer send, explicit ack and correlated reply between exact plugin connections across cwd", async () => {
-    const dir = await mkdtemp(join(tmpdir(), "maestro-broker-peer-ipc-"));
-    broker = new DesktopBroker({
-      pluginSocketPath: join(dir, "plugin.sock"), secret: "secret", brokerInstanceId: "broker-peer",
-      crossCwdAllowRules: [{ sourceCwd: "/work/app", targetCwd: "/work/other" }],
-    });
-    await broker.start();
+  it("persists authorization across Broker restart and revokes delivery through two real UDS Plugin clients", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "maestro-broker-peer-access-ipc-"));
+    const socketPath = join(dir, "plugin.sock");
+    const accessPath = join(dir, "peer-access.json");
     const source = { ...target };
     const peer = { ...target, sessionId: "session-2", endpointId: "endpoint-2", normalizedCwd: "/work/other", processGeneration: "generation-2" };
     let sourceReply: unknown;
-    const sourceClient = new DesktopPluginIpcClient({
-      socketPath: join(dir, "plugin.sock"), secret: "secret", target: source, capabilities: [], features: ["peer-message-v1"],
-      onRequest: async (request) => ({ type: "desktop_plugin_result", requestId: request.requestId, operation: request.operation.type, status: "observed" }),
-      onPeerDelivery: async () => undefined,
-      onPeerReply: (reply) => { sourceReply = reply; },
-    });
-    const peerClient = new DesktopPluginIpcClient({
-      socketPath: join(dir, "plugin.sock"), secret: "secret", target: peer, capabilities: [], features: ["peer-message-v1"],
-      onRequest: async (request) => ({ type: "desktop_plugin_result", requestId: request.requestId, operation: request.operation.type, status: "observed" }),
-      onPeerDelivery: async (delivery) => {
-        peerClient.sendPeerReply({ type: "desktop_peer_reply", deliveryId: delivery.deliveryId, replyId: "reply-1", message: "back" });
-      },
-    });
-    client = sourceClient;
-    await Promise.all([sourceClient.connect(), peerClient.connect()]);
-    await waitFor(() => broker?.registry.resolve(source) !== undefined && broker?.registry.resolve(peer) !== undefined);
-    const peers = await sourceClient.requestPeers({ type: "desktop_peer_list", requestId: "list", deadlineAt: Date.now() + 2000 });
-    expect(peers).toMatchObject({ status: "listed", peers: [peer] });
-    const result = await sourceClient.requestPeers({ type: "desktop_peer_send", requestId: "send", deadlineAt: Date.now() + 2000, target: peer, message: "hello" });
-    expect(result).toMatchObject({ status: "acknowledged", deliveryId: expect.any(String) });
-    await waitFor(() => sourceReply !== undefined);
-    expect(sourceReply).toMatchObject({ deliveryId: result.deliveryId, message: "back" });
-    peerClient.close();
+    let sourceClient: DesktopPluginIpcClient;
+    let peerClient: DesktopPluginIpcClient;
+    const connect = async () => {
+      sourceClient = new DesktopPluginIpcClient({
+        socketPath, secret: "secret", target: source, capabilities: [], features: ["peer-message-v1"],
+        onRequest: async (request) => ({ type: "desktop_plugin_result", requestId: request.requestId, operation: request.operation.type, status: "observed" }),
+        onPeerDelivery: async () => undefined,
+        onPeerReply: (reply) => { sourceReply = reply; },
+      });
+      peerClient = new DesktopPluginIpcClient({
+        socketPath, secret: "secret", target: peer, capabilities: [], features: ["peer-message-v1"],
+        onRequest: async (request) => ({ type: "desktop_plugin_result", requestId: request.requestId, operation: request.operation.type, status: "observed" }),
+        onPeerDelivery: async (delivery) => {
+          peerClient.sendPeerReply({ type: "desktop_peer_reply", deliveryId: delivery.deliveryId, replyId: "reply-1", message: "back" });
+        },
+      });
+      await Promise.all([sourceClient.connect(), peerClient.connect()]);
+      await waitFor(() => broker?.registry.resolve(source) !== undefined && broker?.registry.resolve(peer) !== undefined);
+    };
+    try {
+      broker = new DesktopBroker({ pluginSocketPath: socketPath, secret: "secret", peerAccessPath: accessPath, brokerInstanceId: "broker-peer-access" });
+      await broker.start();
+      await connect();
+      expect(await sourceClient.requestPeers({ type: "desktop_peer_list", requestId: "list-before", deadlineAt: Date.now() + 2_000 })).toMatchObject({ status: "listed", peers: [] });
+      expect(await sourceClient.requestPeers({ type: "desktop_peer_candidates", requestId: "candidates", deadlineAt: Date.now() + 2_000 })).toMatchObject({ status: "candidates", candidates: [peer] });
+      expect(await sourceClient.requestPeers({ type: "desktop_peer_send", requestId: "denied", deadlineAt: Date.now() + 2_000, target: peer, message: "not delivered" })).toMatchObject({ status: "failed", error: { code: "authorization_required" } });
+      const grant = await sourceClient.requestPeers({ type: "desktop_peer_access_grant", requestId: "grant", deadlineAt: Date.now() + 2_000, target: peer, direction: "bidirectional" });
+      expect(grant).toMatchObject({ status: "access_granted", grant: { managed: false, direction: "bidirectional" } });
+      const delivered = await sourceClient.requestPeers({ type: "desktop_peer_send", requestId: "send", deadlineAt: Date.now() + 2_000, target: peer, message: "hello" });
+      expect(delivered).toMatchObject({ status: "acknowledged", deliveryId: expect.any(String) });
+      await waitFor(() => sourceReply !== undefined);
+      expect(sourceReply).toMatchObject({ deliveryId: delivered.deliveryId, message: "back" });
+      expect(JSON.parse(await readFile(accessPath, "utf8"))).toHaveLength(1);
+
+      sourceClient.close(); peerClient.close();
+      await broker.close();
+      broker = new DesktopBroker({ pluginSocketPath: socketPath, secret: "secret", peerAccessPath: accessPath, brokerInstanceId: "broker-peer-access-restart" });
+      await broker.start();
+      sourceReply = undefined;
+      await connect();
+      expect(await sourceClient.requestPeers({ type: "desktop_peer_list", requestId: "list-restored", deadlineAt: Date.now() + 2_000 })).toMatchObject({ status: "listed", peers: [peer] });
+      expect(await sourceClient.requestPeers({ type: "desktop_peer_access_list", requestId: "access", deadlineAt: Date.now() + 2_000 })).toMatchObject({ status: "access_listed", grants: [{ managed: false, direction: "bidirectional" }] });
+      expect(await sourceClient.requestPeers({ type: "desktop_peer_access_revoke", requestId: "revoke", deadlineAt: Date.now() + 2_000, grantId: grant.grant!.grantId })).toMatchObject({ status: "access_revoked" });
+      expect(await sourceClient.requestPeers({ type: "desktop_peer_list", requestId: "list-revoked", deadlineAt: Date.now() + 2_000 })).toMatchObject({ status: "listed", peers: [] });
+      expect(await sourceClient.requestPeers({ type: "desktop_peer_send", requestId: "send-revoked", deadlineAt: Date.now() + 2_000, target: peer, message: "blocked" })).toMatchObject({ status: "failed", error: { code: "authorization_required" } });
+    } finally {
+      sourceClient?.close(); peerClient?.close();
+      await broker?.close(); broker = undefined;
+      await rm(dir, { recursive: true, force: true });
+    }
   });
 
   it("propagates a Plugin Ask cancellation to Host and clears Broker state", async () => {

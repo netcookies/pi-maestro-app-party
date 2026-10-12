@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
-import { isAbsolute, normalize } from "node:path";
+import { mkdir, readFile, rename, unlink, writeFile } from "node:fs/promises";
+import { dirname, isAbsolute, normalize } from "node:path";
 import net from "node:net";
 import type {
   DesktopAskRequest,
@@ -13,6 +14,8 @@ import type {
 
   DesktopBrokerToHostFrame,
   DesktopPeerDelivery,
+  DesktopPeerAccessGrant,
+  DesktopPeerAccessDirection,
   DesktopPeerReply,
   DesktopPeerRequest,
   DesktopPeerResult,
@@ -29,6 +32,7 @@ import {
   DESKTOP_PEER_MAX_DEADLINE_MS,
   DESKTOP_PEER_MAX_PEERS,
   DESKTOP_PEER_MAX_MESSAGE_BYTES,
+  isDesktopPeerAccessGrant,
   MOBILE_RELEASE_VERSION,
 } from "@maestro-mobile/shared";
 import { JsonLineConnection, DesktopPluginIpcServer } from "./desktop-plugin-ipc.js";
@@ -43,6 +47,7 @@ export interface DesktopBrokerOptions {
   snapshotChunkSize?: number;
   onFrame?: (frame: DesktopBrokerToHostFrame) => void;
   crossCwdAllowRules?: readonly { sourceCwd: string; targetCwd: string }[];
+  peerAccessPath?: string;
 }
 
 export class DesktopBroker {
@@ -56,6 +61,55 @@ export class DesktopBroker {
   private readonly completedPeerRequests = new Map<string, { result: DesktopPeerResult; expiresAt: number }>();
   private readonly peerSends = new Map<string, { source: DesktopPluginTarget; target: DesktopPluginTarget; deadlineAt: number }>();
   private readonly pendingAsks = new Map<string, { target: DesktopPluginTarget; request: DesktopAskRequest }>();
+  private readonly persistentPeerAccess = new Map<string, DesktopPeerAccessGrant>();
+  private readonly managedPeerAccess: DesktopPeerAccessGrant[];
+  private peerAccessLoaded = false;
+  private peerAccessWrite: Promise<void> = Promise.resolve();
+
+  private accessKey(sourceCwd: string, targetCwd: string): string { return JSON.stringify([sourceCwd, targetCwd]); }
+  private grantAllows(grant: DesktopPeerAccessGrant, sourceCwd: string, targetCwd: string): boolean {
+    return (grant.sourceCwd === sourceCwd && grant.targetCwd === targetCwd)
+      || (grant.direction === "bidirectional" && grant.sourceCwd === targetCwd && grant.targetCwd === sourceCwd);
+  }
+  private async loadPeerAccess(): Promise<void> {
+    if (this.peerAccessLoaded) return;
+    if (!this.options.peerAccessPath) { this.peerAccessLoaded = true; return; }
+    try {
+      const parsed: unknown = JSON.parse(await readFile(this.options.peerAccessPath, "utf8"));
+      if (!Array.isArray(parsed) || parsed.some((grant) => !isDesktopPeerAccessGrant(grant) || grant.managed)) throw new Error("invalid peer access file");
+      if (parsed.length > DESKTOP_PEER_MAX_PEERS) throw new Error("too many peer grants");
+      for (const grant of parsed) {
+        const key = this.accessKey(grant.sourceCwd, grant.targetCwd);
+        if (this.persistentPeerAccess.has(key)) throw new Error("duplicate peer grant");
+        this.persistentPeerAccess.set(key, grant);
+      }
+      this.peerAccessLoaded = true;
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") { this.peerAccessLoaded = true; return; }
+      this.persistentPeerAccess.clear();
+      throw new Error("peer access file is invalid; Broker startup refused", { cause: error });
+    }
+  }
+  private async changePeerAccess<T>(change: (next: Map<string, DesktopPeerAccessGrant>) => T): Promise<T> {
+    const task = this.peerAccessWrite.then(async () => {
+      if (!this.options.peerAccessPath) throw new Error("peer access persistence unavailable");
+      const next = new Map(this.persistentPeerAccess);
+      const result = change(next);
+      const path = this.options.peerAccessPath;
+      await mkdir(dirname(path), { recursive: true, mode: 0o700 });
+      const temp = `${path}.tmp-${process.pid}-${randomUUID()}`;
+      try {
+        await writeFile(temp, `${JSON.stringify([...next.values()])}\n`, { mode: 0o600, flag: "wx" });
+        await rename(temp, path);
+        this.persistentPeerAccess.clear();
+        for (const [key, grant] of next) this.persistentPeerAccess.set(key, grant);
+        return result;
+      } finally { await unlink(temp).catch(() => undefined); }
+    });
+    this.peerAccessWrite = task.then(() => undefined, () => undefined);
+    return task;
+  }
+  private allPeerAccess(): DesktopPeerAccessGrant[] { return [...this.managedPeerAccess, ...this.persistentPeerAccess.values()]; }
 
   private askKey(target: DesktopPluginTarget, requestId: string): string {
     return JSON.stringify([target.sessionId, target.endpointId, target.normalizedCwd, target.processGeneration, requestId]);
@@ -79,6 +133,7 @@ export class DesktopBroker {
 
   constructor(private readonly options: DesktopBrokerOptions) {
     if (options.crossCwdAllowRules?.some((rule) => !isAbsolute(rule.sourceCwd) || !isAbsolute(rule.targetCwd))) throw new Error("peer allow rules require absolute cwd paths");
+    this.managedPeerAccess = (options.crossCwdAllowRules ?? []).map((rule) => ({ grantId: `managed-${Buffer.from(JSON.stringify([normalize(rule.sourceCwd), normalize(rule.targetCwd)])).toString("base64url")}`, sourceCwd: normalize(rule.sourceCwd), targetCwd: normalize(rule.targetCwd), direction: "one_way", createdAt: 0, managed: true }));
     this.brokerInstanceId = options.brokerInstanceId ?? randomUUID();
     this.snapshotChunkSize = options.snapshotChunkSize ?? DESKTOP_BROKER_MAX_SNAPSHOT_RECORDS;
     if (!Number.isSafeInteger(this.snapshotChunkSize) || this.snapshotChunkSize < 1 || this.snapshotChunkSize > DESKTOP_BROKER_MAX_SNAPSHOT_RECORDS) {
@@ -168,19 +223,58 @@ export class DesktopBroker {
     if (!isAbsolute(source.normalizedCwd) || normalize(source.normalizedCwd) !== source.normalizedCwd) return fail("failed", "invalid_target");
     if (request.type === "desktop_peer_send" && (!isAbsolute(request.target.normalizedCwd) || normalize(request.target.normalizedCwd) !== request.target.normalizedCwd)) return fail("failed", "invalid_target");
     if (request.deadlineAt <= Date.now() || request.deadlineAt > Date.now() + DESKTOP_PEER_MAX_DEADLINE_MS) return fail("unknown", "deadline_exceeded");
+    await this.loadPeerAccess();
     const sourceRegistration = this.registry.resolve(source);
     if (!sourceRegistration?.features?.includes(DESKTOP_PEER_FEATURE)) return fail("failed", "feature_not_negotiated");
     const records = this.registry.snapshotRecords().filter((record) => !this.samePeerTarget(record.target, source));
+    if (request.type === "desktop_peer_access_list") return { type: "desktop_peer_result", requestId: request.requestId, status: "access_listed", grants: this.allPeerAccess() };
+    if (request.type === "desktop_peer_access_grant") {
+      const registration = this.registry.resolve(request.target);
+      if (!registration) return fail("unknown", "target_unavailable");
+      if (source.normalizedCwd === registration.target.normalizedCwd) return fail("failed", "same_cwd_grant_not_needed");
+      const grant: DesktopPeerAccessGrant = { grantId: randomUUID(), sourceCwd: source.normalizedCwd, targetCwd: registration.target.normalizedCwd, direction: request.direction, createdAt: Date.now(), managed: false };
+      try {
+        await this.changePeerAccess((next) => {
+          if (!next.has(this.accessKey(grant.sourceCwd, grant.targetCwd)) && next.size >= DESKTOP_PEER_MAX_PEERS) throw new Error("peer_access_limit");
+          next.set(this.accessKey(grant.sourceCwd, grant.targetCwd), grant);
+        });
+      } catch (error) { return fail("failed", error instanceof Error && error.message === "peer_access_limit" ? "peer_access_limit" : "peer_access_persist_failed"); }
+      return { type: "desktop_peer_result", requestId: request.requestId, status: "access_granted", grant };
+    }
+    if (request.type === "desktop_peer_access_revoke") {
+      if (this.managedPeerAccess.some((grant) => grant.grantId === request.grantId)) return fail("failed", "managed_grant");
+      try {
+        await this.changePeerAccess((next) => {
+          const entry = [...next.entries()].find(([, grant]) => grant.grantId === request.grantId);
+          if (!entry) throw new Error("grant_not_found");
+          if (entry[1].sourceCwd !== source.normalizedCwd) throw new Error("grant_not_owned");
+          next.delete(entry[0]);
+        });
+      } catch (error) {
+        const code = error instanceof Error && ["grant_not_found", "grant_not_owned"].includes(error.message) ? error.message : "peer_access_persist_failed";
+        return fail("failed", code);
+      }
+      for (const pending of this.pendingPeerSends.values()) if (!this.peerAuthorized(pending.source, pending.target)) pending.controller.abort();
+      for (const [deliveryId, pending] of this.peerSends) if (!this.peerAuthorized(pending.source, pending.target)) this.peerSends.delete(deliveryId);
+      return { type: "desktop_peer_result", requestId: request.requestId, status: "access_revoked", grantId: request.grantId };
+    }
     if (request.type === "desktop_peer_list") {
       const eligible = records.filter((record) => this.peerAuthorized(source, record.target) && record.features?.includes(DESKTOP_PEER_FEATURE));
       const peers = eligible.slice(0, DESKTOP_PEER_MAX_PEERS).map((record) => record.target);
       return { type: "desktop_peer_result", requestId: request.requestId, status: "listed", peers, truncated: eligible.length > peers.length };
     }
+    if (request.type === "desktop_peer_candidates") {
+      const eligible = records.filter((record) => !this.peerAuthorized(source, record.target) && record.features?.includes(DESKTOP_PEER_FEATURE));
+      const candidates = eligible.slice(0, DESKTOP_PEER_MAX_PEERS).map((record) => record.target);
+      return { type: "desktop_peer_result", requestId: request.requestId, status: "candidates", candidates, truncated: eligible.length > candidates.length };
+    }
     if (Buffer.byteLength(request.message, "utf8") > DESKTOP_PEER_MAX_MESSAGE_BYTES) return fail("failed", "message_too_large");
     if (!isAbsolute(request.target.normalizedCwd) || normalize(request.target.normalizedCwd) !== request.target.normalizedCwd) return fail("failed", "invalid_target");
     const registration = this.registry.resolve(request.target);
     if (!registration) return fail("unknown", "target_unavailable");
-    if (!this.peerAuthorized(source, registration.target)) return fail("failed", "cross_cwd_not_authorized");
+    if (source.normalizedCwd !== registration.target.normalizedCwd && !this.peerAuthorized(source, registration.target)) {
+      return { ...fail("failed", "authorization_required"), authorization: { sourceCwd: source.normalizedCwd, targetCwd: registration.target.normalizedCwd } };
+    }
     if (!registration.features?.includes(DESKTOP_PEER_FEATURE) || !registration.transport.deliverPeerMessage) return fail("failed", "feature_not_negotiated");
     const key = JSON.stringify([source.sessionId, source.endpointId, source.normalizedCwd, source.processGeneration, request.requestId]);
     for (const [completedKey, completed] of this.completedPeerRequests) if (completed.expiresAt <= Date.now()) this.completedPeerRequests.delete(completedKey);
@@ -195,7 +289,8 @@ export class DesktopBroker {
     setTimeout(() => this.peerSends.delete(deliveryId), Math.max(1, request.deadlineAt - Date.now())).unref?.();
     try {
       const status = await registration.transport.deliverPeerMessage(delivery, controller.signal);
-      if (controller.signal.aborted || this.registry.resolve(source)?.transport !== sourceRegistration.transport || this.registry.resolve(request.target)?.transport !== registration.transport) return fail("unknown", "disconnected");
+      if (controller.signal.aborted || !this.peerAuthorized(source, registration.target)) return fail("failed", "authorization_required");
+      if (this.registry.resolve(source)?.transport !== sourceRegistration.transport || this.registry.resolve(request.target)?.transport !== registration.transport) return fail("unknown", "disconnected");
       if (Date.now() >= request.deadlineAt) return fail("unknown", "deadline_exceeded");
       const receipt: DesktopPeerResult = { type: "desktop_peer_result", requestId: request.requestId, status, deliveryId };
       if (this.completedPeerRequests.size >= DESKTOP_PEER_MAX_PEERS) this.completedPeerRequests.delete(this.completedPeerRequests.keys().next().value!);
@@ -210,7 +305,7 @@ export class DesktopBroker {
 
   private handlePeerReply(source: DesktopPluginTarget, reply: DesktopPeerReply): void {
     const pending = this.peerSends.get(reply.deliveryId);
-    if (!pending || pending.deadlineAt <= Date.now() || !this.samePeerTarget(pending.target, source)) return;
+    if (!pending || pending.deadlineAt <= Date.now() || !this.samePeerTarget(pending.target, source) || !this.peerAuthorized(pending.source, pending.target)) return;
     const registration = this.registry.resolve(pending.source);
     if (!registration || !registration.features?.includes(DESKTOP_PEER_FEATURE) || !registration.transport.sendPeerReply) return;
     if (registration.transport.sendPeerReply(reply)) this.peerSends.delete(reply.deliveryId);
@@ -222,7 +317,8 @@ export class DesktopBroker {
 
   private peerAuthorized(source: DesktopPluginTarget, target: DesktopPluginTarget): boolean {
     if (source.normalizedCwd === target.normalizedCwd) return true;
-    return this.options.crossCwdAllowRules?.some((rule) => normalize(rule.sourceCwd) === source.normalizedCwd && normalize(rule.targetCwd) === target.normalizedCwd) ?? false;
+    if (this.managedPeerAccess.some((grant) => this.grantAllows(grant, source.normalizedCwd, target.normalizedCwd))) return true;
+    return [...this.persistentPeerAccess.values()].some((grant) => this.grantAllows(grant, source.normalizedCwd, target.normalizedCwd));
   }
 
   subscribe(listener: (frame: DesktopBrokerToHostFrame) => void): () => void {
@@ -231,6 +327,7 @@ export class DesktopBroker {
   }
 
   async start(): Promise<void> {
+    await this.loadPeerAccess();
     await this.pluginServer.start();
   }
 

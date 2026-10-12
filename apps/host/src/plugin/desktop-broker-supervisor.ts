@@ -12,6 +12,7 @@ export const DEFAULT_DESKTOP_BROKER_PID_FILE = join(homedir(), ".pi", "maestro-m
 export const DEFAULT_DESKTOP_BROKER_LOCK_FILE = join(homedir(), ".pi", "maestro-mobile-broker.pid.lock");
 export const DEFAULT_DESKTOP_BROKER_LOG_FILE = join(homedir(), ".pi", "maestro-mobile-broker.log");
 export const DEFAULT_DESKTOP_BROKER_SECRET_FILE = join(homedir(), ".pi", "maestro-mobile-ipc-secret");
+export const DEFAULT_DESKTOP_PEER_ACCESS_FILE = join(homedir(), ".pi", "maestro-mobile", "peer-access.json");
 
 export interface DesktopBrokerSupervisorOptions {
   brokerCliPath?: string;
@@ -22,6 +23,7 @@ export interface DesktopBrokerSupervisorOptions {
   pidFile?: string;
   lockFile?: string;
   logFile?: string;
+  peerAccessPath?: string;
   restartIntervalMs?: number;
 }
 
@@ -180,6 +182,7 @@ export class DesktopBrokerSupervisor {
       pidFile: options.pidFile ?? DEFAULT_DESKTOP_BROKER_PID_FILE,
       lockFile: options.lockFile ?? DEFAULT_DESKTOP_BROKER_LOCK_FILE,
       logFile: options.logFile ?? DEFAULT_DESKTOP_BROKER_LOG_FILE,
+      peerAccessPath: options.peerAccessPath ?? DEFAULT_DESKTOP_PEER_ACCESS_FILE,
       restartIntervalMs: options.restartIntervalMs ?? 1_000,
     };
   }
@@ -235,6 +238,7 @@ export class DesktopBrokerSupervisor {
         "--plugin-socket", this.options.pluginSocketPath,
         "--host-socket", this.options.hostSocketPath,
         "--registry", this.options.registryPath,
+        "--peer-access-file", this.options.peerAccessPath,
         "--pid-file", this.options.pidFile,
       ], {
         detached: true,
