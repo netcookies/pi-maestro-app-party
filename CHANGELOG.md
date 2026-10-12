@@ -2,6 +2,17 @@
 
 本文件记录 Maestro Mobile 的显著变更。格式基于 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)。
 
+## [0.12.0] — 2026-10-12
+
+### 测试
+
+- 补齐真实 inbox 多轮 UDS 验收
+
+### 新增
+
+- 统一 mb-peer 显式发送与自动接收回执
+- 增加持久化跨 cwd peer 授权
+
 ## [0.11.0] — 2026-10-10
 
 ### 新增
