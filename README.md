@@ -25,6 +25,7 @@
     <li><a href="#about-the-project">About the project</a></li>
     <li><a href="#getting-started">Getting started</a></li>
     <li><a href="#usage">Usage</a></li>
+    <li><a href="#peer-messaging">Peer messaging (<code>/mb-peer</code>)</a></li>
     <li><a href="#documentation">Documentation</a></li>
     <li><a href="#contributing">Contributing</a></li>
     <li><a href="#license">License</a></li>
@@ -93,6 +94,24 @@ In the app, open **Settings** and scan the desktop QR code. Alternatively, enter
 
 The app saves your connection and reconnects automatically. The default endpoint is `ws://<computer-ip>:4739/ws`; the Host requires a token. Use a private tunnel for access outside your LAN.
 
+<a id="peer-messaging"></a>
+
+## Peer messaging (`/mb-peer`)
+`/mb-peer` is a separate Pi TUI feature for sending messages between online Pi sessions through the Desktop Broker; it does not use the Mobile app or Host HTTP / WebSocket interface.
+
+| Command | Purpose |
+| --- | --- |
+| `/mb-peer list` | List online sessions authorized for this peer. |
+| `/mb-peer send <session ID or prefix> <message>` | Send a message. Pi offers native session completion; if a prefix matches multiple sessions, select the intended session/workspace. |
+| `/mb-peer inbox` | Show unexpired messages accepted by this TUI. |
+| `/mb-peer access` | List online sessions and existing grants, including sessions not yet authorized. |
+| `/mb-peer access <session ID or prefix>` | Grant the selected peer access after choosing a direction. |
+| `/mb-peer revoke <grant ID>` | Revoke a user-managed grant owned by this working directory. |
+
+By default, online peers in the **same working directory** can message each other. Cross-directory messaging requires explicit approval and a **one-way** or **bidirectional** grant. A requested message is not sent until the grant succeeds; retry `/mb-peer send` afterward. Grants persist across Broker restarts. Managed grants cannot be revoked with this command.
+
+A delivery marked `accepted` means the receiving Plugin accepted it into its temporary inbox. It is not proof the recipient read, answered, or acted on it. Both peers must be live Pi TUI sessions with a compatible Desktop Plugin and Broker connection; past sessions and mobile-only connections are not peers.
+
 ## Usage
 
 Use **Workbench** for progress, **Sessions** for conversations, and **Monitor** for workspace activity. Ask / Plan requires Flow in the target Pi session; Monitor / Teammate data comes from `pi-maestro-teammate`.
@@ -108,7 +127,7 @@ If pairing fails, check the computer address and firewall port `4739`. If a visi
 
 ## Documentation
 
-- [User guide](docs/usage.md) — connection, updates, troubleshooting and more screenshots.
+- [User guide](docs/usage.md) — connection, updates, troubleshooting, and [`/mb-peer` peer messaging](docs/usage.md#peer-messaging).
 - [Deployment guide (中文)](docs/deploy.md) — standalone Host, launchd, systemd and Docker.
 - [Development guide](docs/development.md) — source setup, native builds and contribution checks.
 - [Architecture (中文)](docs/architecture.md) · [Protocol and API (中文)](docs/protocol.md) — implementation reference.

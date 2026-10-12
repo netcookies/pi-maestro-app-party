@@ -2,7 +2,7 @@
 
 [README](../README.md) · [中文首页](../README.zh-CN.md)
 
-For installation and first pairing, start with [Getting started](../README.md#getting-started).
+For installation and first pairing, start with [Getting started](../README.md#getting-started). For session-to-session messaging from Pi TUI, see [`/mb-peer` peer messaging](#peer-messaging).
 
 ## Sessions and controls
 
@@ -32,6 +32,26 @@ Run `/maestro-mobile qr` in Pi and scan it from **Settings**. If scanning is una
 The default endpoint is `ws://<computer-ip>:4739/ws`. Host listens on `0.0.0.0:4739` and always requires a token; when none is supplied, it generates one and saves it to `~/.pi/maestro-mobile-token`. For localhost-only access, use `--host 127.0.0.1`. For access outside your LAN, use Tailscale / WireGuard.
 
 Camera, photo-library and notification permissions support QR pairing, image prompts and task alerts. Notifications include local alerts, in-app banners and haptic feedback; `/maestro-mobile notify` configures notification providers and events.
+
+## Peer messaging (`/mb-peer`)
+
+`/mb-peer` lets connected Pi TUI sessions send messages to other online sessions through the Desktop Broker. It does not require the mobile app.
+
+```text
+/mb-peer list
+/mb-peer send <session ID or prefix> <message>
+/mb-peer inbox
+/mb-peer access
+/mb-peer access <session ID or prefix>
+/mb-peer revoke <grant ID>
+```
+
+- `list` displays peers this session can already message. Use a full session ID or a unique prefix to send; Pi also offers native session completion. If multiple peers match, select the intended session/workspace.
+- `send` delivers a message to the receiving TUI's temporary inbox without starting a model turn. `/mb-peer inbox` displays messages still available in the inbox; deliveries expire at their deadline.
+- Delivery status `accepted` means the receiving Plugin accepted the message into its inbox. It does not confirm that a person or model read, answered, or acted on it.
+- Peers in the same working directory are authorized by default. Sending across working directories requires explicit consent: approve the prompt and select one-way or bidirectional access. No message is sent until authorization succeeds; run `/mb-peer send` again afterward.
+- `/mb-peer access` lists online peers, including those not yet authorized, and existing grants. `/mb-peer access <peer>` creates a grant directly after you choose its direction. `/mb-peer revoke <grant ID>` removes a grant you own. Grants persist across Broker restarts; managed rules cannot be revoked from the command.
+- Both peers must be online in Pi with a compatible Mobile Desktop Plugin and Broker connection. History-only sessions and Mobile-only connections are not peers.
 
 ## Desktop commands
 
@@ -76,4 +96,4 @@ For an npm-global Host, run `npm install -g pi-maestro-mobile`; for source deplo
 | Monitor has no windows | Check `~/.pi/teammate/workspaces/` for owner telemetry and confirm the desktop session has used teammate. |
 | Version information is stale | Updating files does not reload extensions in memory. Reload / restart Pi and, if necessary, restart the Host. Empty host-version fields inside Docker are expected. |
 
-Host logs are at `~/.pi/maestro-mobile.log` and may contain tokens; redact them before sharing. Version detection is diagnostic and does not grant capabilities. More service and Docker troubleshooting is in the [deployment guide (中文)](deploy.md).
+Host logs are at `~/.pi/maestro-mobile.log` and may contain tokens; redact them before sharing. Version detection is diagnostic and does not grant capabilities. The [deployment guide (中文)](deploy.md) covers standalone Host, launchd, systemd and Docker. See [Peer messaging](#peer-messaging) for `/mb-peer` access management and delivery details.

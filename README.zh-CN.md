@@ -25,6 +25,7 @@
     <li><a href="#about-the-project">项目介绍</a></li>
     <li><a href="#getting-started">快速开始</a></li>
     <li><a href="#usage">日常使用</a></li>
+    <li><a href="#peer-messaging">Pi 会话消息（/mb-peer）</a></li>
     <li><a href="#documentation">相关文档</a></li>
     <li><a href="#contributing">参与贡献</a></li>
     <li><a href="#license">许可证</a></li>
@@ -97,6 +98,25 @@ pi install npm:pi-maestro-flow
 
 App 会保存连接并自动重连。默认地址为 `ws://<computer-ip>:4739/ws`，Host 始终要求 token；局域网外访问请使用私有隧道。
 
+<a id="peer-messaging"></a>
+
+## 会话间消息（`/mb-peer`）
+
+`/mb-peer` 是独立于 Mobile App 的 Pi TUI 功能，通过 Desktop Broker 在在线 Pi 会话之间发送消息。
+
+| 命令 | 用途 |
+| --- | --- |
+| `/mb-peer list` | 列出当前会话已获准联系的在线会话。 |
+| `/mb-peer send <session ID 或前缀> <消息>` | 发送消息。Pi 支持原生命令补全；若前缀匹配多个会话，可从交互列表选择目标。 |
+| `/mb-peer inbox` | 查看当前 TUI 收到且尚未过期的消息。 |
+| `/mb-peer access` | 列出在线会话与现有授权，包括尚未获准的会话。 |
+| `/mb-peer access <session ID 或前缀>` | 选择会话并授予访问权限。 |
+| `/mb-peer revoke <授权 ID>` | 撤销当前工作目录创建的用户授权。 |
+
+默认情况下，同一**工作目录**下的在线 peer 可以互相发送消息。跨目录发送须明确确认，并选择**单向**或**双向**授权。授权成功前不会发送消息；授权后需重新执行 `/mb-peer send`。授权会在 Broker 重启后保留；命令不能撤销由管理员配置的规则。
+
+回执中的 `accepted` 表示接收端 Plugin 已将消息放入临时收件箱，不代表对方已经阅读、回复或采取行动。双方都须是在线的 Pi TUI 会话，并加载兼容的 Desktop Plugin、连接 Broker；历史会话和仅连接 Mobile App 的设备不是 peer。
+
 <a id="usage"></a>
 
 ## 日常使用
@@ -116,7 +136,7 @@ App 会保存连接并自动重连。默认地址为 `ws://<computer-ip>:4739/ws
 
 ## 相关文档
 
-- [使用指南（英文）](docs/usage.md)：连接、升级、排障与更多截图。
+- [使用指南（英文）](docs/usage.md)：连接、升级、排障与 [`/mb-peer` 会话消息](docs/usage.md#peer-messaging)。
 - [部署指南](docs/deploy.md)：独立 Host、launchd、systemd 与 Docker。
 - [开发指南（英文）](docs/development.md)：源码准备、原生构建与贡献检查。
 - [架构说明](docs/architecture.md) · [协议与 API](docs/protocol.md)：实现参考。

@@ -35,6 +35,22 @@ pi install npm:pi-maestro-mobile
 
 扩展只负责启动、探测、配对与停止；Host 是独立常驻进程，不随当前 Pi 会话退出。
 
+### `/mb-peer`：Pi 会话间消息
+
+Desktop Plugin 连接 Broker 后，可在 Pi TUI 中使用 `/mb-peer` 在在线会话之间发送消息：
+
+```text
+/mb-peer list
+/mb-peer send <session ID 或短 ID> <消息>
+/mb-peer inbox
+/mb-peer access
+/mb-peer revoke <grant ID>
+```
+
+`list` 只显示当前已授权的 peer；`send` 支持 session ID 前缀和原生补全，匹配多个目标时会要求选择。`inbox` 查看接收端临时收件箱。默认同一 cwd 可互发，跨 cwd 必须通过 `access` 明确授予单向或双向权限；授权后重新执行 `send`。`access` 查看在线 peer 和授权，`revoke` 只能撤销当前 cwd 创建的用户授权，managed rule 不能撤销。
+
+peer 消息不依赖 Mobile App 或 Host HTTP / WebSocket；两端必须是在线 Pi TUI，并连接兼容的 Desktop Plugin / singleton Broker。`accepted` 回执只表示接收端 Plugin 接受了消息，不表示已阅读或回复。完整操作见仓库 [`docs/usage.md`](../../docs/usage.md#peer-messaging)。
+
 ### 方式三：Docker（看板模式）
 
 ```bash

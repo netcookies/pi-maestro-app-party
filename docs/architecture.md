@@ -101,6 +101,14 @@ Broker 向 Host 发送带 `brokerInstanceId` 和单调 `revision` 的 chunked sn
 
 `/maestro-mobile status --current` 读取 Pi extension 的 symbol-keyed local runtime state，再调用认证的 `GET /api/desktop/current`，比较 Pi local、Plugin→Broker、Broker→Host 和 Host exact-target projection 四层状态。诊断 verdict 为 `synced`、`drift`、`target_missing`、`plugin_disconnected`、`broker_host_disconnected`、`host_unreachable`、`broker_flapping`；它是只读操作，不改变 Mobile UI。
 
+### Peer messaging（`/mb-peer`）
+
+`/mb-peer` 是 Pi TUI 中独立于 Mobile 的在线会话消息功能。Desktop Plugin 向 Broker 协商 `desktop_peer` feature 后，当前 TUI 可列出在线 peer、通过完整 session ID 或短 ID 前缀发送消息，并在本地临时 inbox 接收投递。Broker 始终按完整 target 路由：`sessionId`、`endpointId`、`normalizedCwd`、`processGeneration`。
+
+同一 `normalizedCwd` 默认允许互发；跨 cwd 必须创建持久化的单向或双向 grant。用户授权存储在 `~/.pi/maestro-mobile/peer-access.json`，管理员配置的 managed grant 不能通过 `/mb-peer revoke` 撤销。投递回执 `accepted` 只表示接收端 Plugin 已接受消息进入 inbox，不表示已阅读或产生回复；消息不会自动启动模型轮次。在线 target 断开、授权撤销或 deadline 到期时，投递会失败或返回未知状态。
+
+完整命令和用户操作见 [使用指南](usage.md#peer-messaging)，线协议见 [协议与 API](protocol.md)。
+
 
 
 ## Workspace Telemetry 合同

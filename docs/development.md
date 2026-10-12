@@ -99,6 +99,10 @@ Versioning and release notes are managed by [scripts/release.mjs](../scripts/rel
 - [Protocol and API (中文)](protocol.md): HTTP / WebSocket contracts and desktop routing.
 - [Host package (中文)](../apps/host/README.md): CLI options and build constraints.
 
+The Desktop Broker routes `/mb-peer` only between live, online Desktop Plugin targets. It addresses the exact session, endpoint, working directory and process generation; it never guesses from a session name or historical record. Cross-directory access must be explicitly granted. User-managed grants persist in `~/.pi/maestro-mobile/peer-access.json`; do not edit the file while the Broker is running.
+
+`/mb-peer` uses the Desktop Broker and Pi TUI, independently of the Mobile Host HTTP / WebSocket interface and app. For wire frames and target identity, see [Protocol and API (中文)](protocol.md).
+
 Flow is independently installed through Pi, rather than an npm dependency of Mobile. Ask / Plan support requires the target TUI to load a compatible stable `pi-maestro-flow`, with both `ask-user-question` and `plan` from the same package, transport exports and shared registry contracts. The command-time dependency check warns and continues basic commands; it is not runtime capability negotiation. Installed versions do not prove the in-memory extensions have reloaded.
 
 Mobile / Desktop Plugin uses protocol **v2**; Desktop Broker uses protocol **v1**. Protocol versions increase for breaking wire changes. The desktop TUI owns the Pi session; the Host reads history and forwards authorized controls through the Broker. See the protocol guide for exact target identity and authorization boundaries.
