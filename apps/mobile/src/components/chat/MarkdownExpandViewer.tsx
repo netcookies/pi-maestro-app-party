@@ -44,10 +44,16 @@ export function MarkdownExpandViewer(props: MarkdownExpandViewerProps) {
       onRequestClose={props.onClose}
       onDismiss={props.onClose}
     >
-      <SafeAreaProvider initialMetrics={initialWindowMetrics}>
-        <MarkdownExpandSurface {...props} />
-      </SafeAreaProvider>
+      <MarkdownExpandContent {...props} />
     </Modal>
+  );
+}
+
+export function MarkdownExpandContent(props: MarkdownExpandViewerProps) {
+  return (
+    <SafeAreaProvider initialMetrics={initialWindowMetrics}>
+      <MarkdownExpandSurface {...props} />
+    </SafeAreaProvider>
   );
 }
 

@@ -13,6 +13,8 @@ import type { DesktopPlanRequest, DesktopPlanResponse, SessionTargetIdentity } f
 import { useTheme } from "../theme";
 import { useI18n, type I18nDictionary } from "../i18n";
 import { normalizePlanAction } from "../plan-actions";
+import { ChatMarkdown } from "./chat/ChatMarkdown";
+import { MarkdownExpandContent, type MarkdownExpandRequest } from "./chat/MarkdownExpandViewer";
 
 interface Props {
   request: DesktopPlanRequest;
@@ -43,6 +45,8 @@ export function PlanSurface({ request, target, initialDraft, onResponse, onCance
   const [editing, setEditing] = useState(request.kind === "review");
   const [discussing, setDiscussing] = useState(false);
   const [submitting, setSubmitting] = useState(false);
+  const [expanded, setExpanded] = useState<MarkdownExpandRequest | null>(null);
+  React.useEffect(() => { setExpanded(null); }, [request.requestId, request.revision]);
   React.useEffect(() => {
     setDraft(initialDraft ?? request.markdown);
   }, [request.requestId, request.revision, initialDraft, request.markdown]);
@@ -95,7 +99,15 @@ export function PlanSurface({ request, target, initialDraft, onResponse, onCance
   };
 
   return (
-    <Modal transparent animationType="fade" visible>
+    <Modal transparent={!expanded} animationType="fade" visible onRequestClose={() => {
+      if (expanded) setExpanded(null);
+      else if (!submitting) onCancel(request, target);
+    }}>
+      {expanded ? (
+        <MarkdownExpandContent visible title={expanded.title} theme={theme} actions={expanded.actions} onClose={() => setExpanded(null)}>
+          {expanded.children}
+        </MarkdownExpandContent>
+      ) : (
       <View style={styles.overlay}>
         <View style={[styles.surface, { backgroundColor: theme.cardBg ?? theme.bg, borderColor: theme.border }]}>
           <View style={styles.header}>
@@ -116,7 +128,7 @@ export function PlanSurface({ request, target, initialDraft, onResponse, onCance
 
           {!editing && !discussing ? (
             <ScrollView style={[styles.preview, { borderColor: theme.border }]} contentContainerStyle={styles.previewContent}>
-              <Text selectable style={[styles.markdown, { color: theme.text }]}>{request.markdown}</Text>
+              <ChatMarkdown content={request.markdown} onExpand={setExpanded} />
             </ScrollView>
           ) : null}
 
@@ -186,6 +198,7 @@ export function PlanSurface({ request, target, initialDraft, onResponse, onCance
           </View>
         </View>
       </View>
+      )}
     </Modal>
   );
 }
@@ -201,7 +214,6 @@ const styles = StyleSheet.create({
   close: { fontSize: 26, lineHeight: 28 },
   preview: { maxHeight: 360, borderWidth: 1, borderRadius: 6 },
   previewContent: { padding: 12 },
-  markdown: { fontSize: 14, lineHeight: 21 },
   editor: { minHeight: 240, maxHeight: 400, borderWidth: 1, borderRadius: 6, padding: 12, fontSize: 14, lineHeight: 21 },
   actions: { gap: 8 },
   action: { minHeight: 44, borderWidth: 1, borderRadius: 6, alignItems: "center", justifyContent: "center", paddingHorizontal: 12 },

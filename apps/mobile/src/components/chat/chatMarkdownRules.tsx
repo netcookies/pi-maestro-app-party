@@ -18,6 +18,39 @@ import { useI18n } from "../../i18n";
 import { MarkdownExpandButton } from "./MarkdownExpandViewer";
 import type { MarkdownExpandRequest } from "./MarkdownExpandViewer";
 
+export function HighlightedCode({ code, language, theme }: { code: string; language: string; theme: AppTheme }) {
+  const isDark = theme.name.includes("dark");
+  const monoFont = Platform.OS === "ios" ? "Menlo" : "monospace";
+  return (
+    <Highlight theme={isDark ? themes.oneDark : themes.oneLight} code={code} language={language || "text"}>
+      {({ tokens, getTokenProps }) => (
+        <Text selectable style={[fenceStyles.codeArea, fenceStyles.token, { fontFamily: monoFont, color: theme.text }]}>
+          {tokens.map((line, lineIndex) => (
+            <Text key={lineIndex}>
+              {lineIndex > 0 ? "\n" : null}
+              {line.filter((token) => !token.empty).map((token, tokenIndex) => {
+                const tokenProps = getTokenProps({ token });
+                return (
+                  <Text
+                    key={tokenIndex}
+                    style={[
+                      { color: tokenProps.style?.color == null ? theme.text : String(tokenProps.style.color) },
+                      tokenProps.style?.fontStyle != null ? { fontStyle: tokenProps.style.fontStyle as "normal" | "italic" } : null,
+                      tokenProps.style?.fontWeight != null ? { fontWeight: String(tokenProps.style.fontWeight) as "bold" | "normal" } : null,
+                    ]}
+                  >
+                    {tokenProps.children}
+                  </Text>
+                );
+              })}
+            </Text>
+          ))}
+        </Text>
+      )}
+    </Highlight>
+  );
+}
+
 function trimTrailingNewLine(str: string): string {
   return str.endsWith("\n") ? str.slice(0, -1) : str;
 }
@@ -77,7 +110,6 @@ function CustomFenceBlock({ code, language, theme, onCopyCode, onExpand }: Custo
   const [copied, setCopied] = useState(false);
   const morphAnim = useRef(new Animated.Value(1)).current;
   const isDark = theme.name.includes("dark");
-  const prismTheme = isDark ? themes.oneDark : themes.oneLight;
   const monoFont = Platform.OS === "ios" ? "Menlo" : "monospace";
 
   const handleCopy = () => {
@@ -112,15 +144,7 @@ function CustomFenceBlock({ code, language, theme, onCopyCode, onExpand }: Custo
       ) : undefined,
       children: (
         <ScrollView horizontal nestedScrollEnabled showsHorizontalScrollIndicator style={fenceStyles.scroll}>
-          <Text
-            selectable
-            style={[
-              fenceStyles.expandedCode,
-              { color: theme.mdCodeBlock ?? theme.text, fontFamily: monoFont },
-            ]}
-          >
-            {code}
-          </Text>
+          <HighlightedCode code={code} language={language} theme={theme} />
         </ScrollView>
       ),
     });
@@ -178,45 +202,16 @@ function CustomFenceBlock({ code, language, theme, onCopyCode, onExpand }: Custo
                 </Animated.View>
               </Pressable>
             )}
-            <MarkdownExpandButton
-              theme={theme}
-              onPress={openExpanded}
-            />
+            {onExpand ? (
+              <MarkdownExpandButton
+                theme={theme}
+                onPress={openExpanded}
+              />
+            ) : null}
           </View>
         </View>
       <ScrollView horizontal nestedScrollEnabled showsHorizontalScrollIndicator={false} style={fenceStyles.scroll}>
-        <Highlight theme={prismTheme} code={code} language={language || "text"}>
-          {({ tokens, getTokenProps }) => (
-            <View style={fenceStyles.codeArea}>
-              {tokens.map((line, lineIndex) => (
-                <View key={lineIndex} style={fenceStyles.codeLine}>
-                  {line
-                    .filter((token) => !token.empty)
-                    .map((token, tokenIndex) => {
-                      const tokenProps = getTokenProps({ token });
-                      const tokenColor = tokenProps.style?.color;
-                      const tokenFontStyle = tokenProps.style?.fontStyle;
-                      const tokenFontWeight = tokenProps.style?.fontWeight;
-                      return (
-                        <Text
-                          key={tokenIndex}
-                          style={[
-                            fenceStyles.token,
-                            { fontFamily: monoFont },
-                            tokenColor != null ? { color: String(tokenColor) } : { color: theme.text },
-                            tokenFontStyle != null ? { fontStyle: tokenFontStyle as "normal" | "italic" } : null,
-                            tokenFontWeight != null ? { fontWeight: String(tokenFontWeight) as "bold" | "normal" } : null,
-                          ]}
-                        >
-                          {tokenProps.children}
-                        </Text>
-                      );
-                    })}
-                </View>
-              ))}
-            </View>
-          )}
-        </Highlight>
+        <HighlightedCode code={code} language={language} theme={theme} />
       </ScrollView>
     </View>
   );
@@ -279,16 +274,6 @@ const fenceStyles = StyleSheet.create({
   codeArea: {
     padding: 10,
     minWidth: "100%",
-  },
-  expandedCode: {
-    minWidth: "100%",
-    padding: 12,
-    fontSize: 13,
-    lineHeight: 19,
-  },
-  codeLine: {
-    flexDirection: "row",
-    minHeight: 18,
   },
   token: {
     fontSize: 12.5,

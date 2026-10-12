@@ -12,6 +12,7 @@ import type { MarkdownExpandRequest } from "./MarkdownExpandViewer";
 export interface ChatMarkdownProps {
   content: string;
   streaming?: boolean;
+  onExpand?: (request: MarkdownExpandRequest) => void;
 }
 
 class MarkdownSafeFallback extends React.Component<{ children: React.ReactNode; fallbackText: string }, { hasError: boolean }> {
@@ -37,7 +38,7 @@ class MarkdownSafeFallback extends React.Component<{ children: React.ReactNode; 
   }
 }
 
-export function ChatMarkdown({ content, streaming = false }: ChatMarkdownProps) {
+export function ChatMarkdown({ content, streaming = false, onExpand }: ChatMarkdownProps) {
   const { theme } = useTheme();
   const { lang } = useI18n();
   const [expandedViewer, setExpandedViewer] = useState<MarkdownExpandRequest | null>(null);
@@ -63,8 +64,8 @@ export function ChatMarkdown({ content, streaming = false }: ChatMarkdownProps) 
 
   const styles = useMemo(() => createChatMarkdownStyles(theme), [theme]);
   const rules = useMemo(
-    () => createChatMarkdownRules(theme, lang, handleCopyCode, handleExpand),
-    [theme, lang, handleCopyCode, handleExpand],
+    () => createChatMarkdownRules(theme, lang, handleCopyCode, onExpand ?? handleExpand),
+    [theme, lang, handleCopyCode, onExpand, handleExpand],
   );
 
   // 保证传入的内容为安全字串
@@ -87,7 +88,7 @@ export function ChatMarkdown({ content, streaming = false }: ChatMarkdownProps) 
           </Component>
         </View>
       </MarkdownSafeFallback>
-      {expandedViewer ? (
+      {!onExpand && expandedViewer ? (
         <MarkdownExpandViewer
           visible
           title={expandedViewer.title}
