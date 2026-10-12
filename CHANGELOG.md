@@ -2,6 +2,12 @@
 
 本文件记录 Maestro Mobile 的显著变更。格式基于 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)。
 
+## [0.12.1] — 2026-10-12
+
+### 修复
+
+- 移除协议校验的 Node 依赖以修复移动端打包
+
 ## [0.12.0] — 2026-10-12
 
 ### 测试
