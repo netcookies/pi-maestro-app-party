@@ -2,7 +2,9 @@ import { afterEach, describe, expect, it } from "vitest";
 import { mkdtemp, readFile, rm, stat } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import type { DesktopPluginResult, DesktopPluginTarget } from "@maestro-mobile/shared";
+import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import type { DesktopPeerDelivery, DesktopPluginResult, DesktopPluginTarget } from "@maestro-mobile/shared";
+import { registerDesktopPeerCommand } from "../src/plugin/desktop-peer-extension.js";
 import { DesktopBroker } from "../src/plugin/desktop-broker.js";
 import { DesktopPluginIpcClient } from "../src/plugin/desktop-plugin-ipc.js";
 import { DesktopPluginRegistry } from "../src/plugin/desktop-plugin-registry.js";
@@ -332,25 +334,45 @@ describe("DesktopBroker", () => {
     expect(broker.registry.revision).toBe(1);
   });
 
-  it("persists authorization across Broker restart and revokes delivery through two real UDS Plugin clients", async () => {
+  it("delivers A→B→A→B through real UDS inboxes, persists authorization across restart, and revokes both directions", async () => {
     const dir = await mkdtemp(join(tmpdir(), "maestro-broker-peer-access-ipc-"));
     const socketPath = join(dir, "plugin.sock");
     const accessPath = join(dir, "peer-access.json");
     const source = { ...target };
     const peer = { ...target, sessionId: "session-2", endpointId: "endpoint-2", normalizedCwd: "/work/other", processGeneration: "generation-2" };
-    let received: unknown;
     let sourceClient: DesktopPluginIpcClient;
     let peerClient: DesktopPluginIpcClient;
+    const createInbox = (getClient: () => DesktopPluginIpcClient | undefined) => {
+      let handler!: Parameters<ExtensionAPI["registerCommand"]>[1]["handler"];
+      const messages: Array<{ content: string }> = [];
+      const pi = {
+        registerCommand: (name: string, command: { handler: typeof handler }) => {
+          expect(name).toBe("mb-peer");
+          handler = command.handler;
+        },
+        sendMessage: (message: { content: string }) => { messages.push(message); },
+      };
+      const command = registerDesktopPeerCommand(pi as unknown as ExtensionAPI, getClient);
+      return {
+        ...command,
+        async read(): Promise<DesktopPeerDelivery[]> {
+          await handler("inbox", {} as Parameters<typeof handler>[1]);
+          return JSON.parse(messages.at(-1)!.content);
+        },
+      };
+    };
+    const sourceInbox = createInbox(() => sourceClient);
+    const peerInbox = createInbox(() => peerClient);
     const connect = async () => {
       sourceClient = new DesktopPluginIpcClient({
         socketPath, secret: "secret", target: source, capabilities: [], features: [PEER_FEATURE],
         onRequest: async (request) => ({ type: "desktop_plugin_result", requestId: request.requestId, operation: request.operation.type, status: "observed" }),
-        onPeerDelivery: async () => undefined,
+        onPeerDelivery: (delivery) => sourceInbox.receive(delivery),
       });
       peerClient = new DesktopPluginIpcClient({
         socketPath, secret: "secret", target: peer, capabilities: [], features: [PEER_FEATURE],
         onRequest: async (request) => ({ type: "desktop_plugin_result", requestId: request.requestId, operation: request.operation.type, status: "observed" }),
-        onPeerDelivery: async (delivery) => { received = delivery; },
+        onPeerDelivery: (delivery) => peerInbox.receive(delivery),
       });
       await Promise.all([sourceClient.connect(), peerClient.connect()]);
       await waitFor(() => broker?.registry.resolve(source) !== undefined && broker?.registry.resolve(peer) !== undefined);
@@ -364,24 +386,42 @@ describe("DesktopBroker", () => {
       expect(await sourceClient.requestPeers({ type: "desktop_peer_send", requestId: "denied", deadlineAt: Date.now() + 2_000, target: peer, message: "not delivered" })).toMatchObject({ status: "failed", error: { code: "authorization_required" } });
       const grant = await sourceClient.requestPeers({ type: "desktop_peer_access_grant", requestId: "grant", deadlineAt: Date.now() + 2_000, target: peer, direction: "bidirectional" });
       expect(grant).toMatchObject({ status: "access_granted", grant: { managed: false, direction: "bidirectional" } });
-      const delivered = await sourceClient.requestPeers({ type: "desktop_peer_send", requestId: "send", deadlineAt: Date.now() + 2_000, target: peer, message: "hello" });
-      expect(delivered).toMatchObject({ status: "accepted", deliveryId: expect.any(String) });
-      await waitFor(() => received !== undefined);
-      expect(received).toMatchObject({ source, target: peer, message: "hello" });
+      expect(await sourceInbox.read()).toEqual([]);
+      expect(await peerInbox.read()).toEqual([]);
+      const deliveryIds: string[] = [];
+      for (const [sender, receiver, senderTarget, receiverTarget, requestId, message] of [
+        [sourceClient, peerInbox, source, peer, "send-a-b-1", "A to B first"],
+        [peerClient, sourceInbox, peer, source, "send-b-a", "B to A response"],
+        [sourceClient, peerInbox, source, peer, "send-a-b-2", "A to B second"],
+      ] as const) {
+        const delivered = await sender.requestPeers({ type: "desktop_peer_send", requestId, deadlineAt: Date.now() + 2_000, target: receiverTarget, message });
+        expect(delivered).toMatchObject({ status: "accepted", requestId, deliveryId: expect.any(String) });
+        deliveryIds.push(delivered.deliveryId!);
+        expect(await receiver.read()).toContainEqual(expect.objectContaining({ requestId, deliveryId: delivered.deliveryId, source: senderTarget, target: receiverTarget, message }));
+      }
+      expect(new Set(deliveryIds).size).toBe(3);
+      expect((await sourceInbox.read()).map((delivery) => delivery.message)).toEqual(["B to A response"]);
+      expect((await peerInbox.read()).map((delivery) => delivery.message)).toEqual(["A to B first", "A to B second"]);
       expect(JSON.parse(await readFile(accessPath, "utf8"))).toHaveLength(1);
 
       sourceClient.close(); peerClient.close();
       await broker.close();
       broker = new DesktopBroker({ pluginSocketPath: socketPath, secret: "secret", peerAccessPath: accessPath, brokerInstanceId: "broker-peer-access-restart" });
       await broker.start();
-      received = undefined;
       await connect();
       expect(await sourceClient.requestPeers({ type: "desktop_peer_list", requestId: "list-restored", deadlineAt: Date.now() + 2_000 })).toMatchObject({ status: "listed", peers: [peer] });
       expect(await sourceClient.requestPeers({ type: "desktop_peer_access_list", requestId: "access", deadlineAt: Date.now() + 2_000 })).toMatchObject({ status: "access_listed", grants: [{ managed: false, direction: "bidirectional" }] });
+      const restoredDelivery = await peerClient.requestPeers({ type: "desktop_peer_send", requestId: "send-restored", deadlineAt: Date.now() + 2_000, target: source, message: "after restart" });
+      expect(restoredDelivery.status).toBe("accepted");
+      expect(await sourceInbox.read()).toContainEqual(expect.objectContaining({ deliveryId: restoredDelivery.deliveryId, source: peer, target: source, message: "after restart" }));
       expect(await sourceClient.requestPeers({ type: "desktop_peer_access_revoke", requestId: "revoke", deadlineAt: Date.now() + 2_000, grantId: grant.grant!.grantId })).toMatchObject({ status: "access_revoked" });
       expect(await sourceClient.requestPeers({ type: "desktop_peer_list", requestId: "list-revoked", deadlineAt: Date.now() + 2_000 })).toMatchObject({ status: "listed", peers: [] });
       expect(await sourceClient.requestPeers({ type: "desktop_peer_send", requestId: "send-revoked", deadlineAt: Date.now() + 2_000, target: peer, message: "blocked" })).toMatchObject({ status: "failed", error: { code: "authorization_required" } });
+      expect(await peerClient.requestPeers({ type: "desktop_peer_send", requestId: "reverse-revoked", deadlineAt: Date.now() + 2_000, target: source, message: "reverse blocked" })).toMatchObject({ status: "failed", error: { code: "authorization_required" } });
+      expect((await sourceInbox.read()).map((delivery) => delivery.message)).toEqual(["B to A response", "after restart"]);
+      expect((await peerInbox.read()).map((delivery) => delivery.message)).toEqual(["A to B first", "A to B second"]);
     } finally {
+      sourceInbox.clear(); peerInbox.clear();
       sourceClient?.close(); peerClient?.close();
       await broker?.close(); broker = undefined;
       await rm(dir, { recursive: true, force: true });
