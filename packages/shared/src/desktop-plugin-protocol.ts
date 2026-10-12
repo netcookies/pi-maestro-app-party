@@ -1,4 +1,3 @@
-import { isAbsolute, normalize } from "node:path";
 import type {
   ExtensionUiResponse,
   JsonValue,
@@ -88,7 +87,21 @@ export function isDesktopPeerRequest(value: unknown): value is DesktopPeerReques
   return value.type === "desktop_peer_access_revoke" && typeof value.grantId === "string" && value.grantId.length > 0 && value.grantId.length <= 128;
 }
 function isAbsoluteNormalizedCwd(value: unknown): value is string {
-  return typeof value === "string" && value.length <= 4096 && isAbsolute(value) && normalize(value) === value;
+  if (typeof value !== "string" || value.length > 4096) return false;
+  let separator: string;
+  let tail: string;
+  if (value.startsWith("/")) {
+    separator = "/";
+    tail = value.slice(1);
+  } else {
+    const root = /^(?:[A-Za-z]:\\|\\\\[^\\/]+\\[^\\/]+\\|\\(?!\\))/.exec(value);
+    if (!root || value.includes("/")) return false;
+    separator = "\\";
+    tail = value.slice(root[0].length);
+  }
+  if (!tail) return true;
+  if (tail.endsWith(separator)) tail = tail.slice(0, -1);
+  return tail.length > 0 && tail.split(separator).every((part) => part !== "" && part !== "." && part !== "..");
 }
 export function isDesktopPeerAccessGrant(value: unknown): value is DesktopPeerAccessGrant {
   return isRecord(value) && stringFields(value, "grantId", "sourceCwd", "targetCwd")
