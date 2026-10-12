@@ -2,6 +2,12 @@
 
 本文件记录 Maestro Mobile 的显著变更。格式基于 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)。
 
+## [0.13.0] — 2026-10-12
+
+### 新增
+
+- 统一 mb-peer 短 ID 发送并接入原生补全
+
 ## [0.12.2] — 2026-10-12
 
 ### 新增
