@@ -1,5 +1,5 @@
 import { describe, expect, it, beforeEach, vi } from "vitest";
-import { VersionDetector, binVersionForTest } from "../src/version-detector.js";
+import { VersionDetector, binVersionForTest, isStableFlowVersion } from "../src/version-detector.js";
 
 // vi.mock 会被 hoist 到 import 前：Windows .cmd 探测路径在 win32 下才生效
 declare global {
@@ -55,6 +55,14 @@ describe("VersionDetector · Windows paths", () => {
 describe("VersionDetector", () => {
   beforeEach(() => {
     vi.restoreAllMocks();
+  });
+
+  it.each(["0.31.2", "0.32.1", "0.1.0", "1.0.0", "0.1000.0", "0.0.1000000", "0.32.1+local.patch"])("validates stable SemVer %s without guessing a compatibility floor", (version) => {
+    expect(isStableFlowVersion(version)).toBe(true);
+  });
+
+  it.each([undefined, null, 32, "", "dev", "0.32", "0.32.1junk", "0.32.1-rc.1", "1.0.0-beta", "01.32.1", "0.32.1+", " 0.32.1", "9007199254740992.0.0"])("rejects invalid or unverified prerelease %s", (version) => {
+    expect(isStableFlowVersion(version)).toBe(false);
   });
 
   it("caches detection result (detect called once for repeated calls)", async () => {

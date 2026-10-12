@@ -22,6 +22,13 @@ export interface ComponentVersions {
   maestroCliVersion?: string;
 }
 
+/** Validate stable SemVer syntax only; transport contracts, not release numbers, define compatibility. */
+export function isStableFlowVersion(version: unknown): version is string {
+  if (typeof version !== "string") return false;
+  const match = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$/.exec(version);
+  return match !== null && match.slice(1, 4).every((part) => Number.isSafeInteger(Number(part)));
+}
+
 /** package.json 中提取 version（接受字符串或已解析对象；空/异常安全） */
 function readPkgVersion(raw: string | { version?: unknown }): string | undefined {
   try {
@@ -42,7 +49,7 @@ async function versionFromPkgPath(pkgPath: string): Promise<string | undefined> 
 
 /** pi 扩展目录候选：macOS/Linux 均默认 ~/.pi/agent/npm/node_modules/<pkg> */
 function piAgentModulePath(pkgName: string): string {
-  return join(homedir(), ".pi", "agent", "npm", "node_modules", pkgName, "package.json");
+  return join(process.env.PI_CODING_AGENT_DIR || join(homedir(), ".pi", "agent"), "npm", "node_modules", pkgName, "package.json");
 }
 
 /** execFile 兜底：bin 不存在/超时均返回 undefined（3s 超时，版本命令无 stdin 输入）

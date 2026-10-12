@@ -23,6 +23,7 @@ import { DEFAULT_DESKTOP_BROKER_PID_FILE, isOwnedProcessCommand } from "./plugin
 import { compareDesktopCurrentStatus, formatDesktopCurrentStatus, type DesktopHostDiagnostic } from "./current-desktop-status.js";
 import { getDesktopPluginRuntimeRecord } from "./plugin/desktop-plugin-runtime-state.js";
 import { getPackageDir, type ExtensionAPI, type ExtensionContext } from "@earendil-works/pi-coding-agent";
+import { maestroFlowWarning } from "./flow-dependency.js";
 import { runNotificationTui } from "./notification-tui.js";
 
 const PID_FILE = join(homedir(), ".pi", "maestro-mobile.pid");
@@ -381,6 +382,8 @@ export default function maestroHostExtension(pi: ExtensionAPI): void {
     description: "Maestro Mobile Host 遥控（status / start / stop / qr）",
     handler: async (args: string, ctx) => {
       const sub = (args ?? "").trim().split(/\s+/)[0] || "default";
+      const flowWarning = await maestroFlowWarning(pi);
+      if (flowWarning) ctx.ui.notify(`maestro-mobile warning: ${flowWarning}`, "warning");
       const port = hostPort();
       const alive = await probeHealth(port);
       const requestedCurrent = (args ?? "").trim().split(/\s+/).includes("--current");
