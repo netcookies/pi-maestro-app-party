@@ -2,6 +2,16 @@
 
 本文件记录 Maestro Mobile 的显著变更。格式基于 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)。
 
+## [0.12.2] — 2026-10-12
+
+### 新增
+
+- 检测 Flow 依赖并完善 README
+
+### 修复
+
+- 渲染 Plan Markdown 并统一代码展开 Modal
+
 ## [0.12.1] — 2026-10-12
 
 ### 修复
