@@ -54,19 +54,37 @@ export function registerDesktopPeerCommand(pi: ExtensionAPI, getClient: () => De
       ? peerMessage(details.direction === "out" ? "out" : "in", details.peer, details.body)
       : typeof message.content === "string" ? message.content : "";
     const [heading = "mb-peer", ...body] = visible.split("\n");
+    const direction = details?.direction === "out" ? "out" : "in";
+    const source = details?.peer
+      ? `${direction === "out" ? "发给" : "来自"} peer ${details.peer.sessionId.slice(0, 8)}`
+      : heading.replace(/^[←→]\s*/u, "");
+    const messageBody = details?.body !== undefined ? details.body.split("\n") : body;
+
     return {
       render(width) {
         if (width < 5) return new Text(visible, 0, 0).render(width);
-        const innerWidth = Math.min(80, width - 4);
-        const border = theme.fg("borderAccent", "│");
-        const edge = (start: string, end: string) => theme.fg("borderAccent", `${start}${"─".repeat(innerWidth + 2)}${end}`);
-        const row = (line: string, title = false) => {
-          const clipped = truncateToWidth(line, innerWidth, "…");
-          const padding = " ".repeat(Math.max(0, innerWidth - visibleWidth(clipped)));
-          return `${border} ${theme.fg(title ? "customMessageLabel" : "customMessageText", clipped)}${padding} ${border}`;
+
+        const border = (text: string) => theme.fg("dim", text);
+        const innerWidth = width - 2;
+        const contentWidth = Math.max(1, width - 4);
+        const icon = theme.fg("success", direction === "out" ? "→" : "←");
+        const label = theme.fg("warning", theme.bold("mb-peer"));
+        const peerSource = theme.fg("accent", source);
+        const styledHeader = `${icon}  ${label}  ${peerSource}`;
+        const header = truncateToWidth(` ${styledHeader} `, innerWidth - 1, "…");
+        const topPrefix = `─${header}`;
+        const topFill = "─".repeat(Math.max(0, innerWidth - visibleWidth(topPrefix)));
+        const fit = (line: string): string => {
+          const clipped = truncateToWidth(line, contentWidth, "…");
+          return `${clipped}${" ".repeat(Math.max(0, contentWidth - visibleWidth(clipped)))}`;
         };
-        const lines = body.flatMap((line) => wrapTextWithAnsi(line, innerWidth));
-        return [edge("╭", "╮"), row(heading, true), edge("├", "┤"), ...lines.map((line) => row(line)), edge("╰", "╯")];
+        const lines = messageBody.flatMap((line) => wrapTextWithAnsi(line || " ", contentWidth));
+
+        return [
+          `${border("╭")}${border(topPrefix)}${border(topFill)}${border("╮")}`,
+          ...lines.map((line) => `${border("│")} ${theme.fg("text", fit(line))} ${border("│")}`),
+          `${border("╰")}${border("─".repeat(innerWidth))}${border("╯")}`,
+        ];
       },
       invalidate() {},
     };

@@ -12,6 +12,7 @@ function setup(result: (request: DesktopPeerRequest) => DesktopPeerResult | Prom
   let complete: NonNullable<RegisteredCommand["getArgumentCompletions"]> = () => null;
   const messages: unknown[] = [];
   const messageOptions: unknown[] = [];
+  let messageRenderer: ((message: unknown, options: unknown, theme: unknown) => { render(width: number): string[] }) | undefined;
   const tools = new Map<string, { execute: (id: string, params: unknown) => Promise<unknown> }>();
   const requests: DesktopPeerRequest[] = [];
   let commandName = "";
@@ -21,7 +22,7 @@ function setup(result: (request: DesktopPeerRequest) => DesktopPeerResult | Prom
     },
     sendMessage: (message: unknown, options?: unknown) => { messages.push(message); messageOptions.push(options); },
     registerTool: (tool: { name: string; execute: (id: string, params: unknown) => Promise<unknown> }) => { tools.set(tool.name, tool); },
-    registerMessageRenderer: () => undefined,
+    registerMessageRenderer: (_name: string, renderer: typeof messageRenderer) => { messageRenderer = renderer; },
   };
   const client = { target: { ...target, normalizedCwd: "/work/app" }, requestPeers: async (request: DesktopPeerRequest) => { requests.push(request); return result(request); } };
   let connected = true;
@@ -29,7 +30,7 @@ function setup(result: (request: DesktopPeerRequest) => DesktopPeerResult | Prom
   const notify = vi.fn();
   const run = async (command: string, confirm?: (title: string, message: string) => Promise<boolean>, select?: (title: string, options: string[]) => Promise<string | undefined>) =>
     handler(command, { ui: { notify, confirm, select } });
-  return { run, requests, messages, messageOptions, tools, notify, peerCommand, complete: (prefix: string) => complete(prefix), disconnect: () => { connected = false; peerCommand.clear(); }, get commandName() { return commandName; } };
+  return { run, requests, messages, messageOptions, tools, notify, peerCommand, complete: (prefix: string) => complete(prefix), renderMessage: (message: unknown, width: number) => messageRenderer!(message, {}, { fg: (token: string, text: string) => `<${token}>${text}</${token}>`, bold: (text: string) => `**${text}**` }).render(width), disconnect: () => { connected = false; peerCommand.clear(); }, get commandName() { return commandName; } };
 }
 
 describe("desktop peer target input and completion", () => {
@@ -310,6 +311,34 @@ describe("desktop peer TUI authorization", () => {
     expect(state.messages[0]).toMatchObject({ customType: "mb-peer", content: expect.stringContaining("← 来自 peer source-s\n请检查 WorkSpace4AI 的构建失败原因。") });
     expect(state.messages[0]).toMatchObject({ details: { peer: delivery.source, body: delivery.message } });
     expect(state.messages[0]).toMatchObject({ content: expect.not.stringContaining("/mb-peer send") });
+  });
+
+  it("renders mb-peer with an embedded token-colored header across the full TUI width", async () => {
+    const state = setup((request) => ({ type: "desktop_peer_result", requestId: request.requestId, status: "listed", peers: [] }));
+    const delivery: DesktopPeerDelivery = {
+      type: "desktop_peer_delivery",
+      requestId: "request",
+      deliveryId: "render-delivery",
+      source: { sessionId: "01a11f34-1111-2222-3333-444444444444", endpointId: "source-endpoint", normalizedCwd: "/source/project", processGeneration: "source-generation" },
+      target,
+      deadlineAt: Date.now() + 5_000,
+      message: "peer message",
+    };
+    await state.peerCommand.receive(delivery);
+    const message = state.messages[0] as { customType: string; content: string; display: boolean; details: unknown };
+    const rows = state.renderMessage(message, 120);
+
+    expect(rows).toHaveLength(3);
+    const plainRows = rows.map((row) => row.replace(/<[^>]+>/gu, "").replace(/\*\*/gu, ""));
+    expect(plainRows[0]).toContain("╭─ ");
+    expect(rows[0]).toContain("<success>←</success>");
+    expect(rows[0]).toContain("<warning>**mb-peer**</warning>");
+    expect(rows[0]).toContain("<accent>来自 peer 01a11f34</accent>");
+    expect(plainRows[0]).toContain("─╮");
+    expect(plainRows[1]).toContain("│ peer message ");
+    expect(plainRows[2]).toContain("╰" + "─".repeat(118) + "╯");
+    expect(plainRows[1]?.startsWith("│ ")).toBe(true);
+    expect(plainRows[1]?.endsWith(" │")).toBe(true);
   });
 
   it("automatically accepts and retains deliveries in the inbox until clear", async () => {
