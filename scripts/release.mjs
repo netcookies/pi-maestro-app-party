@@ -13,17 +13,10 @@
  *   4. commit "release: v<x.y.z>" + 打 tag + push(含 tag)
  */
 import { execSync, spawnSync } from "node:child_process";
-import { readFileSync, writeFileSync } from "node:fs";
+import { readFileSync } from "node:fs";
+import { collectChanges, writeChangelog } from "./release-notes.mjs";
 
 const ROOT = new URL("..", import.meta.url).pathname;
-const CHANGELOG = `${ROOT}CHANGELOG.md`;
-const PKG_FILES = [
-  "package.json",
-  "apps/host/package.json",
-  "apps/mobile/package.json",
-  "packages/shared/package.json",
-];
-const APP_JSON = "apps/mobile/app.json";
 
 const args = process.argv.slice(2);
 const yes = args.includes("--yes");
@@ -43,65 +36,6 @@ function bumpVersion(v, kind) {
   if (kind === "major") return `${x + 1}.0.0`;
   if (kind === "minor") return `${x}.${y + 1}.0`;
   return `${x}.${y}.${z + 1}`;
-}
-
-/** 从 git log 生成一组 {type, items[]} */
-function collectChanges(fromTag) {
-  // tag 不存在(首次发版)时回退全量 HEAD
-  const hasTag = fromTag
-    ? spawnSync("git", ["rev-parse", "--verify", "--quiet", `${fromTag}^{commit}`], { cwd: ROOT }).status === 0
-    : false;
-  const range = hasTag ? `${fromTag}..HEAD` : "HEAD";
-  const out = sh(`git log ${range} --pretty=format:%s`);
-  const lines = out ? out.split("\n") : [];
-  const groups = new Map(); // type -> items[]
-  const skip = /^(release|chore\(deps\)|odyssey-|test\(notes\)|merge)/i;
-  const typeLabel = {
-    feat: "新增",
-    fix: "修复",
-    docs: "文档",
-    perf: "性能",
-    refactor: "重构",
-    style: "样式",
-    test: "测试",
-  };
-  for (const line of lines) {
-    const m = line.match(/^(\w+)(?:\([^)]*\))?!?:\s*(.+)/);
-    if (!m || skip.test(line)) continue;
-    const type = m[1].toLowerCase();
-    const label = typeLabel[type] ?? "其他";
-    if (!groups.has(label)) groups.set(label, []);
-    const item = m[2].replace(/\s*\(#[0-9a-f]+\)\s*$/, "").trim();
-    groups.get(label).push(item);
-  }
-  return groups;
-}
-
-/** 把 groups 写进 CHANGELOG 的指定版本段(替换 Unreleased 或插入顶部) */
-function writeChangelog(groups, version, date, prevVersion) {
-  let md = readFileSync(CHANGELOG, "utf8");
-  let section = `## [${version}] — ${date}\n`;
-  if (groups.size === 0) section += "\n- 维护性发布\n";
-  for (const [label, items] of groups) {
-    section += `\n### ${label}\n\n`;
-    for (const item of items) section += `- ${item}\n`;
-  }
-  // dedupe(同摘要多次 fix-rebase 会出现重复行)
-  if (md.includes("## Unreleased")) {
-    md = md.replace(/## Unreleased[\s\S]*?(?=\n## )/, "");
-  }
-  const header = md.slice(0, md.indexOf("## ["));
-  const rest = md.slice(md.indexOf("## ["));
-  md = header + section + "\n" + rest;
-  md = md.replace(
-    /\[unreleased\]:\s*\S*/,
-    `[unreleased]: https://github.com/isulewli/pi-maestro-app-party/compare/v${version}...HEAD`,
-  );
-  md = md.replace(
-    new RegExp(`\\[${prevVersion}\\]:\\s*\\S*`),
-    `[${version}]: https://github.com/isulewli/pi-maestro-app-party/compare/v${prevVersion}...v${version}\n[${version}]: https://github.com/isulewli/pi-maestro-app-party/releases/tag/v${version}`,
-  );
-  writeFileSync(CHANGELOG, md);
 }
 
 // ---- main ----

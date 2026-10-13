@@ -37,16 +37,21 @@ command -v gh    >/dev/null || die "gh 未安装（brew install gh）"
 command -v xcodebuild >/dev/null || die "Xcode 未安装"
 gh auth status >/dev/null 2>&1 || die "gh 未登录（gh auth login）"
 npm whoami >/dev/null 2>&1 || die "npm 未登录（npm login）"
-gh release view "$TAG" --repo netcookies/pi-maestro-app-party >/dev/null 2>&1 && die "Release $TAG 已存在"
+# 已存在的 Release 允许重跑：正文会被统一更新，资产随后覆盖上传
 [[ -f "$REPO_ROOT/apps/mobile/android/local.properties" ]] || die "缺 android/local.properties（签名配置），参考 docs/deploy.md"
 git -C "$REPO_ROOT" diff --quiet || die "工作树有未提交改动，先 commit"
 git -C "$REPO_ROOT" rev-parse -q --verify "refs/tags/$TAG" >/dev/null && die "本地已有 tag $TAG"
 note "预检通过"
 
 # ── 同步版本号（package.json / app.json / iOS Info.plist）──────────────
+PREVIOUS_VERSION="$(node -p "require('$REPO_ROOT/package.json').version")"
 note "同步版本号为 v$VERSION"
 node "$REPO_ROOT/scripts/bump-version.mjs" "$VERSION"
 pnpm --filter @maestro-mobile/shared build
+
+# CHANGELOG 必须先准备好，release-notes 生成器会拒绝不存在的版本段
+node "$REPO_ROOT/scripts/release-notes.mjs" "$VERSION" --update --from "$PREVIOUS_VERSION" >/dev/null
+note "CHANGELOG 已准备 v$VERSION 版本段"
 
 # ── npm publish（host 包）───────────────────────────────────────────────
 if [[ "$SKIP_NPM" == false ]]; then
@@ -88,30 +93,34 @@ else
   note "跳过 iOS"
 fi
 
-# ── git tag ────────────────────────────────────────────────────────────
+# ── git commit + tag ────────────────────────────────────────────────────
+git -C "$REPO_ROOT" add -A
+git -C "$REPO_ROOT" commit -m "release: $TAG" || die "release commit 失败"
 git -C "$REPO_ROOT" tag -a "$TAG" -m "maestro-mobile v$VERSION"
-note "tag $TAG 已创建（随 release 上传时 push）"
+note "commit + tag $TAG 已创建"
 
 # ── GitHub Release ─────────────────────────────────────────────────────
 note "创建 GitHub Release $TAG"
 ASSETS=()
 [[ -f "$OUT_DIR/maestro-mobile-$VERSION.apk" ]] && ASSETS+=("$OUT_DIR/maestro-mobile-$VERSION.apk")
 [[ -f "$OUT_DIR/MaestroMobile-unsigned-$VERSION.ipa" ]] && ASSETS+=("$OUT_DIR/MaestroMobile-unsigned-$VERSION.ipa")
-git -C "$REPO_ROOT" push origin "$TAG" || die "tag push 失败（网络/权限）"
+git -C "$REPO_ROOT" push origin "HEAD:$(git -C "$REPO_ROOT" branch --show-current)" "$TAG" || die "发布 commit/tag 推送失败（网络/权限）"
 
-gh release create "$TAG" \
-  --repo netcookies/pi-maestro-app-party \
-  --title "Maestro Mobile v$VERSION" \
-  --notes "$(cat <<EOF
-## 安装
-
-- **Android**: 下载 .apk 直接安装（已用 release key 签名）
-- **iOS**: 下载 unsigned .ipa，用 [Sideloadly](https://sideloadly.io)/AltStore + 自己的 Apple ID 重签后安装
-- **PC Host**: \`npm install -g pi-pi-maestro-mobile@$VERSION\`，或 \`pi install npm:pi-maestro-mobile\`
-
-完整部署文档见仓库 docs/deploy.md
-EOF
-)" "${ASSETS[@]}" || die "gh release create 失败"
+NOTES="$(node "$REPO_ROOT/scripts/release-notes.mjs" "$VERSION")"
+if gh release view "$TAG" --repo netcookies/pi-maestro-app-party >/dev/null 2>&1; then
+  note "Release $TAG 已存在，更新正文并补传产物"
+  gh release edit "$TAG" --repo netcookies/pi-maestro-app-party \
+    --title "Maestro Mobile v$VERSION" --notes "$NOTES" || die "gh release edit 失败"
+else
+  gh release create "$TAG" \
+    --repo netcookies/pi-maestro-app-party \
+    --title "Maestro Mobile v$VERSION" \
+    --notes "$NOTES" "${ASSETS[@]}" || die "gh release create 失败"
+  ASSETS=()
+fi
+if ((${#ASSETS[@]} > 0)); then
+  gh release upload "$TAG" --repo netcookies/pi-maestro-app-party "${ASSETS[@]}" --clobber || die "gh release upload 失败"
+fi
 
 note "🎉 maestro-mobile v$VERSION 发布完成"
 gh release view "$TAG" --repo netcookies/pi-maestro-app-party --web
