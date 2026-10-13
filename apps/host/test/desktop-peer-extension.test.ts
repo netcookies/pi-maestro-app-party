@@ -50,11 +50,25 @@ describe("desktop peer target input and completion", () => {
     const listed = await tool!.execute("list", { action: "list" }) as { content: { text: string }[] };
     expect(JSON.parse(listed.content[0]!.text)).toMatchObject([{ sessionId: other.sessionId, cwd: other.normalizedCwd }]);
     const sent = await tool!.execute("send", { action: "send", target: peer.sessionId, message: "协作回复" }) as { content: { text: string }[] };
-    expect(sent.content[0]!.text).toContain("Message accepted");
+    expect(sent.content[0]!.text).toBe("accepted");
+    expect(sent.content[0]!.text).not.toContain("协作回复");
+    expect(sent.details).toMatchObject({ status: "accepted", deliveryId: "tool-delivery", target: peer.sessionId });
     expect(state.requests.filter((request) => request.type === "desktop_peer_send")).toMatchObject([
       { target: peer, message: "协作回复" },
     ]);
-    expect(state.messages.at(-1)).toMatchObject({ customType: "mb-peer", content: expect.stringContaining("→ 已发送给 peer 39a52f00 · 消息\n协作回复") });
+    expect(state.messages.at(-1)).toMatchObject({ customType: "mb-peer", content: expect.stringContaining("→ 发给 peer 39a52f00\n协作回复") });
+    expect(state.messages.at(-1)).toMatchObject({ details: { direction: "out", peer, body: "协作回复" } });
+  });
+
+  it("returns a machine-readable error for rejected sends without creating a message card", async () => {
+    const state = setup((request) => request.type === "desktop_peer_list"
+      ? { type: "desktop_peer_result", requestId: request.requestId, status: "listed", peers: [{ ...target, sessionId: "known-peer" }] }
+      : { type: "desktop_peer_result", requestId: request.requestId, status: "failed", error: { code: "authorization_required" } });
+    const result = await state.tools.get("mb-peer")!.execute("send", { action: "send", target: "known-peer", message: "secret message" }) as { content: { text: string }[]; isError: boolean };
+    expect(result.isError).toBe(true);
+    expect(result.content[0]!.text).toBe("authorization_required");
+    expect(result.content[0]!.text).not.toContain("secret message");
+    expect(state.messages).toHaveLength(0);
   });
 
   it("shows full target identity in completion and access excludes only the current cwd", async () => {
@@ -293,9 +307,9 @@ describe("desktop peer TUI authorization", () => {
     };
     await expect(state.peerCommand.receive(delivery)).resolves.toBeUndefined();
     expect(state.messageOptions[0]).toEqual({ triggerTurn: true, deliverAs: "steer" });
-    expect(state.messages[0]).toMatchObject({ customType: "mb-peer", content: expect.stringContaining("← 收到来自 peer source-s 的消息 · 消息") });
-    expect(state.messages[0]).toMatchObject({ content: expect.stringContaining(delivery.message) });
-    expect(state.messages[0]).toMatchObject({ content: expect.stringContaining("/mb-peer send source-session <回复内容>") });
+    expect(state.messages[0]).toMatchObject({ customType: "mb-peer", content: expect.stringContaining("← 来自 peer source-s\n请检查 WorkSpace4AI 的构建失败原因。") });
+    expect(state.messages[0]).toMatchObject({ details: { peer: delivery.source, body: delivery.message } });
+    expect(state.messages[0]).toMatchObject({ content: expect.not.stringContaining("/mb-peer send") });
   });
 
   it("automatically accepts and retains deliveries in the inbox until clear", async () => {
