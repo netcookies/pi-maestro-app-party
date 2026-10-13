@@ -349,6 +349,8 @@ describe("DesktopBroker", () => {
           expect(name).toBe("mb-peer");
           handler = command.handler;
         },
+        registerMessageRenderer: () => undefined,
+        registerTool: () => undefined,
         sendMessage: (message: { content: string }) => { messages.push(message); },
       };
       const command = registerDesktopPeerCommand(pi as unknown as ExtensionAPI, getClient);

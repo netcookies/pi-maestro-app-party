@@ -53,6 +53,8 @@ function fakePi() {
   };
   const pi = {
     registerCommand: (name: string, command: { handler: (args: string, ctx: unknown) => unknown }) => registeredCommands.set(name, command),
+    registerMessageRenderer: () => undefined,
+    registerTool: () => undefined,
     on(event: string, handler: Handler) {
       handlers.set(event, [...(handlers.get(event) ?? []), handler]);
     },

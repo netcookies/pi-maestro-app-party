@@ -25,6 +25,8 @@ function fakePi(options: { models: { provider: string; id: string; name: string 
   const sent: { content: unknown; options?: { deliverAs?: string } }[] = [];
   const pi = {
     registerCommand: (name: string, command: { handler: (args: string, ctx: unknown) => unknown }) => registeredCommands.set(name, command),
+    registerMessageRenderer: () => undefined,
+    registerTool: () => undefined,
     registeredCommands,
     sendMessage: () => undefined,
     events: {
