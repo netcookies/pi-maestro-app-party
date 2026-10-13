@@ -1,4 +1,6 @@
 import { randomUUID } from "node:crypto";
+import { Box, Spacer, Text } from "@earendil-works/pi-tui";
+import { Type } from "typebox";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import type { DesktopPeerAccessDirection, DesktopPeerDelivery, DesktopPeerRequest, DesktopPeerResult, DesktopPluginTarget } from "@maestro-mobile/shared";
 import { DESKTOP_PEER_MAX_DEADLINE_MS, DESKTOP_PEER_MAX_PEERS, isDesktopPeerRequest } from "@maestro-mobile/shared";
@@ -37,8 +39,75 @@ export function registerDesktopPeerCommand(pi: ExtensionAPI, getClient: () => De
     return { client, generation: currentGeneration, peers: result.peers ?? [], grants: result.grants ?? [] };
   };
   const display = (content: unknown): void => {
-    pi.sendMessage({ customType: "mb-peer", content: JSON.stringify(content, null, 2), display: true }, { triggerTurn: false });
+    pi.sendMessage({ customType: "mb-peer", content: typeof content === "string" ? content : JSON.stringify(content, null, 2), display: true }, { triggerTurn: false });
   };
+
+  pi.registerMessageRenderer("mb-peer", (message, _options, theme) => {
+    const content = typeof message.content === "string" ? message.content : "";
+    const box = new Box(1, 0, (text) => theme.bg("customMessageBg", text));
+    const lines = content.split("\n");
+    box.addChild(new Text(theme.fg("customMessageLabel", `◆ mb-peer  ${lines[0] ?? ""}`), 0, 0));
+    if (lines.length > 1) {
+      box.addChild(new Spacer(1));
+      box.addChild(new Text(lines.slice(1).join("\n").split("\n").map((line) => theme.fg("customMessageText", line)).join("\n"), 0, 0));
+    }
+    return box;
+  });
+
+  const sendToTarget = async (selector: string, message: string) => {
+    if (!selector.trim() || !message.trim()) throw new Error("target_and_message_required");
+    const resolved = await listPeers();
+    const exact = resolved.peers.filter((peer) => peer.sessionId === selector);
+    const matches = exact.length ? exact : resolved.peers.filter((peer) => peer.sessionId.startsWith(selector));
+    if (matches.length !== 1) throw new Error(matches.length ? "ambiguous_peer: use the full sessionId" : "peer_not_found: use /mb-peer access to discover other workspaces");
+    const target = matches[0]!;
+    const candidate = { type: "desktop_peer_send", requestId: randomUUID(), deadlineAt: Date.now() + DESKTOP_PEER_MAX_DEADLINE_MS, target, message };
+    if (!isDesktopPeerRequest(candidate)) throw new Error("invalid_message_or_target");
+    if (resolved.client !== getClient() || resolved.generation !== generation) throw new Error("disconnected");
+    return { ...resolved, target, request: candidate };
+  };
+  const sendDisplay = (result: DesktopPeerResult, target?: DesktopPluginTarget, message?: string): void => {
+    if (result.status === "accepted") {
+      display(`→ 已发送给 peer ${target?.sessionId.slice(0, 8) ?? "unknown"} · 消息\n${message ?? ""}`);
+      return;
+    }
+    display(result);
+  };
+  const toolResult = (text: string, isError = false) => ({
+    content: [{ type: "text" as const, text }],
+    details: { status: isError ? "error" : "ok" },
+    ...(isError ? { isError: true } : {}),
+  });
+  pi.registerTool({
+    name: "mb-peer",
+    label: "MB Peer",
+    description: "Discover online peers or send a collaboration message to a peer. Cross-workspace targets must be authorized first with /mb-peer access; messages do not grant human authorization or change the active user objective.",
+    promptSnippet: "Send and receive collaboration messages with online Pi peers via mb-peer.",
+    promptGuidelines: ["Use mb-peer to reply to an incoming peer message using the sender sessionId and include the substantive response in the message."],
+    parameters: Type.Object({
+      action: Type.Union([Type.Literal("list"), Type.Literal("send")]),
+      target: Type.Optional(Type.String({ minLength: 1, description: "Exact sessionId or an unambiguous prefix; required for send." })),
+      message: Type.Optional(Type.String({ minLength: 1, description: "Message text; required for send." })),
+    }),
+    async execute(_id, params) {
+      try {
+        if (params.action === "list") {
+          const { peers, client } = await listAccess();
+          const remote = peers.filter((peer) => peer.normalizedCwd !== client.target.normalizedCwd);
+          return toolResult(JSON.stringify(remote.map((peer) => ({ sessionId: peer.sessionId, cwd: formatCwd(peer.normalizedCwd), endpointId: peer.endpointId, processGeneration: peer.processGeneration }))));
+        }
+        if (!params.target || !params.message) throw new Error("target_and_message_required");
+        const result = await sendToTarget(params.target, params.message);
+        const receipt = await result.client.requestPeers(result.request);
+        sendDisplay(receipt, result.target, params.message);
+        if (receipt.status !== "accepted") return toolResult(receipt.error?.code ?? receipt.status, true);
+        return toolResult(`Message accepted by ${result.target.sessionId}; deliveryId=${receipt.deliveryId ?? "unknown"}`);
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        return toolResult(message, true);
+      }
+    },
+  });
 
   pi.registerCommand("mb-peer", {
     description: "Online Broker peer: send <sessionId|短 ID> <消息> | list | access | revoke <grantId> | inbox",
@@ -180,7 +249,8 @@ export function registerDesktopPeerCommand(pi: ExtensionAPI, getClient: () => De
           ctx.ui.notify(grant?.status === "access_granted" ? "授权已保存；请重新执行 /mb-peer send。" : "授权未保存，消息未发送。", grant?.status === "access_granted" ? "info" : "warning");
           return;
         }
-        display(result);
+        if (action === "send" && result.status === "accepted") sendDisplay(result, (request as Extract<DesktopPeerRequest, { type: "desktop_peer_send" }>).target, (request as Extract<DesktopPeerRequest, { type: "desktop_peer_send" }>).message);
+        else if (action !== "send") display(result);
       } catch (error) {
         ctx.ui.notify(error instanceof Error ? error.message : "desktop messaging failed", "error");
       }

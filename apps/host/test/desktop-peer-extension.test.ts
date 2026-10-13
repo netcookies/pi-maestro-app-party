@@ -12,6 +12,7 @@ function setup(result: (request: DesktopPeerRequest) => DesktopPeerResult | Prom
   let complete: NonNullable<RegisteredCommand["getArgumentCompletions"]> = () => null;
   const messages: unknown[] = [];
   const messageOptions: unknown[] = [];
+  const tools = new Map<string, { execute: (id: string, params: unknown) => Promise<unknown> }>();
   const requests: DesktopPeerRequest[] = [];
   let commandName = "";
   const pi = {
@@ -19,6 +20,8 @@ function setup(result: (request: DesktopPeerRequest) => DesktopPeerResult | Prom
       commandName = name; handler = _command.handler; complete = _command.getArgumentCompletions;
     },
     sendMessage: (message: unknown, options?: unknown) => { messages.push(message); messageOptions.push(options); },
+    registerTool: (tool: { name: string; execute: (id: string, params: unknown) => Promise<unknown> }) => { tools.set(tool.name, tool); },
+    registerMessageRenderer: () => undefined,
   };
   const client = { target: { ...target, normalizedCwd: "/work/app" }, requestPeers: async (request: DesktopPeerRequest) => { requests.push(request); return result(request); } };
   let connected = true;
@@ -26,7 +29,7 @@ function setup(result: (request: DesktopPeerRequest) => DesktopPeerResult | Prom
   const notify = vi.fn();
   const run = async (command: string, confirm?: (title: string, message: string) => Promise<boolean>, select?: (title: string, options: string[]) => Promise<string | undefined>) =>
     handler(command, { ui: { notify, confirm, select } });
-  return { run, requests, messages, messageOptions, notify, peerCommand, complete: (prefix: string) => complete(prefix), disconnect: () => { connected = false; peerCommand.clear(); }, get commandName() { return commandName; } };
+  return { run, requests, messages, messageOptions, tools, notify, peerCommand, complete: (prefix: string) => complete(prefix), disconnect: () => { connected = false; peerCommand.clear(); }, get commandName() { return commandName; } };
 }
 
 describe("desktop peer target input and completion", () => {
@@ -35,6 +38,24 @@ describe("desktop peer target input and completion", () => {
   const respond = (peers: DesktopPluginTarget[]) => (request: DesktopPeerRequest): DesktopPeerResult => request.type === "desktop_peer_list"
     ? { type: "desktop_peer_result", requestId: request.requestId, status: "listed", peers }
     : { type: "desktop_peer_result", requestId: request.requestId, status: "accepted", deliveryId: "delivery" };
+
+  it("registers an agent tool for peer discovery and collaboration sends", async () => {
+    const state = setup((request) => request.type === "desktop_peer_access_list"
+      ? { type: "desktop_peer_result", requestId: request.requestId, status: "access_listed", peers: [other], grants: [], truncated: false }
+      : request.type === "desktop_peer_list"
+        ? { type: "desktop_peer_result", requestId: request.requestId, status: "listed", peers: [peer] }
+        : { type: "desktop_peer_result", requestId: request.requestId, status: "accepted", deliveryId: "tool-delivery" });
+    const tool = state.tools.get("mb-peer");
+    expect(tool).toBeDefined();
+    const listed = await tool!.execute("list", { action: "list" }) as { content: { text: string }[] };
+    expect(JSON.parse(listed.content[0]!.text)).toMatchObject([{ sessionId: other.sessionId, cwd: other.normalizedCwd }]);
+    const sent = await tool!.execute("send", { action: "send", target: peer.sessionId, message: "协作回复" }) as { content: { text: string }[] };
+    expect(sent.content[0]!.text).toContain("Message accepted");
+    expect(state.requests.filter((request) => request.type === "desktop_peer_send")).toMatchObject([
+      { target: peer, message: "协作回复" },
+    ]);
+    expect(state.messages.at(-1)).toMatchObject({ customType: "mb-peer", content: expect.stringContaining("→ 已发送给 peer 39a52f00 · 消息\n协作回复") });
+  });
 
   it("shows full target identity in completion and access excludes only the current cwd", async () => {
     const remote = {
