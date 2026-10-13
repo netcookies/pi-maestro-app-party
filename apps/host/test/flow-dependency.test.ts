@@ -119,15 +119,19 @@ describe("actual /maestro-mobile command warning ordering", () => {
 
   async function command(root?: string) {
     let handler!: (args: string, ctx: unknown) => Promise<void>;
+    let complete: ((prefix: string) => unknown) | undefined;
     const events: string[] = [];
     const pi = {
       ...loaded(root),
       on: vi.fn(),
-      registerCommand: (_name: string, spec: { handler: typeof handler }) => { handler = spec.handler; },
+      registerCommand: (_name: string, spec: { handler: typeof handler; getArgumentCompletions?: (prefix: string) => unknown }) => {
+        handler = spec.handler;
+        if (_name === "maestro-mobile") complete = spec.getArgumentCompletions;
+      },
     };
     maestroHostExtension(pi as never);
     const ctx = { ui: { notify: (message: string, level: string) => events.push(`${level}:${message}`) } };
-    return { handler: (args: string) => handler(args, ctx), events };
+    return { handler: (args: string) => handler(args, ctx), complete: (prefix: string) => complete?.(prefix), events };
   }
 
   it.each(["status", "start", "", "qr", "stop", "notify", "unknown"])("warns before continuing %s without spawning or signalling real processes", async (args) => {
@@ -148,6 +152,21 @@ describe("actual /maestro-mobile command warning ordering", () => {
     expect(spawn).not.toHaveBeenCalled();
     expect(execFile).not.toHaveBeenCalled();
     expect(kill).not.toHaveBeenCalled();
+  });
+
+  it("completes command names, status flag, and stops inside unsupported arguments", async () => {
+    const cmd = await command();
+    expect(cmd.complete("")).toEqual([
+      { value: "status ", label: "status" },
+      { value: "start ", label: "start" },
+      { value: "stop ", label: "stop" },
+      { value: "qr ", label: "qr" },
+      { value: "notify ", label: "notify" },
+    ]);
+    expect(cmd.complete("sta")).toEqual([{ value: "status ", label: "status" }, { value: "start ", label: "start" }]);
+    expect(cmd.complete("status --c")).toEqual([{ value: "status --current ", label: "--current", description: "显示当前 Pi 会话状态" }]);
+    expect(cmd.complete("status --unknown")).toEqual([]);
+    expect(cmd.complete("start ")).toBeNull();
   });
 
   it("warns every time and still returns normal status", async () => {

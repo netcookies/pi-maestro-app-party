@@ -380,6 +380,22 @@ export default function maestroHostExtension(pi: ExtensionAPI): void {
 
   pi.registerCommand("maestro-mobile", {
     description: "Maestro Mobile Host 遥控（status / start / stop / qr）",
+    getArgumentCompletions: (prefix) => {
+      const normalized = prefix.trimStart();
+      const subcommands = ["status", "start", "stop", "qr", "notify"];
+      if (!normalized || !normalized.includes(" ")) {
+        const query = normalized.trim();
+        return subcommands
+          .filter((command) => command.startsWith(query))
+          .map((command) => ({ value: `${command} `, label: command }));
+      }
+      if (/^status\s+--?[^\s]*$/.test(normalized)) {
+        return "--current".startsWith(normalized.split(/\s+/).at(-1) ?? "")
+          ? [{ value: "status --current ", label: "--current", description: "显示当前 Pi 会话状态" }]
+          : [];
+      }
+      return null;
+    },
     handler: async (args: string, ctx) => {
       const sub = (args ?? "").trim().split(/\s+/)[0] || "default";
       const flowWarning = await maestroFlowWarning(pi);
