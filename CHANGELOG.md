@@ -2,6 +2,26 @@
 
 本文件记录 Maestro Mobile 的显著变更。格式基于 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)。
 
+## [0.15.0] — 2026-10-13
+
+### 测试
+
+- 补齐 peer extension 测试替身
+
+### 新增
+
+- add maestro-mobile completions
+- expose mb-peer collaboration tool
+
+### 修复
+
+- simplify mb-peer delivery display
+- improve mb-peer discovery and delivery
+
+### 文档
+
+- 补充 mb-peer 使用说明
+
 ## [0.14.0] — 2026-10-12
 
 ### 新增
