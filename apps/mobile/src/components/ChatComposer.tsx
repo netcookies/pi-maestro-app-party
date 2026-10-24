@@ -579,7 +579,7 @@ export function ChatComposer({ actions, sending, isStreaming = false, onAbort, s
                     renderItem={({ item }) => (
                       <TouchableOpacity
                         style={[styles.skillItem, { borderBottomColor: theme.border }]}
-                        onPress={() => { setText(`/skill:${item.name} `); closeFsPanel(); }}
+                        onPress={() => { updateText(`/skill:${item.name} ${textValue}`); closeFsPanel(); }}
                       >
                         <Text style={[styles.skillName, { color: theme.text }]} numberOfLines={1}>/skill:{item.name}</Text>
                       </TouchableOpacity>
@@ -613,7 +613,7 @@ export function ChatComposer({ actions, sending, isStreaming = false, onAbort, s
                 renderItem={({ item }) => (
                   <TouchableOpacity
                     style={[styles.skillItem, { borderBottomColor: theme.border }]}
-                    onPress={() => { setText(`/skill:${item.name} `); setShowSkills(false); }}
+                    onPress={() => { updateText(`/skill:${item.name} ${textValue}`); setShowSkills(false); }}
                   >
                     <Text style={[styles.skillName, { color: theme.text }]} numberOfLines={1}>
                       /skill:{item.name}
@@ -748,7 +748,7 @@ const styles = StyleSheet.create({
     padding: 16,
     maxHeight: 480,
   },
-  input: { flex: 1, borderRadius: 8, paddingHorizontal: 12, paddingVertical: 10, borderWidth: 1, fontSize: 15, maxHeight: 120 },
+  input: { flex: 1, borderRadius: 8, paddingHorizontal: 12, paddingRight: 42, paddingVertical: 10, borderWidth: 1, fontSize: 15, maxHeight: 120 },
   sendButton: {
     width: 36,
     height: 36,

@@ -120,6 +120,101 @@ function selectableCode(root: ReactTestInstance): ReactTestInstance {
 }
 
 describe("mounted Plan Markdown integration", () => {
+  it("keeps Plan confirm visible and reports when Review & Refine is delegated to the Pi TUI", async () => {
+    const onCancel = vi.fn();
+    const onResponse = vi.fn();
+    const refineRequest = { ...request, availableActions: ["refine"] };
+    const renderer = await mount(<PlanSurface request={refineRequest} target={target} onCancel={onCancel} onResponse={onResponse} />);
+    const modal = host(renderer.root, "Modal");
+    await press(renderer.root, t.planActionRefine);
+    expect(host(renderer.root, "Modal")).toBe(modal);
+    expect(modal.props.visible).toBe(true);
+    expect(onResponse).toHaveBeenCalledWith({
+      type: "desktop_plan_response", requestId: request.requestId, kind: "confirm", status: "decision",
+      decision: { action: "refine" },
+    }, target);
+    expect(renderer.root.findAll((node) => node.type === "Text" && textContent(node).includes(t.planRefineOpened))).toHaveLength(1);
+    expect(onCancel).not.toHaveBeenCalled();
+  });
+
+  it("shows an explicit unavailable banner and keeps Plan open without calling onResponse when supportsRefine is false", async () => {
+    const onCancel = vi.fn();
+    const onResponse = vi.fn();
+    const refineRequest = { ...request, availableActions: ["refine"] };
+    const renderer = await mount(
+      <PlanSurface request={refineRequest} target={target} onCancel={onCancel} onResponse={onResponse} supportsRefine={false} />,
+    );
+    const modal = host(renderer.root, "Modal");
+    await press(renderer.root, t.planActionRefine);
+    expect(host(renderer.root, "Modal")).toBe(modal);
+    expect(modal.props.visible).toBe(true);
+    expect(onResponse).not.toHaveBeenCalled();
+    expect(onCancel).not.toHaveBeenCalled();
+    expect(renderer.root.findAll((node) => node.type === "Text" && textContent(node).includes(t.planRefineUnavailable))).toHaveLength(1);
+  });
+
+  it("opens the native Review & Refine panel and dispatches actions when supportsRefine is true", async () => {
+    const onCancel = vi.fn();
+    const onResponse = vi.fn();
+    const refineState = {
+      kind: "live" as const,
+      snapshot: {
+        type: "plan_refine_snapshot" as const,
+        sequence: 1,
+        highWaterSequence: 1,
+        refineSessionId: "refine-1",
+        planRequestId: request.requestId,
+        operationId: 1,
+        revision: request.revision,
+        status: "ready" as const,
+        markdown,
+        turns: [],
+        currentRole: "reviewer" as const,
+        currentModel: "provider/model",
+        modelOptions: [],
+        availableActions: ["select_role", "run", "apply", "discard", "cancel"] as const,
+      },
+      turns: [],
+      expectedSequence: 2,
+      actionResults: new Map(),
+    };
+    const onRefineAction = vi.fn(async () => undefined);
+    const refineRequest = { ...request, availableActions: ["refine"] };
+    const renderer = await mount(
+      <PlanSurface
+        request={refineRequest}
+        target={target}
+        onCancel={onCancel}
+        onResponse={onResponse}
+        supportsRefine
+        refineState={refineState}
+        refineTarget={target}
+        onRefineAction={onRefineAction}
+      />,
+    );
+    await press(renderer.root, t.planActionRefine);
+    // Native panel is open: four role tabs are visible
+    expect(renderer.root.findAll((node) => node.type === "Text" && textContent(node).includes(t.planRefineRoleReviewer))).toHaveLength(1);
+    expect(renderer.root.findAll((node) => node.type === "Text" && textContent(node).includes(t.planRefineRoleOptimizer))).toHaveLength(1);
+
+    // Press Run role
+    await press(renderer.root, t.planRefineRun);
+    expect(onRefineAction).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: "plan_refine_action",
+        action: expect.objectContaining({ action: "run" }),
+      }),
+      target,
+    );
+    expect(onResponse).toHaveBeenCalledWith({
+      type: "desktop_plan_response", requestId: request.requestId, kind: "confirm", status: "decision",
+      decision: { action: "refine" },
+    }, target);
+    expect(renderer.root.findAll((node) => node.type === "Text" && textContent(node).includes(t.planRefineOpened))).toHaveLength(0);
+    await press(renderer.root, t.planRefineBack);
+    expect(renderer.root.findAll((node) => node.type === "Text" && textContent(node).includes(t.planActionRefine))).toHaveLength(1);
+  });
+
   it("expands through the real fence button in one Modal and restores preview on close/back", async () => {
     const onCancel = vi.fn();
     const onResponse = vi.fn();

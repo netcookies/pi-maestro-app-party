@@ -21,7 +21,8 @@ import {
   type ExecutionProjection,
   type DesktopPlanResponse,
 } from "@maestro-mobile/shared";
-import { HostClient, createMobileRecovery, type ConnectionState, type RecoveryCoordinator } from "@maestro-mobile/mobile-sdk";
+import { HostClient, createMobileRecovery, type ConnectionState, type RecoveryCoordinator, PlanRefineTracker, type PlanRefineState } from "@maestro-mobile/mobile-sdk";
+import type { MobilePlanRefineAction } from "@maestro-mobile/mobile-sdk/protocol";
 import { beginGracePeriod, endGracePeriod, isAndroidRuntime, isIosRuntime, startBackgroundService, stopBackgroundService } from "./background-runtime";
 import { getConfig } from "./config";
 import { consumePlanNotificationEvent, emitInAppError } from "./notifications";
@@ -87,6 +88,10 @@ export interface HostStoreValue {
   cancelDialog(requestId: string): void;
   respondPlan(requestId: string, response: DesktopPlanResponse, target?: SessionTargetIdentity): void;
   cancelPlan(requestId: string, target?: SessionTargetIdentity): void;
+  supportsRefine: boolean;
+  refineState: PlanRefineState;
+  refineTarget?: SessionTargetIdentity;
+  sendRefineAction(action: MobilePlanRefineAction, target: SessionTargetIdentity): Promise<unknown>;
   lastError: string | null;
   /** 清除本地错误提示（可关闭横幅）；只影响本地提示，不影响 host 事件流。 */
   clearError(): void;
@@ -190,6 +195,30 @@ export function HostStoreProvider({ children }: { children: React.ReactNode }) {
   );
   const stateRef = useRef(state);
   stateRef.current = state;
+  const [refineState, setRefineState] = useState<PlanRefineState>({ kind: "idle" });
+  const [refineTarget, setRefineTarget] = useState<SessionTargetIdentity | undefined>(undefined);
+  const refineTargetRef = useRef<SessionTargetIdentity | undefined>(undefined);
+  const refineTrackerRef = useRef<PlanRefineTracker | null>(null);
+  if (!refineTrackerRef.current) {
+    refineTrackerRef.current = new PlanRefineTracker({
+      requestSnapshot: () => {
+        const live = refineTrackerRef.current?.current;
+        const client = clientRef.current;
+        const target = refineTargetRef.current;
+        if (!live || live.kind !== "live" || !client || !target) return;
+        const action: MobilePlanRefineAction = {
+          type: "plan_refine_action",
+          refineSessionId: live.snapshot.refineSessionId,
+          planRequestId: live.snapshot.planRequestId,
+          operationId: live.snapshot.operationId,
+          revision: live.snapshot.revision,
+          actionId: `snapshot-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+          action: { action: "snapshot" },
+        };
+        void client.sendPlanRefineAction(target.sessionId, action, target).catch(() => undefined);
+      },
+    });
+  }
 
   const getClient = useCallback((): HostClient => {
     if (!clientRef.current) {
@@ -221,6 +250,10 @@ export function HostStoreProvider({ children }: { children: React.ReactNode }) {
     clientRef.current?.close();
     sessionTargetsRef.current.clear();
     activeTargetKeysRef.current.clear();
+    refineTargetRef.current = undefined;
+    setRefineTarget(undefined);
+    refineTrackerRef.current?.reset();
+    setRefineState({ kind: "idle" });
     setHostUrl(url);
     setToken(tok);
     const client = new HostClient({
@@ -228,6 +261,23 @@ export function HostStoreProvider({ children }: { children: React.ReactNode }) {
       token: tok,
       reconnectBaseMs: 1000,
       reconnectMaxMs: 15000,
+      onEvent: (event) => {
+        if (event.type !== "plan_refine_snapshot" && event.type !== "plan_refine_update"
+          && event.type !== "plan_refine_action_result" && event.type !== "plan_refine_terminal") return;
+        refineTargetRef.current = event.target;
+        setRefineTarget(event.target);
+        const refineEvent = event.type === "plan_refine_snapshot" ? event.snapshot
+          : event.type === "plan_refine_update" ? event.update
+            : event.type === "plan_refine_action_result" ? event.result : event.terminal;
+        const tracker = refineTrackerRef.current!;
+        if (event.type === "plan_refine_snapshot") {
+          const current = tracker.current;
+          if (current.kind === "live" && (current.snapshot.refineSessionId !== refineEvent.refineSessionId
+            || current.snapshot.operationId !== refineEvent.operationId)) tracker.reset();
+        }
+        tracker.apply(refineEvent);
+        setRefineState(tracker.current);
+      },
       onRevisionChange: (revision) => dispatch({ type: "__revision", revision }),
       // ISS-002：断连导致的命令失败必须提示到 UI（app/session.tsx 承诺「错误由 store.lastError 提示」，
       // 但 lastError 原本只由 host 推的事件写入，本地 reject 进不了 reducer）。
@@ -273,6 +323,10 @@ export function HostStoreProvider({ children }: { children: React.ReactNode }) {
     activeSessionRef.current = null;
     sessionTargetsRef.current.clear();
     activeTargetKeysRef.current.clear();
+    refineTargetRef.current = undefined;
+    setRefineTarget(undefined);
+    refineTrackerRef.current?.reset();
+    setRefineState({ kind: "idle" });
     dispatch({ type: "__connection_reset", connectionGeneration: stateRef.current.connectionGeneration + 1 });
     setConnectionState("disconnected");
   }, [clearBufferedEvents]);
@@ -644,6 +698,15 @@ export function HostStoreProvider({ children }: { children: React.ReactNode }) {
     [planActions],
   );
 
+  const supportsRefine = clientRef.current?.hasCapability("plan_refine") ?? false;
+  const sendRefineAction = useCallback(
+    (action: MobilePlanRefineAction, target: SessionTargetIdentity) => {
+      const client = getClient();
+      return client.sendPlanRefineAction(target.sessionId, action, target);
+    },
+    [getClient],
+  );
+
   const clearError = useCallback(() => {
     dispatch({ type: "__local_error", message: "" });
   }, [dispatch]);
@@ -682,10 +745,14 @@ export function HostStoreProvider({ children }: { children: React.ReactNode }) {
       cancelDialog,
       respondPlan,
       cancelPlan,
+      supportsRefine,
+      refineState,
+      refineTarget,
+      sendRefineAction,
       lastError: state.lastError,
       clearError,
     }),
-    [state, connectionState, hostUrl, token, connect, disconnect, activate, listHostSessions, refreshMaestroState, refreshMonitor, refreshExecutionProjections, loadSessionHistory, selectSessionTarget, loadMoreHistory, searchHistory, listModels, listSkills, getMaestroSettings, updateMaestroSettings, fetchSessionUsage, setModel, setThinking, sendPrompt, sendSteer, sendAbort, getNotificationConfig, testNotification, answerDialog, cancelDialog, respondPlan, cancelPlan, clearError],
+    [state, connectionState, hostUrl, token, connect, disconnect, activate, listHostSessions, refreshMaestroState, refreshMonitor, refreshExecutionProjections, loadSessionHistory, selectSessionTarget, loadMoreHistory, searchHistory, listModels, listSkills, getMaestroSettings, updateMaestroSettings, fetchSessionUsage, setModel, setThinking, sendPrompt, sendSteer, sendAbort, getNotificationConfig, testNotification, answerDialog, cancelDialog, respondPlan, cancelPlan, supportsRefine, refineState, refineTarget, sendRefineAction, clearError],
 
   );
 

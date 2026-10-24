@@ -13,6 +13,7 @@ import { useI18n } from "../src/i18n";
 import { hapticImpactLight, hapticImpactMedium, hapticNotificationSuccess } from "../src/utils/haptics";
 import { SafeAreaView, useSafeAreaInsets } from "react-native-safe-area-context";
 import { sessionTargetKey, type DesktopPlanResponse } from "@maestro-mobile/shared";
+import type { PlanEntry } from "../src/plan-queue";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { ExtensionUiDialog } from "../src/components/ExtensionUiDialog";
 import { AskWizardDialog, type AskAnswer } from "../src/components/AskWizardDialog";
@@ -28,6 +29,14 @@ import { ChatComposer } from "../src/components/ChatComposer";
 import { pickImagesFromLibrary } from "../src/image-picker";
 import { useSessionDraft, draftScopeKey } from "../src/drafts";
 import { selectExecutionSummaryForSession, executionTodoCounts } from "../src/session-execution";
+import {
+  EXECUTION_SECTION_ORDER,
+  executionSectionCounts,
+  executionTone,
+  hasActiveExecution,
+  type ExecutionSectionCount,
+  type ExecutionSectionKey,
+} from "../src/execution-presentation";
 import { SpringBottomSheet } from "../src/components/SpringBottomSheet";
 import { buildTimelineRows, type TimelineRow } from "../src/timeline-rows";
 import { ToolCallGroup } from "../src/components/ToolCallGroup";
@@ -60,7 +69,7 @@ function modelNameOf(value: unknown): string | undefined {
 export default function SessionScreen() {
   const { id, targetKey, from } = useLocalSearchParams<{ id: string; targetKey?: string; from?: string }>();
   const router = useRouter();
-  const { state, hostUrl, sendPrompt, sendAbort, answerDialog, cancelDialog, respondPlan, cancelPlan, selectSessionTarget, loadSessionHistory, loadMoreHistory, searchHistory, setThinking, listSkills, isConnected, connectionState, lastError, clearError: dispatchLocalError } = useHost();
+  const { state, hostUrl, sendPrompt, sendAbort, answerDialog, cancelDialog, respondPlan, cancelPlan, supportsRefine, refineState, refineTarget, sendRefineAction, selectSessionTarget, loadSessionHistory, loadMoreHistory, searchHistory, setThinking, listSkills, isConnected, connectionState, lastError, clearError: dispatchLocalError } = useHost();
   const { theme } = useTheme();
   const { t } = useI18n();
   const cfg = getConfig();
@@ -73,16 +82,52 @@ export default function SessionScreen() {
     : undefined;
 
   const [executionDetailsOpen, setExecutionDetailsOpen] = useState(false);
+  const [executionSection, setExecutionSection] = useState<ExecutionSectionKey>("todo");
   const [detailsExpanded, setDetailsExpanded] = useState(false);
   const detailLimit = detailsExpanded ? 20 : 5;
   const executionSummary = selectExecutionSummaryForSession(state, selectedTargetKey);
-  const executionTodoCount = executionSummary ? executionTodoCounts(executionSummary) : null;
-  const executionJobs = executionSummary?.backgroundJobs ?? [];
-  const executionDetails = executionSummary ? [
-    { title: `Todo (${executionSummary.todos.length})`, items: executionSummary.todos.map((item) => `${item.subject} · ${item.status}`), count: executionSummary.todos.length },
-    { title: `Teammate (${executionSummary.teammate.agents.length})`, items: executionSummary.teammate.agents.map((item) => `${item.name ?? item.agent ?? item.correlationId ?? "Teammate"} · ${item.status}`), count: executionSummary.teammate.agents.length },
-    { title: `Background (${executionJobs.length})`, items: executionJobs.map((item) => `${item.label ?? item.id} · ${item.status}`), count: executionJobs.length },
-  ] : [];
+  const executionCounts = executionSummary ? executionSectionCounts(executionSummary) : null;
+  const openExecutionSection = (section: ExecutionSectionKey) => {
+    setExecutionSection(section);
+    setExecutionDetailsOpen(true);
+  };
+  const executionSectionMeta: Record<ExecutionSectionKey, { title: string; count: ExecutionSectionCount; empty: string }> = executionSummary && executionCounts
+    ? {
+      todo: { title: t.executionTodo, count: executionCounts.todo, empty: t.executionEmptyTodo },
+      teammate: { title: t.executionTeammate, count: executionCounts.teammate, empty: t.executionEmptyTeammate },
+      background: { title: t.executionBackground, count: executionCounts.background, empty: t.executionEmptyBackground },
+    }
+    : { todo: { title: "", count: { active: 0, done: 0, total: 0 }, empty: "" }, teammate: { title: "", count: { active: 0, done: 0, total: 0 }, empty: "" }, background: { title: "", count: { active: 0, done: 0, total: 0 }, empty: "" } };
+
+  const toneColor = (tone: ReturnType<typeof executionTone>): string =>
+    tone === "success" ? theme.success : tone === "warning" ? theme.warning : tone === "error" ? theme.error : theme.muted;
+  const executionRows = useMemo(() => {
+    if (!executionSummary) return [];
+    const statusLabel = (status: string | undefined): string =>
+      status ? (t.executionStatusLabels[status.toLowerCase()] ?? status) : "";
+    if (executionSection === "todo") {
+      return executionSummary.todos.map((item) => ({
+        key: `todo-${item.id}`,
+        title: item.subject,
+        meta: [statusLabel(item.status), item.assigneeLabel].filter(Boolean).join(" · "),
+        color: toneColor(executionTone("todo", item.status)),
+      }));
+    }
+    if (executionSection === "teammate") {
+      return executionSummary.teammate.agents.map((item, index) => ({
+        key: `agent-${item.correlationId ?? index}`,
+        title: item.name ?? item.agent ?? item.correlationId ?? "—",
+        meta: [statusLabel(item.status), item.phase, item.pendingInteractions ? `${item.pendingInteractions} ${t.executionRunning}` : ""].filter(Boolean).join(" · "),
+        color: toneColor(executionTone("teammate", item.status)),
+      }));
+    }
+    return executionSummary.backgroundJobs.map((item) => ({
+      key: `job-${item.id}`,
+      title: item.label ?? item.id,
+      meta: [statusLabel(item.status), typeof item.progress === "number" ? `${Math.round(item.progress * 100)}%` : ""].filter(Boolean).join(" · "),
+      color: toneColor(executionTone("background", item.status)),
+    }));
+  }, [executionSummary, executionSection, theme, t]);
 
   const [reduceMotion, setReduceMotion] = useState(false);
 
@@ -188,6 +233,7 @@ export default function SessionScreen() {
   const [searchTotal, setSearchTotal] = useState(0);
   // ChatComposer 状态（store listSkills 返回 {name, description} 对象列表）
   const [availableSkills, setAvailableSkills] = useState<{ name: string; description?: string }[]>([]);
+  const [refiningPlan, setRefiningPlan] = useState<PlanEntry | undefined>();
   const [currentModelId, setCurrentModelId] = useState<string | undefined>(modelIdOf(session?.model));
   // 复制反馈状态（记录被复制消息的 id）
   const [copiedId, setCopiedId] = useState<string | null>(null);
@@ -383,6 +429,11 @@ export default function SessionScreen() {
     && sessionTargetKey(entry.target) === selectedTargetKey) : undefined,
   [id, interactionReady, selectedTargetKey, state.planRequests]);
 
+  const visiblePlan = activePlan ?? refiningPlan;
+  useEffect(() => {
+    if (activePlan && refiningPlan && activePlan.request.requestId !== refiningPlan.request.requestId) setRefiningPlan(undefined);
+  }, [activePlan, refiningPlan]);
+
   const control = session?.presentation?.control;
   const canPrompt = control?.canPrompt === true;
   const canAbort = control?.canAbort === true;
@@ -425,6 +476,10 @@ export default function SessionScreen() {
   };
 
   const handlePlanResponse = (response: DesktopPlanResponse, target: Parameters<typeof sessionTargetKey>[0]) => {
+    if (response.status === "decision" && response.decision.action === "refine") {
+      const entry = state.planRequests.find((item) => item.request.requestId === response.requestId && item.status === "pending");
+      if (entry) setRefiningPlan(entry);
+    }
     respondPlan(response.requestId, response, target);
   };
 
@@ -777,20 +832,41 @@ export default function SessionScreen() {
           <LineIcon name="chevronDown" size={11} color={theme.accent} />
         </TouchableOpacity>
       </View>
-      {executionSummary && (
+      {executionSummary && executionCounts && (
         <ScrollView horizontal showsHorizontalScrollIndicator={false} style={[styles.executionChips, { borderBottomColor: theme.border }]} contentContainerStyle={styles.executionChipsContent}>
-          <TouchableOpacity onPress={() => setExecutionDetailsOpen(true)} style={[styles.executionChip, { backgroundColor: theme.cardBg, borderColor: theme.border }]} accessibilityRole="button" accessibilityLabel={`Todo ${executionTodoCount?.done ?? 0} of ${executionTodoCount?.total ?? 0}`}>
-            <Text style={[styles.executionChipText, { color: theme.text }]} numberOfLines={1}>Todo {executionTodoCount?.done ?? 0}/{executionTodoCount?.total ?? 0}</Text>
-          </TouchableOpacity>
-          <TouchableOpacity onPress={() => setExecutionDetailsOpen(true)} style={[styles.executionChip, { backgroundColor: theme.cardBg, borderColor: theme.border }]} accessibilityRole="button" accessibilityLabel={`Teammate ${executionSummary.teammate.running} running of ${executionSummary.teammate.total}`}>
-            <Text style={[styles.executionChipText, { color: theme.text }]} numberOfLines={1}>Teammate {executionSummary.teammate.running}/{executionSummary.teammate.total}</Text>
-          </TouchableOpacity>
-          {executionSummary.workspace && <TouchableOpacity onPress={() => setExecutionDetailsOpen(true)} style={[styles.executionChip, { backgroundColor: theme.cardBg, borderColor: theme.border }]} accessibilityRole="button" accessibilityLabel={`Workspace ${executionSummary.workspace.label ?? executionSummary.workspace.workspaceId ?? ""}`}>
-            <Text style={[styles.executionChipText, { color: theme.text }]} numberOfLines={1}>Workspace {executionSummary.workspace.label ?? executionSummary.workspace.workspaceId ?? "—"}</Text>
-          </TouchableOpacity>}
-          <TouchableOpacity onPress={() => setExecutionDetailsOpen(true)} style={[styles.executionChip, { backgroundColor: theme.cardBg, borderColor: theme.border }]} accessibilityRole="button" accessibilityLabel={`Background jobs ${executionJobs.length}`}>
-            <Text style={[styles.executionChipText, { color: theme.text }]} numberOfLines={1}>Bg {executionJobs.length}</Text>
-          </TouchableOpacity>
+          {EXECUTION_SECTION_ORDER.map((section) => {
+            const meta = executionSectionMeta[section];
+            const live = meta.count.active > 0;
+            const tone = live ? theme.warning : meta.count.total > 0 && meta.count.done === meta.count.total ? theme.success : theme.muted;
+            return (
+              <TouchableOpacity
+                key={section}
+                onPress={() => openExecutionSection(section)}
+                style={[styles.executionChip, { backgroundColor: theme.cardBg, borderColor: live ? theme.warning : theme.border }]}
+                accessibilityRole="button"
+                accessibilityLabel={live
+                  ? `${meta.title} ${meta.count.active} ${t.executionRunning}, ${meta.count.done} ${t.executionDone}, ${meta.count.total}`
+                  : `${meta.title} ${meta.count.done} ${t.executionDone} / ${meta.count.total}`}
+              >
+                <View style={[styles.executionChipDot, { backgroundColor: tone }]} />
+                <Text style={[styles.executionChipText, { color: theme.text }]} numberOfLines={1}>
+                  {live ? `${meta.title} ${meta.count.active} · ${meta.count.done}/${meta.count.total}` : `${meta.title} ${meta.count.done}/${meta.count.total}`}
+                </Text>
+              </TouchableOpacity>
+            );
+          })}
+          {executionSummary.workspace && (
+            <TouchableOpacity
+              onPress={() => openExecutionSection("teammate")}
+              style={[styles.executionChip, { backgroundColor: theme.cardBg, borderColor: theme.border }]}
+              accessibilityRole="button"
+              accessibilityLabel={`${t.executionWorkspace} ${executionSummary.workspace.label ?? executionSummary.workspace.workspaceId ?? ""}`}
+            >
+              <Text style={[styles.executionChipText, { color: theme.muted }]} numberOfLines={1}>
+                {executionSummary.workspace.label ?? executionSummary.workspace.workspaceId ?? t.executionWorkspace}
+              </Text>
+            </TouchableOpacity>
+          )}
         </ScrollView>
       )}
 
@@ -1045,13 +1121,17 @@ export default function SessionScreen() {
       />
       </View>
 
-      {activePlan && (
+      {visiblePlan && (
         <PlanSurface
-          request={activePlan.request}
-          target={activePlan.target}
-          initialDraft={activePlan.editedMarkdown}
+          request={visiblePlan.request}
+          target={visiblePlan.target}
+          initialDraft={visiblePlan.editedMarkdown}
           onResponse={handlePlanResponse}
           onCancel={handlePlanCancel}
+          supportsRefine={supportsRefine}
+          refineState={refineState}
+          refineTarget={refineTarget}
+          onRefineAction={sendRefineAction}
         />
       )}
 
@@ -1074,22 +1154,76 @@ export default function SessionScreen() {
       <SpringBottomSheet
         visible={executionDetailsOpen && Boolean(executionSummary)}
         onClose={() => setExecutionDetailsOpen(false)}
-        contentHeight={Math.min(640, 180 + executionDetails.reduce((n, section) => n + Math.min(detailsExpanded ? 20 : 5, section.items.length) * 42, 0))}
+        contentHeight={Math.min(640, 240 + Math.min(detailsExpanded ? 20 : 5, executionRows.length) * 46)}
       >
         {executionSummary && <View style={{ gap: 12 }}>
           <View style={styles.sheetHeader}>
-            <Text style={[styles.sheetTitle, { color: theme.text }]}>Session execution</Text>
+            <Text style={[styles.sheetTitle, { color: theme.text }]}>{t.executionTitle}</Text>
+            <TouchableOpacity onPress={() => setExecutionDetailsOpen(false)} accessibilityRole="button" accessibilityLabel={t.planActionClose}>
+              <LineIcon name="x" size={16} color={theme.muted} />
+            </TouchableOpacity>
           </View>
-          <Text style={[styles.sheetDesc, { color: theme.muted }]}>{isConnected ? `Revision ${executionSummary.revision}` : "Disconnected · showing last received summary"}</Text>
-          {executionDetails.map((section) => <View key={section.title} style={{ gap: 4 }}>
-            <Text style={[styles.sheetOptionText, { color: theme.accent }]}>{section.title}</Text>
-            {section.items.slice(0, detailLimit).map((item, index) => <Text key={`${section.title}-${index}`} style={[styles.sheetDesc, { color: theme.text }]} numberOfLines={2}>{item}</Text>)}
-            {section.items.length > detailLimit ? (
-              <TouchableOpacity onPress={() => setDetailsExpanded(true)} accessibilityRole="button" accessibilityLabel={`查看全部 ${Math.min(20, section.items.length)} 条 ${section.title}`}>
-                <Text style={[styles.sheetDesc, { color: theme.accent }]}>查看全部 {Math.min(20, section.items.length)} 条</Text>
-              </TouchableOpacity>
-            ) : null}
-          </View>)}
+          <Text style={[styles.sheetDesc, { color: isConnected ? theme.muted : theme.warning }]}>
+            {isConnected ? `Revision ${executionSummary.revision}` : t.executionOffline}
+          </Text>
+
+          {/* Section switcher: each header chip opens its own section here. */}
+          <View style={styles.executionSegments}>
+            {EXECUTION_SECTION_ORDER.map((section) => {
+              const meta = executionSectionMeta[section];
+              const selected = executionSection === section;
+              return (
+                <TouchableOpacity
+                  key={section}
+                  onPress={() => { setExecutionSection(section); setDetailsExpanded(false); }}
+                  style={[
+                    styles.executionSegment,
+                    {
+                      borderColor: selected ? theme.accent : theme.border,
+                      backgroundColor: selected ? theme.inputBg : "transparent",
+                    },
+                  ]}
+                  accessibilityRole="button"
+                  accessibilityState={{ selected }}
+                  accessibilityLabel={`${meta.title} ${meta.count.total}`}
+                >
+                  <Text
+                    style={[styles.executionSegmentText, { color: selected ? theme.accent : theme.muted, fontWeight: selected ? "700" : "500" }]}
+                    numberOfLines={1}
+                  >
+                    {meta.title} {meta.count.total}
+                  </Text>
+                </TouchableOpacity>
+              );
+            })}
+          </View>
+
+          {executionRows.length === 0 ? (
+            <Text style={[styles.sheetDesc, { color: theme.muted }]}>{executionSectionMeta[executionSection].empty}</Text>
+          ) : (
+            <View style={{ gap: 8 }}>
+              {executionRows.slice(0, detailLimit).map((row) => (
+                <View key={row.key} style={styles.executionRow}>
+                  <View style={[styles.executionRowDot, { backgroundColor: row.color }]} />
+                  <View style={{ flex: 1, gap: 2 }}>
+                    <Text style={[styles.executionRowTitle, { color: theme.text }]} numberOfLines={2}>{row.title}</Text>
+                    <Text style={[styles.executionRowMeta, { color: theme.muted }]} numberOfLines={2}>{row.meta}</Text>
+                  </View>
+                </View>
+              ))}
+              {executionRows.length > detailLimit ? (
+                <TouchableOpacity
+                  onPress={() => setDetailsExpanded(true)}
+                  accessibilityRole="button"
+                  accessibilityLabel={`${t.executionShowAll} ${Math.min(20, executionRows.length)}`}
+                >
+                  <Text style={[styles.sheetDesc, { color: theme.accent }]}>
+                    {t.executionShowAll} {Math.min(20, executionRows.length)}
+                  </Text>
+                </TouchableOpacity>
+              ) : null}
+            </View>
+          )}
         </View>}
       </SpringBottomSheet>
 
@@ -1271,8 +1405,16 @@ function makeStyles(theme: ReturnType<typeof useTheme>["theme"]) {
   return StyleSheet.create({
     executionChips: { flexGrow: 0, maxHeight: 42, borderBottomWidth: StyleSheet.hairlineWidth },
     executionChipsContent: { alignItems: "center", gap: 7, paddingHorizontal: MIUIX_SPACE.md, paddingVertical: 6 },
-    executionChip: { borderWidth: StyleSheet.hairlineWidth, borderRadius: MIUIX_RADIUS.pill, paddingHorizontal: 10, paddingVertical: 5, maxWidth: 190 },
+    executionChip: { flexDirection: "row", alignItems: "center", gap: 6, borderWidth: StyleSheet.hairlineWidth, borderRadius: MIUIX_RADIUS.pill, paddingHorizontal: 10, paddingVertical: 5, maxWidth: 190 },
+    executionChipDot: { width: 7, height: 7, borderRadius: 4 },
     executionChipText: { fontSize: MIUIX_TYPE.footnote2, fontWeight: "600" },
+    executionSegments: { flexDirection: "row", gap: 6 },
+    executionSegment: { flexGrow: 1, minHeight: 34, borderWidth: 1, borderRadius: MIUIX_RADIUS.sm, alignItems: "center", justifyContent: "center", paddingHorizontal: 8 },
+    executionSegmentText: { fontSize: MIUIX_TYPE.footnote2 },
+    executionRow: { flexDirection: "row", alignItems: "flex-start", gap: 8 },
+    executionRowDot: { width: 8, height: 8, borderRadius: 4, marginTop: 6 },
+    executionRowTitle: { fontSize: MIUIX_TYPE.footnote1, fontWeight: "600" },
+    executionRowMeta: { fontSize: MIUIX_TYPE.footnote2 },
     container: { flex: 1, backgroundColor: theme.bg },
     header: {
       flexDirection: "row",

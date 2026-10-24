@@ -224,9 +224,40 @@ export interface I18nDictionary {
   planActionModify: string;
   planActionContinue: string;
   planActionRefine: string;
+  planRefineOpened: string;
+  planRefineUnavailable: string;
+  planRefineRoleReviewer: string;
+  planRefineRoleDecomposer: string;
+  planRefineRoleOptimizer: string;
+  planRefineRoleBrainstormer: string;
+  planRefineRun: string;
+  planRefineRunning: string;
+  planRefineApply: string;
+  planRefineDiscard: string;
+  planRefineCancel: string;
+  planRefineInputPlaceholder: string;
+  planRefineOutput: string;
+  planRefineHistory: string;
+  planRefineConflict: string;
+  planRefineApplyDraft: string;
+  planRefineApplyFeedback: string;
+  planRefineBack: string;
   planActionRollback: string;
   planActionExit: string;
   planActionClose: string;
+  executionTitle: string;
+  executionTodo: string;
+  executionTeammate: string;
+  executionBackground: string;
+  executionWorkspace: string;
+  executionOffline: string;
+  executionEmptyTodo: string;
+  executionEmptyTeammate: string;
+  executionEmptyBackground: string;
+  executionShowAll: string;
+  executionRunning: string;
+  executionDone: string;
+  executionStatusLabels: Record<string, string>;
   expand: string;
   code: string;
   table: string;
@@ -460,9 +491,53 @@ export const DICTIONARIES: Record<Language, I18nDictionary> = {
     planActionModify: "查看 / 修改计划",
     planActionContinue: "继续讨论",
     planActionRefine: "评审并优化",
+    planRefineOpened: "已在 Pi TUI 中打开 Review & Refine；此计划面板会保持打开。",
+    planRefineUnavailable: "当前连接不支持移动端 Review & Refine",
+    planRefineRoleReviewer: "审核官",
+    planRefineRoleDecomposer: "拆解官",
+    planRefineRoleOptimizer: "优化官",
+    planRefineRoleBrainstormer: "脑暴官",
+    planRefineRun: "运行",
+    planRefineRunning: "运行中…",
+    planRefineApply: "采纳结果",
+    planRefineDiscard: "放弃结果",
+    planRefineCancel: "取消",
+    planRefineInputPlaceholder: "追加指令（选填）…",
+    planRefineOutput: "输出",
+    planRefineHistory: "历史输出",
+    planRefineConflict: "计划版本已变更，需重新生成",
+    planRefineApplyDraft: "优化官将覆盖计划草稿",
+    planRefineApplyFeedback: "结果将作为讨论意见返回",
+    planRefineBack: "返回计划",
     planActionRollback: "回滚到历史草稿",
     planActionExit: "退出计划模式",
     planActionClose: "关闭",
+    executionTitle: "会话执行状态",
+    executionTodo: "待办",
+    executionTeammate: "子代理",
+    executionBackground: "后台任务",
+    executionWorkspace: "工作区",
+    executionOffline: "已断开 · 显示最后一次收到的状态",
+    executionEmptyTodo: "暂无待办任务",
+    executionEmptyTeammate: "暂无子代理",
+    executionEmptyBackground: "暂无后台任务",
+    executionShowAll: "查看全部",
+    executionRunning: "运行中",
+    executionDone: "已完成",
+    executionStatusLabels: {
+      completed: "已完成",
+      in_progress: "进行中",
+      running: "运行中",
+      blocked: "已阻塞",
+      pending: "等待中",
+      retrying: "重试中",
+      sleeping: "休眠中",
+      failed: "失败",
+      terminated: "已终止",
+      queued: "排队中",
+      cancelled: "已取消",
+      unknown: "未知",
+    },
     expand: "展开",
     code: "代码",
     table: "表格",
@@ -694,9 +769,53 @@ export const DICTIONARIES: Record<Language, I18nDictionary> = {
     planActionModify: "View / Modify Plan",
     planActionContinue: "Continue Discussion",
     planActionRefine: "Review & Refine",
+    planRefineOpened: "Review & Refine is open in the Pi TUI; this Plan panel will stay open.",
+    planRefineUnavailable: "Current connection does not support Mobile Review & Refine",
+    planRefineRoleReviewer: "Reviewer",
+    planRefineRoleDecomposer: "Decomposer",
+    planRefineRoleOptimizer: "Optimizer",
+    planRefineRoleBrainstormer: "Brainstormer",
+    planRefineRun: "Run",
+    planRefineRunning: "Running…",
+    planRefineApply: "Apply Result",
+    planRefineDiscard: "Discard",
+    planRefineCancel: "Cancel",
+    planRefineInputPlaceholder: "Additional instructions (optional)…",
+    planRefineOutput: "Output",
+    planRefineHistory: "History",
+    planRefineConflict: "Plan revision changed; rerun required",
+    planRefineApplyDraft: "Optimizer output will replace the Plan draft",
+    planRefineApplyFeedback: "Result will be sent as discussion feedback",
+    planRefineBack: "Back to Plan",
     planActionRollback: "Rollback to Draft",
     planActionExit: "Exit Plan Mode",
     planActionClose: "Close",
+    executionTitle: "Session execution",
+    executionTodo: "Todo",
+    executionTeammate: "Teammate",
+    executionBackground: "Background",
+    executionWorkspace: "Workspace",
+    executionOffline: "Disconnected · showing the last received summary",
+    executionEmptyTodo: "No todo tasks",
+    executionEmptyTeammate: "No teammates",
+    executionEmptyBackground: "No background jobs",
+    executionShowAll: "Show all",
+    executionRunning: "running",
+    executionDone: "done",
+    executionStatusLabels: {
+      completed: "completed",
+      in_progress: "in progress",
+      running: "running",
+      blocked: "blocked",
+      pending: "pending",
+      retrying: "retrying",
+      sleeping: "sleeping",
+      failed: "failed",
+      terminated: "terminated",
+      queued: "queued",
+      cancelled: "cancelled",
+      unknown: "unknown",
+    },
     expand: "Expand",
     code: "Code",
     table: "Table",
