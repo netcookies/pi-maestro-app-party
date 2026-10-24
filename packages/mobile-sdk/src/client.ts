@@ -15,6 +15,7 @@ import type {
   SessionTargetIdentity,
 } from "./protocol/index.js";
 import type { DesktopPlanResponse } from "./mobile-plan-protocol.js";
+import type { MobilePlanRefineAction } from "./mobile-plan-refine-protocol.js";
 import {
   isCompatibleProtocolVersion,
   isHostFrame,
@@ -136,6 +137,7 @@ export class MobileClient {
   private commandSeq = 0;
   private heartbeatPingTimer: ReturnType<typeof setInterval> | null = null;
   private protocolReady = false;
+  private negotiatedCapabilities: readonly ProtocolCapability[] = [];
   private helloSeq = 0;
   private eventListeners = new Set<(event: HostEvent) => void>();
   private stateListeners = new Set<(state: ConnectionState) => void>();
@@ -154,6 +156,10 @@ export class MobileClient {
   }
 
   get isProtocolReady(): boolean { return this.protocolReady; }
+  get capabilities(): readonly ProtocolCapability[] { return this.negotiatedCapabilities; }
+  hasCapability(capability: ProtocolCapability): boolean {
+    return this.protocolReady && this.negotiatedCapabilities.includes(capability);
+  }
   get connectionState(): ConnectionState { return this.state; }
   get isConnected(): boolean { return this.state === "connected"; }
 
@@ -265,6 +271,10 @@ export class MobileClient {
 
   respondDesktopPlan(sessionId: string, requestId: string, response: DesktopPlanResponse, target: SessionTargetIdentity): Promise<unknown> {
     return this.sendCommand({ type: "desktop_plan_response", sessionId, requestId, response, target });
+  }
+
+  sendPlanRefineAction(sessionId: string, refine: MobilePlanRefineAction, target: SessionTargetIdentity): Promise<unknown> {
+    return this.sendCommand({ type: "plan_refine_action", sessionId, refine, target });
   }
 
   getExecutionProjections(options?: { signal?: AbortSignal }): Promise<{ projections: ExecutionProjection[]; revision: number }> {
@@ -396,7 +406,7 @@ export class MobileClient {
       clientVersion: this.productVersion,
       // Kept during the bridge period for old Hosts; never used by the new SDK to gate ready.
       releaseVersion: this.options.releaseVersion ?? this.productVersion,
-      capabilities: this.options.capabilities ?? ["session_control", "extension_ui", "monitor_read", "session_filter", "execution_projection_read", "plan", "notification_control", "background_transport"],
+      capabilities: this.options.capabilities ?? ["session_control", "extension_ui", "monitor_read", "session_filter", "execution_projection_read", "plan", "plan_refine", "notification_control", "background_transport"],
       requestId: `hello-${++this.helloSeq}`,
     };
     this.sendRaw(JSON.stringify(hello));
@@ -415,6 +425,7 @@ export class MobileClient {
         return;
       }
       this.protocolReady = true;
+      this.negotiatedCapabilities = [...message.capabilities];
       this.connectedAt = Date.now();
       this.startPing();
       this.setState("connected");

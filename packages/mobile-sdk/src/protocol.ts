@@ -5,6 +5,20 @@ import {
 } from "./release.js";
 import type { DesktopPlanRequest, DesktopPlanResponse } from "./mobile-plan-protocol.js";
 import { isDesktopPlanRequest, isDesktopPlanResponse } from "./mobile-plan-protocol.js";
+import type {
+  MobilePlanRefineAction,
+  MobilePlanRefineActionResult,
+  MobilePlanRefineSnapshot,
+  MobilePlanRefineTerminal,
+  MobilePlanRefineUpdate,
+} from "./mobile-plan-refine-protocol.js";
+import {
+  isMobilePlanRefineAction,
+  isMobilePlanRefineActionResult,
+  isMobilePlanRefineSnapshot,
+  isMobilePlanRefineTerminal,
+  isMobilePlanRefineUpdate,
+} from "./mobile-plan-refine-protocol.js";
 
 
 /**
@@ -42,6 +56,7 @@ export type ProtocolCapability =
   | "session_filter"
   | "execution_projection_read"
   | "plan"
+  | "plan_refine"
   | "notification_control"
   | "background_transport";
 
@@ -646,6 +661,15 @@ export type HostEvent =
   | { type: "extension_ui_cleared"; sessionId: string; requestId: string; target?: SessionTargetIdentity; seq: number }
   | { type: "desktop_plan_request"; sessionId: string; request: DesktopPlanRequest; target: SessionTargetIdentity; seq: number }
   | { type: "desktop_plan_cleared"; sessionId: string; requestId: string; kind?: "confirm" | "review"; target: SessionTargetIdentity; seq: number }
+  /**
+   * Native multi-round Review & Refine projection. Emitted only when the
+   * `plan_refine` capability was negotiated by both ends and the exact target's
+   * Plugin advertised `plan-refine-v1`.
+   */
+  | { type: "plan_refine_snapshot"; sessionId: string; snapshot: MobilePlanRefineSnapshot; target: SessionTargetIdentity; seq: number }
+  | { type: "plan_refine_update"; sessionId: string; update: MobilePlanRefineUpdate; target: SessionTargetIdentity; seq: number }
+  | { type: "plan_refine_action_result"; sessionId: string; result: MobilePlanRefineActionResult; target: SessionTargetIdentity; seq: number }
+  | { type: "plan_refine_terminal"; sessionId: string; terminal: MobilePlanRefineTerminal; target: SessionTargetIdentity; seq: number }
   | { type: "maestro_state"; state: MaestroState; seq: number }
   | { type: "monitor_state"; state: MonitorState; seq: number }
   | { type: "teammate_event"; scheduleId: string; dispatchId?: string; status: string; seq: number }
@@ -693,6 +717,7 @@ export type ClientCommandPayload =
   | ({ type: "extension_ui_response"; requestId: string; response: ExtensionUiResponse } & TargetedSessionCommand)
   | ({ type: "extension_ui_response"; requestId: string; response: ExtensionUiResponse } & TargetedSessionCommand)
   | ({ type: "desktop_plan_response"; requestId: string; response: DesktopPlanResponse } & TargetedSessionCommand)
+  | ({ type: "plan_refine_action"; refine: MobilePlanRefineAction } & TargetedSessionCommand)
   | ({ type: "get_snapshot" } & TargetedSessionCommand)
   | ({ type: "get_session_usage" } & TargetedSessionCommand)
   | { type: "get_maestro_state" }
@@ -825,6 +850,18 @@ export function isHostEvent(value: unknown): value is HostEvent {
       return isString(value.sessionId) && isString(value.requestId)
         && (value.kind === undefined || value.kind === "confirm" || value.kind === "review")
         && isSessionTargetIdentity(value.target);
+    case "plan_refine_snapshot":
+      return isString(value.sessionId) && isMobilePlanRefineSnapshot(value.snapshot)
+        && isSessionTargetIdentity(value.target);
+    case "plan_refine_update":
+      return isString(value.sessionId) && isMobilePlanRefineUpdate(value.update)
+        && isSessionTargetIdentity(value.target);
+    case "plan_refine_action_result":
+      return isString(value.sessionId) && isMobilePlanRefineActionResult(value.result)
+        && isSessionTargetIdentity(value.target);
+    case "plan_refine_terminal":
+      return isString(value.sessionId) && isMobilePlanRefineTerminal(value.terminal)
+        && isSessionTargetIdentity(value.target);
     case "maestro_state":
       return isRecord(value.state);
     case "monitor_state":
@@ -910,6 +947,9 @@ export function isClientCommand(value: unknown): value is ClientCommand {
     case "desktop_plan_response":
       return isString(value.sessionId) && isString(value.requestId)
         && isDesktopPlanResponse(value.response) && isSessionTargetIdentity(value.target);
+    case "plan_refine_action":
+      return isString(value.sessionId) && isMobilePlanRefineAction(value.refine)
+        && isSessionTargetIdentity(value.target);
     default:
       return false;
   }

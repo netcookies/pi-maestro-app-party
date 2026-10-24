@@ -27,8 +27,99 @@ export type DesktopPluginCapability =
   | "ask-user-question"
   | "plan";
 
+/** Negotiated multi-round native Review & Refine transport. */
+export const DESKTOP_PLAN_REFINE_FEATURE = "plan-refine-v1" as const;
+export const DESKTOP_PLAN_REFINE_MAX_MARKDOWN_LENGTH = 256_000;
+export const DESKTOP_PLAN_REFINE_MAX_OUTPUT_LENGTH = 64_000;
+export const DESKTOP_PLAN_REFINE_MAX_ACTION_TEXT_LENGTH = 16_384;
+
+export type DesktopPlanRefineRole = "reviewer" | "decomposer" | "optimizer" | "brainstormer";
+export type DesktopPlanRefineApplyKind = "feedback" | "draft";
+export type DesktopPlanRefineTerminalStatus = "applied" | "discarded" | "cancelled" | "failed" | "revision_conflict" | "disconnected";
+export type DesktopPlanRefineStatus = "opening" | "ready" | "running" | DesktopPlanRefineTerminalStatus;
+
+export interface DesktopPlanRefineTurn {
+  turnId: string;
+  role: DesktopPlanRefineRole;
+  model: string;
+  userInput?: string;
+  output?: string;
+  error?: string;
+  status: "running" | "succeeded" | "failed" | "cancelled";
+  appliesAs: DesktopPlanRefineApplyKind;
+  createdAt: number;
+}
+
+export interface DesktopPlanRefineModelOption {
+  id: string;
+  name: string;
+}
+
+export interface DesktopPlanRefineSnapshot {
+  type: "desktop_plan_refine_snapshot";
+  target: DesktopPluginTarget;
+  refineSessionId: string;
+  planRequestId: string;
+  operationId: number;
+  revision: number;
+  sequence: number;
+  status: DesktopPlanRefineStatus;
+  markdown: string;
+  turns: DesktopPlanRefineTurn[];
+  currentRole: DesktopPlanRefineRole;
+  currentModel: string;
+  modelOptions: DesktopPlanRefineModelOption[];
+  availableActions: Array<"select_role" | "select_model" | "run" | "apply" | "discard" | "cancel">;
+}
+
+export type DesktopPlanRefineActionPayload =
+  | { action: "select_role"; role: DesktopPlanRefineRole }
+  | { action: "select_model"; model: string }
+  | { action: "run"; userInput: string }
+  | { action: "apply"; turnId: string }
+  | { action: "discard" }
+  | { action: "cancel" }
+  | { action: "snapshot" };
+
+export interface DesktopPlanRefineAction {
+  type: "desktop_plan_refine_action";
+  target: DesktopPluginTarget;
+  refineSessionId: string;
+  planRequestId: string;
+  operationId: number;
+  revision: number;
+  actionId: string;
+  action: DesktopPlanRefineActionPayload;
+}
+
+export type DesktopPlanRefineActionStatus = "accepted" | "succeeded" | "rejected" | "failed";
+
+export interface DesktopPlanRefineActionResult {
+  actionId: string;
+  status: DesktopPlanRefineActionStatus;
+  turnId?: string;
+  error?: { code: string; message?: string };
+}
+
+export interface DesktopPlanRefineUpdate {
+  type: "desktop_plan_refine_update";
+  target: DesktopPluginTarget;
+  refineSessionId: string;
+  planRequestId: string;
+  operationId: number;
+  revision: number;
+  sequence: number;
+  status: DesktopPlanRefineStatus;
+  turn?: DesktopPlanRefineTurn;
+  actionResult?: DesktopPlanRefineActionResult;
+  error?: { code: string; message?: string };
+}
+
+
 /** Additive Plugin-to-Broker feature, independent of Host commands. */
 export const DESKTOP_PEER_FEATURE = "peer-message-v2" as const;
+export const DESKTOP_PLUGIN_FEATURES = [DESKTOP_PEER_FEATURE, DESKTOP_PLAN_REFINE_FEATURE] as const;
+
 export const DESKTOP_PEER_MAX_MESSAGE_BYTES = 16_384;
 export const DESKTOP_PEER_MAX_DEADLINE_MS = 30_000;
 export const DESKTOP_PEER_MAX_PEERS = 64;
@@ -348,6 +439,8 @@ export type DesktopPluginClientFrame =
   | DesktopPlanRequest
   | DesktopPlanCancel
   | DesktopPlanResult
+  | DesktopPlanRefineSnapshot
+  | DesktopPlanRefineUpdate
   | DesktopPluginGoodbye;
 
 export interface DesktopPluginChallenge {
@@ -405,6 +498,7 @@ export type DesktopPluginServerFrame =
   | DesktopPluginReceipt
   | DesktopPluginResult
   | DesktopPlanResponse
+  | DesktopPlanRefineAction
   | DesktopPluginError;
 
 export type DesktopPluginFrame = DesktopPluginClientFrame | DesktopPluginServerFrame;
@@ -423,7 +517,7 @@ export function isDesktopPluginClientFrame(value: unknown): value is DesktopPlug
         && stringFields(value, "endpointId", "sessionId", "normalizedCwd", "processGeneration", "clientNonce", "secret")
         && (value.sessionFile === undefined || stringFields(value, "sessionFile"))
         && stringArray(value.capabilities)
-        && (value.features === undefined || stringArray(value.features))
+        && (value.features === undefined || stringArray(value.features) && value.features.every(isDesktopPluginFeature))
         && (value.releaseVersion === undefined || stringFields(value, "releaseVersion"));
     case "desktop_plugin_request":
       return stringFields(value, "requestId", "commandId")
@@ -448,6 +542,12 @@ export function isDesktopPluginClientFrame(value: unknown): value is DesktopPlug
       return isDesktopPlanCancel(value);
     case "desktop_plan_result":
       return isDesktopPlanResult(value);
+    case "desktop_plan_refine_snapshot":
+      return isDesktopPlanRefineSnapshot(value);
+    case "desktop_plan_refine_update":
+      return isDesktopPlanRefineUpdate(value);
+    case "desktop_plan_refine_action":
+      return isDesktopPlanRefineAction(value);
     case "desktop_plugin_goodbye":
       return value.reason === undefined || value.reason === "shutdown" || value.reason === "session_closed";
     default:
@@ -481,6 +581,76 @@ function isDesktopPlanDecision(value: unknown): boolean {
     && (value.execution === undefined || isDesktopPlanExecutionChoice(value.execution));
 }
 
+export function isDesktopPlanRefineRole(value: unknown): value is DesktopPlanRefineRole {
+  return value === "reviewer" || value === "decomposer" || value === "optimizer" || value === "brainstormer";
+}
+
+function isDesktopPlanRefineTurn(value: unknown): value is DesktopPlanRefineTurn {
+  return isRecord(value) && stringFields(value, "turnId") && isDesktopPlanRefineRole(value.role)
+    && boundedText(value.model, 512)
+    && (value.userInput === undefined || boundedText(value.userInput, DESKTOP_PLAN_REFINE_MAX_ACTION_TEXT_LENGTH))
+    && (value.output === undefined || boundedText(value.output, DESKTOP_PLAN_REFINE_MAX_OUTPUT_LENGTH))
+    && (value.error === undefined || boundedText(value.error, DESKTOP_PLAN_REFINE_MAX_OUTPUT_LENGTH))
+    && (value.status === "running" || value.status === "succeeded" || value.status === "failed" || value.status === "cancelled")
+    && (value.appliesAs === "feedback" || value.appliesAs === "draft") && finiteNumber(value.createdAt);
+}
+
+function isDesktopPlanRefineStatus(value: unknown): value is DesktopPlanRefineStatus {
+  return value === "opening" || value === "ready" || value === "running" || value === "applied" || value === "discarded"
+    || value === "cancelled" || value === "failed" || value === "revision_conflict" || value === "disconnected";
+}
+
+export function isDesktopPlanRefineSnapshot(value: unknown): value is DesktopPlanRefineSnapshot {
+  return isRecord(value) && value.type === "desktop_plan_refine_snapshot"
+    && isDesktopPluginTarget(value.target) && stringFields(value, "refineSessionId", "planRequestId")
+    && nonNegativeInteger(value.operationId) && nonNegativeInteger(value.revision) && nonNegativeInteger(value.sequence)
+    && isDesktopPlanRefineStatus(value.status) && boundedText(value.markdown, DESKTOP_PLAN_REFINE_MAX_MARKDOWN_LENGTH)
+    && Array.isArray(value.turns) && value.turns.length <= 128 && value.turns.every(isDesktopPlanRefineTurn)
+    && isDesktopPlanRefineRole(value.currentRole) && boundedText(value.currentModel, 512)
+    && Array.isArray(value.modelOptions) && value.modelOptions.length <= 128
+    && value.modelOptions.every((model) => isRecord(model) && boundedText(model.id, 512) && boundedText(model.name, 512))
+    && Array.isArray(value.availableActions) && value.availableActions.every((action) =>
+      action === "select_role" || action === "select_model" || action === "run" || action === "apply" || action === "discard" || action === "cancel");
+}
+
+export function isDesktopPlanRefineAction(value: unknown): value is DesktopPlanRefineAction {
+  if (!isRecord(value) || value.type !== "desktop_plan_refine_action" || !isDesktopPluginTarget(value.target)
+    || !stringFields(value, "refineSessionId", "planRequestId", "actionId")
+    || nonNegativeInteger(value.operationId) === false || nonNegativeInteger(value.revision) === false
+    || !isRecord(value.action) || typeof value.action.action !== "string") return false;
+  switch (value.action.action) {
+    case "select_role": return isDesktopPlanRefineRole(value.action.role);
+    case "select_model": return boundedText(value.action.model, 512);
+    case "run": return boundedText(value.action.userInput, DESKTOP_PLAN_REFINE_MAX_ACTION_TEXT_LENGTH);
+    case "apply": return stringFields(value.action, "turnId");
+    case "discard": case "cancel": case "snapshot": return true;
+    default: return false;
+  }
+}
+
+function isDesktopPlanRefineActionResult(value: unknown): value is DesktopPlanRefineActionResult {
+  return isRecord(value)
+    && stringFields(value, "actionId")
+    && (value.status === "accepted" || value.status === "succeeded" || value.status === "rejected" || value.status === "failed")
+    && (value.turnId === undefined || boundedText(value.turnId, 512))
+    && (value.error === undefined || (isRecord(value.error)
+      && boundedText(value.error.code, 128)
+      && (value.error.message === undefined || boundedText(value.error.message, DESKTOP_PLAN_REFINE_MAX_OUTPUT_LENGTH))));
+}
+
+export function isDesktopPlanRefineUpdate(value: unknown): value is DesktopPlanRefineUpdate {
+  return isRecord(value) && value.type === "desktop_plan_refine_update" && isDesktopPluginTarget(value.target)
+    && stringFields(value, "refineSessionId", "planRequestId") && nonNegativeInteger(value.operationId)
+    && nonNegativeInteger(value.revision) && nonNegativeInteger(value.sequence) && isDesktopPlanRefineStatus(value.status)
+    && (value.turn === undefined || isDesktopPlanRefineTurn(value.turn))
+    && (value.actionResult === undefined || isDesktopPlanRefineActionResult(value.actionResult))
+    && (value.error === undefined || (isRecord(value.error) && boundedText(value.error.code, 128)
+      && (value.error.message === undefined || boundedText(value.error.message, DESKTOP_PLAN_REFINE_MAX_OUTPUT_LENGTH))));
+}
+
+function boundedText(value: unknown, maxLength: number): value is string {
+  return typeof value === "string" && value.length > 0 && value.length <= maxLength;
+}
 export function isDesktopPlanRequest(value: unknown): value is DesktopPlanRequest {
   return isRecord(value) && stringFields(value, "requestId", "kind", "sessionId", "cwd", "mode", "pathLabel")
     && (value.kind === "confirm" || value.kind === "review")
@@ -543,7 +713,7 @@ export function isDesktopPluginServerFrame(value: unknown): value is DesktopPlug
       return value.protocolVersion === DESKTOP_PLUGIN_PROTOCOL_VERSION
         && stringFields(value, "endpointId")
         && stringArray(value.capabilities)
-        && (value.supportedFeatures === undefined || stringArray(value.supportedFeatures))
+        && (value.supportedFeatures === undefined || stringArray(value.supportedFeatures) && value.supportedFeatures.every(isDesktopPluginFeature))
         && (value.releaseVersion === undefined || stringFields(value, "releaseVersion"))
         && (value.supportedEvents === undefined || desktopPluginEventArray(value.supportedEvents));
     case "desktop_plugin_receipt":
@@ -554,6 +724,8 @@ export function isDesktopPluginServerFrame(value: unknown): value is DesktopPlug
         && (value.status === "accepted" || value.status === "observed" || value.status === "failed" || value.status === "unknown");
     case "desktop_plan_response":
       return isDesktopPlanResponse(value);
+    case "desktop_plan_refine_action":
+      return isDesktopPlanRefineAction(value);
     case "desktop_plugin_error":
       return stringFields(value, "message") && (value.requestId === undefined || typeof value.requestId === "string");
     default:
@@ -579,6 +751,9 @@ function stringArray(value: unknown): value is string[] {
   return Array.isArray(value) && value.every((item) => typeof item === "string");
 }
 
+function isDesktopPluginFeature(value: unknown): boolean {
+  return value === DESKTOP_PEER_FEATURE || value === DESKTOP_PLAN_REFINE_FEATURE;
+}
 function desktopPluginEventArray(value: unknown): value is DesktopPluginEvent["event"][] {
   return Array.isArray(value)
     && value.every((item) => item === "model_select" || item === "thinking_level_select" || item === "runtime_status" || item === "session_summary" || item === "execution_summary");

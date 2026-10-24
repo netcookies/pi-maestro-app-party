@@ -6,6 +6,9 @@ import type {
   DesktopPlanResponse,
   DesktopPlanResult,
   DesktopPlanCancel,
+  DesktopPlanRefineAction,
+  DesktopPlanRefineSnapshot,
+  DesktopPlanRefineUpdate,
   DesktopPluginCapability,
   DesktopPluginEvent,
   DesktopPluginExecutionSummary,
@@ -18,6 +21,7 @@ import type {
 } from "./desktop-plugin-protocol.js";
 import {
   DESKTOP_PEER_FEATURE,
+  DESKTOP_PLAN_REFINE_FEATURE,
   DESKTOP_PLUGIN_PROTOCOL_VERSION,
   isDesktopPluginModel,
   isDesktopPluginExecutionSummary,
@@ -29,6 +33,9 @@ import {
   isDesktopPlanResponse,
   isDesktopPlanResult,
   isDesktopPlanCancel,
+  isDesktopPlanRefineAction,
+  isDesktopPlanRefineSnapshot,
+  isDesktopPlanRefineUpdate,
   isExtensionUiResponse,
 } from "./desktop-plugin-protocol.js";
 import type { JsonValue } from "./protocol.js";
@@ -159,6 +166,12 @@ export interface DesktopBrokerPlanCancel {
   cancel: DesktopPlanCancel;
 }
 
+export interface DesktopBrokerPlanRefine {
+  type: "desktop_broker_plan_refine";
+  target: DesktopPluginTarget;
+  message: DesktopPlanRefineAction | DesktopPlanRefineSnapshot | DesktopPlanRefineUpdate;
+}
+
 export interface DesktopBrokerPing {
   type: "desktop_broker_ping";
   nonce: string;
@@ -210,6 +223,7 @@ export type DesktopBrokerToHostFrame =
   | DesktopBrokerPlanResponse
   | DesktopBrokerPlanResult
   | DesktopBrokerPlanCancel
+  | DesktopBrokerPlanRefine
   | DesktopBrokerPong
   | DesktopBrokerError;
 
@@ -218,6 +232,7 @@ export type DesktopHostToBrokerFrame =
   | DesktopBrokerCommand
   | DesktopBrokerAskResponse
   | DesktopBrokerPlanResponse
+  | DesktopBrokerPlanRefine
   | DesktopBrokerPing
   | DesktopBrokerError;
 
@@ -265,6 +280,8 @@ export function isDesktopBrokerToHostFrame(value: unknown): value is DesktopBrok
       return isDesktopPluginTarget(value.target) && isDesktopPlanRequest(value.request);
     case "desktop_broker_plan_response":
       return isDesktopPluginTarget(value.target) && isDesktopPlanResponse(value.response);
+    case "desktop_broker_plan_refine":
+      return isDesktopPluginTarget(value.target) && isDesktopBrokerPlanRefineMessage(value.message);
     case "desktop_broker_plan_cancel":
       return isDesktopPluginTarget(value.target) && isDesktopPlanCancel(value.cancel);
     case "desktop_broker_pong":
@@ -289,6 +306,8 @@ export function isDesktopHostToBrokerFrame(value: unknown): value is DesktopHost
       return isDesktopPluginTarget(value.target) && isDesktopAskResponse(value.response);
     case "desktop_broker_plan_response":
       return isDesktopPluginTarget(value.target) && isDesktopPlanResponse(value.response);
+    case "desktop_broker_plan_refine":
+      return isDesktopPluginTarget(value.target) && isDesktopBrokerPlanRefineMessage(value.message);
     case "desktop_broker_ping":
       return stringFields(value, "nonce");
     case "desktop_broker_error":
@@ -303,7 +322,7 @@ function isDesktopBrokerTargetRecord(value: unknown): value is DesktopBrokerTarg
     && isDesktopPluginTarget(value.target)
     && optionalString(value, "sessionFile")
     && isDesktopPluginCapabilityArray(value.capabilities)
-    && (value.features === undefined || Array.isArray(value.features) && value.features.every((feature) => feature === DESKTOP_PEER_FEATURE))
+    && (value.features === undefined || Array.isArray(value.features) && value.features.every((feature) => feature === DESKTOP_PEER_FEATURE || feature === DESKTOP_PLAN_REFINE_FEATURE))
     && (value.model === undefined || isDesktopPluginModel(value.model))
     && optionalString(value, "thinkingLevel")
     && (value.runtimeStatus === "running" || value.runtimeStatus === "idle")
@@ -361,6 +380,9 @@ function isDesktopAskResponse(value: unknown): value is DesktopAskResponse {
   return isRecord(value) && stringFields(value, "requestId", "toolCallId") && isExtensionUiResponse(value.response);
 }
 
+function isDesktopBrokerPlanRefineMessage(value: unknown): value is DesktopBrokerPlanRefine["message"] {
+  return isDesktopPlanRefineAction(value) || isDesktopPlanRefineSnapshot(value) || isDesktopPlanRefineUpdate(value);
+}
 function isDesktopBrokerError(value: unknown): value is DesktopBrokerError {
   return isRecord(value)
     && stringFields(value, "message")

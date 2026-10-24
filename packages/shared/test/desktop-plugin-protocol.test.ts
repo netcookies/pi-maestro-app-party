@@ -1,8 +1,12 @@
 import { describe, expect, it } from "vitest";
 import {
+  DESKTOP_PLAN_REFINE_FEATURE,
   DESKTOP_PLUGIN_PROTOCOL_VERSION,
   isDesktopPluginClientFrame,
   isDesktopPluginServerFrame,
+  isDesktopPlanRefineAction,
+  isDesktopPlanRefineSnapshot,
+  isDesktopPlanRefineUpdate,
   isDesktopPeerRequest,
   isDesktopPeerDelivery,
   isDesktopPeerResult,
@@ -316,6 +320,49 @@ describe("Desktop Plugin IPC protocol", () => {
       operation: "prompt",
       status: "observed",
     })).toBe(true);
+  });
+
+  it("validates plan-refine-v1 snapshots, actions, updates and broker relay frames", () => {
+    const target = { sessionId: "s", endpointId: "e", normalizedCwd: "/work", processGeneration: "g" };
+    const snapshot = {
+      type: "desktop_plan_refine_snapshot", target, refineSessionId: "refine-1", planRequestId: "plan-1",
+      operationId: 2, revision: 3, sequence: 4, status: "ready", markdown: "# Plan", turns: [],
+      currentRole: "reviewer", currentModel: "provider/model", modelOptions: [{ id: "provider/model", name: "Model" }],
+      availableActions: ["select_role", "select_model", "run", "apply", "discard", "cancel"],
+    } as const;
+    const action = {
+      type: "desktop_plan_refine_action", target, refineSessionId: "refine-1", planRequestId: "plan-1",
+      operationId: 2, revision: 3, actionId: "action-1", action: { action: "run", userInput: "Review this" },
+    } as const;
+    const update = {
+      type: "desktop_plan_refine_update", target, refineSessionId: "refine-1", planRequestId: "plan-1",
+      operationId: 2, revision: 3, sequence: 5, status: "running",
+      turn: { turnId: "turn-1", role: "reviewer", model: "provider/model", userInput: "Review this", status: "running", appliesAs: "feedback", createdAt: 1 },
+    } as const;
+    expect(isDesktopPluginClientFrame(snapshot)).toBe(true);
+    expect(isDesktopPluginClientFrame(action)).toBe(true);
+    expect(isDesktopPluginClientFrame({ ...action, action: { action: "select_role", role: "hacker" } })).toBe(false);
+    expect(isDesktopPluginClientFrame({ ...action, target: { ...target, processGeneration: "" } })).toBe(false);
+    expect(isDesktopPluginClientFrame({ ...action, revision: -1 })).toBe(false);
+    expect(isDesktopPluginClientFrame({ ...action, action: { action: "run", userInput: "x".repeat(16_385) } })).toBe(false);
+    expect(isDesktopPluginClientFrame({ ...snapshot, markdown: "x".repeat(256_001) })).toBe(false);
+    expect(isDesktopPluginClientFrame(update)).toBe(true);
+    expect(isDesktopPluginClientFrame({ ...update, sequence: 1.5 })).toBe(false);
+    expect(isDesktopBrokerToHostFrame({ type: "desktop_broker_plan_refine", target, message: snapshot })).toBe(true);
+    expect(isDesktopHostToBrokerFrame({ type: "desktop_broker_plan_refine", target, message: action })).toBe(true);
+    expect(isDesktopHostToBrokerFrame({ type: "desktop_broker_plan_refine", target, message: { ...action, target: { ...target, sessionId: "other" } } })).toBe(true);
+  });
+
+  it("negotiates plan-refine-v1 additively without changing legacy Plan frames", () => {
+    expect(isDesktopPluginClientFrame({ ...hello, features: [DESKTOP_PLAN_REFINE_FEATURE] })).toBe(true);
+    expect(isDesktopPluginClientFrame({ ...hello, features: ["unknown-feature"] })).toBe(false);
+    const ready = { type: "desktop_plugin_ready", protocolVersion: DESKTOP_PLUGIN_PROTOCOL_VERSION, endpointId: "endpoint-1", capabilities: ["plan"] };
+    expect(isDesktopPluginServerFrame({ ...ready, supportedFeatures: [DESKTOP_PLAN_REFINE_FEATURE] })).toBe(true);
+    expect(isDesktopPluginServerFrame({ ...ready, supportedFeatures: ["unknown-feature"] })).toBe(false);
+    const legacyRequest = { type: "desktop_plan_request", requestId: "r", kind: "review", sessionId: "s", operationId: 1, cwd: "/work", mode: "plan", markdown: "# Plan", revision: 1, pathLabel: "plan.md", availableActions: ["refine"], decisionDocuments: [], drafts: [] };
+    expect(isDesktopPluginClientFrame(legacyRequest)).toBe(true);
+    expect(isDesktopPluginServerFrame({ type: "desktop_plan_response", requestId: "r", kind: "review", status: "decision", decision: { action: "refine" } })).toBe(true);
+    expect(isDesktopPluginClientFrame({ type: "desktop_plan_refine_snapshot", target: {}, refineSessionId: "r" })).toBe(false);
   });
 
   it("accepts correlated ask results and rejects incomplete receipts", () => {
