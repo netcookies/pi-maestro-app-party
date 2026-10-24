@@ -16,6 +16,9 @@ import type {
   DesktopPlanResponse,
   DesktopPlanResult,
   DesktopPlanCancel,
+  DesktopPlanRefineAction,
+  DesktopPlanRefineSnapshot,
+  DesktopPlanRefineUpdate,
   DesktopPluginClientFrame,
   DesktopPluginError,
   DesktopPluginFrame,
@@ -34,6 +37,7 @@ import {
   validateDesktopPluginClientFrame,
   validateDesktopPluginServerFrame,
   DESKTOP_PEER_FEATURE,
+  DESKTOP_PLAN_REFINE_FEATURE,
   DESKTOP_PEER_MAX_DEADLINE_MS,
   DESKTOP_PEER_MAX_PEERS,
   isDesktopPeerAck,
@@ -70,6 +74,7 @@ export interface DesktopPluginIpcServerOptions {
   onPlanRequest?: (target: DesktopPluginTarget, request: DesktopPlanRequest) => void;
   onPeerRequest?: (target: DesktopPluginTarget, request: DesktopPeerRequest, reply: (result: DesktopPeerResult) => void) => void;
   onPlanResponse?: (target: DesktopPluginTarget, response: DesktopPlanResponse) => void;
+  onPlanRefine?: (target: DesktopPluginTarget, message: DesktopPlanRefineAction | DesktopPlanRefineSnapshot | DesktopPlanRefineUpdate) => void;
   onDisconnected?: (target: DesktopPluginTarget) => void;
 }
 
@@ -85,6 +90,7 @@ export interface DesktopPluginIpcClientOptions {
   onRequest: (request: DesktopPluginRequest) => Promise<DesktopPluginResult>;
   onAskResponse?: (response: DesktopAskResponse) => Promise<void>;
   onPlanResponse?: (response: DesktopPlanResponse) => Promise<void>;
+  onPlanRefine?: (message: DesktopPlanRefineAction) => Promise<boolean>;
   features?: string[];
   onPeerDelivery?: (delivery: DesktopPeerDelivery) => Promise<void>;
   onDisconnected?: () => void;
@@ -276,6 +282,26 @@ class ServerTransport implements DesktopPluginTransport {
         resolve({ type: "desktop_plan_result", requestId: response.requestId, kind: response.kind, status: "unknown", error: { code: "disconnected" } });
       }
     });
+  }
+
+  answerRefine(action: DesktopPlanRefineAction): Promise<boolean> {
+    if (this.closed) return Promise.resolve(false);
+    try {
+      this.connection.send(action);
+      return Promise.resolve(true);
+    } catch {
+      return Promise.resolve(false);
+    }
+  }
+
+  sendRefine(message: DesktopPlanRefineSnapshot | DesktopPlanRefineUpdate): Promise<boolean> {
+    if (this.closed) return Promise.resolve(false);
+    try {
+      this.connection.send(message);
+      return Promise.resolve(true);
+    } catch {
+      return Promise.resolve(false);
+    }
   }
 
   handlePlanResult(result: DesktopPlanResult): void {
@@ -498,6 +524,17 @@ export class DesktopPluginIpcServer {
         this.sendError(connection, "invalid_frame", undefined);
         return;
       }
+      if (raw && typeof raw === "object"
+        && ((raw as { type?: unknown }).type === "desktop_plan_refine_snapshot"
+          || (raw as { type?: unknown }).type === "desktop_plan_refine_update"
+          || (raw as { type?: unknown }).type === "desktop_plan_refine_action")) {
+        if (isDesktopPluginClientFrame(raw) && target) {
+          this.options.onPlanRefine?.(target, validateDesktopPluginClientFrame(raw) as Parameters<NonNullable<DesktopPluginIpcServerOptions["onPlanRefine"]>>[1]);
+          return;
+        }
+        this.sendError(connection, "invalid_frame", undefined);
+        return;
+      }
       if (!isDesktopPluginServerFrame(raw)) {
         this.sendError(connection, "invalid_frame", undefined);
         connection.close(new Error("invalid desktop plugin server frame"));
@@ -561,6 +598,12 @@ export class DesktopPluginIpcServer {
       releaseVersion: expectedRelease,
       ...(this.options.supportedEvents ? { supportedEvents: [...this.options.supportedEvents] } : {}),
       ...(this.options.onPeerRequest && hello.features?.includes(DESKTOP_PEER_FEATURE) ? { supportedFeatures: [DESKTOP_PEER_FEATURE] } : {}),
+      ...(this.options.onPlanRefine && hello.features?.includes(DESKTOP_PLAN_REFINE_FEATURE)
+        ? { supportedFeatures: [
+            ...(this.options.onPeerRequest && hello.features?.includes(DESKTOP_PEER_FEATURE) ? [DESKTOP_PEER_FEATURE] : []),
+            DESKTOP_PLAN_REFINE_FEATURE,
+          ] }
+        : {}),
     });
     this.registry.register({
       target,
@@ -584,6 +627,7 @@ export class DesktopPluginIpcClient {
   private closed = false;
   private readonly pendingPeer = new Map<string, { resolve: (result: DesktopPeerResult) => void; timer: ReturnType<typeof setTimeout> }>();
   private supportsPeerMessaging = false;
+  private supportsPlanRefine = false;
   private supportsThinkingLevelSelect = false;
   private supportsRuntimeStatus = false;
   private supportsSessionSummary = false;
@@ -618,6 +662,7 @@ export class DesktopPluginIpcClient {
             }
             authenticated = true;
             this.supportsPeerMessaging = frame.supportedFeatures?.includes(DESKTOP_PEER_FEATURE) ?? false;
+            this.supportsPlanRefine = frame.supportedFeatures?.includes(DESKTOP_PLAN_REFINE_FEATURE) ?? false;
             this.supportsThinkingLevelSelect = frame.supportedEvents?.includes("thinking_level_select") ?? false;
             this.supportsRuntimeStatus = frame.supportedEvents?.includes("runtime_status") ?? false;
             this.supportsSessionSummary = frame.supportedEvents?.includes("session_summary") ?? false;
@@ -688,6 +733,10 @@ export class DesktopPluginIpcClient {
             void this.handlePlanResponse(frame);
             return;
           }
+          if (frame.type === "desktop_plan_refine_action") {
+            void this.handlePlanRefineAction(frame);
+            return;
+          }
           if (frame.type === "desktop_plugin_receipt" || frame.type === "desktop_plugin_result") {
             return;
           }
@@ -723,7 +772,7 @@ export class DesktopPluginIpcClient {
             ...(this.options.features ? { features: this.options.features } : {}),
             clientNonce: randomBytes(16).toString("hex"),
             secret: this.options.secret,
-            releaseVersion: this.options.releaseVersion ?? MOBILE_RELEASE_VERSION,
+            ...(process.env.E2E_RELEASE_VERSION ? { releaseVersion: process.env.E2E_RELEASE_VERSION } : { releaseVersion: this.options.releaseVersion ?? MOBILE_RELEASE_VERSION }),
           });
         } catch (error) {
           finishError(error instanceof Error ? error : new Error("desktop plugin hello failed"));
@@ -745,6 +794,16 @@ export class DesktopPluginIpcClient {
       }
     }
   }
+  private handlePlanRefineAction(action: DesktopPlanRefineAction): void {
+    void (async () => {
+      try {
+        await this.options.onPlanRefine?.(action);
+      } catch {
+        // A failed relay stays local: Flow is the only authority for terminal state.
+      }
+    })();
+  }
+
   private handleAskResponse(response: DesktopAskResponse): void {
     void (async () => {
       try {
@@ -864,12 +923,25 @@ export class DesktopPluginIpcClient {
     this.connection.send({ type: "desktop_plan_cancel", requestId: request.requestId, kind: request.kind });
   }
 
+  /** Relay one Review & Refine frame (snapshot, update, or user action). */
+  async sendPlanRefine(message: DesktopPlanRefineAction | DesktopPlanRefineSnapshot | DesktopPlanRefineUpdate): Promise<void> {
+    if (!this.supportsPlanRefine) throw new Error("feature_not_negotiated");
+    await this.connect();
+    if (this.closed || !this.connection) throw new Error("desktop plugin disconnected");
+    this.connection.send(message);
+  }
+
 
   close(): void {
     if (this.closed) return;
     this.closed = true;
     this.clearPeerRequests();
     this.connection?.close();
+  }
+
+  /** True only after the Plugin advertised plan-refine-v1 in its ready frame. */
+  get isPlanRefineSupported(): boolean {
+    return this.supportsPlanRefine;
   }
 
   get isConnected(): boolean {

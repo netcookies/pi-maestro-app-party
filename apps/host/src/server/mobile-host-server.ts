@@ -20,6 +20,7 @@ import type {
 } from "@maestro-mobile/mobile-sdk/protocol";
 import type { DesktopPluginTarget } from "@maestro-mobile/shared";
 import type { HostController } from "../host-controller.js";
+import { toDesktopRefineAction } from "../plugin/refine-protocol-projection.js";
 import type { SessionTargetIdentity } from "../control/SessionDirectory.js";
 import type { CommandResult as ApplicationCommandResult } from "../application/session-command-service.js";
 import {
@@ -43,6 +44,7 @@ const HOST_PROTOCOL_CAPABILITIES: ProtocolCapability[] = [
   "session_filter",
   "execution_projection_read",
   "plan",
+  "plan_refine",
 ];
 
 /** Legacy clients predate protocolRevision and are bridged only for known releases. */
@@ -66,6 +68,7 @@ const ROLLOUT_MUTATING_COMMANDS = new Set([
   "abort",
   "extension_ui_response",
   "desktop_plan_response",
+  "plan_refine_action",
 ]);
 
 function isMutatingCommand(command: ClientCommand): boolean {
@@ -1071,6 +1074,17 @@ export class MobileHostServer {
           const ok = await this.controller.respondToDesktopPlan(command.sessionId, command.requestId, command.response, target);
           if (ok) this.sendAck(client, command, {});
           else this.sendError(client, "request_not_found", undefined, command.id);
+          break;
+        }
+        case "plan_refine_action": {
+          if (!client.capabilities.includes("plan_refine")) { this.sendUnavailable(client, command, "capability_mismatch"); break; }
+          const target = this.targetForCommand(command);
+          if (!target || !this.controller.directory.resolve(target, "plan")) { this.sendUnavailable(client, command, "target_unavailable"); break; }
+          const projected = toDesktopRefineAction(command.refine, target);
+          if (!projected) { this.sendUnavailable(client, command, "target_mismatch"); break; }
+          const ok = await this.controller.respondToDesktopRefine(projected, target);
+          if (ok) this.sendAck(client, command, {});
+          else this.sendError(client, "refine_session_unavailable", undefined, command.id);
           break;
         }
         case "get_maestro_state": {

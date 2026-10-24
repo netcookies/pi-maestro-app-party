@@ -5,7 +5,7 @@ import { randomUUID } from "node:crypto";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import type { ImageContent, Model, TextContent } from "@earendil-works/pi-ai";
 import type { BackgroundJobSummary, DesktopPluginEvent, DesktopPluginExecutionSummary, DesktopPluginModel, DesktopPluginRuntimeStatus, DesktopPluginSessionSummary, DesktopPluginTarget, DesktopAskRequest, DesktopPlanResponse, JsonValue, MonitorTodoSummary, TeammateAgentState } from "@maestro-mobile/shared";
-import { DESKTOP_PEER_FEATURE } from "@maestro-mobile/shared";
+import { DESKTOP_PEER_FEATURE, DESKTOP_PLAN_REFINE_FEATURE } from "@maestro-mobile/shared";
 import { registerDesktopPeerCommand } from "./desktop-peer-extension.js";
 import { DesktopPluginIpcClient } from "./desktop-plugin-ipc.js";
 import {
@@ -25,6 +25,11 @@ import {
   createDesktopPlanTransport,
   type DesktopPlanTransport,
 } from "./flow-plan-transport.js";
+import {
+  registerFlowRefineTransport,
+  createDesktopRefineTransport,
+  type DesktopRefineTransport,
+} from "./flow-refine-transport.js";
 
 const DEFAULT_SOCKET_PATH = join(homedir(), ".pi", "maestro-mobile", "ipc", "desktop-plugin.sock");
 const DEFAULT_SECRET_PATH = join(homedir(), ".pi", "maestro-mobile-ipc-secret");
@@ -376,6 +381,8 @@ export function createDesktopPluginExtension(options: DesktopPluginExtensionOpti
     let unregisterFlowAskTransport: (() => void) | undefined;
     let planTransport: DesktopPlanTransport | undefined;
     let unregisterFlowPlanTransport: (() => void) | undefined;
+    let refineTransport: DesktopRefineTransport | undefined;
+    let unregisterFlowRefineTransport: (() => void) | undefined;
 
     const updateRuntime = (patch: Parameters<typeof updateDesktopPluginRuntimeRecord>[1]): void => {
       if (runtimeGenerationToken) updateDesktopPluginRuntimeRecord(runtimeGenerationToken, patch);
@@ -523,7 +530,7 @@ export function createDesktopPluginExtension(options: DesktopPluginExtensionOpti
             target: sessionAdapter.target,
             ...(sessionFile ? { sessionFile } : {}),
             capabilities: sessionAdapter.getCapabilities(),
-            features: [DESKTOP_PEER_FEATURE],
+            features: [DESKTOP_PEER_FEATURE, DESKTOP_PLAN_REFINE_FEATURE],
             onPeerDelivery: (delivery) => {
               if (!isCurrentSession(generation, sessionAdapter)) return Promise.reject(new Error("target_unavailable"));
               return peerCommand.receive(delivery);
@@ -540,6 +547,10 @@ export function createDesktopPluginExtension(options: DesktopPluginExtensionOpti
             },
             onPlanResponse: async (response: DesktopPlanResponse) => {
               if (!planTransport?.handleResponse(response)) throw new Error("unknown_plan_response");
+            },
+            onPlanRefine: async (action) => {
+              if (!refineTransport) return false;
+              return refineTransport.handleAction(action);
             },
             onDisconnected: () => {
               if (client !== candidate) return;
@@ -646,6 +657,9 @@ export function createDesktopPluginExtension(options: DesktopPluginExtensionOpti
       planTransport?.cancelAll();
       unregisterFlowPlanTransport?.();
       unregisterFlowPlanTransport = undefined;
+      refineTransport?.cancelAll();
+      unregisterFlowRefineTransport?.();
+      unregisterFlowRefineTransport = undefined;
       const target: DesktopPluginTarget = {
         sessionId: ctx.sessionManager.getSessionId(),
         endpointId: options.endpointId ?? `desktop-${randomUUID()}`,
@@ -675,6 +689,14 @@ export function createDesktopPluginExtension(options: DesktopPluginExtensionOpti
           && normalize(request.cwd) === target.normalizedCwd,
       });
       unregisterFlowPlanTransport = registerFlowPlanTransport(planTransport);
+      refineTransport = createDesktopRefineTransport({
+        getClient: () => client,
+        isCurrent: (request) => !stopping
+          && request.target.sessionId === target.sessionId
+          && request.target.normalizedCwd === target.normalizedCwd,
+        supportsRefine: () => client?.isPlanRefineSupported === true,
+      });
+      unregisterFlowRefineTransport = registerFlowRefineTransport(refineTransport);
       queueMicrotask(() => {
         if (executionSessionId === target.sessionId && executionTargetGeneration === target.processGeneration && !stopping) {
           eventBus?.emit("bash-bg:query", undefined);
@@ -967,6 +989,9 @@ export function createDesktopPluginExtension(options: DesktopPluginExtensionOpti
       planTransport?.cancelAll();
       unregisterFlowPlanTransport?.();
       unregisterFlowPlanTransport = undefined;
+      refineTransport?.cancelAll();
+      unregisterFlowRefineTransport?.();
+      unregisterFlowRefineTransport = undefined;
       if (reconnectTimer) {
         clearTimeout(reconnectTimer);
         reconnectTimer = undefined;

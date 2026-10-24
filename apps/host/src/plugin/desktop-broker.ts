@@ -200,6 +200,10 @@ export class DesktopBroker {
         this.clearPlan(key);
         this.emit({ type: "desktop_broker_plan_cancel", target: { ...target }, cancel: { type: "desktop_plan_cancel", requestId: response.requestId, kind: response.kind } });
       },
+      onPlanRefine: (target, message) => {
+        if (!this.registry.resolve(target)) return;
+        this.emit({ type: "desktop_broker_plan_refine", target: { ...target }, message });
+      },
       onAskResponse: (target, response) => {
         if (response.response.cancelled !== true) return;
         const key = this.askKey(target, response.requestId);
@@ -432,6 +436,22 @@ export class DesktopBroker {
         } catch {
           this.emitPlanResult(frame.target, { type: "desktop_plan_result", requestId: frame.response.requestId, kind: frame.response.kind, status: "unknown", error: { code: "disconnected" } });
         }
+        return;
+      }
+      case "desktop_broker_plan_refine": {
+        const registration = this.registry.resolve(frame.target);
+        const message = frame.message;
+        if (message.type === "desktop_plan_refine_action") {
+          void registration?.transport.answerRefine?.(message).then(() => undefined, () => undefined);
+          return;
+        }
+        if (!registration?.transport.sendRefine) {
+          this.emit({ type: "desktop_broker_plan_refine", target: frame.target, message: { ...message, status: "disconnected" } });
+          return;
+        }
+        void registration.transport.sendRefine(message).then((delivered) => {
+          if (!delivered) this.emit({ type: "desktop_broker_plan_refine", target: frame.target, message: { ...message, status: "disconnected" } });
+        }, () => undefined);
         return;
       }
       case "desktop_broker_ping":

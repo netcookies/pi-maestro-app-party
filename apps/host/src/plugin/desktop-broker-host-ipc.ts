@@ -19,6 +19,7 @@ import type {
   DesktopAskResult,
   DesktopPlanResponse,
   DesktopPlanResult,
+  DesktopPlanRefineAction,
   DesktopBrokerPlanResult,
   DesktopBrokerPlanRequest,
   DesktopPluginCapability,
@@ -83,6 +84,11 @@ class DesktopBrokerTargetTransport implements DesktopPluginTransport {
   answerPlan(response: DesktopPlanResponse): Promise<DesktopPlanResult> {
     if (this.closed) return Promise.resolve({ type: "desktop_plan_result", requestId: response.requestId, kind: response.kind, status: "unknown", error: { code: "disconnected" } });
     return this.link.answerPlan(this.target, response);
+  }
+
+  answerRefine(action: DesktopPlanRefineAction): Promise<boolean> {
+    if (this.closed) return Promise.resolve(false);
+    return this.link.sendHostFrame({ type: "desktop_broker_plan_refine", target: this.target, message: action });
   }
   close(): void {
     this.closed = true;
@@ -281,6 +287,16 @@ export class DesktopBrokerHostLink {
     private readonly now: () => number = Date.now,
   ) {}
 
+  sendHostFrame(frame: DesktopHostToBrokerFrame): Promise<boolean> {
+    if (this.closed) return Promise.resolve(false);
+    try {
+      this.connection.send(frame);
+      return Promise.resolve(true);
+    } catch {
+      return Promise.resolve(false);
+    }
+  }
+
   request(request: DesktopPluginRequest): Promise<DesktopPluginResult> {
     if (this.closed) return Promise.reject(new Error("desktop broker disconnected"));
     const remaining = request.deadlineAt - this.now();
@@ -394,6 +410,7 @@ export interface DesktopBrokerHostIpcOptions {
   onAskCancel?: (target: DesktopPluginTarget, response: Extract<DesktopBrokerToHostFrame, { type: "desktop_broker_ask_cancel" }>["response"]) => void;
   onPlanRequest?: (target: DesktopPluginTarget, request: Extract<DesktopBrokerToHostFrame, { type: "desktop_broker_plan_request" }>["request"]) => void;
   onPlanCancel?: (target: DesktopPluginTarget, cancel: Extract<DesktopBrokerToHostFrame, { type: "desktop_broker_plan_cancel" }>["cancel"]) => void;
+  onPlanRefine?: (target: DesktopPluginTarget, message: Extract<DesktopBrokerToHostFrame, { type: "desktop_broker_plan_refine" }>["message"]) => void;
   onDisconnected?: () => void;
 }
 
@@ -574,6 +591,11 @@ export class DesktopBrokerHostIpc {
     }
     if (frame.type === "desktop_broker_plan_cancel") {
       this.options.onPlanCancel?.(frame.target, frame.cancel);
+      return;
+    }
+    if (frame.type === "desktop_broker_plan_refine") {
+      this.options.onPlanRefine?.(frame.target, frame.message);
+      return;
     }
   }
 

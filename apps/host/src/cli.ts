@@ -223,6 +223,7 @@ async function main(): Promise<void> {
     onAskCancel: (target, response) => controller.onDesktopAskCancelled(target, response),
     onPlanRequest: (target, request) => controller.onDesktopPlanRequest(target, request),
     onPlanCancel: (target, cancel) => controller.onDesktopPlanCancelled(target, cancel),
+    onPlanRefine: (target, message) => controller.onDesktopPlanRefine(target, message as Parameters<typeof controller.onDesktopPlanRefine>[1]),
   });
   controller.setDesktopBrokerLinkHealth(() => brokerHost.isConnected, () => brokerHost.isFlapping);
   const supervisor = new DesktopBrokerSupervisor({

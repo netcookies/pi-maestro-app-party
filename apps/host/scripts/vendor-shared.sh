@@ -12,6 +12,7 @@ cp ../../packages/mobile-sdk/src/validation.ts src/vendor/mobile-sdk/validation.
 cp ../../packages/mobile-sdk/src/timeline.ts src/vendor/mobile-sdk/timeline.ts
 cp ../../packages/mobile-sdk/src/release.ts src/vendor/mobile-sdk/release.ts
 cp ../../packages/mobile-sdk/src/mobile-plan-protocol.ts src/vendor/mobile-sdk/mobile-plan-protocol.ts
+cp ../../packages/mobile-sdk/src/mobile-plan-refine-protocol.ts src/vendor/mobile-sdk/mobile-plan-refine-protocol.ts
 cp ../../packages/mobile-sdk/src/protocol/index.ts src/vendor/mobile-sdk/protocol/index.ts
 
 # Rewrite workspace imports in Host source to the temporary staged files.

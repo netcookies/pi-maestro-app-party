@@ -1,4 +1,5 @@
-import type { HostEvent, SessionSnapshot, ExtensionUiResponse, DesktopAskRequest, DesktopAskResponse, DesktopPluginModel, DesktopPluginRuntimeStatus, DesktopPluginSessionSummary, DesktopPluginExecutionSummary, SessionExecutionSummary, SessionSummaryPatch, TimelineItem, DesktopPlanRequest, DesktopPlanResponse } from "@maestro-mobile/shared";
+import type { HostEvent, SessionSnapshot, ExtensionUiResponse, DesktopAskRequest, DesktopAskResponse, DesktopPluginModel, DesktopPluginRuntimeStatus, DesktopPluginSessionSummary, DesktopPluginExecutionSummary, SessionExecutionSummary, SessionSummaryPatch, TimelineItem, DesktopPlanRequest, DesktopPlanResponse, DesktopPlanRefineAction, DesktopPlanRefineSnapshot, DesktopPlanRefineUpdate } from "@maestro-mobile/shared";
+import { toMobileRefineHostEvent } from "./plugin/refine-wire-to-mobile.js";
 
 import type { DesktopPluginTarget } from "@maestro-mobile/shared";
 import type { SessionCatalog, HostEventListener } from "./types.js";
@@ -570,6 +571,20 @@ export class HostController {
       .map(({ request, target }) => this.eventLog.record({ type: "desktop_plan_request", sessionId: target.sessionId, target: { ...target }, request }));
   }
 
+  /**
+   * Translate and emit one inbound Broker refine frame to Mobile clients.
+   * Only clients that negotiated `plan_refine` receive the event.
+   */
+  onDesktopPlanRefine(
+    target: DesktopPluginTarget,
+    message: DesktopPlanRefineSnapshot | DesktopPlanRefineUpdate,
+  ): void {
+    if (this.disposed || !this.sessionDirectory.resolve(target, "plan")) return;
+    const body = toMobileRefineHostEvent(target, message);
+    if (!body) return;
+    this.emitToListeners(this.eventLog.record(body as Parameters<typeof this.eventLog.record>[0]));
+  }
+
   async respondToDesktopPlan(sessionId: string, requestId: string, response: DesktopPlanResponse, target?: SessionTargetIdentity): Promise<boolean> {
     if (!target || target.sessionId !== sessionId) return false;
     const id = planKey(target, requestId, response.kind);
@@ -590,6 +605,17 @@ export class HostController {
     if (!this.disposed) this.emitToListeners(this.eventLog.record({ type: "desktop_plan_cleared", sessionId: pending.target.sessionId, requestId: pending.request.requestId, kind: pending.request.kind, target: { ...pending.target } }));
   }
 
+
+  /**
+   * Relay one Review & Refine intent to the exact target's Plugin.
+   * Flow remains the authority; this only forwards the user's intent.
+   */
+  async respondToDesktopRefine(action: DesktopPlanRefineAction, target?: SessionTargetIdentity): Promise<boolean> {
+    if (!target || !this.sessionDirectory.resolve(target, "plan")) return false;
+    const registration = this.desktopPluginRegistry.resolve(target);
+    if (!registration?.transport.answerRefine) return false;
+    return registration.transport.answerRefine(action);
+  }
 
   private clearDesktopAsk(id: string): void {
     const pending = this.pendingDesktopAsks.get(id);

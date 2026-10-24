@@ -5,6 +5,9 @@ import type {
   DesktopAskResult,
   DesktopPlanResponse,
   DesktopPlanResult,
+  DesktopPlanRefineAction,
+  DesktopPlanRefineSnapshot,
+  DesktopPlanRefineUpdate,
   DesktopBrokerDeltaMutation,
   DesktopBrokerTargetRecord,
   DesktopPluginCapability,
@@ -27,6 +30,9 @@ export interface DesktopPluginTransport {
   request(request: DesktopPluginRequest): Promise<DesktopPluginResult>;
   answerAsk?(response: DesktopAskResponse): Promise<DesktopAskResult>;
   answerPlan?(response: DesktopPlanResponse): Promise<DesktopPlanResult>;
+  /** Relay one Review & Refine intent; returns false when no live refine session matches. */
+  answerRefine?(action: DesktopPlanRefineAction): Promise<boolean>;
+  sendRefine?(message: DesktopPlanRefineSnapshot | DesktopPlanRefineUpdate): Promise<boolean>;
   close(): void;
 }
 export interface DesktopPluginRegistration {
