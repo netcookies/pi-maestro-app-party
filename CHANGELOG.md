@@ -2,6 +2,18 @@
 
 本文件记录 Maestro Mobile 的显著变更。格式基于 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)。
 
+## [0.16.0] — 2026-10-24
+
+### 新增
+
+- native Review & Refine vertical panel, skill prepend, and execution drawer
+- relay Flow Review & Refine through Broker and enforce peer hard gate
+- add plan-refine-v1 wire contract and mobile sdk state machine
+
+### 修复
+
+- include changelog in GitHub release notes
+
 ## [0.15.1] — 2026-10-13
 
 ### 修复
