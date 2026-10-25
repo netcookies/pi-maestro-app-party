@@ -52,6 +52,41 @@ export function executionTone(section: ExecutionSectionKey, status: string | und
   return toneFrom(BACKGROUND_TONES, status);
 }
 
+/** TUI-matching glyph icons for execution status. */
+export function executionGlyph(section: ExecutionSectionKey, status: string | undefined): string {
+  const s = (status ?? "").toLowerCase();
+  if (section === "todo") {
+    if (s === "completed" || s === "done") return "✓";
+    if (s === "in_progress" || s === "running" || s === "active") return "■";
+    if (s === "blocked" || s === "failed") return "!";
+    return "□";
+  }
+  if (section === "teammate") {
+    if (s === "completed") return "✓";
+    if (s === "running") return "■";
+    if (s === "retrying") return "↻";
+    if (s === "sleeping") return "◉";
+    if (s === "failed" || s === "terminated") return "✗";
+    return "□";
+  }
+  if (s === "completed") return "✓";
+  if (s === "running") return "■";
+  if (s === "failed" || s === "cancelled") return "✗";
+  return "□";
+}
+
+export function isExecutionItemDone(section: ExecutionSectionKey, status: string | undefined): boolean {
+  return executionTone(section, status) === "success";
+}
+
+/** Formats numeric or alphanumeric task IDs with a leading # (e.g. "1" -> "#1"). */
+export function formatExecutionId(id: string | undefined): string {
+  if (!id) return "";
+  const trimmed = id.trim();
+  if (!trimmed) return "";
+  return trimmed.startsWith("#") ? trimmed : `#${trimmed}`;
+}
+
 /** Counts shown on the header chips; `active` drives the live pulse dot. */
 export interface ExecutionSectionCount {
   readonly active: number;

@@ -31,9 +31,12 @@ import { useSessionDraft, draftScopeKey } from "../src/drafts";
 import { selectExecutionSummaryForSession, executionTodoCounts } from "../src/session-execution";
 import {
   EXECUTION_SECTION_ORDER,
+  executionGlyph,
   executionSectionCounts,
   executionTone,
+  formatExecutionId,
   hasActiveExecution,
+  isExecutionItemDone,
   type ExecutionSectionCount,
   type ExecutionSectionKey,
 } from "../src/execution-presentation";
@@ -108,23 +111,35 @@ export default function SessionScreen() {
     if (executionSection === "todo") {
       return executionSummary.todos.map((item) => ({
         key: `todo-${item.id}`,
+        id: formatExecutionId(item.id),
+        assignee: item.assigneeLabel ? (item.assigneeLabel.startsWith("@") ? item.assigneeLabel : `@${item.assigneeLabel}`) : undefined,
         title: item.subject,
-        meta: [statusLabel(item.status), item.assigneeLabel].filter(Boolean).join(" · "),
+        meta: statusLabel(item.status),
+        glyph: executionGlyph("todo", item.status),
+        isDone: isExecutionItemDone("todo", item.status),
         color: toneColor(executionTone("todo", item.status)),
       }));
     }
     if (executionSection === "teammate") {
       return executionSummary.teammate.agents.map((item, index) => ({
         key: `agent-${item.correlationId ?? index}`,
+        id: undefined,
+        assignee: item.agent ? (item.agent.startsWith("@") ? item.agent : `@${item.agent}`) : undefined,
         title: item.name ?? item.agent ?? item.correlationId ?? "—",
         meta: [statusLabel(item.status), item.phase, item.pendingInteractions ? `${item.pendingInteractions} ${t.executionRunning}` : ""].filter(Boolean).join(" · "),
+        glyph: executionGlyph("teammate", item.status),
+        isDone: isExecutionItemDone("teammate", item.status),
         color: toneColor(executionTone("teammate", item.status)),
       }));
     }
     return executionSummary.backgroundJobs.map((item) => ({
       key: `job-${item.id}`,
+      id: undefined,
+      assignee: undefined,
       title: item.label ?? item.id,
       meta: [statusLabel(item.status), typeof item.progress === "number" ? `${Math.round(item.progress * 100)}%` : ""].filter(Boolean).join(" · "),
+      glyph: executionGlyph("background", item.status),
+      isDone: isExecutionItemDone("background", item.status),
       color: toneColor(executionTone("background", item.status)),
     }));
   }, [executionSummary, executionSection, theme, t]);
@@ -1154,77 +1169,121 @@ export default function SessionScreen() {
       <SpringBottomSheet
         visible={executionDetailsOpen && Boolean(executionSummary)}
         onClose={() => setExecutionDetailsOpen(false)}
-        contentHeight={Math.min(640, 240 + Math.min(detailsExpanded ? 20 : 5, executionRows.length) * 46)}
+        contentHeight={Math.min(Math.round(Dimensions.get("window").height * 0.78), 220 + executionRows.length * 48)}
+        containerStyle={{ maxHeight: Math.round(Dimensions.get("window").height * 0.82) }}
       >
-        {executionSummary && <View style={{ gap: 12 }}>
-          <View style={styles.sheetHeader}>
-            <Text style={[styles.sheetTitle, { color: theme.text }]}>{t.executionTitle}</Text>
-            <TouchableOpacity onPress={() => setExecutionDetailsOpen(false)} accessibilityRole="button" accessibilityLabel={t.planActionClose}>
-              <LineIcon name="x" size={16} color={theme.muted} />
-            </TouchableOpacity>
-          </View>
-          <Text style={[styles.sheetDesc, { color: isConnected ? theme.muted : theme.warning }]}>
-            {isConnected ? `Revision ${executionSummary.revision}` : t.executionOffline}
-          </Text>
-
-          {/* Section switcher: each header chip opens its own section here. */}
-          <View style={styles.executionSegments}>
-            {EXECUTION_SECTION_ORDER.map((section) => {
-              const meta = executionSectionMeta[section];
-              const selected = executionSection === section;
-              return (
-                <TouchableOpacity
-                  key={section}
-                  onPress={() => { setExecutionSection(section); setDetailsExpanded(false); }}
-                  style={[
-                    styles.executionSegment,
-                    {
-                      borderColor: selected ? theme.accent : theme.border,
-                      backgroundColor: selected ? theme.inputBg : "transparent",
-                    },
-                  ]}
-                  accessibilityRole="button"
-                  accessibilityState={{ selected }}
-                  accessibilityLabel={`${meta.title} ${meta.count.total}`}
-                >
-                  <Text
-                    style={[styles.executionSegmentText, { color: selected ? theme.accent : theme.muted, fontWeight: selected ? "700" : "500" }]}
-                    numberOfLines={1}
-                  >
-                    {meta.title} {meta.count.total}
-                  </Text>
-                </TouchableOpacity>
-              );
-            })}
-          </View>
-
-          {executionRows.length === 0 ? (
-            <Text style={[styles.sheetDesc, { color: theme.muted }]}>{executionSectionMeta[executionSection].empty}</Text>
-          ) : (
-            <View style={{ gap: 8 }}>
-              {executionRows.slice(0, detailLimit).map((row) => (
-                <View key={row.key} style={styles.executionRow}>
-                  <View style={[styles.executionRowDot, { backgroundColor: row.color }]} />
-                  <View style={{ flex: 1, gap: 2 }}>
-                    <Text style={[styles.executionRowTitle, { color: theme.text }]} numberOfLines={2}>{row.title}</Text>
-                    <Text style={[styles.executionRowMeta, { color: theme.muted }]} numberOfLines={2}>{row.meta}</Text>
-                  </View>
-                </View>
-              ))}
-              {executionRows.length > detailLimit ? (
-                <TouchableOpacity
-                  onPress={() => setDetailsExpanded(true)}
-                  accessibilityRole="button"
-                  accessibilityLabel={`${t.executionShowAll} ${Math.min(20, executionRows.length)}`}
-                >
-                  <Text style={[styles.sheetDesc, { color: theme.accent }]}>
-                    {t.executionShowAll} {Math.min(20, executionRows.length)}
-                  </Text>
-                </TouchableOpacity>
-              ) : null}
+        {executionSummary && (
+          <View style={{ gap: 12 }}>
+            <View style={styles.sheetHeader}>
+              <Text style={[styles.sheetTitle, { color: theme.text }]}>{t.executionTitle}</Text>
+              <TouchableOpacity
+                onPress={() => setExecutionDetailsOpen(false)}
+                accessibilityRole="button"
+                accessibilityLabel={t.planActionClose}
+                hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}
+                style={{ padding: 8, marginRight: -8, alignItems: "center", justifyContent: "center" }}
+              >
+                <LineIcon name="x" size={16} color={theme.muted} />
+              </TouchableOpacity>
             </View>
-          )}
-        </View>}
+            <Text style={[styles.sheetDesc, { color: isConnected ? theme.muted : theme.warning }]}>
+              {isConnected ? `Revision ${executionSummary.revision}` : t.executionOffline}
+            </Text>
+
+            {/* Section switcher: each header chip opens its own section here. */}
+            <View style={styles.executionSegments}>
+              {EXECUTION_SECTION_ORDER.map((section) => {
+                const meta = executionSectionMeta[section];
+                const selected = executionSection === section;
+                return (
+                  <TouchableOpacity
+                    key={section}
+                    onPress={() => { setExecutionSection(section); setDetailsExpanded(false); }}
+                    style={[
+                      styles.executionSegment,
+                      {
+                        borderColor: selected ? theme.accent : theme.border,
+                        backgroundColor: selected ? theme.inputBg : "transparent",
+                      },
+                    ]}
+                    accessibilityRole="button"
+                    accessibilityState={{ selected }}
+                    accessibilityLabel={`${meta.title} ${meta.count.total}`}
+                  >
+                    <Text
+                      style={[styles.executionSegmentText, { color: selected ? theme.accent : theme.muted, fontWeight: selected ? "700" : "500" }]}
+                      numberOfLines={1}
+                    >
+                      {meta.title} {meta.count.total}
+                    </Text>
+                  </TouchableOpacity>
+                );
+              })}
+            </View>
+
+            {executionRows.length === 0 ? (
+              <Text style={[styles.sheetDesc, { color: theme.muted }]}>{executionSectionMeta[executionSection].empty}</Text>
+            ) : (
+              <ScrollView
+                style={{ maxHeight: Math.round(Dimensions.get("window").height * 0.52) }}
+                contentContainerStyle={{ gap: 10, paddingBottom: 16 }}
+                showsVerticalScrollIndicator
+              >
+                {executionRows.slice(0, detailLimit).map((row) => (
+                  <View key={row.key} style={styles.executionRow}>
+                    <View style={styles.executionRowHeader}>
+                      <Text style={[styles.executionGlyph, { color: row.color }]}>
+                        {row.glyph}
+                      </Text>
+                      <View style={styles.executionRowMain}>
+                        <View style={styles.executionRowHeadline}>
+                          {row.id ? (
+                            <Text style={[styles.executionIdTag, { color: theme.dim }]}>
+                              {row.id}
+                            </Text>
+                          ) : null}
+                          {row.assignee ? (
+                            <Text style={[styles.executionAssigneeTag, { color: theme.accent }]}>
+                              {row.assignee}
+                            </Text>
+                          ) : null}
+                          <Text
+                            style={[
+                              styles.executionRowTitle,
+                              {
+                                color: row.isDone ? theme.muted : theme.text,
+                                textDecorationLine: row.isDone ? "line-through" : "none",
+                              },
+                            ]}
+                            numberOfLines={2}
+                          >
+                            {row.title}
+                          </Text>
+                        </View>
+                        {row.meta ? (
+                          <Text style={[styles.executionRowMeta, { color: theme.muted }]} numberOfLines={1}>
+                            {row.meta}
+                          </Text>
+                        ) : null}
+                      </View>
+                    </View>
+                  </View>
+                ))}
+                {executionRows.length > detailLimit ? (
+                  <TouchableOpacity
+                    onPress={() => setDetailsExpanded(true)}
+                    accessibilityRole="button"
+                    accessibilityLabel={`${t.executionShowAll} ${Math.min(20, executionRows.length)}`}
+                  >
+                    <Text style={[styles.sheetDesc, { color: theme.accent, marginTop: 4 }]}>
+                      {t.executionShowAll} {Math.min(20, executionRows.length)}
+                    </Text>
+                  </TouchableOpacity>
+                ) : null}
+              </ScrollView>
+            )}
+          </View>
+        )}
       </SpringBottomSheet>
 
       {/* 底部物理弹簧 ActionSheet：思考等级与计划模式。 */}
@@ -1411,10 +1470,15 @@ function makeStyles(theme: ReturnType<typeof useTheme>["theme"]) {
     executionSegments: { flexDirection: "row", gap: 6 },
     executionSegment: { flexGrow: 1, minHeight: 34, borderWidth: 1, borderRadius: MIUIX_RADIUS.sm, alignItems: "center", justifyContent: "center", paddingHorizontal: 8 },
     executionSegmentText: { fontSize: MIUIX_TYPE.footnote2 },
-    executionRow: { flexDirection: "row", alignItems: "flex-start", gap: 8 },
-    executionRowDot: { width: 8, height: 8, borderRadius: 4, marginTop: 6 },
-    executionRowTitle: { fontSize: MIUIX_TYPE.footnote1, fontWeight: "600" },
-    executionRowMeta: { fontSize: MIUIX_TYPE.footnote2 },
+    executionRow: { paddingVertical: 4 },
+    executionRowHeader: { flexDirection: "row", alignItems: "flex-start", gap: 8 },
+    executionGlyph: { fontSize: 13, fontWeight: "700", width: 16, textAlign: "center", lineHeight: 20 },
+    executionRowMain: { flex: 1, gap: 2 },
+    executionRowHeadline: { flexDirection: "row", alignItems: "flex-start", flexWrap: "wrap", gap: 6 },
+    executionIdTag: { fontSize: 12, fontWeight: "600", lineHeight: 20 },
+    executionAssigneeTag: { fontSize: 12, fontWeight: "600", lineHeight: 20 },
+    executionRowTitle: { flex: 1, minWidth: "60%", fontSize: MIUIX_TYPE.footnote1, fontWeight: "500", lineHeight: 20 },
+    executionRowMeta: { fontSize: 11, lineHeight: 15, marginLeft: 24 },
     container: { flex: 1, backgroundColor: theme.bg },
     header: {
       flexDirection: "row",

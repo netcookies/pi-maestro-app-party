@@ -2,9 +2,12 @@ import { describe, expect, it } from "vitest";
 import type { SessionExecutionSummary } from "@maestro-mobile/mobile-sdk/protocol";
 import {
   EXECUTION_SECTION_ORDER,
+  executionGlyph,
   executionSectionCounts,
   executionTone,
+  formatExecutionId,
   hasActiveExecution,
+  isExecutionItemDone,
 } from "../src/execution-presentation";
 
 const sampleSummary: SessionExecutionSummary = {
@@ -69,5 +72,36 @@ describe("execution-presentation", () => {
 
   it("preserves stable section order for tabs and chips", () => {
     expect(EXECUTION_SECTION_ORDER).toEqual(["todo", "teammate", "background"]);
+  });
+
+  it("maps status to TUI-matching glyphs and done state", () => {
+    expect(executionGlyph("todo", "completed")).toBe("✓");
+    expect(executionGlyph("todo", "done")).toBe("✓");
+    expect(executionGlyph("todo", "in_progress")).toBe("■");
+    expect(executionGlyph("todo", "blocked")).toBe("!");
+    expect(executionGlyph("todo", "pending")).toBe("□");
+
+    expect(isExecutionItemDone("todo", "completed")).toBe(true);
+    expect(isExecutionItemDone("todo", "done")).toBe(true);
+    expect(isExecutionItemDone("todo", "in_progress")).toBe(false);
+    expect(isExecutionItemDone("todo", "pending")).toBe(false);
+
+    expect(executionGlyph("teammate", "completed")).toBe("✓");
+    expect(executionGlyph("teammate", "running")).toBe("■");
+    expect(executionGlyph("teammate", "retrying")).toBe("↻");
+    expect(executionGlyph("teammate", "sleeping")).toBe("◉");
+    expect(executionGlyph("teammate", "failed")).toBe("✗");
+
+    expect(executionGlyph("background", "completed")).toBe("✓");
+    expect(executionGlyph("background", "running")).toBe("■");
+    expect(executionGlyph("background", "cancelled")).toBe("✗");
+  });
+
+  it("formats IDs with leading #", () => {
+    expect(formatExecutionId("1")).toBe("#1");
+    expect(formatExecutionId("#12")).toBe("#12");
+    expect(formatExecutionId("abc")).toBe("#abc");
+    expect(formatExecutionId("")).toBe("");
+    expect(formatExecutionId(undefined)).toBe("");
   });
 });

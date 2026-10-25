@@ -247,6 +247,7 @@ const styles = StyleSheet.create({
   },
   sheetContainer: {
     width: "100%",
+    maxHeight: Math.round(SCREEN_HEIGHT * 0.88),
     borderTopLeftRadius: MIUIX_RADIUS.lg,
     borderTopRightRadius: MIUIX_RADIUS.lg,
     borderTopWidth: 1,
