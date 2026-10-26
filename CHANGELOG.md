@@ -2,6 +2,12 @@
 
 本文件记录 Maestro Mobile 的显著变更。格式基于 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)。
 
+## [0.16.3] — 2026-10-26
+
+### 修复
+
+- stop the truncation case racing its own background poll
+
 ## [0.16.2] — 2026-10-26
 
 ### 测试
