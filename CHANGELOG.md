@@ -2,6 +2,17 @@
 
 本文件记录 Maestro Mobile 的显著变更。格式基于 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)。
 
+## [0.16.2] — 2026-10-26
+
+### 测试
+
+- cover the optimizer apply path end to end
+- add isolated dual-process Review & Refine E2E probe
+
+### 修复
+
+- clean refine pending on abort without synthesizing cancel
+
 ## [0.16.1] — 2026-10-25
 
 ### 修复
