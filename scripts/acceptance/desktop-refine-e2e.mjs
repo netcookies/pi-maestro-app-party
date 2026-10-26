@@ -223,7 +223,7 @@ async function setup() {
   await writeFile(join(evidenceDir, "pi-list-models.redacted.txt"), redacted(`${listModels.stdout}\n${listModels.stderr}`), { mode: 0o600 });
   if (listModels.exitCode !== 0) throw new Error(`pi model preflight failed: ${listModels.stderr}`);
 
-  for (const id of ["R1", "R2", "R3", "R4"]) tasks[id] = { id, status: "pending" };
+  for (const id of ["R1", "R2", "R3", "R4", "R5"]) tasks[id] = { id, status: "pending" };
 }
 
 async function writeBroker() {
@@ -689,8 +689,21 @@ async function caseR3(target) {
   } catch {
     screen = await capturePane("r3-timeout");
   }
-  const pass = exited;
-  tasks.R3 = { id: "R3", status: pass ? "passed" : "failed", exitCode: pass ? 0 : 1, target, refineSessionId, result, exited, screen };
+  // The overlay closing is not enough: the mirror must also broadcast the
+  // business terminal. Host projects a Flow `terminal` event as an update whose
+  // status is the terminal name, so that is what we look for.
+  const TERMINAL_STATUSES = new Set(["discarded", "cancelled", "applied", "failed", "disconnected", "revision_conflict"]);
+  let terminal;
+  try {
+    terminal = await waitUntil(async () => {
+      const scoped = mirrorOf(await mirrorFrames(), refineSessionId);
+      return scoped.updates.filter((f) => TERMINAL_STATUSES.has(f.status)).at(-1) ?? false;
+    }, 30000, "discard terminal", 1000);
+  } catch {
+    terminal = undefined;
+  }
+  const pass = exited && Boolean(terminal);
+  tasks.R3 = { id: "R3", status: pass ? "passed" : "failed", exitCode: pass ? 0 : 1, target, refineSessionId, result, exited, terminal: terminal ?? null, screen };
   await writeCase("r3", { provider, model, status: tasks.R3.status, case: "remote-discard", target, ...tasks.R3, pass }, await caseFrames(startMs, Date.now()));
   return pass;
 }
@@ -755,6 +768,94 @@ async function caseR4(target) {
   return pass;
 }
 
+/**
+ * R5 verifies the only path that writes the PlanStore: the optimizer role
+ * (`appliesAs: "draft"`) produces a turn, the user applies it, and the mirror
+ * must not broadcast `applied` until the PlanStore write has actually committed.
+ */
+async function caseR5(target) {
+  const startMs = Date.now();
+  // Apply writes PlanStore and closes the panel, so R5 opens its own session.
+  try {
+    // R2 leaves the panel open, so R5 reuses it directly.
+    if (!REFINE_PANEL.test(await capturePane("r5-precheck"))) {
+      tasks.R5 = { id: "R5", status: "blocked", exitCode: 2, blockedReason: "refine panel was not still open after R2" };
+      await writeCase("r5", { provider, model, status: "blocked", case: "apply-commits-terminal", target, pass: false }, await caseFrames(startMs, Date.now()));
+      return false;
+    }
+  } catch (error) {
+    tasks.R5 = { id: "R5", status: "blocked", exitCode: 2, blockedReason: `could not open refine panel: ${error}` };
+    await writeCase("r5", { provider, model, status: "blocked", case: "apply-commits-terminal", target, pass: false }, await caseFrames(startMs, Date.now()));
+    return false;
+  }
+  const latestSnapshot = [...(await mirrorFrames())].reverse().find((f) => f.type === "desktop_plan_refine_snapshot");
+  if (!latestSnapshot) {
+    tasks.R5 = { id: "R5", status: "blocked", exitCode: 2, blockedReason: "no snapshot to target" };
+    await writeCase("r5", { provider, model, status: "blocked", case: "apply-commits-terminal", target, pass: false }, await caseFrames(startMs, Date.now()));
+    return false;
+  }
+  const refineSessionId = latestSnapshot.refineSessionId;
+
+  // Host keeps the role in its own selection state; `run` cannot carry it.
+  // Only the optimizer role returns a full draft that plan.ts writes to PlanStore.
+  const selectResult = await sendRefineAction(target, latestSnapshot, `${env.nonce}-r5-select-role`, {
+    action: "select_role",
+    role: "optimizer",
+  });
+  await sleep(800);
+  const runResult = await sendRefineAction(target, latestSnapshot, `${env.nonce}-r5-run`, {
+    action: "run",
+    userInput: "Return the complete revised plan as one Markdown draft, three bullets only.",
+  });
+
+  // The panel is reused from R2, so only turns produced after R5's own run count.
+  let turns = [];
+  try {
+    await waitUntil(async () => {
+      const scoped = mirrorOf(await mirrorFrames(), refineSessionId);
+      turns = scoped.all.flatMap((f) => (f.turn ? [f.turn] : [])).filter((t) => t.role === "optimizer");
+      return turns.length >= 1;
+    }, runTurnWaitMs, "optimizer turn", 3000);
+  } catch (error) {
+    const failureScreen = await capturePane("r5-run-timeout");
+    tasks.R5 = { id: "R5", status: "failed", exitCode: 1, target, refineSessionId, runResult, blockedReason: String(error), failureScreen };
+    await writeCase("r5", { provider, model, status: "failed", case: "apply-commits-terminal", target, ...tasks.R5, pass: false }, await caseFrames(startMs, Date.now()));
+    return false;
+  }
+  const turnId = turns.at(-1)?.turnId;
+  const optimizerTurn = turns.at(-1);
+
+  const applyResult = await sendRefineAction(target, latestSnapshot, `${env.nonce}-r5-apply`, {
+    action: "apply",
+    turnId,
+  });
+
+  // The terminal must arrive only after the PlanStore commit, so wait for it and
+  // confirm it is `applied` (a failed save would report `failed`).
+  let terminal;
+  try {
+    terminal = await waitUntil(async () => {
+      const scoped = mirrorOf(await mirrorFrames(), refineSessionId);
+      return scoped.updates.filter((f) => ["applied", "failed"].includes(f.status)).at(-1) ?? false;
+    }, 60000, "apply terminal", 1500);
+  } catch {
+    terminal = undefined;
+  }
+
+  const screen = await capturePane("r5-after-apply");
+  const applied = terminal?.status === "applied";
+  const pass = Boolean(optimizerTurn) && applied;
+  tasks.R5 = {
+    id: "R5", status: pass ? "passed" : "failed", exitCode: pass ? 0 : 1,
+    target, refineSessionId, selectResult, runResult, applyResult, turnId,
+    turnStatus: optimizerTurn?.status ?? null,
+    appliesAs: optimizerTurn?.appliesAs ?? null,
+    terminal: terminal ?? null, screen,
+  };
+  await writeCase("r5", { provider, model, status: tasks.R5.status, case: "apply-commits-terminal", target, ...tasks.R5, pass }, await caseFrames(startMs, Date.now()));
+  return pass;
+}
+
 async function cleanup() {
   const attempts = [];
   spawnSync("tmux", ["kill-session", "-t", env.tmuxSession], { encoding: "utf8" });
@@ -793,7 +894,7 @@ async function cleanup() {
 }
 
 async function finalize() {
-  const cases = [tasks.R1, tasks.R2, tasks.R3, tasks.R4];
+  const cases = [tasks.R1, tasks.R2, tasks.R3, tasks.R4, tasks.R5];
   const verdict = cases.some((t) => t?.status === "failed") ? "failed"
     : cases.every((t) => t?.status === "passed") ? "passed" : "blocked";
   const allFrames = [];
@@ -816,6 +917,7 @@ async function finalize() {
       remoteRunProducedTurn: tasks.R2?.status === "passed",
       remoteDiscardExitedLocally: tasks.R3?.status === "passed",
       remoteCancelDidNotReopenConfirm: tasks.R4?.status === "passed",
+      applyCommitsTerminal: tasks.R5?.status === "passed",
       realMultiProcessTopology: true,
     },
   });
@@ -833,6 +935,7 @@ liveVerdict: ${verdict}
 - R2 remote run intent produces a turn: ${tasks.R2?.status}${tasks.R2?.blockedReason ? ` (${tasks.R2.blockedReason})` : ""}.
 - R3 remote discard exits locally: ${tasks.R3?.status}${tasks.R3?.blockedReason ? ` (${tasks.R3.blockedReason})` : ""}.
 - R4 remote cancel does not reopen plan confirm: ${tasks.R4?.status}${tasks.R4?.blockedReason ? ` (${tasks.R4.blockedReason})` : ""}.
+- R5 apply commits PlanStore then broadcasts applied: ${tasks.R5?.status}${tasks.R5?.blockedReason ? ` (${tasks.R5.blockedReason})` : ""}.
 - Topology: real Broker + real Host + real Pi TUI in tmux.
 - Cleanup proof: evidence/cleanup-proof.json.
 `, { mode: 0o600 });
@@ -861,7 +964,10 @@ async function main() {
   // case can be iterated without paying for the whole chain again.
   const stopAfter = process.env.REFINE_PROBE_STOP_AFTER ?? "";
   if (tasks.R1.status === "passed" && stopAfter !== "r1") {
+    // R2 -> R5 share one open panel: R5's apply writes PlanStore and closes it.
     await caseR2(target);
+    if (tasks.R2.status === "passed" && !process.env.REFINE_PROBE_SKIP_R5) await caseR5(target);
+    // R3 -> R4 need a fresh panel; R4 also proves no reopen loop after cancel.
     if (tasks.R2.status === "passed" && stopAfter !== "r2") {
       await caseR3(target);
       if (tasks.R3.status === "passed" && stopAfter !== "r3") await caseR4(target);
@@ -874,7 +980,7 @@ try {
   await main();
 } catch (error) {
   await appendJsonLine(join(evidenceDir, "probe-errors.jsonl"), { at: now(), error: error instanceof Error ? error.stack : String(error) }).catch(() => {});
-  for (const id of ["R1", "R2", "R3", "R4"]) tasks[id] ??= { id, status: "blocked", exitCode: 2, blockedReason: "runner error" };
+  for (const id of ["R1", "R2", "R3", "R4", "R5"]) tasks[id] ??= { id, status: "blocked", exitCode: 2, blockedReason: "runner error" };
 } finally {
   if (env) { await cleanup(); await finalize(); }
 }
