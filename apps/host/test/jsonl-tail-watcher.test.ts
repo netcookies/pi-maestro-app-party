@@ -121,7 +121,10 @@ describe("JsonlTailWatcher (AC1, AC2, AC5)", () => {
       { type: "message", id: "m1", message: { role: "user", content: "很长很长的历史消息".repeat(100) } },
     ]);
     const received: TimelineItem[] = [];
-    const watcher = new JsonlTailWatcher(filePath, (items) => received.push(...items), { pollIntervalMs: 50 });
+    // This case drives truncation through an explicit checkNewContent() call. A
+    // short background poll would race it: checkNewContent() returns early while
+    // another check is in flight, so the assertion could miss the replay.
+    const watcher = new JsonlTailWatcher(filePath, (items) => received.push(...items), { pollIntervalMs: 60_000 });
     await watcher.start();
     const initialOffset = watcher.offset;
     expect(initialOffset).toBeGreaterThan(1000);
