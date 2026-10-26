@@ -221,6 +221,35 @@ describe("flow refine transport", () => {
     expect(calls).toBe(1);
     await expect(transport.handleAction({ ...action, action: { action: "run", userInput: "replacement" } })).resolves.toBe(false);
   });
+
+  it("signal abort drops the mirror and pending entry without settling handle promise as cancel", async () => {
+    const transport = createDesktopRefineTransport({
+      getClient: () => ({ target, sendPlanRefine: async () => {} }),
+      isCurrent: () => true,
+      supportsRefine: () => true,
+    });
+    const controller = new AbortController();
+    const handle = transport.open({
+      sessionId: "sess-1",
+      refineSessionId: "ref-abort",
+      operationId: 10,
+      target,
+      cwd: "/repo",
+      mode: "plan",
+      markdown: "# P",
+      revision: 1,
+      initialRole: "reviewer",
+      signal: controller.signal,
+      handleAction: async () => {},
+    })!;
+    expect(transport.pendingCount).toBe(1);
+    let settled = false;
+    void handle.promise.finally(() => { settled = true; });
+    controller.abort();
+    expect(transport.pendingCount).toBe(0);
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(settled).toBe(false);
+  });
 });
 
 describe("refine protocol projection", () => {

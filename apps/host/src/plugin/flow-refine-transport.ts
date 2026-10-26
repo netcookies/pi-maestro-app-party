@@ -338,7 +338,15 @@ export function createDesktopRefineTransport(options: {
         },
       };
 
-      const onAbort = (): void => { void handle.cancel("aborted"); };
+      const onAbort = (): void => {
+        // An aborted Flow signal is not a user decision. Drop the mirror
+        // without settling the promise so the local overlay stays the only
+        // authority for the outcome.
+        const entry = pending.get(key);
+        if (!entry) return;
+        pending.delete(key);
+        entry.removeAbortListener();
+      };
       request.signal.addEventListener("abort", onAbort, { once: true });
 
       const entry: PendingRefine = {
