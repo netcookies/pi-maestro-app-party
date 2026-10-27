@@ -1072,6 +1072,12 @@ export class MobileHostServer {
           this.sendAck(client, command, result);
           break;
         }
+        case "close_all_herdr_sessions": {
+          if (!client.capabilities.includes("herdr_session_close")) { this.sendUnavailable(client, command, "capability_mismatch"); break; }
+          const closed = await this.controller.closeAllHerdrSessions();
+          this.sendAck(client, command, { closed });
+          break;
+        }
         case "launch_pi_session": {
           if (!client.capabilities.includes("herdr_launch")) { this.sendUnavailable(client, command, "capability_mismatch"); break; }
           const requestId = command.id ? `${client.id}:${command.id}` : crypto.randomUUID();

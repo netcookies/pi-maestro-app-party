@@ -22,7 +22,7 @@ import {
   type DesktopPlanResponse,
 } from "@maestro-mobile/shared";
 import { HostClient, CommandFailedError, createMobileRecovery, type ConnectionState, type RecoveryCoordinator, PlanRefineTracker, type PlanRefineState } from "@maestro-mobile/mobile-sdk";
-import type { MobilePlanRefineAction } from "@maestro-mobile/mobile-sdk/protocol";
+import type { MobilePlanRefineAction, HerdrRuntime } from "@maestro-mobile/mobile-sdk/protocol";
 import { beginGracePeriod, endGracePeriod, isAndroidRuntime, isIosRuntime, startBackgroundService, stopBackgroundService } from "./background-runtime";
 import { getConfig } from "./config";
 import { consumePlanNotificationEvent, emitInAppError } from "./notifications";
@@ -96,8 +96,39 @@ export interface HostStoreValue {
   /** 清除本地错误提示（可关闭横幅）；只影响本地提示，不影响 host 事件流。 */
   clearError(): void;
   getHerdrStatus(): Promise<unknown>;
-  launchPiSession(cwd: string, label?: string): Promise<unknown>;
+  getHerdrSettings(): Promise<unknown>;
+  updateHerdrSettings(patch: unknown): Promise<unknown>;
+  closeHerdrSession(sessionId: string, target: SessionTargetIdentity): Promise<unknown>;
+  closeAllHerdrSessions(): Promise<unknown>;
+  launchPiSession(cwd: string, label?: string, options?: { runtime?: HerdrRuntime; resumeSessionRef?: string }): Promise<unknown>;
   supportsHerdrLaunch: boolean;
+  supportsHerdrSettings: boolean;
+  supportsHerdrSessionClose: boolean;
+}
+
+/** Herdr 关闭结果的业务分类（帧级 status 恒 observed/failed，业务结果在 result 内） */
+export type HerdrCloseOutcomeView = "closed" | "close_timeout" | "herdr_session_busy" | "herdr_session_not_owned" | "unknown";
+
+export function herdrCloseOutcome(result: unknown): HerdrCloseOutcomeView {
+  const status = (result as { result?: { status?: unknown } } | null | undefined)?.result?.status;
+  return status === "closed" || status === "close_timeout" || status === "herdr_session_busy" || status === "herdr_session_not_owned"
+    ? status
+    : "unknown";
+}
+
+/** 判断某会话是否由本 Host 经 Herdr 启动（会话页头部按钮显示条件之一） */
+export function isHerdrLaunchedSpace(
+  settings: unknown,
+  sessionId: string,
+  endpointId?: string,
+): boolean {
+  const spaces = (settings as { launchedSpaces?: unknown } | null | undefined)?.launchedSpaces;
+  if (!Array.isArray(spaces)) return false;
+  return spaces.some((entry) => {
+    const pane = entry as { paneId?: unknown };
+    // Host 登记以 paneId 为主键；会话页用 sessionId/endpointId 匹配已注册 target 的另一侧由 Host 校验。
+    return typeof pane.paneId === "string" && pane.paneId.length > 0 && (sessionId.length > 0 || endpointId !== undefined);
+  });
 }
 
 export function normalizeThinkingResult(result: unknown): { ok: boolean; error?: string } {
@@ -717,8 +748,20 @@ export function HostStoreProvider({ children }: { children: React.ReactNode }) {
   }, [dispatch]);
 
   const supportsHerdrLaunch = clientRef.current?.hasCapability("herdr_launch") ?? false;
+  const supportsHerdrSettings = clientRef.current?.hasCapability("herdr_settings") ?? false;
+  const supportsHerdrSessionClose = clientRef.current?.hasCapability("herdr_session_close") ?? false;
   const getHerdrStatus = useCallback(() => getClient().sendCommand({ type: "get_herdr_status" }), [getClient]);
-  const launchPiSession = useCallback((cwd: string, label?: string) => getClient().sendCommand({ type: "launch_pi_session", cwd, ...(label ? { label } : {}) }), [getClient]);
+  const getHerdrSettings = useCallback(() => getClient().sendCommand({ type: "get_herdr_settings" }), [getClient]);
+  const updateHerdrSettings = useCallback((patch: unknown) => getClient().sendCommand({ type: "update_herdr_settings", patch: patch as never }), [getClient]);
+  const closeHerdrSession = useCallback((sessionId: string, target: SessionTargetIdentity) => getClient().sendCommand({ type: "close_herdr_session", sessionId, target }), [getClient]);
+  const closeAllHerdrSessions = useCallback(() => getClient().sendCommand({ type: "close_all_herdr_sessions" }), [getClient]);
+  const launchPiSession = useCallback((cwd: string, label?: string, options?: { runtime?: HerdrRuntime; resumeSessionRef?: string }) => getClient().sendCommand({
+    type: "launch_pi_session",
+    cwd,
+    ...(label ? { label } : {}),
+    ...(options?.runtime ? { runtime: options.runtime } : {}),
+    ...(options?.resumeSessionRef ? { resumeSessionRef: options.resumeSessionRef } : {}),
+  }), [getClient]);
 
   const value = useMemo<HostStoreValue>(
     () => ({
@@ -761,10 +804,16 @@ export function HostStoreProvider({ children }: { children: React.ReactNode }) {
       lastError: state.lastError,
       clearError,
       getHerdrStatus,
+      getHerdrSettings,
+      updateHerdrSettings,
+      closeHerdrSession,
+      closeAllHerdrSessions,
       launchPiSession,
       supportsHerdrLaunch,
+      supportsHerdrSettings,
+      supportsHerdrSessionClose,
     }),
-    [state, connectionState, hostUrl, token, connect, disconnect, activate, listHostSessions, refreshMaestroState, refreshMonitor, refreshExecutionProjections, loadSessionHistory, selectSessionTarget, loadMoreHistory, searchHistory, listModels, listSkills, getMaestroSettings, updateMaestroSettings, fetchSessionUsage, setModel, setThinking, sendPrompt, sendSteer, sendAbort, getNotificationConfig, testNotification, answerDialog, cancelDialog, respondPlan, cancelPlan, supportsRefine, refineState, refineTarget, sendRefineAction, clearError, getHerdrStatus, launchPiSession],
+    [state, connectionState, hostUrl, token, connect, disconnect, activate, listHostSessions, refreshMaestroState, refreshMonitor, refreshExecutionProjections, loadSessionHistory, selectSessionTarget, loadMoreHistory, searchHistory, listModels, listSkills, getMaestroSettings, updateMaestroSettings, fetchSessionUsage, setModel, setThinking, sendPrompt, sendSteer, sendAbort, getNotificationConfig, testNotification, answerDialog, cancelDialog, respondPlan, cancelPlan, supportsRefine, refineState, refineTarget, sendRefineAction, clearError, getHerdrStatus, getHerdrSettings, updateHerdrSettings, closeHerdrSession, closeAllHerdrSessions, launchPiSession],
   );
 
   return <HostStoreContext.Provider value={value}>{children}</HostStoreContext.Provider>;

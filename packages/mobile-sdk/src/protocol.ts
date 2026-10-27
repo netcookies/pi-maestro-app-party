@@ -740,6 +740,7 @@ export type ClientCommandPayload =
   | { type: "get_herdr_status" }
   | { type: "get_herdr_settings" }
   | { type: "update_herdr_settings"; patch: { settings?: Partial<Pick<HerdrLaunchSettings, "runtime" | "resumeHistory" | "autoCleanupSpace">>; addFavorite?: string; removeFavorite?: string; /** 整表替换，表达排序与批量整理 */ reorderFavorites?: string[] } }
+  | { type: "close_all_herdr_sessions" }
   | ({ type: "close_herdr_session" } & TargetedSessionCommand)
   | ({ type: "load_more_history"; count?: number } & TargetedSessionCommand)
   | ({ type: "search_history"; keyword: string; maxResults?: number; previewLength?: number } & TargetedSessionCommand)
@@ -958,6 +959,7 @@ export function isClientCommand(value: unknown): value is ClientCommand {
     && value.type !== "update_maestro_settings"
     && value.type !== "launch_pi_session" && value.type !== "get_herdr_status"
     && value.type !== "get_herdr_settings" && value.type !== "update_herdr_settings"
+    && value.type !== "close_all_herdr_sessions"
     && (value.target === undefined || !isSessionTargetIdentity(value.target))) return false;
   switch (value.type) {
     case "launch_pi_session":
@@ -967,6 +969,7 @@ export function isClientCommand(value: unknown): value is ClientCommand {
     case "get_herdr_status":
       return true;
     case "get_herdr_settings":
+    case "close_all_herdr_sessions":
       return true;
     case "update_herdr_settings":
       return isHerdrSettingsPatch(value.patch);
