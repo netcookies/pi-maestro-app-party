@@ -234,3 +234,60 @@ describe("HerdrSessionLaunchService.close", () => {
     }
   });
 });
+
+describe("HerdrSessionLaunchService runtime resolution", () => {
+  /** 构造一个带 probeRuntimes 的 adapter stub，记录实际传给 launchPiPane 的 runtime。 */
+  async function runtimeHarness(options: { piBolt: boolean }) {
+    const projection = registry();
+    const cwd = await mkdtemp(join(tmpdir(), "herdr-runtime-"));
+    const target = { ...targetA, normalizedCwd: await realpath(cwd) };
+    const received: Array<string | undefined> = [];
+    const launchPiPane = vi.fn(async (request: { runtime?: "pi" | "pi-bolt" }) => {
+      received.push(request.runtime);
+      projection.records.push({ target, launchNonce: "a".repeat(32) });
+      return { paneId: "w9:p1", workspaceId: "w9", launchNonce: "a".repeat(32) };
+    });
+    const probeRuntimes = vi.fn(async () => ({ pi: true, piBolt: options.piBolt }));
+    const adapterStub = { launchPiPane, probeRuntimes } as unknown as HerdrAdapter;
+    return { projection, launchPiPane, probeRuntimes, received, adapterStub, cwd };
+  }
+
+  it("auto resolves to pi-bolt when installed and passes the same runtime to the launcher", async () => {
+    const { projection, received, adapterStub, cwd } = await runtimeHarness({ piBolt: true });
+    const service = new HerdrSessionLaunchService(projection, adapterStub);
+    const result = await service.launch("auto-bolt", cwd, undefined, { runtime: "auto" });
+    expect(result).toMatchObject({ status: "ready", runtime: "pi-bolt" });
+    // 关键回归：实际启动的二进制必须与回显一致
+    expect(received).toEqual(["pi-bolt"]);
+  });
+
+  it("auto resolves to pi when pi-bolt is absent and passes the same runtime to the launcher", async () => {
+    const { projection, received, adapterStub, cwd } = await runtimeHarness({ piBolt: false });
+    const service = new HerdrSessionLaunchService(projection, adapterStub);
+    const result = await service.launch("auto-pi", cwd, undefined, { runtime: "auto" });
+    expect(result).toMatchObject({ status: "ready", runtime: "pi" });
+    expect(received).toEqual(["pi"]);
+  });
+
+  it("explicit runtime bypasses probing and is echoed unchanged", async () => {
+    const { projection, received, probeRuntimes, adapterStub, cwd } = await runtimeHarness({ piBolt: true });
+    const service = new HerdrSessionLaunchService(projection, adapterStub);
+    const result = await service.launch("explicit", cwd, undefined, { runtime: "pi" });
+    expect(result).toMatchObject({ status: "ready", runtime: "pi" });
+    expect(received).toEqual(["pi"]);
+    expect(probeRuntimes).not.toHaveBeenCalled();
+  });
+
+  it("records the resolved runtime in the launched space registration", async () => {
+    const { projection, adapterStub, cwd } = await runtimeHarness({ piBolt: true });
+    const { store, file } = await tempStore();
+    try {
+      const service = new HerdrSessionLaunchService(projection, adapterStub, store);
+      await service.launch("record", cwd, undefined, { runtime: "auto" });
+      const [record] = await store.listLaunches();
+      expect(record?.runtime).toBe("pi-bolt");
+    } finally {
+      await rm(join(file, ".."), { recursive: true, force: true });
+    }
+  });
+});

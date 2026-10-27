@@ -714,6 +714,11 @@ export interface HerdrLaunchedSpace {
   workspaceId?: string;
   label?: string;
   cwd: string;
+  /** 该 space 内 Pi 注册的 exact target；Mobile 用它判定归属 */
+  sessionId?: string;
+  endpointId?: string;
+  processGeneration?: string;
+  runtime?: "pi" | "pi-bolt";
   launchedAt: string;
 }
 

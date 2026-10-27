@@ -88,7 +88,11 @@ export default function SessionScreen() {
   const [closeConfirmOpen, setCloseConfirmOpen] = useState(false);
   const [closeMessage, setCloseMessage] = useState<string | null>(null);
   const [resumeState, setResumeState] = useState<"idle" | "launching" | "failed" | "unknown">("idle");
-  const [herdrLaunch, setHerdrLaunch] = useState<{ settings: { resumeHistory: boolean } | null; launchedPaneIds: Set<string>; herdrAvailable: boolean }>({ settings: null, launchedPaneIds: new Set(), herdrAvailable: false });
+  const [herdrLaunch, setHerdrLaunch] = useState<{
+    settings: { resumeHistory: boolean } | null;
+    launchedSpaces: Array<{ paneId: string; sessionId?: string; endpointId?: string; processGeneration?: string }>;
+    herdrAvailable: boolean;
+  }>({ settings: null, launchedSpaces: [], herdrAvailable: false });
   const [executionSection, setExecutionSection] = useState<ExecutionSectionKey>("todo");
   const [detailsExpanded, setDetailsExpanded] = useState(false);
   const detailLimit = detailsExpanded ? 20 : 5;
@@ -525,28 +529,34 @@ export default function SessionScreen() {
     void (async () => {
       try {
         const response = (await getHerdrSettings()) as {
-          result?: { settings?: { resumeHistory: boolean }; launchedSpaces?: Array<{ paneId: string }> };
+          result?: { settings?: { resumeHistory: boolean }; launchedSpaces?: Array<{ paneId: string; sessionId?: string; endpointId?: string; processGeneration?: string }> };
           settings?: { resumeHistory: boolean };
-          launchedSpaces?: Array<{ paneId: string }>;
+          launchedSpaces?: Array<{ paneId: string; sessionId?: string; endpointId?: string; processGeneration?: string }>;
         };
         const data = response.result ?? response;
         setHerdrLaunch({
           settings: data.settings ? { resumeHistory: data.settings.resumeHistory } : null,
-          launchedPaneIds: new Set((data.launchedSpaces ?? []).map((entry: { paneId: string }) => entry.paneId)),
+          launchedSpaces: data.launchedSpaces ?? [],
           herdrAvailable: true,
         });
       } catch {
-        setHerdrLaunch({ settings: null, launchedPaneIds: new Set(), herdrAvailable: false });
+        setHerdrLaunch({ settings: null, launchedSpaces: [], herdrAvailable: false });
       }
     })();
   }, [getHerdrSettings, supportsHerdrSessionClose]);
 
-  // 归属判断只依据 Host 的 launchedSpaces 投影；App 不自行推断进程身份。
+  // 归属判断必须同时满足 capability、Herdr 可用、已连接，且当前 target 在 Host 登记中。
+  const currentTarget = sessionSummary?.target;
+  const isOwnedHerdrSession = currentTarget !== undefined && herdrLaunch.launchedSpaces.some((entry) =>
+    entry.sessionId === currentTarget.sessionId
+    && entry.endpointId === currentTarget.endpointId
+    && entry.processGeneration === currentTarget.processGeneration);
+
   const canCloseHerdrSession = supportsHerdrSessionClose
     && herdrLaunch.herdrAvailable
     && isConnected
     && !isHistorySession
-    && session !== undefined;
+    && isOwnedHerdrSession;
 
   const resumeEnabled = herdrLaunch.settings?.resumeHistory === true
     && isHistorySession

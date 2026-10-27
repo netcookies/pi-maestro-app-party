@@ -166,7 +166,7 @@ export class HerdrSessionLaunchService {
         cwd,
         label,
         ...(options.resumeSessionRef !== undefined ? { resumeSessionRef: options.resumeSessionRef } : {}),
-        ...(runtime !== "auto" ? { runtime } : {}),
+        runtime,
       });
       const deadline = this.now() + REGISTRATION_TIMEOUT_MS;
       while (this.now() < deadline) {
@@ -179,14 +179,14 @@ export class HerdrSessionLaunchService {
         if (match) {
           const expectedCwd = await import("node:fs/promises").then(({ realpath }) => realpath(cwd));
           if (match.target.normalizedCwd !== expectedCwd) return { requestId, status: "failed", stage: "plugin_registered", paneId: launched.paneId, error: { code: "launch_target_mismatch", message: "Registered Pi cwd does not match the requested cwd", source: "command" } };
-          await this.recordLaunchedSpace(launched, match.target, cwd, label);
+          await this.recordLaunchedSpace(launched, match.target, cwd, label, runtime);
           return {
             requestId,
             status: "ready",
             stage: "ready",
             paneId: launched.paneId,
             target: { ...match.target },
-            ...(runtime === "auto" ? await this.echoAutoRuntime() : { runtime }),
+            runtime,
           };
         }
         await this.sleep(POLL_INTERVAL_MS);
@@ -210,27 +210,24 @@ export class HerdrSessionLaunchService {
     }
   }
 
-  /** auto：探测到 pi-bolt 用 pi-bolt，否则 pi。 */
-  private async resolveRuntime(runtime: HerdrLaunchOptions["runtime"]): Promise<"auto" | "pi" | "pi-bolt"> {
+  /** auto：探测到 pi-bolt 用 pi-bolt，否则 pi。解析结果必须同时用于启动与回显。 */
+  private async resolveRuntime(runtime: HerdrLaunchOptions["runtime"]): Promise<"pi" | "pi-bolt"> {
     if (runtime === "pi" || runtime === "pi-bolt") return runtime;
-    return "auto";
-  }
-
-  private async echoAutoRuntime(): Promise<{ runtime: "pi" | "pi-bolt" }> {
     try {
       const probe = await this.adapter.probeRuntimes();
-      return { runtime: probe.piBolt ? "pi-bolt" : "pi" };
+      return probe.piBolt ? "pi-bolt" : "pi";
     } catch {
-      return { runtime: "pi" };
+      return "pi";
     }
   }
 
-  private async recordLaunchedSpace(launched: HerdrPaneLaunchResult, target: DesktopPluginTarget, cwd: string, label: string | undefined): Promise<void> {
+  private async recordLaunchedSpace(launched: HerdrPaneLaunchResult, target: DesktopPluginTarget, cwd: string, label: string | undefined, runtime: "pi" | "pi-bolt"): Promise<void> {
     if (!this.store) return;
     const record: HerdrLaunchedSpaceRecord = {
       paneId: launched.paneId,
       target: { ...target },
       cwd,
+      runtime,
       launchedAt: new Date(this.now()).toISOString(),
       ...(launched.workspaceId !== undefined ? { workspaceId: launched.workspaceId } : {}),
       ...(label !== undefined ? { label } : {}),

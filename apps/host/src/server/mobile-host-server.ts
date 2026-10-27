@@ -578,9 +578,13 @@ export class MobileHostServer {
           writeJson(response, 400, { error: "addFavorite must be an existing absolute directory path" });
           return;
         }
-        if (reorderFavorites !== undefined && !reorderFavorites.every(isSafeFavoritePath)) {
-          writeJson(response, 400, { error: "reorderFavorites entries must be existing absolute directory paths" });
-          return;
+        if (reorderFavorites !== undefined) {
+          // isSafeFavoritePath 是异步的；必须 await 后才能判断，否则 Promise 恒为真值而绕过校验。
+          const checks = await Promise.all(reorderFavorites.map(isSafeFavoritePath));
+          if (!checks.every(Boolean)) {
+            writeJson(response, 400, { error: "reorderFavorites entries must be existing absolute directory paths" });
+            return;
+          }
         }
         const updated = await this.controller.updateHerdrSettings({
           ...(addFavorite !== undefined ? { addFavorite: await realpath(addFavorite) } : {}),

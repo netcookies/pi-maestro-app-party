@@ -103,33 +103,6 @@ describe("MobileHostServer", () => {
     await rm(ctx.tmpDir, { recursive: true, force: true });
   });
 
-  it("serves /api/herdr-favorites and rejects unsafe paths", async () => {    const normalized = await realpath(ctx.tmpDir);
-    const add = await fetch(`${ctx.url}/api/herdr-favorites`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ addFavorite: ctx.tmpDir }),
-    });
-    expect(add.status).toBe(200);
-    expect(((await add.json()) as { favorites: string[] }).favorites).toEqual([normalized]);
-
-    const reorder = await fetch(`${ctx.url}/api/herdr-favorites`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ reorderFavorites: [normalized] }),
-    });
-    expect(reorder.status).toBe(200);
-
-    const unsafe = await fetch(`${ctx.url}/api/herdr-favorites`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ addFavorite: "/definitely/not/a/directory" }),
-    });
-    expect(unsafe.status).toBe(400);
-
-    const list = await fetch(`${ctx.url}/api/herdr-favorites`);
-    expect(((await list.json()) as { favorites: string[] }).favorites).toEqual([normalized]);
-  });
-
   it("serves /api/herdr-favorites and rejects unsafe paths", async () => {
     const normalized = await realpath(ctx.tmpDir);
     const add = await fetch(`${ctx.url}/api/herdr-favorites`, {
@@ -153,6 +126,14 @@ describe("MobileHostServer", () => {
       body: JSON.stringify({ addFavorite: "/definitely/not/a/directory" }),
     });
     expect(unsafe.status).toBe(400);
+
+    // 回归：reorderFavorites 的路径校验是异步的，必须真被 await 后才拒绝（旧实现用 every 把 Promise 当真值）。
+    const unsafeReorder = await fetch(`${ctx.url}/api/herdr-favorites`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ reorderFavorites: [normalized, "/definitely/not/a/directory"] }),
+    });
+    expect(unsafeReorder.status).toBe(400);
 
     const list = await fetch(`${ctx.url}/api/herdr-favorites`);
     expect(((await list.json()) as { favorites: string[] }).favorites).toEqual([normalized]);

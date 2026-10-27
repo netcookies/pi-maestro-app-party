@@ -10,6 +10,7 @@ export interface HerdrLaunchedSpaceRecord {
   target: DesktopPluginTarget;
   label?: string;
   cwd: string;
+  runtime?: HerdrRuntime;
   launchedAt: string;
 }
 
@@ -61,6 +62,7 @@ function isLaunchedSpace(value: unknown): value is HerdrLaunchedSpaceRecord {
     && isString(target.sessionId) && isString(target.endpointId)
     && isString(target.normalizedCwd) && isString(target.processGeneration)
     && (value.workspaceId === undefined || isString(value.workspaceId))
+    && (value.runtime === undefined || RUNTIMES.includes(value.runtime as HerdrRuntime))
     && (value.label === undefined || typeof value.label === "string");
 }
 
