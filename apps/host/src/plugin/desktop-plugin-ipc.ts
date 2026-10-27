@@ -83,6 +83,7 @@ export interface DesktopPluginIpcClientOptions {
   secret: string;
   target: DesktopPluginTarget;
   sessionFile?: string;
+  launchNonce?: string;
   capabilities: DesktopPluginCapability[];
   maxFrameBytes?: number;
   handshakeTimeoutMs?: number;
@@ -608,6 +609,7 @@ export class DesktopPluginIpcServer {
     this.registry.register({
       target,
       ...(hello.sessionFile ? { sessionFile: hello.sessionFile } : {}),
+      ...(hello.launchNonce ? { launchNonce: hello.launchNonce } : {}),
       capabilities: hello.capabilities,
       features: this.options.onPeerRequest ? hello.features?.filter((feature) => feature === DESKTOP_PEER_FEATURE) : [],
       transport,
@@ -767,6 +769,7 @@ export class DesktopPluginIpcClient {
             sessionId: target.sessionId,
             normalizedCwd: target.normalizedCwd,
             ...(this.options.sessionFile ? { sessionFile: this.options.sessionFile } : {}),
+            ...(process.env.MAESTRO_HERDR_LAUNCH_NONCE ? { launchNonce: process.env.MAESTRO_HERDR_LAUNCH_NONCE } : {}),
             processGeneration: target.processGeneration,
             capabilities: this.options.capabilities,
             ...(this.options.features ? { features: this.options.features } : {}),

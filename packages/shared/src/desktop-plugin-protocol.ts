@@ -266,6 +266,8 @@ export interface DesktopPluginHello {
   features?: string[];
   clientNonce: string;
   secret: string;
+  /** Optional one-time correlation for a Herdr-launched Pi process; never an authority credential. */
+  launchNonce?: string;
   /** Release coupling is optional for older development plugins. */
   releaseVersion?: string;
 }
@@ -518,6 +520,7 @@ export function isDesktopPluginClientFrame(value: unknown): value is DesktopPlug
         && (value.sessionFile === undefined || stringFields(value, "sessionFile"))
         && stringArray(value.capabilities)
         && (value.features === undefined || stringArray(value.features) && value.features.every(isDesktopPluginFeature))
+        && (value.launchNonce === undefined || (typeof value.launchNonce === "string" && /^[a-f0-9]{32}$/.test(value.launchNonce)))
         && (value.releaseVersion === undefined || stringFields(value, "releaseVersion"));
     case "desktop_plugin_request":
       return stringFields(value, "requestId", "commandId")

@@ -187,6 +187,7 @@ export class DesktopBrokerProjectedRegistry {
       ...registration,
       target: { ...registration.target },
       ...(registration.sessionFile ? { sessionFile: registration.sessionFile } : {}),
+      ...(registration.launchNonce ? { launchNonce: registration.launchNonce } : {}),
       capabilities: [...registration.capabilities],
       runtimeStatus: registration.runtimeStatus ?? "idle",
     });
@@ -229,6 +230,7 @@ export class DesktopBrokerProjectedRegistry {
       ...registration,
       target: { ...registration.target },
       ...(registration.sessionFile ? { sessionFile: registration.sessionFile } : {}),
+      ...(registration.launchNonce ? { launchNonce: registration.launchNonce } : {}),
       capabilities: [...registration.capabilities],
       ...(registration.model ? { model: structuredClone(registration.model) } : {}),
       ...(registration.thinkingLevel ? { thinkingLevel: registration.thinkingLevel } : {}),
@@ -241,6 +243,7 @@ export class DesktopBrokerProjectedRegistry {
     return {
       target: { ...record.target },
       ...(record.sessionFile ? { sessionFile: record.sessionFile } : {}),
+      ...(record.launchNonce ? { launchNonce: record.launchNonce } : {}),
       capabilities: [...record.capabilities],
       transport: new DesktopBrokerTargetTransport(link, record.target),
       ...(record.model ? { model: structuredClone(record.model) } : {}),
@@ -663,6 +666,7 @@ export class DesktopBrokerHostIpc {
     this.options.onProjection?.(this.projection.list().map((registration) => ({
       target: { ...registration.target },
       ...(registration.sessionFile ? { sessionFile: registration.sessionFile } : {}),
+      ...(registration.launchNonce ? { launchNonce: registration.launchNonce } : {}),
       capabilities: [...registration.capabilities],
       ...(registration.model ? { model: structuredClone(registration.model) } : {}),
       ...(registration.thinkingLevel ? { thinkingLevel: registration.thinkingLevel } : {}),

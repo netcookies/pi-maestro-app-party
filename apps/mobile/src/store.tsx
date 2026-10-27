@@ -21,7 +21,7 @@ import {
   type ExecutionProjection,
   type DesktopPlanResponse,
 } from "@maestro-mobile/shared";
-import { HostClient, createMobileRecovery, type ConnectionState, type RecoveryCoordinator, PlanRefineTracker, type PlanRefineState } from "@maestro-mobile/mobile-sdk";
+import { HostClient, CommandFailedError, createMobileRecovery, type ConnectionState, type RecoveryCoordinator, PlanRefineTracker, type PlanRefineState } from "@maestro-mobile/mobile-sdk";
 import type { MobilePlanRefineAction } from "@maestro-mobile/mobile-sdk/protocol";
 import { beginGracePeriod, endGracePeriod, isAndroidRuntime, isIosRuntime, startBackgroundService, stopBackgroundService } from "./background-runtime";
 import { getConfig } from "./config";
@@ -95,6 +95,9 @@ export interface HostStoreValue {
   lastError: string | null;
   /** 清除本地错误提示（可关闭横幅）；只影响本地提示，不影响 host 事件流。 */
   clearError(): void;
+  getHerdrStatus(): Promise<unknown>;
+  launchPiSession(cwd: string, label?: string): Promise<unknown>;
+  supportsHerdrLaunch: boolean;
 }
 
 export function normalizeThinkingResult(result: unknown): { ok: boolean; error?: string } {
@@ -713,6 +716,10 @@ export function HostStoreProvider({ children }: { children: React.ReactNode }) {
     dispatch({ type: "__local_error", message: "" });
   }, [dispatch]);
 
+  const supportsHerdrLaunch = clientRef.current?.hasCapability("herdr_launch") ?? false;
+  const getHerdrStatus = useCallback(() => getClient().sendCommand({ type: "get_herdr_status" }), [getClient]);
+  const launchPiSession = useCallback((cwd: string, label?: string) => getClient().sendCommand({ type: "launch_pi_session", cwd, ...(label ? { label } : {}) }), [getClient]);
+
   const value = useMemo<HostStoreValue>(
     () => ({
       state,
@@ -753,9 +760,11 @@ export function HostStoreProvider({ children }: { children: React.ReactNode }) {
       sendRefineAction,
       lastError: state.lastError,
       clearError,
+      getHerdrStatus,
+      launchPiSession,
+      supportsHerdrLaunch,
     }),
-    [state, connectionState, hostUrl, token, connect, disconnect, activate, listHostSessions, refreshMaestroState, refreshMonitor, refreshExecutionProjections, loadSessionHistory, selectSessionTarget, loadMoreHistory, searchHistory, listModels, listSkills, getMaestroSettings, updateMaestroSettings, fetchSessionUsage, setModel, setThinking, sendPrompt, sendSteer, sendAbort, getNotificationConfig, testNotification, answerDialog, cancelDialog, respondPlan, cancelPlan, supportsRefine, refineState, refineTarget, sendRefineAction, clearError],
-
+    [state, connectionState, hostUrl, token, connect, disconnect, activate, listHostSessions, refreshMaestroState, refreshMonitor, refreshExecutionProjections, loadSessionHistory, selectSessionTarget, loadMoreHistory, searchHistory, listModels, listSkills, getMaestroSettings, updateMaestroSettings, fetchSessionUsage, setModel, setThinking, sendPrompt, sendSteer, sendAbort, getNotificationConfig, testNotification, answerDialog, cancelDialog, respondPlan, cancelPlan, supportsRefine, refineState, refineTarget, sendRefineAction, clearError, getHerdrStatus, launchPiSession],
   );
 
   return <HostStoreContext.Provider value={value}>{children}</HostStoreContext.Provider>;

@@ -65,6 +65,8 @@ export interface DesktopBrokerTargetRecord {
   target: DesktopPluginTarget;
   /** Session JSONL metadata; exact target identity remains the four target fields. */
   sessionFile?: string;
+  /** Herdr launch correlation; optional and never part of target identity. */
+  launchNonce?: string;
   capabilities: DesktopPluginCapability[];
   features?: string[];
   model?: DesktopPluginModel;
@@ -321,6 +323,7 @@ function isDesktopBrokerTargetRecord(value: unknown): value is DesktopBrokerTarg
   return isRecord(value)
     && isDesktopPluginTarget(value.target)
     && optionalString(value, "sessionFile")
+    && (value.launchNonce === undefined || (typeof value.launchNonce === "string" && /^[a-f0-9]{32}$/.test(value.launchNonce)))
     && isDesktopPluginCapabilityArray(value.capabilities)
     && (value.features === undefined || Array.isArray(value.features) && value.features.every((feature) => feature === DESKTOP_PEER_FEATURE || feature === DESKTOP_PLAN_REFINE_FEATURE))
     && (value.model === undefined || isDesktopPluginModel(value.model))

@@ -30,6 +30,8 @@ import { NotificationConfigStore } from "./notifications/notification-config.js"
 import { NotificationDispatcher } from "./notifications/notification-dispatcher.js";
 import { notificationProviders } from "./notifications/providers/index.js";
 import { notificationEventFromHostEvent } from "./notifications/notification-normalizer.js";
+import { HerdrAdapter, type HerdrServerStatus } from "./herdr-adapter.js";
+import { HerdrSessionLaunchService } from "./herdr-session-launch-service.js";
 
 function targetKey(target: DesktopPluginTarget): string {
   return [target.sessionId, target.endpointId, target.normalizedCwd, target.processGeneration].join("\u0000");
@@ -103,6 +105,8 @@ export class HostController {
   private readonly notificationConfig: NotificationConfigStore;
   private readonly notificationOutbox: NotificationOutbox;
   private readonly notificationDispatcher: NotificationDispatcher;
+  private readonly herdrAdapter = new HerdrAdapter();
+  private readonly herdrLaunchService: HerdrSessionLaunchService;
   private readonly notificationHostInstanceId = `${process.pid}-${Date.now()}`;
   private notificationSequence = 0;
   private readonly emitToListeners: (event: HostEvent) => void;
@@ -119,6 +123,7 @@ export class HostController {
     notificationPaths?: { configPath?: string; outboxPath?: string },
   ) {
     this.desktopPluginRegistry = desktopRegistry ?? new DesktopBrokerProjectedRegistry();
+    this.herdrLaunchService = new HerdrSessionLaunchService(this.desktopPluginRegistry, this.herdrAdapter);
     this.maestroReader = maestroReader ?? new MaestroStateReader();
     this.telemetryReader = new WorkspaceTelemetryReader();
     this.monitorReadService = new MonitorReadService(() => this.telemetryReader.read());
@@ -193,6 +198,26 @@ export class HostController {
 
   get directory(): SessionDirectory {
     return this.sessionDirectory;
+  }
+
+  async getHerdrStatus(): Promise<HerdrServerStatus> {
+    return this.herdrAdapter.probe();
+  }
+
+  publishHerdrAvailability(status: HerdrServerStatus, requestId?: string): void {
+    this.emitToListeners(this.eventLog.record({
+      type: "herdr_availability",
+      status: status.status,
+      ...(status.version ? { version: status.version } : {}),
+      ...(status.protocol !== undefined ? { protocol: status.protocol } : {}),
+      ...(requestId ? { requestId } : {}),
+    }));
+  }
+
+  async launchPiSession(requestId: string, cwd: string, label?: string) {
+    const result = await this.herdrLaunchService.launch(requestId, cwd, label);
+    this.emitToListeners(this.eventLog.record({ type: "herdr_launch", ...result }));
+    return { ...result, ok: result.status === "ready", revision: this.directory.revision };
   }
 
   get application(): ApplicationCommandRouter {

@@ -73,6 +73,21 @@ describe("Desktop Plugin IPC protocol", () => {
     expect(isDesktopPluginClientFrame({ ...hello, processGeneration: "" })).toBe(false);
   });
 
+  it("accepts a bounded optional Herdr launch correlation without changing target identity", () => {
+    expect(isDesktopPluginClientFrame({ ...hello, launchNonce: "a".repeat(32) })).toBe(true);
+    expect(isDesktopPluginClientFrame({ ...hello, launchNonce: "A".repeat(32) })).toBe(false);
+    expect(isDesktopPluginClientFrame({ ...hello, launchNonce: "a".repeat(31) })).toBe(false);
+    const target = { sessionId: "session-1", endpointId: "endpoint-1", normalizedCwd: "/work/app", processGeneration: "generation-1" };
+    expect(isDesktopBrokerToHostFrame({
+      type: "desktop_broker_snapshot_chunk", brokerInstanceId: "broker-1", snapshotId: "snapshot-1", revision: 1, chunkIndex: 0,
+      records: [{ target, launchNonce: "a".repeat(32), capabilities: ["prompt"], runtimeStatus: "idle" }],
+    })).toBe(true);
+    expect(isDesktopBrokerToHostFrame({
+      type: "desktop_broker_snapshot_chunk", brokerInstanceId: "broker-1", snapshotId: "snapshot-1", revision: 1, chunkIndex: 0,
+      records: [{ target, launchNonce: "bad", capabilities: ["prompt"], runtimeStatus: "idle" }],
+    })).toBe(false);
+  });
+
   it("rejects the retired Plugin protocol v1 hello", () => {
     expect(isDesktopPluginClientFrame({ ...hello, protocolVersion: 1 })).toBe(false);
   });

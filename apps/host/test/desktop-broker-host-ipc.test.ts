@@ -171,11 +171,13 @@ describe("DesktopBrokerHostIpc", () => {
     await expect(connected.nextFrame()).resolves.toMatchObject({ type: "desktop_broker_ready", hostInstanceId: "host-1" });
 
     writeFrame(socket, { type: "desktop_broker_snapshot_begin", brokerInstanceId: "broker-1", snapshotId: "snapshot-1", revision: 7, targetCount: 1 });
-    writeFrame(socket, { type: "desktop_broker_snapshot_chunk", brokerInstanceId: "broker-1", snapshotId: "snapshot-1", revision: 7, chunkIndex: 0, records: [record(target)] });
+    writeFrame(socket, { type: "desktop_broker_snapshot_chunk", brokerInstanceId: "broker-1", snapshotId: "snapshot-1", revision: 7, chunkIndex: 0, records: [{ ...record(target), launchNonce: "a".repeat(32) }] });
     expect(host.projection.list()).toHaveLength(0);
     writeFrame(socket, { type: "desktop_broker_snapshot_end", brokerInstanceId: "broker-1", snapshotId: "snapshot-1", revision: 7, chunkCount: 1 });
     await new Promise((resolve) => setTimeout(resolve, 10));
     expect(host.projection.list()).toHaveLength(1);
+    expect(host.projection.resolve(target)?.launchNonce).toBe("a".repeat(32));
+    expect(host.projection.resolve(target)?.target).toEqual(target);
     expect(host.projection.revision).toBe(7);
 
     writeFrame(socket, {

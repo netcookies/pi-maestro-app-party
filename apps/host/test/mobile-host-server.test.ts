@@ -22,7 +22,7 @@ function protocolHello() {
     type: "protocol_hello" as const,
     protocolVersion: 2 as const,
     clientVersion: "test",
-    capabilities: ["session_control", "monitor_read", "session_filter", "extension_ui", "desktop_plugin_control"] as const,
+    capabilities: ["session_control", "monitor_read", "session_filter", "extension_ui", "desktop_plugin_control", "herdr_launch"] as const,
     requestId: `hello-${randomUUID()}`,
   };
 }
@@ -101,6 +101,26 @@ describe("MobileHostServer", () => {
     await ctx.server.close();
     await ctx.controller.dispose();
     await rm(ctx.tmpDir, { recursive: true, force: true });
+  });
+
+  it("preserves Herdr unknown launch outcomes in command_result", async () => {
+    const ws = await connectV2(ctx.url);
+    try {
+      const frame = await new Promise<Record<string, unknown>>((resolve, reject) => {
+        const onMessage = (data: WebSocket.RawData) => {
+          const value = JSON.parse(data.toString()) as Record<string, unknown>;
+          if (value.type !== "command_result" || value.in_reply_to !== "herdr-unknown") return;
+          ws.off("message", onMessage);
+          resolve(value);
+        };
+        ws.on("message", onMessage);
+        ws.once("error", reject);
+        ws.send(JSON.stringify({ type: "launch_pi_session", id: "herdr-unknown", cwd: ctx.tmpDir }));
+      });
+      expect(frame).toMatchObject({ status: "unknown", ok: false, result: { status: "unknown", stage: "broker_projection_unavailable" } });
+    } finally {
+      ws.close();
+    }
   });
 
   it("serves /api/health", async () => {

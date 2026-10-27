@@ -38,6 +38,8 @@ export interface DesktopPluginTransport {
 export interface DesktopPluginRegistration {
   target: DesktopPluginTarget;
   sessionFile?: string;
+  /** Herdr launch correlation; optional and never part of target identity. */
+  launchNonce?: string;
   capabilities: readonly DesktopPluginCapability[];
   features?: readonly string[];
   transport: DesktopPluginTransport;
@@ -74,6 +76,7 @@ function cloneRecord(registration: DesktopPluginRegistration): DesktopBrokerTarg
   return {
     target: { ...registration.target },
     ...(registration.sessionFile ? { sessionFile: registration.sessionFile } : {}),
+    ...(registration.launchNonce ? { launchNonce: registration.launchNonce } : {}),
     capabilities: [...registration.capabilities],
     ...(registration.features ? { features: [...registration.features] } : {}),
     ...(registration.model ? { model: { ...registration.model } } : {}),
@@ -125,6 +128,7 @@ export class DesktopPluginRegistry {
       target,
       capabilities: [...registration.capabilities],
       ...(registration.features ? { features: [...registration.features] } : {}),
+      ...(registration.launchNonce ? { launchNonce: registration.launchNonce } : {}),
       runtimeStatus: registration.runtimeStatus ?? "idle",
       ...(registration.executionSummary ? { executionSummary: structuredClone(registration.executionSummary) } : {}),
       connectedAt: registration.connectedAt ?? new Date().toISOString(),
@@ -228,7 +232,7 @@ export class DesktopPluginRegistry {
       schemaVersion: 1,
       brokerInstanceId: this.brokerInstanceId,
       revision: this._revision,
-      registrations: this.snapshotRecords(),
+      registrations: this.snapshotRecords().map(({ launchNonce: _launchNonce, ...record }) => record),
     };
   }
 

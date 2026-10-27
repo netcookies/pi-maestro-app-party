@@ -58,7 +58,8 @@ export type ProtocolCapability =
   | "plan"
   | "plan_refine"
   | "notification_control"
-  | "background_transport";
+  | "background_transport"
+  | "herdr_launch";
 
 export type OperationStatus = "requested" | "accepted" | "observed" | "failed" | "unknown";
 
@@ -674,7 +675,9 @@ export type HostEvent =
   | { type: "monitor_state"; state: MonitorState; seq: number }
   | { type: "teammate_event"; scheduleId: string; dispatchId?: string; status: string; seq: number }
   | { type: "notification_event"; eventId: string; kind: "ask_pending" | "plan_pending" | "plan_review_pending" | "plan_confirm_pending" | "agent_settled" | "session_error"; sessionId: string; target?: SessionTargetIdentity; requestId?: string; deadlineAt?: number; title: string; body: string; occurredAt: string; dedupeKey: string; seq: number }
-  | { type: "error"; code: string; message: string; seq: number };
+  | { type: "error"; code: string; message: string; seq: number }
+  | { type: "herdr_availability"; status: string; version?: string; protocol?: number; requestId?: string; seq: number }
+  | { type: "herdr_launch"; requestId: string; status: "accepted" | "ready" | "failed" | "unknown"; stage: string; paneId?: string; target?: SessionTargetIdentity; error?: HostError; seq: number };
 
 // ─────────────────────────────────────────────────────────────────────────────
 // ClientCommand — 客户端发给 host 的命令
@@ -695,6 +698,8 @@ export type ClientCommandPayload =
   /** Deprecated compatibility envelope: Host always rejects it and never creates/attaches a session. */
   | { type: "open_session"; cwd: string; mode?: "create" | "continue"; sessionFile?: string; target?: SessionTargetIdentity }
   | { type: "list_host_sessions"; cwd?: string; limit?: number; cursor?: string; query?: string; includeMonitor?: boolean; sessionIds?: string[]; latestForCwds?: string[] }
+  | { type: "launch_pi_session"; cwd: string; label?: string }
+  | { type: "get_herdr_status" }
   | ({ type: "load_more_history"; count?: number } & TargetedSessionCommand)
   | ({ type: "search_history"; keyword: string; maxResults?: number; previewLength?: number } & TargetedSessionCommand)
   | ({ type: "list_models" } & TargetedSessionCommand)
@@ -875,6 +880,14 @@ export function isHostEvent(value: unknown): value is HostEvent {
         && (value.target === undefined || (isSessionTargetIdentity(value.target) && value.target.sessionId === value.sessionId))
         && optionalString(value.requestId) && optionalFiniteNumber(value.deadlineAt)
         && isString(value.title) && isString(value.body) && isString(value.occurredAt) && isString(value.dedupeKey);
+    case "herdr_availability":
+      return isString(value.status) && optionalString(value.version) && optionalFiniteNumber(value.protocol) && optionalString(value.requestId);
+    case "herdr_launch":
+      return isString(value.requestId) && optionalEnum(value.status, "accepted", "ready", "failed", "unknown")
+        && value.status !== undefined && isString(value.stage)
+        && optionalString(value.paneId)
+        && (value.target === undefined || isSessionTargetIdentity(value.target))
+        && (value.error === undefined || isHostError(value.error));
     case "error":
       return isString(value.code) && isString(value.message);
     default:
@@ -893,8 +906,13 @@ export function isClientCommand(value: unknown): value is ClientCommand {
     && value.type !== "get_monitor_state"
     && value.type !== "get_execution_projections" && value.type !== "ping"
     && value.type !== "update_maestro_settings"
+    && value.type !== "launch_pi_session" && value.type !== "get_herdr_status"
     && (value.target === undefined || !isSessionTargetIdentity(value.target))) return false;
   switch (value.type) {
+    case "launch_pi_session":
+      return isString(value.cwd) && (value.label === undefined || isString(value.label));
+    case "get_herdr_status":
+      return true;
     case "open_session":
       return isString(value.cwd) && optionalEnum(value.mode, "create", "continue") && optionalString(value.sessionFile);
     case "list_host_sessions":

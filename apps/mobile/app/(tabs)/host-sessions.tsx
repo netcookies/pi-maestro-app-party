@@ -18,6 +18,7 @@ import { useTheme, MIUIX_RADIUS, MIUIX_SPACE, MIUIX_TYPE } from "../../src/theme
 import { LineIcon } from "../../src/components/LineIcon";
 import { HostSessionCard } from "../../src/components/HostSessionCard";
 import { useI18n } from "../../src/i18n";
+import { CommandFailedError } from "@maestro-mobile/mobile-sdk";
 import { sessionTargetKey, type HostSessionSummary } from "@maestro-mobile/shared";
 import {
   beginFilterRequest,
@@ -43,7 +44,7 @@ export default function HostSessionsScreen({ active = true }: { active?: boolean
   const { theme } = useTheme();
   const { t } = useI18n();
   const styles = useMemo(() => makeStyles(theme), [theme]);
-  const { state, listHostSessions, loadSessionHistory, isConnected, connectionState, hostUrl } = useHost();
+  const { state, listHostSessions, loadSessionHistory, isConnected, connectionState, hostUrl, getHerdrStatus, launchPiSession, supportsHerdrLaunch } = useHost();
   const sessionRoleRevisionValue = useMemo(
     () => sessionRoleRevision(state.workspaceWindowProjections.values()),
     [state.workspaceWindowProjections],
@@ -72,6 +73,11 @@ export default function HostSessionsScreen({ active = true }: { active?: boolean
   const lastRequestedCursorRef = useRef<string | undefined>(undefined);
   const [error, setError] = useState<string | null>(null);
   const [opening, setOpening] = useState<string | null>(null);
+  const [launchCwd, setLaunchCwd] = useState("");
+  const [launchLabel, setLaunchLabel] = useState("");
+  const [launchingPi, setLaunchingPi] = useState(false);
+  const [launchMessage, setLaunchMessage] = useState<string | null>(null);
+  const [launchOutcomeUnknown, setLaunchOutcomeUnknown] = useState(false);
   const refreshedUnknownPatchRef = useRef(new Map<string, number>());
   const hydratedConnectionGenerationRef = useRef<number | null>(null);
 
@@ -93,6 +99,40 @@ export default function HostSessionsScreen({ active = true }: { active?: boolean
     sessionsRef.current = next;
     setSessions(next);
   }, [state.sessionSummaryPatches]);
+
+  const handleLaunchPi = useCallback(async () => {
+    const cwd = launchCwd.trim();
+    if (!cwd || launchingPi) return;
+    if (!supportsHerdrLaunch) {
+      setLaunchMessage(t.herdrUnavailable);
+      return;
+    }
+    setLaunchingPi(true);
+    setLaunchOutcomeUnknown(false);
+    setLaunchMessage(t.herdrLaunching);
+    let launchIssued = false;
+    try {
+      const status = await getHerdrStatus() as { status?: string; running?: boolean };
+      if (status.status === "not_installed") { setLaunchMessage(t.herdrNotInstalled); return; }
+      if (status.status === "not_running" || status.running === false) { setLaunchMessage(t.herdrNotRunning); return; }
+      if (status.status === "incompatible") { setLaunchMessage(t.herdrIncompatible); return; }
+      launchIssued = true;
+      const result = await launchPiSession(cwd, launchLabel.trim() || undefined) as { status?: string };
+      if (result.status === "ready") setLaunchMessage(t.herdrReady);
+      else if (result.status === "unknown") { setLaunchOutcomeUnknown(true); setLaunchMessage(t.herdrUnknown); }
+      else if (result.status === "failed") setLaunchMessage(t.herdrFailed);
+      else setLaunchMessage(t.herdrLaunching);
+    } catch (cause) {
+      if (cause instanceof CommandFailedError && cause.status === "failed") {
+        setLaunchMessage(t.herdrFailed);
+      } else if (launchIssued) {
+        setLaunchOutcomeUnknown(true);
+        setLaunchMessage(t.herdrUnknown);
+      } else setLaunchMessage(cause instanceof Error ? cause.message : t.herdrUnavailable);
+    } finally {
+      setLaunchingPi(false);
+    }
+  }, [getHerdrStatus, launchCwd, launchLabel, launchPiSession, launchOutcomeUnknown, launchingPi, supportsHerdrLaunch, t.herdrFailed, t.herdrIncompatible, t.herdrLaunching, t.herdrNotInstalled, t.herdrNotRunning, t.herdrReady, t.herdrUnavailable, t.herdrUnknown]);
 
   const setFilter = useCallback((patch: Partial<FilterState["filter"]>) => {
     const next = updateFilterState(filterStateRef.current, patch);
@@ -296,6 +336,14 @@ export default function HostSessionsScreen({ active = true }: { active?: boolean
               {queryInput.length > 0 && <TouchableOpacity onPress={() => setQueryInput("")} accessibilityRole="button" accessibilityLabel={t.clearSearch}><LineIcon name="x" size={15} color={theme.muted} /></TouchableOpacity>}
             </View>
           )}
+          {supportsHerdrLaunch ? <View style={styles.launchRow}>
+            <TextInput value={launchCwd} onChangeText={setLaunchCwd} placeholder={t.herdrCwdPrompt} placeholderTextColor={theme.dim} style={[styles.launchInput, { color: theme.text, borderColor: theme.border }]} autoCapitalize="none" autoCorrect={false} />
+            <TextInput value={launchLabel} onChangeText={setLaunchLabel} placeholder={t.herdrLabelPrompt} placeholderTextColor={theme.dim} style={[styles.launchInput, { color: theme.text, borderColor: theme.border }]} />
+            <TouchableOpacity onPress={() => void handleLaunchPi()} disabled={!isConnected || launchingPi || launchOutcomeUnknown || !launchCwd.trim()} accessibilityRole="button" accessibilityLabel={t.herdrLaunch} style={[styles.launchButton, { backgroundColor: theme.accent, opacity: !isConnected || launchingPi || launchOutcomeUnknown || !launchCwd.trim() ? 0.5 : 1 }]}>
+              {launchingPi ? <ActivityIndicator size="small" color="#fff" /> : <Text style={styles.launchButtonText}>{t.herdrLaunch}</Text>}
+            </TouchableOpacity>
+          </View> : null}
+          {launchMessage ? <Text style={[styles.launchMessage, { color: theme.muted }]}>{launchMessage}</Text> : null}
         </SafeAreaView>
       </View>
 
@@ -424,6 +472,11 @@ function makeStyles(theme: ReturnType<typeof useTheme>["theme"]) {
     filterCount: { position: "absolute", right: -3, top: -4, color: "#fff", backgroundColor: theme.warning, fontSize: 9, minWidth: 14, height: 14, borderRadius: 7, textAlign: "center", overflow: "hidden" },
     searchRow: { flexDirection: "row", alignItems: "center", gap: 8, marginHorizontal: 16, marginBottom: 10, paddingHorizontal: 10, height: 40, borderRadius: MIUIX_RADIUS.md, backgroundColor: theme.inputBg },
     searchInput: { flex: 1, fontSize: 13 },
+    launchRow: { flexDirection: "row", alignItems: "center", gap: 8, marginHorizontal: 16, marginBottom: 6 },
+    launchInput: { flex: 1, height: 38, borderWidth: 1, borderRadius: MIUIX_RADIUS.sm, paddingHorizontal: 10, fontSize: 12 },
+    launchButton: { minWidth: 74, height: 38, borderRadius: MIUIX_RADIUS.sm, alignItems: "center", justifyContent: "center", paddingHorizontal: 10 },
+    launchButtonText: { color: "#fff", fontSize: 12, fontWeight: "700" },
+    launchMessage: { marginHorizontal: 16, marginBottom: 6, fontSize: 11 },
     list: { padding: MIUIX_SPACE.lg, paddingBottom: 112 },
     floatingBarContainer: { position: "absolute", bottom: 20, left: 20, right: 20, flexDirection: "row", justifyContent: "space-between", alignItems: "center", zIndex: 5 },
     floatingPill: { flexDirection: "row", alignItems: "center", borderRadius: 20, padding: 3, borderWidth: 1, shadowColor: "#000", shadowOpacity: 0.12, shadowRadius: 6, elevation: 5 },

@@ -45,6 +45,7 @@ const HOST_PROTOCOL_CAPABILITIES: ProtocolCapability[] = [
   "execution_projection_read",
   "plan",
   "plan_refine",
+  "herdr_launch",
 ];
 
 /** Legacy clients predate protocolRevision and are bridged only for known releases. */
@@ -56,6 +57,7 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 const ROLLOUT_MUTATING_COMMANDS = new Set([
   "open_session",
+  "launch_pi_session",
   "update_maestro_settings",
   "set_model",
   "set_thinking",
@@ -1013,6 +1015,19 @@ export class MobileHostServer {
           this.sendAck(client, command, list);
           break;
         }
+        case "get_herdr_status": {
+          const status = await this.controller.getHerdrStatus();
+          this.sendAck(client, command, status);
+          this.controller.publishHerdrAvailability(status, command.id);
+          break;
+        }
+        case "launch_pi_session": {
+          if (!client.capabilities.includes("herdr_launch")) { this.sendUnavailable(client, command, "capability_mismatch"); break; }
+          const requestId = command.id ? `${client.id}:${command.id}` : crypto.randomUUID();
+          const result = await this.controller.launchPiSession(requestId, command.cwd, command.label);
+          this.sendAck(client, command, result);
+          break;
+        }
         case "open_session": {
           this.sendUnavailable(client, command, "session_creation_disabled");
           break;
@@ -1163,8 +1178,12 @@ export class MobileHostServer {
   }
 
   private sendAck(client: ClientSocket, command: ClientCommand, result: unknown): void {
-    if (isRecord(result) && result.ok === false) {
-      const rawError = result.error;
+    const record = isRecord(result) ? result : undefined;
+    const status = record?.status === "unknown" || record?.status === "failed" || record?.status === "accepted" || record?.status === "ready"
+      ? record.status
+      : "observed";
+    if (record?.ok === false) {
+      const rawError = record.error;
       const code = typeof rawError === "string"
         ? rawError
         : isRecord(rawError) && typeof rawError.code === "string" ? rawError.code : "operation_failed";
@@ -1172,16 +1191,13 @@ export class MobileHostServer {
         type: "command_result",
         in_reply_to: command.id ?? "",
         ok: false,
-        status: "failed",
-        revision: this.controller.directory.revision,
+        status,
+        revision: typeof record.revision === "number" ? record.revision : this.controller.directory.revision,
         error: { code },
+        result: result as JsonValue,
       }, "required", "command_result");
       return;
     }
-    const record = isRecord(result) ? result : undefined;
-    const status = record?.status === "unknown" || record?.status === "failed" || record?.status === "accepted"
-      ? record.status
-      : "observed";
     this.sendFrame(client, {
       type: "command_result",
       in_reply_to: command.id ?? "",
