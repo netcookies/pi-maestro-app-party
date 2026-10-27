@@ -205,7 +205,14 @@ export class HerdrAdapter {
     return { paneId, workspaceId, launchNonce: nonce };
   }
 
-  /** 解析要交给 Herdr 执行的命令：覆盖路径存在时用绝对路径，否则回退到命令名。 */
+  /**
+   * 解析要交给 Herdr 执行的命令。
+   *
+   * 与 probeRuntimes 共用同一判定（override 可 access 即视为可用），因此「探测说可用」与「实际执行」
+   * 在四种组合下都一致：override 可用→执行 override 绝对路径；override 未配置→执行 PATH 命令名；
+   * override 损坏但 PATH 有该命令→执行 PATH 命令名（显式选择的降级，仍与回显的 runtime 标签一致）；
+   * override 损坏且 PATH 也没有→auto 不会选中它，显式选中则由 Herdr 启动失败以 unknown 暴露。
+   */
   private async resolveRuntimeCommand(runtime: "pi" | "pi-bolt"): Promise<string> {
     const override = runtime === "pi-bolt" ? this.env.HERDR_PI_BOLT_BIN : this.env.HERDR_PI_BIN;
     if (override && override.includes("/")) {
@@ -213,7 +220,7 @@ export class HerdrAdapter {
         await access(override);
         return override;
       } catch {
-        // 覆盖路径不可用时回退到命令名，由 probeRuntimes 的判定与启动失败共同暴露。
+        // 覆盖路径不可用：回退到 PATH 命令名（probeRuntimes 此时同样判为不可用，auto 不会选中）。
       }
     }
     return runtime;

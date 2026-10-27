@@ -190,3 +190,53 @@ describe("HerdrAdapter runtime command resolution", () => {
     expect(calls.find((args) => args[0] === "pane")).toEqual(["pane", "run", "w:p1", "pi-bolt"]);
   });
 });
+
+describe("HerdrAdapter runtime probe/launch consistency", () => {
+  function stubRun(calls: string[][]) {
+    return (async (_binary: string, args: string[]) => {
+      calls.push(args);
+      if (args[0] === "status") return status;
+      if (args[0] === "workspace") return JSON.stringify({ result: { root_pane: { pane_id: "w:p1" }, workspace: { workspace_id: "w1" } } });
+      return "{}";
+    }) as NonNullable<HerdrAdapterOptions["run"]>;
+  }
+
+  it("keeps probeRuntimes and the launched command consistent for every override state", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "herdr-consistency-"));
+    dirs.push(dir);
+    const goodBolt = join(dir, "good-pi-bolt");
+    await writeFile(goodBolt, "#!/bin/sh\n", "utf8");
+    const brokenBolt = join(dir, "missing-pi-bolt");
+
+    // 1) override 可用：probe 为 true，启动执行该绝对路径
+    const callsA: string[][] = [];
+    const a = new HerdrAdapter({ env: { HERDR_BIN_PATH: "/usr/bin/env", HERDR_PI_BOLT_BIN: goodBolt }, run: stubRun(callsA), randomNonce: () => "a".repeat(32) });
+    expect((await a.probeRuntimes()).piBolt).toBe(true);
+    await a.launchPiPane({ requestId: "r", cwd: await cwd(), runtime: "pi-bolt" });
+    expect(callsA.find((args) => args[0] === "pane")?.[3]).toBe(goodBolt);
+
+    // 2) override 未配置：probe 依赖 PATH，启动执行裸命令名
+    const callsB: string[][] = [];
+    const b = adapter(stubRun(callsB));
+    await b.launchPiPane({ requestId: "r", cwd: await cwd(), runtime: "pi-bolt" });
+    expect(callsB.find((args) => args[0] === "pane")?.[3]).toBe("pi-bolt");
+
+    // 3) override 损坏：probeRuntimes 判为不可用（PATH 为空时），显式选择回退裸命令名
+    const callsC: string[][] = [];
+    const c = new HerdrAdapter({ env: { PATH: "", HERDR_BIN_PATH: "/usr/bin/env", HERDR_PI_BOLT_BIN: brokenBolt }, run: stubRun(callsC), randomNonce: () => "a".repeat(32) });
+    expect((await c.probeRuntimes()).piBolt).toBe(false);
+    await c.launchPiPane({ requestId: "r", cwd: await cwd(), runtime: "pi-bolt" });
+    expect(callsC.find((args) => args[0] === "pane")?.[3]).toBe("pi-bolt");
+  });
+
+  it("applies HERDR_PI_BIN override for the pi runtime too", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "herdr-pi-override-"));
+    dirs.push(dir);
+    const customPi = join(dir, "custom-pi");
+    await writeFile(customPi, "#!/bin/sh\n", "utf8");
+    const calls: string[][] = [];
+    const value = new HerdrAdapter({ env: { HERDR_BIN_PATH: "/usr/bin/env", HERDR_PI_BIN: customPi }, run: stubRun(calls), randomNonce: () => "a".repeat(32) });
+    await value.launchPiPane({ requestId: "r", cwd: await cwd(), runtime: "pi" });
+    expect(calls.find((args) => args[0] === "pane")).toEqual(["pane", "run", "w:p1", customPi]);
+  });
+});
