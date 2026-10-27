@@ -183,6 +183,42 @@ export interface I18nDictionary {
   herdrLaunching: string;
   herdrUnknown: string;
   herdrFailed: string;
+  secNotifications: string;
+  secHerdrLaunch: string;
+  herdrStatusRow: string;
+  herdrRuntime: string;
+  herdrRuntimeAuto: string;
+  herdrRuntimePiBolt: string;
+  herdrRuntimePi: string;
+  herdrRuntimePinned: string;
+  herdrResumeHistoryTitle: string;
+  herdrResumeHistorySummary: string;
+  herdrAutoCleanupTitle: string;
+  herdrAutoCleanupSummary: string;
+  herdrFavoriteDirs: string;
+  herdrFavoriteDirsEmpty: string;
+  herdrFavoriteDirsAdd: string;
+  herdrFavoriteDirsRemove: string;
+  herdrFavoriteDirsCurrent: string;
+  herdrFavoriteDirsPrompt: string;
+  herdrNewSession: string;
+  herdrNewSessionTitle: string;
+  herdrNewSessionLaunch: string;
+  herdrNewSessionLabel: string;
+  herdrNewSessionPick: string;
+  herdrNewSessionCustomCwd: string;
+  herdrCloseSession: string;
+  herdrCloseConfirmTitle: string;
+  herdrCloseConfirmMessage: string;
+  herdrCloseAll: string;
+  herdrCloseAllConfirm: string;
+  herdrSessionBusy: string;
+  herdrCloseTimeout: string;
+  herdrNotOwned: string;
+  herdrCloseSuccess: string;
+  herdrSessionRunning: string;
+  herdrResumeSession: string;
+  herdrImmediateHint: string;
   retry: string;
   loadingSessions: string;
   loadingSessionDetail: string;
@@ -470,6 +506,42 @@ export const DICTIONARIES: Record<Language, I18nDictionary> = {
     herdrLaunching: "正在启动并等待 Pi 注册…",
     herdrUnknown: "启动结果未知，请检查 Herdr 窗格；不要重复请求",
     herdrFailed: "启动失败",
+    secNotifications: "通知",
+    secHerdrLaunch: "Herdr 会话启动",
+    herdrStatusRow: "Herdr 状态",
+    herdrRuntime: "运行时",
+    herdrRuntimeAuto: "自动",
+    herdrRuntimePiBolt: "Pi-bolt",
+    herdrRuntimePi: "Pi",
+    herdrRuntimePinned: "未检测到 Pi-bolt，已锁定 Pi",
+    herdrResumeHistoryTitle: "从历史会话恢复",
+    herdrResumeHistorySummary: "开启后，历史会话详情页可一键在新窗口恢复该会话",
+    herdrAutoCleanupTitle: "自动清理空窗口",
+    herdrAutoCleanupSummary: "会话退出后，若其所在窗口无其他任务则自动关闭该窗口",
+    herdrFavoriteDirs: "常用工作目录",
+    herdrFavoriteDirsEmpty: "暂无常用目录，可在此添加或在 TUI 执行 /maestro-mobile manager-fav",
+    herdrFavoriteDirsAdd: "添加",
+    herdrFavoriteDirsRemove: "删除",
+    herdrFavoriteDirsCurrent: "添加当前常用目录",
+    herdrFavoriteDirsPrompt: "输入工作目录绝对路径",
+    herdrNewSession: "新建会话",
+    herdrNewSessionTitle: "新建 Herdr 会话",
+    herdrNewSessionLaunch: "启动会话",
+    herdrNewSessionLabel: "窗口名称（可选）",
+    herdrNewSessionPick: "选择常用工作目录",
+    herdrNewSessionCustomCwd: "或手动输入目录绝对路径",
+    herdrCloseSession: "结束会话",
+    herdrCloseConfirmTitle: "结束此会话？",
+    herdrCloseConfirmMessage: "将退出该 Pi 会话并关闭对应窗口；历史记录保留，可从历史会话恢复。",
+    herdrCloseAll: "结束全部 Mobile 会话",
+    herdrCloseAllConfirm: "将退出全部由 Mobile 经 Herdr 启动的 Pi 会话，历史记录保留。确定继续？",
+    herdrSessionBusy: "会话正在运行，请先中断当前任务再结束",
+    herdrCloseTimeout: "结束超时，会话可能仍在退出中，可重试",
+    herdrNotOwned: "该会话不是由 Mobile 启动，无法在此结束",
+    herdrCloseSuccess: "会话已结束",
+    herdrSessionRunning: "会话仍在运行，无需恢复",
+    herdrResumeSession: "恢复会话",
+    herdrImmediateHint: "修改即时生效",
     retry: "重试",
     loadingSessions: "加载会话列表中...",
     loadingSessionDetail: "正在加载会话详情...",
@@ -768,6 +840,42 @@ export const DICTIONARIES: Record<Language, I18nDictionary> = {
     herdrLaunching: "Starting Pi and waiting for registration…",
     herdrUnknown: "Launch outcome is unknown. Check the Herdr pane; do not retry",
     herdrFailed: "Launch failed",
+    secNotifications: "Notifications",
+    secHerdrLaunch: "Herdr Session Launch",
+    herdrStatusRow: "Herdr status",
+    herdrRuntime: "Runtime",
+    herdrRuntimeAuto: "Auto",
+    herdrRuntimePiBolt: "Pi-bolt",
+    herdrRuntimePi: "Pi",
+    herdrRuntimePinned: "Pi-bolt not detected; locked to Pi",
+    herdrResumeHistoryTitle: "Resume from history",
+    herdrResumeHistorySummary: "Allow one-tap resume of a history session into a new pane from its detail page",
+    herdrAutoCleanupTitle: "Auto-clean empty spaces",
+    herdrAutoCleanupSummary: "After a session exits, close its space automatically when no other tasks remain",
+    herdrFavoriteDirs: "Favorite directories",
+    herdrFavoriteDirsEmpty: "No favorites yet. Add here or run /maestro-mobile manager-fav in TUI",
+    herdrFavoriteDirsAdd: "Add",
+    herdrFavoriteDirsRemove: "Remove",
+    herdrFavoriteDirsCurrent: "Add current directory",
+    herdrFavoriteDirsPrompt: "Enter an absolute working directory path",
+    herdrNewSession: "New session",
+    herdrNewSessionTitle: "New Herdr Session",
+    herdrNewSessionLaunch: "Launch session",
+    herdrNewSessionLabel: "Pane label (optional)",
+    herdrNewSessionPick: "Pick a favorite directory",
+    herdrNewSessionCustomCwd: "Or enter an absolute directory path",
+    herdrCloseSession: "End session",
+    herdrCloseConfirmTitle: "End this session?",
+    herdrCloseConfirmMessage: "The Pi session will exit and its pane closes. History is kept and can be resumed later.",
+    herdrCloseAll: "End all Mobile sessions",
+    herdrCloseAllConfirm: "This exits every Pi session started via Herdr by Mobile. History is kept. Continue?",
+    herdrSessionBusy: "Session is busy. Abort the running task before ending",
+    herdrCloseTimeout: "Close timed out. The session may still be exiting; you can retry",
+    herdrNotOwned: "This session was not started by Mobile and cannot be ended here",
+    herdrCloseSuccess: "Session ended",
+    herdrSessionRunning: "Session is still running; no need to resume",
+    herdrResumeSession: "Resume session",
+    herdrImmediateHint: "Changes apply immediately",
     retry: "Retry",
     loadingSessions: "Loading sessions...",
     loadingSessionDetail: "Loading session...",
