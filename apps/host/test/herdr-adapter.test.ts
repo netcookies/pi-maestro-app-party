@@ -155,3 +155,38 @@ describe("HerdrAdapter", () => {
     await expect(value.sendCtrlD("bad;id")).rejects.toMatchObject({ stage: "validate_request" });
   });
 });
+
+describe("HerdrAdapter runtime command resolution", () => {
+  it("launches the absolute override path when HERDR_PI_BOLT_BIN points outside PATH", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "herdr-override-"));
+    dirs.push(dir);
+    const fakeBolt = join(dir, "custom-pi-bolt");
+    await writeFile(fakeBolt, "#!/bin/sh\n", "utf8");
+    const calls: string[][] = [];
+    const run: NonNullable<HerdrAdapterOptions["run"]> = async (_binary, args) => {
+      calls.push(args);
+      if (args[0] === "status") return status;
+      if (args[0] === "workspace") return JSON.stringify({ result: { root_pane: { pane_id: "w:p1" }, workspace: { workspace_id: "w1" } } });
+      return "{}";
+    };
+    const value = new HerdrAdapter({ env: { HERDR_BIN_PATH: "/usr/bin/env", HERDR_PI_BOLT_BIN: fakeBolt }, run, randomNonce: () => "a".repeat(32) });
+    const workingDirectory = await cwd();
+    // 探测与启动必须一致：探测报告 piBolt 可用，启动就必须执行同一个路径
+    await expect(value.probeRuntimes()).resolves.toMatchObject({ piBolt: true });
+    await value.launchPiPane({ requestId: "r", cwd: workingDirectory, runtime: "pi-bolt" });
+    expect(calls.find((args) => args[0] === "pane")).toEqual(["pane", "run", "w:p1", fakeBolt]);
+  });
+
+  it("falls back to the bare command name when no override is configured", async () => {
+    const calls: string[][] = [];
+    const run: NonNullable<HerdrAdapterOptions["run"]> = async (_binary, args) => {
+      calls.push(args);
+      if (args[0] === "status") return status;
+      if (args[0] === "workspace") return JSON.stringify({ result: { root_pane: { pane_id: "w:p1" } } });
+      return "{}";
+    };
+    const value = adapter(run);
+    await value.launchPiPane({ requestId: "r", cwd: await cwd(), runtime: "pi-bolt" });
+    expect(calls.find((args) => args[0] === "pane")).toEqual(["pane", "run", "w:p1", "pi-bolt"]);
+  });
+});

@@ -197,11 +197,26 @@ export class HerdrAdapter {
     const paneId = this.rootPaneId(workspaceResult);
     if (!paneId) throw new HerdrAdapterError("herdr_operation_failed", "create_pane", "Herdr did not return a root pane id");
     const workspaceId = this.workspaceIdOf(workspaceResult);
-    const runtimeBinary = request.runtime === "pi-bolt" ? "pi-bolt" : "pi";
-    const runArgs = ["pane", "run", paneId, runtimeBinary];
+    // 实际执行的命令必须与 probeRuntimes 的判定一致：显式覆盖路径时直接用绝对路径，否则用 PATH 里的命令名。
+    const runtimeCommand = await this.resolveRuntimeCommand(request.runtime === "pi-bolt" ? "pi-bolt" : "pi");
+    const runArgs = ["pane", "run", paneId, runtimeCommand];
     if (sessionRef) runArgs.push("--session", sessionRef);
     await this.invoke(binary, runArgs, "start_pi");
     return { paneId, workspaceId, launchNonce: nonce };
+  }
+
+  /** 解析要交给 Herdr 执行的命令：覆盖路径存在时用绝对路径，否则回退到命令名。 */
+  private async resolveRuntimeCommand(runtime: "pi" | "pi-bolt"): Promise<string> {
+    const override = runtime === "pi-bolt" ? this.env.HERDR_PI_BOLT_BIN : this.env.HERDR_PI_BIN;
+    if (override && override.includes("/")) {
+      try {
+        await access(override);
+        return override;
+      } catch {
+        // 覆盖路径不可用时回退到命令名，由 probeRuntimes 的判定与启动失败共同暴露。
+      }
+    }
+    return runtime;
   }
 
   /** 探测 pi / pi-bolt 可执行性（HERDR_PI_BOLT_BIN 覆盖 → PATH） */
