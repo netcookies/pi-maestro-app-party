@@ -7,7 +7,7 @@
  * 版本与诊断：Host 版本来自 host_status 对象载荷（hostStatusMeta），
  * Pi / pi-maestro-flow / Maestro CLI 版本协议未提供，显示「待 Host 接入」，不编造。
  */
-import React, { useMemo, useState, useEffect } from "react";
+import React, { useMemo, useState, useEffect, useCallback } from "react";
 import { Platform } from "react-native";import { View, Text, StyleSheet, ScrollView, TouchableOpacity, TextInput, Animated, ActivityIndicator } from "react-native";
 
 import { SafeAreaView } from "react-native-safe-area-context";
@@ -30,7 +30,7 @@ import { getNotificationSettings, setNotificationSettings } from "../../src/noti
 
 export default function SettingsScreen() {
   const router = useRouter();
-  const { connectionState, isConnected, state, hostUrl: connectedHostUrl, token: connectedToken, connect, disconnect, getNotificationConfig, testNotification } = useHost();
+  const { connectionState, isConnected, state, hostUrl: connectedHostUrl, token: connectedToken, connect, disconnect, getNotificationConfig, testNotification, supportsHerdrSettings, closeAllHerdrSessions, getHerdrStatus } = useHost();
   const { theme, themeName, setTheme, customAccent, setCustomAccent, appearanceChoice, setAppearanceChoice } = useTheme();
   const { lang, langChoice, t, setLanguageChoice } = useI18n();
 
@@ -158,6 +158,23 @@ export default function SettingsScreen() {
   };
 
   const meta = state.hostStatusMeta;
+  const [herdrVersion, setHerdrVersion] = useState<{ version?: string; status: string } | null>(null);
+  useEffect(() => {
+    if (!supportsHerdrSettings) return;
+    void getHerdrStatus()
+      .then((value) => {
+        const data = (value as { result?: { version?: string; status?: string } })?.result ?? (value as { version?: string; status?: string });
+        setHerdrVersion({ version: data?.version, status: data?.status ?? "unknown" });
+      })
+      .catch(() => setHerdrVersion(null));
+  }, [getHerdrStatus, supportsHerdrSettings]);
+  const herdrVersionLabel = !supportsHerdrSettings
+    ? t.notConnected
+    : herdrVersion === null
+      ? t.notDetected
+      : herdrVersion.status === "available"
+        ? herdrVersion.version ?? t.notDetected
+        : t.notInstalled;
   return (
     <View style={[styles.container, { backgroundColor: theme.bg }]}>
       {/* 统一定制顶栏：顶部状态栏背景与 Header 融为一体，只有下方微阴影 */}
@@ -456,8 +473,11 @@ export default function SettingsScreen() {
           >
             <Text style={styles.saveText}>{t.saveParams}</Text>
           </TouchableOpacity>
+        </View>
 
-          <View style={[styles.prefDivider, { backgroundColor: theme.dividerLine ?? theme.border }]} />
+        {/* 卡片 4b：通知（从性能参数拆出） */}
+        <View style={[styles.prefGroup, { backgroundColor: theme.cardBg, borderColor: theme.border }]}>
+          <Text style={styles.cardHeaderTitle}>{t.secNotifications}</Text>
           <View style={styles.prefRow}>
             <View style={styles.prefMain}>
               <Text style={styles.prefLabel}>{t.notificationAskTitle}</Text>
@@ -473,6 +493,7 @@ export default function SettingsScreen() {
             </View>
             <MiuixSwitch value={config.backgroundConnectionMode === "best_effort"} onValueChange={(value) => saveBackgroundMode(value ? "best_effort" : "power_saving")} accessibilityLabel={t.backgroundConnectionAccessibility} />
           </View>
+          <View style={[styles.prefDivider, { backgroundColor: theme.dividerLine ?? theme.border }]} />
           <View style={styles.prefRow}>
             <View style={styles.prefMain}>
               <Text style={styles.prefLabel}>{t.notificationSettledTitle}</Text>
@@ -495,6 +516,9 @@ export default function SettingsScreen() {
             </TouchableOpacity>
           </View>
         </View>
+
+        {/* 卡片 4c：Herdr 会话启动（Host 不支持时不渲染） */}
+        {supportsHerdrSettings ? <HerdrLaunchCard /> : null}
 
         {/* 卡片 5：版本信息 (置底) */}
         <View style={[styles.prefGroup, { backgroundColor: theme.cardBg, borderColor: theme.border, marginBottom: 40 }]}>
@@ -537,6 +561,14 @@ export default function SettingsScreen() {
               <Text style={styles.prefLabel}>{t.versionCli}</Text>
             </View>
             <Text style={styles.prefValue}>{meta?.maestroCliVersion ?? (isConnected ? t.notDetected : t.notConnected)}</Text>
+          </View>
+          <View style={[styles.prefDivider, { backgroundColor: theme.dividerLine ?? theme.border }]} />
+          <View style={styles.prefRow}>
+            <View style={styles.prefMain}>
+              <Text style={styles.prefLabel}>{t.herdrStatusRow}</Text>
+              <Text style={styles.prefSummary}>{t.herdrRuntime}</Text>
+            </View>
+            <Text style={styles.prefValue}>{herdrVersionLabel}</Text>
           </View>
           <View style={[styles.prefDivider, { backgroundColor: theme.dividerLine ?? theme.border }]} />
           <View style={styles.prefRow}>
@@ -712,4 +744,178 @@ function makeStyles(theme: ReturnType<typeof useTheme>["theme"]) {
     },
     saveText: { color: "#fff", fontWeight: "600", fontSize: MIUIX_TYPE.body2 },
   });
+}
+
+interface HerdrSettingsSnapshot {
+  settings: { runtime: "auto" | "pi" | "pi-bolt"; resumeHistory: boolean; autoCleanupSpace: boolean };
+  favorites: string[];
+  launchedSpaces: Array<{ paneId: string; cwd: string; launchedAt: string }>;
+}
+
+interface HerdrStatusSnapshot {
+  status: "available" | "not_installed" | "not_running" | "incompatible" | "degraded";
+  running: boolean;
+  version?: string;
+  runtimes?: { pi: boolean; piBolt: boolean };
+}
+
+const HERDR_RUNTIME_OPTIONS = [
+  { key: "auto" as const, labelKey: "herdrRuntimeAuto" as const },
+  { key: "pi-bolt" as const, labelKey: "herdrRuntimePiBolt" as const },
+  { key: "pi" as const, labelKey: "herdrRuntimePi" as const },
+];
+
+/** Herdr 会话启动卡：Herdr 不可用时整卡禁用；修改即时生效（失败回滚）。 */
+function HerdrLaunchCard() {
+  const router = useRouter();
+  const { theme } = useTheme();
+  const { t } = useI18n();
+  const styles = useMemo(() => makeStyles(theme), [theme]);
+  const { getHerdrSettings, updateHerdrSettings, getHerdrStatus, closeAllHerdrSessions } = useHost();
+
+  const [settings, setSettings] = useState<HerdrSettingsSnapshot["settings"] | null>(null);
+  const [status, setStatus] = useState<HerdrStatusSnapshot | null>(null);
+  const [message, setMessage] = useState<string | null>(null);
+
+  const refresh = useCallback(async () => {
+    try {
+      const snapshot = (await getHerdrSettings()) as { result?: HerdrSettingsSnapshot } & HerdrSettingsSnapshot;
+      const data = snapshot.result ?? snapshot;
+      setSettings(data.settings ?? null);
+    } catch {
+      setSettings(null);
+    }
+    try {
+      const value = (await getHerdrStatus()) as { result?: HerdrStatusSnapshot } & HerdrStatusSnapshot;
+      setStatus(value.result ?? value);
+    } catch {
+      setStatus(null);
+    }
+  }, [getHerdrSettings, getHerdrStatus]);
+
+  useEffect(() => {
+    void refresh();
+  }, [refresh]);
+
+  const available = status?.status === "available";
+  const disabled = !available;
+  const piBoltAvailable = status?.runtimes?.piBolt === true;
+
+  const patchSettings = useCallback(async (patch: Partial<HerdrSettingsSnapshot["settings"]>, successKey: string) => {
+    if (!settings || disabled) return;
+    const previous = settings;
+    setSettings({ ...settings, ...patch });
+    try {
+      await updateHerdrSettings({ settings: patch });
+      setMessage(null);
+      void successKey;
+    } catch {
+      setSettings(previous);
+      setMessage(t.herdrFailed);
+    }
+  }, [settings, disabled, updateHerdrSettings, t.herdrFailed]);
+
+  const statusLabel = status === null
+    ? t.notConnected
+    : status.status === "available"
+      ? `${t.herdrReady}${status.version ? ` · ${status.version}` : ""}${status.runtimes ? ` · ${status.runtimes.piBolt ? t.herdrRuntimePiBolt : t.herdrRuntimePi}` : ""}`
+      : status.status === "not_installed" ? t.herdrNotInstalled
+      : status.status === "not_running" ? t.herdrNotRunning
+      : status.status === "incompatible" ? t.herdrIncompatible
+      : t.herdrUnavailable;
+
+  return (
+    <View style={[styles.prefGroup, { backgroundColor: theme.cardBg, borderColor: theme.border }]}>
+      <Text style={styles.cardHeaderTitle}>{t.secHerdrLaunch}</Text>
+      <View style={styles.prefRow}>
+        <View style={styles.prefMain}>
+          <Text style={styles.prefLabel}>{t.herdrStatusRow}</Text>
+          <Text style={styles.prefSummary}>{statusLabel}</Text>
+        </View>
+      </View>
+
+      <View style={[styles.prefDivider, { backgroundColor: theme.dividerLine ?? theme.border }]} />
+      <View style={{ paddingVertical: 10 }}>
+        <Text style={styles.prefLabel}>{t.herdrRuntime}</Text>
+        <View style={[styles.segWrap, { backgroundColor: theme.cardInner ?? theme.secondaryContainer ?? theme.inputBg, marginTop: 8, marginBottom: 0 }]}>
+          {HERDR_RUNTIME_OPTIONS.map((option) => {
+            const active = settings?.runtime === option.key;
+            const locked = option.key !== "pi" && !piBoltAvailable;
+            return (
+              <TouchableOpacity
+                key={option.key}
+                disabled={disabled || locked}
+                onPress={() => void patchSettings({ runtime: option.key }, option.labelKey)}
+                accessibilityRole="button"
+                accessibilityState={{ selected: active, disabled: disabled || locked }}
+                accessibilityLabel={t[option.labelKey]}
+                style={[styles.segItem, active && { backgroundColor: theme.accent }, (disabled || locked) && { opacity: 0.4 }]}
+              >
+                <Text style={[styles.segText, { color: active ? "#FFFFFF" : theme.muted }, active && { fontWeight: "700" }]}>{t[option.labelKey]}</Text>
+              </TouchableOpacity>
+            );
+          })}
+        </View>
+        {!piBoltAvailable ? <Text style={styles.prefSummary}>{t.herdrRuntimePinned}</Text> : null}
+      </View>
+
+      <View style={[styles.prefDivider, { backgroundColor: theme.dividerLine ?? theme.border }]} />
+      <View style={styles.prefRow}>
+        <View style={styles.prefMain}>
+          <Text style={styles.prefLabel}>{t.herdrResumeHistoryTitle}</Text>
+          <Text style={styles.prefSummary}>{t.herdrResumeHistorySummary}</Text>
+        </View>
+        <MiuixSwitch
+          value={settings?.resumeHistory ?? false}
+          disabled={disabled}
+          onValueChange={(value) => void patchSettings({ resumeHistory: value }, "resumeHistory")}
+          accessibilityLabel={t.herdrResumeHistoryTitle}
+        />
+      </View>
+
+      <View style={[styles.prefDivider, { backgroundColor: theme.dividerLine ?? theme.border }]} />
+      <View style={styles.prefRow}>
+        <View style={styles.prefMain}>
+          <Text style={styles.prefLabel}>{t.herdrAutoCleanupTitle}</Text>
+          <Text style={styles.prefSummary}>{t.herdrAutoCleanupSummary}</Text>
+        </View>
+        <MiuixSwitch
+          value={settings?.autoCleanupSpace ?? false}
+          disabled={disabled}
+          onValueChange={(value) => void patchSettings({ autoCleanupSpace: value }, "autoCleanupSpace")}
+          accessibilityLabel={t.herdrAutoCleanupTitle}
+        />
+      </View>
+
+      <View style={[styles.prefDivider, { backgroundColor: theme.dividerLine ?? theme.border }]} />
+      <TouchableOpacity
+        style={[styles.saveBtn, { backgroundColor: theme.buttonPrimary, opacity: disabled ? 0.5 : 1 }]}
+        disabled={disabled}
+        onPress={() => router.push("/herdr-directories")}
+        accessibilityRole="button"
+        accessibilityLabel={t.herdrFavoriteDirs}
+      >
+        <Text style={styles.saveText}>{t.herdrFavoriteDirs}</Text>
+      </TouchableOpacity>
+
+      <TouchableOpacity
+        style={[styles.saveBtn, { backgroundColor: theme.buttonPrimary, opacity: disabled ? 0.5 : 1 }]}
+        disabled={disabled}
+        onPress={() => {
+          if (!available) return;
+          void (async () => {
+            const closed = (await closeAllHerdrSessions()) as { result?: { closed?: number } } & { closed?: number };
+            const count = (closed.result ?? closed).closed ?? 0;
+            setMessage(count > 0 ? t.herdrCloseSuccess : t.herdrNotOwned);
+          })();
+        }}
+        accessibilityRole="button"
+        accessibilityLabel={t.herdrCloseAll}
+      >
+        <Text style={styles.saveText}>{t.herdrCloseAll}</Text>
+      </TouchableOpacity>
+
+      <Text style={styles.prefSummary}>{message ?? t.herdrImmediateHint}</Text>
+    </View>
+  );
 }
