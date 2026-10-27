@@ -241,6 +241,8 @@ async function main(): Promise<void> {
   await brokerHost.start();
   await supervisor.ensureRunning();
   supervisor.startWatch();
+  // 重启对账：剔除已不存在的 Herdr pane 登记（不影响启动，失败仅留待下次）
+  void controller.reconcileHerdrLaunchedSpaces().catch(() => undefined);
   try {
     await server.listen(cli.port, cli.host);
   } catch (error) {

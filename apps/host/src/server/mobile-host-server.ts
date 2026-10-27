@@ -46,6 +46,8 @@ const HOST_PROTOCOL_CAPABILITIES: ProtocolCapability[] = [
   "plan",
   "plan_refine",
   "herdr_launch",
+  "herdr_settings",
+  "herdr_session_close",
 ];
 
 /** Legacy clients predate protocolRevision and are bridged only for known releases. */
@@ -1051,10 +1053,37 @@ export class MobileHostServer {
           this.controller.publishHerdrAvailability(status, command.id);
           break;
         }
+        case "get_herdr_settings": {
+          if (!client.capabilities.includes("herdr_settings")) { this.sendUnavailable(client, command, "capability_mismatch"); break; }
+          this.sendAck(client, command, await this.controller.getHerdrSettings());
+          break;
+        }
+        case "update_herdr_settings": {
+          if (!client.capabilities.includes("herdr_settings")) { this.sendUnavailable(client, command, "capability_mismatch"); break; }
+          this.sendAck(client, command, await this.controller.updateHerdrSettings(command.patch));
+          break;
+        }
+        case "close_herdr_session": {
+          if (!client.capabilities.includes("herdr_session_close")) { this.sendUnavailable(client, command, "capability_mismatch"); break; }
+          const target = this.targetForCommand(command);
+          if (!target) { this.sendUnavailable(client, command, "target_unavailable"); break; }
+          const requestId = command.id ? `${client.id}:${command.id}` : crypto.randomUUID();
+          const result = await this.controller.closeHerdrSession(requestId, target);
+          this.sendAck(client, command, result);
+          break;
+        }
         case "launch_pi_session": {
           if (!client.capabilities.includes("herdr_launch")) { this.sendUnavailable(client, command, "capability_mismatch"); break; }
           const requestId = command.id ? `${client.id}:${command.id}` : crypto.randomUUID();
-          const result = await this.controller.launchPiSession(requestId, command.cwd, command.label);
+          const result = await this.controller.launchPiSession(
+            requestId,
+            command.cwd,
+            command.label,
+            {
+              ...(command.runtime !== undefined ? { runtime: command.runtime } : {}),
+              ...(command.resumeSessionRef !== undefined ? { resumeSessionRef: command.resumeSessionRef } : {}),
+            },
+          );
           this.sendAck(client, command, result);
           break;
         }

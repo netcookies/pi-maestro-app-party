@@ -32,7 +32,7 @@ import { notificationProviders } from "./notifications/providers/index.js";
 import { notificationEventFromHostEvent } from "./notifications/notification-normalizer.js";
 import type { HerdrLaunchSettings, HerdrRuntime, HerdrSettingsSnapshot } from "@maestro-mobile/mobile-sdk/protocol";
 import { HerdrAdapter, type HerdrRuntimeProbe, type HerdrServerStatus } from "./herdr-adapter.js";
-import { HerdrSessionLaunchService } from "./herdr-session-launch-service.js";
+import { HerdrSessionLaunchService, type HerdrCloseEvent } from "./herdr-session-launch-service.js";
 import { HerdrLaunchStore, type HerdrLaunchStoreData } from "./herdr-launch-store.js";
 
 function targetKey(target: DesktopPluginTarget): string {
@@ -229,7 +229,8 @@ export class HostController {
     };
   }
 
-  async updateHerdrSettings(patch: { settings?: Partial<HerdrLaunchSettings>; addFavorite?: string; removeFavorite?: string; reorderFavorites?: string[] }): Promise<HerdrSettingsSnapshot> {    if (patch.settings) await this.herdrLaunchStore.updateSettings(patch.settings);
+  async updateHerdrSettings(patch: { settings?: Partial<HerdrLaunchSettings>; addFavorite?: string; removeFavorite?: string; reorderFavorites?: string[] }): Promise<HerdrSettingsSnapshot> {
+    if (patch.settings) await this.herdrLaunchStore.updateSettings(patch.settings);
     if (patch.addFavorite) await this.herdrLaunchStore.addFavorite(patch.addFavorite);
     if (patch.removeFavorite) await this.herdrLaunchStore.removeFavorite(patch.removeFavorite);
     if (patch.reorderFavorites) await this.herdrLaunchStore.replaceFavorites(patch.reorderFavorites);
@@ -244,6 +245,19 @@ export class HostController {
       ...(status.protocol !== undefined ? { protocol: status.protocol } : {}),
       ...(requestId ? { requestId } : {}),
     }));
+  }
+
+  /** Host 启动后对账一次：剔除已不存在的 pane 登记，避免重启后残留 stale 项。 */
+  async reconcileHerdrLaunchedSpaces(): Promise<number> {
+    return this.herdrLaunchService.reconcileLaunchedSpaces();
+  }
+
+  async closeHerdrSession(requestId: string, target: SessionTargetIdentity): Promise<HerdrCloseEvent> {
+    return this.herdrLaunchService.close(requestId, target);
+  }
+
+  async closeAllHerdrSessions(): Promise<number> {
+    return this.herdrLaunchService.closeAll();
   }
 
   async launchPiSession(requestId: string, cwd: string, label?: string, options: { runtime?: HerdrRuntime; resumeSessionRef?: string } = {}) {

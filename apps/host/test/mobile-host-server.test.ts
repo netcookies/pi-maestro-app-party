@@ -22,7 +22,7 @@ function protocolHello() {
     type: "protocol_hello" as const,
     protocolVersion: 2 as const,
     clientVersion: "test",
-    capabilities: ["session_control", "monitor_read", "session_filter", "extension_ui", "desktop_plugin_control", "herdr_launch"] as const,
+    capabilities: ["session_control", "monitor_read", "session_filter", "extension_ui", "desktop_plugin_control", "herdr_launch", "herdr_settings", "herdr_session_close"] as const,
     requestId: `hello-${randomUUID()}`,
   };
 }
@@ -103,6 +103,33 @@ describe("MobileHostServer", () => {
     await rm(ctx.tmpDir, { recursive: true, force: true });
   });
 
+  it("serves /api/herdr-favorites and rejects unsafe paths", async () => {    const normalized = await realpath(ctx.tmpDir);
+    const add = await fetch(`${ctx.url}/api/herdr-favorites`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ addFavorite: ctx.tmpDir }),
+    });
+    expect(add.status).toBe(200);
+    expect(((await add.json()) as { favorites: string[] }).favorites).toEqual([normalized]);
+
+    const reorder = await fetch(`${ctx.url}/api/herdr-favorites`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ reorderFavorites: [normalized] }),
+    });
+    expect(reorder.status).toBe(200);
+
+    const unsafe = await fetch(`${ctx.url}/api/herdr-favorites`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ addFavorite: "/definitely/not/a/directory" }),
+    });
+    expect(unsafe.status).toBe(400);
+
+    const list = await fetch(`${ctx.url}/api/herdr-favorites`);
+    expect(((await list.json()) as { favorites: string[] }).favorites).toEqual([normalized]);
+  });
+
   it("serves /api/herdr-favorites and rejects unsafe paths", async () => {
     const normalized = await realpath(ctx.tmpDir);
     const add = await fetch(`${ctx.url}/api/herdr-favorites`, {
@@ -129,6 +156,83 @@ describe("MobileHostServer", () => {
 
     const list = await fetch(`${ctx.url}/api/herdr-favorites`);
     expect(((await list.json()) as { favorites: string[] }).favorites).toEqual([normalized]);
+  });
+
+  it("gates herdr settings and close commands behind their capabilities", async () => {
+    const withoutSettings = await exchangeHello(ctx.url, { ...protocolHello(), capabilities: ["herdr_launch"] });
+    try {
+      const frame = await new Promise<Record<string, unknown>>((resolve, reject) => {
+        const onMessage = (data: WebSocket.RawData) => {
+          const value = JSON.parse(data.toString()) as Record<string, unknown>;
+          if (value.type !== "command_result" || value.in_reply_to !== "herdr-settings-gated") return;
+          withoutSettings.ws.off("message", onMessage);
+          resolve(value);
+        };
+        withoutSettings.ws.on("message", onMessage);
+        withoutSettings.ws.once("error", reject);
+        withoutSettings.ws.send(JSON.stringify({ type: "get_herdr_settings", id: "herdr-settings-gated" }));
+      });
+      expect(frame).toMatchObject({ ok: false, error: { code: "capability_mismatch" } });
+    } finally {
+      withoutSettings.ws.close();
+    }
+
+    const target = { sessionId: "s1", endpointId: "e1", normalizedCwd: "/work", processGeneration: "g1" };
+    const closeWs = await connectV2(ctx.url);
+    try {
+      const frame = await new Promise<Record<string, unknown>>((resolve, reject) => {
+        const onMessage = (data: WebSocket.RawData) => {
+          const value = JSON.parse(data.toString()) as Record<string, unknown>;
+          if (value.type !== "command_result" || value.in_reply_to !== "herdr-close-not-owned") return;
+          closeWs.off("message", onMessage);
+          resolve(value);
+        };
+        closeWs.on("message", onMessage);
+        closeWs.once("error", reject);
+        closeWs.send(JSON.stringify({ type: "close_herdr_session", id: "herdr-close-not-owned", sessionId: "s1", target }));
+      });
+      // 未登记会话必须 fail closed，且业务结果不被折叠成 failed
+      expect(frame).toMatchObject({ ok: true, status: "observed", result: { status: "herdr_session_not_owned" } });
+    } finally {
+      closeWs.close();
+    }
+  });
+
+  it("serves herdr settings snapshots and keeps per-client request ids idempotent", async () => {
+    const ws = await connectV2(ctx.url);
+    try {
+      const frame = await new Promise<Record<string, unknown>>((resolve, reject) => {
+        const onMessage = (data: WebSocket.RawData) => {
+          const value = JSON.parse(data.toString()) as Record<string, unknown>;
+          if (value.type !== "command_result" || value.in_reply_to !== "herdr-settings") return;
+          ws.off("message", onMessage);
+          resolve(value);
+        };
+        ws.on("message", onMessage);
+        ws.once("error", reject);
+        ws.send(JSON.stringify({ type: "get_herdr_settings", id: "herdr-settings" }));
+      });
+      expect(frame).toMatchObject({
+        ok: true,
+        status: "observed",
+        result: { settings: { runtime: "auto", resumeHistory: true, autoCleanupSpace: true }, favorites: [], launchedSpaces: [] },
+      });
+
+      const updated = await new Promise<Record<string, unknown>>((resolve, reject) => {
+        const onMessage = (data: WebSocket.RawData) => {
+          const value = JSON.parse(data.toString()) as Record<string, unknown>;
+          if (value.type !== "command_result" || value.in_reply_to !== "herdr-settings-update") return;
+          ws.off("message", onMessage);
+          resolve(value);
+        };
+        ws.on("message", onMessage);
+        ws.once("error", reject);
+        ws.send(JSON.stringify({ type: "update_herdr_settings", id: "herdr-settings-update", patch: { settings: { runtime: "pi-bolt", resumeHistory: false } } }));
+      });
+      expect(updated).toMatchObject({ ok: true, result: { settings: { runtime: "pi-bolt", resumeHistory: false, autoCleanupSpace: true } } });
+    } finally {
+      ws.close();
+    }
   });
 
   it("preserves Herdr unknown launch outcomes in command_result", async () => {
