@@ -222,6 +222,83 @@ describe("flow refine transport", () => {
     await expect(transport.handleAction({ ...action, action: { action: "run", userInput: "replacement" } })).resolves.toBe(false);
   });
 
+  it("runs with the session model when the snapshot advertises none", async () => {
+    const transport = createDesktopRefineTransport({
+      getClient: () => ({ target, sendPlanRefine: async () => {} }),
+      isCurrent: () => true,
+      supportsRefine: () => true,
+      getSessionModel: () => "my-sub2api-gpt/gpt-6.1-sol",
+    });
+    let handled: unknown;
+    const handle = transport.open({
+      sessionId: "sess-1", refineSessionId: "ref-session-model", operationId: 21, target,
+      cwd: "/repo", mode: "plan", markdown: "# P", revision: 1,
+      initialRole: "reviewer", signal: new AbortController().signal,
+      handleAction: async (action) => { handled = action; },
+    })!;
+    // Snapshot without a model: the phone must still be able to run.
+    handle.emit({
+      type: "snapshot",
+      sequence: 1,
+      snapshot: {
+        refineSessionId: "ref-session-model", operationId: 21, target, revision: 1, status: "ready", highWaterSequence: 0,
+        session: { turns: [], currentRole: "reviewer", currentModel: { model: "", label: "Follow current main model" } },
+        turns: [],
+      },
+    });
+    const action = {
+      type: "desktop_plan_refine_action" as const,
+      target, refineSessionId: "ref-session-model", planRequestId: "ref-session-model",
+      operationId: 21, revision: 1,
+      actionId: "a-run-session-model",
+      action: { action: "run" as const, userInput: "" },
+    };
+    await expect(transport.handleAction(action)).resolves.toBe(true);
+    expect(handled).toMatchObject({
+      type: "run",
+      model: "my-sub2api-gpt/gpt-6.1-sol",
+      role: "reviewer",
+    });
+  });
+
+  it("echoes a model selection back so the phone can render it as selected", async () => {
+    const sent: unknown[] = [];
+    const transport = createDesktopRefineTransport({
+      getClient: () => ({ target, sendPlanRefine: async (frame) => { sent.push(frame); } }),
+      isCurrent: () => true,
+      supportsRefine: () => true,
+    });
+    const handle = transport.open({
+      sessionId: "sess-1", refineSessionId: "ref-select", operationId: 31, target,
+      cwd: "/repo", mode: "plan", markdown: "# P", revision: 2,
+      initialRole: "reviewer", signal: new AbortController().signal,
+      handleAction: async () => {},
+    })!;
+    handle.emit({
+      type: "snapshot",
+      sequence: 1,
+      snapshot: {
+        refineSessionId: "ref-select", operationId: 31, target, revision: 2, status: "ready", highWaterSequence: 0,
+        session: { turns: [], currentRole: "reviewer", currentModel: { model: "p/original", label: "Original" } },
+        turns: [],
+      },
+    });
+    await new Promise((r) => setImmediate(r));
+    sent.length = 0;
+    const ok = await transport.handleAction({
+      type: "desktop_plan_refine_action",
+      target, refineSessionId: "ref-select", planRequestId: "ref-select",
+      operationId: 31, revision: 2, actionId: "a-model-pick",
+      action: { action: "select_model", model: "p/picked" },
+    });
+    expect(ok).toBe(true);
+    await new Promise((r) => setImmediate(r));
+    const echoed = sent.find((f) => (f as { type?: string }).type === "desktop_plan_refine_snapshot") as
+      { currentModel?: string; sequence?: number } | undefined;
+    expect(echoed?.currentModel).toBe("p/picked");
+    expect(echoed?.sequence).toBe(2);
+  });
+
   it("signal abort drops the mirror and pending entry without settling handle promise as cancel", async () => {
     const transport = createDesktopRefineTransport({
       getClient: () => ({ target, sendPlanRefine: async () => {} }),

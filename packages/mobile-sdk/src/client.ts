@@ -380,7 +380,8 @@ export class MobileClient {
       const timer = setTimeout(() => controller.abort(), 3_000);
       let res: Response;
       try {
-        res = await fetch(`${httpBase}/api/health`, { signal: controller.signal });
+        const headers = this.options.token ? { Authorization: `Bearer ${this.options.token}` } : undefined;
+        res = await fetch(`${httpBase}/api/health`, { headers, signal: controller.signal });
       } finally {
         clearTimeout(timer);
       }

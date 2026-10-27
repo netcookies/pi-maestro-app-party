@@ -34,8 +34,25 @@ export interface PlanSurfaceProps {
    */
   supportsRefine?: boolean;
   onRefineAction?: (action: MobilePlanRefineAction, target: SessionTargetIdentity) => Promise<unknown>;
+  /**
+   * Lists the models the session may run a refine role with. The refine panel
+   * mirrors the TUI's `2. Model [...]` row, so the phone can change the model
+   * before running instead of being locked to whatever desktop picked.
+   */
+  onListModels?: (sessionId: string) => Promise<RefineModelOption[]>;
+  /** The main session's model (`provider/id`); the refine panel defaults to it. */
+  sessionModel?: string;
+  initialRefineOpen?: boolean;
   refineState?: PlanRefineState;
   refineTarget?: SessionTargetIdentity;
+}
+
+export interface RefineModelOption {
+  id: string;
+  provider: string;
+  name: string;
+  reasoning: boolean;
+  vision: boolean;
 }
 
 const REFINE_ROLES: MobilePlanRefineRole[] = ["reviewer", "decomposer", "optimizer", "brainstormer"];
@@ -71,6 +88,9 @@ export function PlanSurface({
   onCancel,
   supportsRefine,
   onRefineAction,
+  onListModels,
+  sessionModel,
+  initialRefineOpen,
   refineState,
   refineTarget,
 }: PlanSurfaceProps) {
@@ -84,20 +104,28 @@ export function PlanSurface({
   const [expanded, setExpanded] = useState<MarkdownExpandRequest | null>(null);
 
   // Native Review & Refine state
-  const [nativeRefineOpen, setNativeRefineOpen] = useState(false);
+  const [nativeRefineOpen, setNativeRefineOpen] = useState(initialRefineOpen ?? false);
   const [selectedRole, setSelectedRole] = useState<MobilePlanRefineRole>("reviewer");
   const [refineInstructions, setRefineInstructions] = useState("");
   const [refineUnavailableNotice, setRefineUnavailableNotice] = useState(false);
   const [legacyRefiningNotice, setLegacyRefiningNotice] = useState(false);
   const [cancelAfterSnapshot, setCancelAfterSnapshot] = useState(false);
+  // Model row mirrors the TUI's `2. Model [...]` entry.
+  const [modelPickerOpen, setModelPickerOpen] = useState(false);
+  const [availableModels, setAvailableModels] = useState<RefineModelOption[]>([]);
+  const [loadingModels, setLoadingModels] = useState(false);
+  const [modelQuery, setModelQuery] = useState("");
+  /** Optimistic local pick; the Host echoes it back via a re-broadcast snapshot. */
+  const [pickedModel, setPickedModel] = useState<string | undefined>(undefined);
 
   React.useEffect(() => {
     setExpanded(null);
     setSubmitting(false);
-    setNativeRefineOpen(false);
+    setNativeRefineOpen(initialRefineOpen ?? false);
     setRefineUnavailableNotice(false);
     setLegacyRefiningNotice(false);
-  }, [request.requestId, request.revision]);
+    setCancelAfterSnapshot(false);
+  }, [request.requestId, request.revision, initialRefineOpen]);
 
   React.useEffect(() => {
     setDraft(initialDraft ?? request.markdown);
@@ -105,14 +133,20 @@ export function PlanSurface({
 
   const liveRefineCandidate = refineState?.kind === "live"
     && refineTarget?.sessionId === target.sessionId
-    && refineTarget.endpointId === target.endpointId
-    && refineTarget.normalizedCwd === target.normalizedCwd
-    && refineTarget.processGeneration === target.processGeneration
+    && refineTarget?.normalizedCwd === target.normalizedCwd
     ? refineState : undefined;
   const liveRefine = liveRefineCandidate?.snapshot.revision === request.revision ? liveRefineCandidate : undefined;
+  // When Desktop opens Review & Refine, the remote mobile app is the mirror of that
+  // overlay. It must open automatically as long as the snapshot is live, without
+  // requiring the phone to have pressed the button first.
+  const isRefineActive = liveRefine !== undefined
+    && liveRefine.snapshot.status !== "discarded"
+    && liveRefine.snapshot.status !== "applied"
+    && liveRefine.snapshot.status !== "cancelled";
+  const isRefineShowing = nativeRefineOpen || isRefineActive;
   const latestTurn = liveRefine?.turns.at(-1);
   const isRunning = liveRefine?.snapshot.status === "running";
-  const refineReady = liveRefine?.snapshot.status === "ready";
+  const refineReady = liveRefine ? liveRefine.snapshot.status !== "running" : true;
   const revisionMismatch = liveRefineCandidate !== undefined && liveRefineCandidate.snapshot.revision !== request.revision;
   React.useEffect(() => {
     if (!cancelAfterSnapshot || !liveRefine || isRunning) return;
@@ -128,7 +162,15 @@ export function PlanSurface({
   const submit = (response: DesktopPlanResponse): void => {
     if (submitting) return;
     setSubmitting(true);
-    onResponse(response, target);
+    // Safety fallback: if the host drops or rejects the response, reset submitting
+    // after 3s so the user is not permanently trapped with greyed-out buttons.
+    const timer = setTimeout(() => setSubmitting(false), 3000);
+    try {
+      onResponse(response, target);
+    } catch {
+      clearTimeout(timer);
+      setSubmitting(false);
+    }
   };
 
   const submitEdit = (): void => {
@@ -168,6 +210,7 @@ export function PlanSurface({
   };
 
   const handleRefinePress = (): void => {
+    setCancelAfterSnapshot(false);
     if (supportsRefine === true) {
       setRefineUnavailableNotice(false);
       setNativeRefineOpen(true);
@@ -206,8 +249,47 @@ export function PlanSurface({
 
   const handleRunRole = async (): Promise<void> => {
     if (isRunning) return;
-    await dispatchRefineAction({ action: "select_role", role: selectedRole });
     await dispatchRefineAction({ action: "run", userInput: refineInstructions.trim() });
+  };
+
+  /** Current model as advertised by the live snapshot. */
+  const currentModelId = liveRefine?.snapshot.currentModel || pickedModel || sessionModel || "";
+  const currentModelLabel = (() => {
+    if (!currentModelId) return t.planRefineModelNone;
+    const fromSnapshot = liveRefine?.snapshot.modelOptions.find((opt) => opt.id === currentModelId)?.name;
+    if (fromSnapshot) return fromSnapshot;
+    const fromPicker = availableModels.find((m) => `${m.provider}/${m.id}` === currentModelId || m.id === currentModelId)?.name;
+    return fromPicker ?? currentModelId;
+  })();
+
+  /** TUI parity: the role row cycles roles in place (`↔ change role`). */
+  const handleCycleRole = (): void => {
+    if (isRunning || !refineReady) return;
+    const index = REFINE_ROLES.indexOf(selectedRole);
+    const next = REFINE_ROLES[(index + 1) % REFINE_ROLES.length];
+    setSelectedRole(next);
+    void dispatchRefineAction({ action: "select_role", role: next });
+  };
+
+  const openModelPicker = async (): Promise<void> => {
+    if (isRunning || !refineReady) return;
+    setModelPickerOpen(true);
+    setModelQuery("");
+    if (availableModels.length > 0 || !onListModels) return;
+    setLoadingModels(true);
+    try {
+      setAvailableModels(await onListModels(target.sessionId));
+    } catch {
+      setAvailableModels([]);
+    } finally {
+      setLoadingModels(false);
+    }
+  };
+
+  const handleSelectModel = (option: RefineModelOption): void => {
+    setModelPickerOpen(false);
+    setPickedModel(`${option.provider}/${option.id}`);
+    void dispatchRefineAction({ action: "select_model", model: `${option.provider}/${option.id}` });
   };
 
   const handleApplyResult = (): void => {
@@ -266,50 +348,20 @@ export function PlanSurface({
           {/* Native Review & Refine Panel Mode */}
           {nativeRefineOpen ? (
             <View style={styles.refineContainer}>
-              {/* Role selection grid: 2x2 so each role label stays on one line */}
-              <View style={styles.roleGrid}>
-                {REFINE_ROLES.map((role) => {
-                  const active = selectedRole === role;
-                  return (
-                    <TouchableOpacity
-                      key={role}
-                      onPress={() => {
-                        setSelectedRole(role);
-                        dispatchRefineAction({ action: "select_role", role });
-                      }}
-                      disabled={!refineReady || isRunning}
-                      style={[
-                        styles.roleTab,
-                        {
-                          borderColor: active ? theme.accent : theme.border,
-                          backgroundColor: active ? (theme.inputBg ?? theme.border) : "transparent",
-                        },
-                      ]}
-                      accessibilityRole="button"
-                      accessibilityLabel={roleLabel(role, t)}
-                    >
-                      <Text
-                        style={[
-                          styles.roleTabText,
-                          { color: active ? theme.accent : theme.muted, fontWeight: active ? "700" : "500" },
-                        ]}
-                        numberOfLines={1}
-                      >
-                        {roleLabel(role, t)}
-                      </Text>
-                    </TouchableOpacity>
-                  );
-                })}
+              {/* Header mirrors the TUI's `role reviewer · turns 0` line. */}
+              <View style={styles.refineHeader}>
+                <Text style={[styles.refineHeaderText, { color: theme.muted }]} numberOfLines={1}>
+                  {"role "}{selectedRole}{" · "}{liveRefine?.turns.length ?? 0}{" "}{t.planRefineTurns}
+                </Text>
               </View>
 
-              {/* Revision mismatch / conflict warning */}
               {revisionMismatch ? (
                 <Text style={[styles.conflictBanner, { color: theme.error ?? "#E53E3E" }]}>
                   {t.planRefineConflict}
                 </Text>
               ) : null}
 
-              {/* Output Preview */}
+              {/* Output preview (TUI preview pane) */}
               <ScrollView style={[styles.refinePreview, { borderColor: theme.border }]} contentContainerStyle={styles.previewContent}>
                 {latestTurn?.output ? (
                   <ChatMarkdown content={latestTurn.output} onExpand={setExpanded} />
@@ -320,55 +372,96 @@ export function PlanSurface({
                 )}
               </ScrollView>
 
-              {/* Additional instruction input */}
-              <TextInput
-                value={refineInstructions}
-                onChangeText={setRefineInstructions}
-                editable={!isRunning}
-                placeholder={t.planRefineInputPlaceholder}
-                placeholderTextColor={theme.muted}
-                style={[styles.refineInput, { color: theme.text, borderColor: theme.border, backgroundColor: theme.inputBg }]}
-                accessibilityLabel={t.planRefineInputPlaceholder}
-              />
-
-              {/* Refine actions: vertical stack, matching the Plan action layout */}
-              <View style={styles.refineActions}>
+              {/* Numbered rows, matching the TUI's 1-6 selection list. */}
+              <View style={styles.refineRows}>
                 <TouchableOpacity
-                  onPress={handleRunRole}
+                  onPress={handleCycleRole}
                   disabled={!refineReady || isRunning}
-                  style={[styles.primary, { backgroundColor: theme.accent, opacity: isRunning ? 0.6 : 1 }]}
+                  style={[styles.refineRow, { borderColor: theme.border }]}
                   accessibilityRole="button"
-                  accessibilityLabel={isRunning ? t.planRefineRunning : t.planRefineRun}
+                  accessibilityLabel={`1. ${t.planRefineRoleLabel} ${roleLabel(selectedRole, t)}`}
                 >
+                  <Text style={[styles.refineRowIndex, { color: theme.muted }]}>1.</Text>
+                  <Text style={[styles.refineRowLabel, { color: theme.text }]}>{t.planRefineRoleLabel}</Text>
+                  <Text style={[styles.refineRowValue, { color: theme.accent }]} numberOfLines={1}>
+                    [{roleLabel(selectedRole, t)}]
+                  </Text>
+                  <Text style={[styles.refineRowChevron, { color: theme.muted }]}>↔</Text>
+                </TouchableOpacity>
+
+                <TouchableOpacity
+                  onPress={() => void openModelPicker()}
+                  disabled={!refineReady || isRunning}
+                  style={[styles.refineRow, { borderColor: theme.border }]}
+                  accessibilityRole="button"
+                  accessibilityLabel={`2. ${t.planRefineModelLabel} ${currentModelLabel}`}
+                >
+                  <Text style={[styles.refineRowIndex, { color: theme.muted }]}>2.</Text>
+                  <Text style={[styles.refineRowLabel, { color: theme.text }]}>{t.planRefineModelLabel}</Text>
+                  <Text
+                    style={[styles.refineRowValue, { color: currentModelId ? theme.accent : (theme.error ?? "#E53E3E") }]}
+                    numberOfLines={1}
+                  >
+                    [{currentModelLabel}]
+                  </Text>
+                  <Text style={[styles.refineRowChevron, { color: theme.muted }]}>›</Text>
+                </TouchableOpacity>
+
+                <View style={[styles.refineRowColumn, { borderColor: theme.border }]}>
+                  <View style={styles.refineRowInline}>
+                    <Text style={[styles.refineRowIndex, { color: theme.muted }]}>3.</Text>
+                    <Text style={[styles.refineRowLabel, { color: theme.text }]}>{t.planRefineRowInput}</Text>
+                  </View>
+                  <TextInput
+                    value={refineInstructions}
+                    onChangeText={setRefineInstructions}
+                    editable={!isRunning}
+                    placeholder={t.planRefineInputPlaceholder}
+                    placeholderTextColor={theme.muted}
+                    style={[styles.refineInput, { color: theme.text, borderColor: theme.border, backgroundColor: theme.inputBg }]}
+                    accessibilityLabel={t.planRefineInputPlaceholder}
+                  />
+                </View>
+
+                <TouchableOpacity
+                  onPress={() => void handleRunRole()}
+                  disabled={!refineReady || isRunning}
+                  style={[styles.refineRow, styles.refineRowPrimary, { borderColor: theme.accent, backgroundColor: theme.accent, opacity: isRunning ? 0.6 : 1 }]}
+                  accessibilityRole="button"
+                  accessibilityLabel={isRunning ? t.planRefineRunning : `4. ${t.planRefineRun}`}
+                >
+                  <Text style={[styles.refineRowIndex, { color: "#FFFFFF" }]}>4.</Text>
                   {isRunning ? (
-                    <ActivityIndicator color="#FFFFFF" size="small" />
+                    <>
+                      <ActivityIndicator color="#FFFFFF" size="small" />
+                      <Text style={[styles.refineRowLabel, { color: "#FFFFFF", flex: 1 }]}>{t.planRefineRunning}</Text>
+                    </>
                   ) : (
-                    <Text style={styles.primaryText}>{t.planRefineRun}</Text>
+                    <Text style={[styles.refineRowLabel, { color: "#FFFFFF", flex: 1 }]}>{t.planRefineRun}</Text>
                   )}
                 </TouchableOpacity>
 
-                {latestTurn ? (
-                  <>
-                    <TouchableOpacity
-                      onPress={handleApplyResult}
-                      disabled={!refineReady || isRunning}
-                      style={[styles.action, { borderColor: theme.accent, backgroundColor: theme.inputBg }]}
-                      accessibilityRole="button"
-                      accessibilityLabel={t.planRefineApply}
-                    >
-                      <Text style={[styles.actionText, { color: theme.accent }]}>{t.planRefineApply}</Text>
-                    </TouchableOpacity>
-                    <TouchableOpacity
-                      onPress={handleDiscardResult}
-                      disabled={!refineReady || isRunning}
-                      style={[styles.action, { borderColor: theme.border, backgroundColor: theme.inputBg }]}
-                      accessibilityRole="button"
-                      accessibilityLabel={t.planRefineDiscard}
-                    >
-                      <Text style={[styles.actionText, { color: theme.muted }]}>{t.planRefineDiscard}</Text>
-                    </TouchableOpacity>
-                  </>
-                ) : null}
+                <TouchableOpacity
+                  onPress={handleApplyResult}
+                  disabled={!refineReady || isRunning || !latestTurn}
+                  style={[styles.refineRow, { borderColor: theme.border, opacity: latestTurn ? 1 : 0.45 }]}
+                  accessibilityRole="button"
+                  accessibilityLabel={`5. ${t.planRefineApply}`}
+                >
+                  <Text style={[styles.refineRowIndex, { color: theme.muted }]}>5.</Text>
+                  <Text style={[styles.refineRowLabel, { color: theme.accent, flex: 1 }]}>{t.planRefineApply}</Text>
+                </TouchableOpacity>
+
+                <TouchableOpacity
+                  onPress={handleDiscardResult}
+                  disabled={!refineReady || isRunning}
+                  style={[styles.refineRow, { borderColor: theme.border }]}
+                  accessibilityRole="button"
+                  accessibilityLabel={`6. ${t.planRefineDiscard}`}
+                >
+                  <Text style={[styles.refineRowIndex, { color: theme.muted }]}>6.</Text>
+                  <Text style={[styles.refineRowLabel, { color: theme.muted, flex: 1 }]}>{t.planRefineDiscard}</Text>
+                </TouchableOpacity>
               </View>
 
               <TouchableOpacity
@@ -476,6 +569,77 @@ export function PlanSurface({
         </View>
       </View>
       )}
+
+      {/* Model picker: the mobile counterpart of the TUI's `m model` prompt. */}
+      {modelPickerOpen ? (
+        <View style={styles.modelOverlay}>
+          <View style={[styles.modelSheet, { backgroundColor: theme.bg, borderColor: theme.border }]}>
+            <View style={styles.modelSheetHeader}>
+              <Text style={[styles.modelSheetTitle, { color: theme.text }]}>{t.planRefineModelPicker}</Text>
+              <TouchableOpacity
+                onPress={() => setModelPickerOpen(false)}
+                accessibilityRole="button"
+                accessibilityLabel={t.planRefineCancel}
+                style={styles.closeButton}
+              >
+                <Text style={[styles.close, { color: theme.muted }]}>×</Text>
+              </TouchableOpacity>
+            </View>
+            <TextInput
+              value={modelQuery}
+              onChangeText={setModelQuery}
+              placeholder={t.planRefineModelSearch}
+              placeholderTextColor={theme.muted}
+              style={[styles.refineInput, { color: theme.text, borderColor: theme.border, backgroundColor: theme.inputBg }]}
+              accessibilityLabel={t.planRefineModelSearch}
+            />
+            {loadingModels ? (
+              <View style={styles.modelSheetEmpty}>
+                <ActivityIndicator color={theme.accent} />
+              </View>
+            ) : (() => {
+              const query = modelQuery.trim().toLowerCase();
+              const filtered = query
+                ? availableModels.filter((m) => `${m.provider}/${m.id}`.toLowerCase().includes(query) || m.name.toLowerCase().includes(query))
+                : availableModels;
+              if (filtered.length === 0) {
+                return (
+                  <View style={styles.modelSheetEmpty}>
+                    <Text style={[styles.modelSheetEmptyText, { color: theme.muted }]}>{t.planRefineNoModels}</Text>
+                  </View>
+                );
+              }
+              return (
+                <ScrollView style={styles.modelSheetList} keyboardShouldPersistTaps="handled">
+                  {filtered.map((option) => {
+                    const key = `${option.provider}/${option.id}`;
+                    const active = key === currentModelId || option.id === currentModelId;
+                    return (
+                      <TouchableOpacity
+                        key={key}
+                        onPress={() => handleSelectModel(option)}
+                        style={[
+                          styles.modelOption,
+                          { borderColor: active ? theme.accent : theme.border, backgroundColor: active ? (theme.inputBg ?? theme.border) : "transparent" },
+                        ]}
+                        accessibilityRole="button"
+                        accessibilityLabel={key}
+                      >
+                        <Text style={[styles.modelOptionName, { color: active ? theme.accent : theme.text }]} numberOfLines={1}>
+                          {option.name}
+                        </Text>
+                        <Text style={[styles.modelOptionMeta, { color: theme.muted }]} numberOfLines={1}>
+                          {key}
+                        </Text>
+                      </TouchableOpacity>
+                    );
+                  })}
+                </ScrollView>
+              );
+            })()}
+          </View>
+        </View>
+      ) : null}
     </Modal>
   );
 }
@@ -501,6 +665,46 @@ const styles = StyleSheet.create({
   backButton: { minHeight: 36, alignItems: "center", justifyContent: "center" },
   backText: { fontSize: 13 },
   refineContainer: { gap: 12 },
+  refineHeader: { flexDirection: "row", alignItems: "center" },
+  refineHeaderText: { fontSize: 12, fontWeight: "600" },
+  refineRows: { gap: 6 },
+  refineRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+    minHeight: 42,
+    borderWidth: 1,
+    borderRadius: 6,
+    paddingHorizontal: 10,
+    paddingVertical: 8,
+  },
+  refineRowPrimary: { borderWidth: 1 },
+  refineRowIndex: { fontSize: 12, fontWeight: "700", minWidth: 16 },
+  refineRowLabel: { fontSize: 13, fontWeight: "600" },
+  refineRowValue: { flex: 1, fontSize: 12, textAlign: "right" },
+  refineRowChevron: { fontSize: 13 },
+  refineRowColumn: { borderWidth: 1, borderRadius: 6, paddingHorizontal: 10, paddingVertical: 8, gap: 6 },
+  refineRowInline: { flexDirection: "row", alignItems: "center", gap: 8 },
+  modelOverlay: {
+    position: "absolute",
+    top: 0,
+    right: 0,
+    bottom: 0,
+    left: 0,
+    backgroundColor: "rgba(0,0,0,0.55)",
+    alignItems: "center",
+    justifyContent: "center",
+    padding: 16,
+  },
+  modelSheet: { width: "100%", maxHeight: "80%", borderWidth: 1, borderRadius: 10, padding: 12, gap: 10 },
+  modelSheetHeader: { flexDirection: "row", alignItems: "center", justifyContent: "space-between" },
+  modelSheetTitle: { fontSize: 15, fontWeight: "700" },
+  modelSheetList: { maxHeight: 380 },
+  modelSheetEmpty: { minHeight: 80, alignItems: "center", justifyContent: "center" },
+  modelSheetEmptyText: { fontSize: 13 },
+  modelOption: { borderWidth: 1, borderRadius: 6, paddingHorizontal: 10, paddingVertical: 8, gap: 2, marginBottom: 6 },
+  modelOptionName: { fontSize: 13, fontWeight: "600" },
+  modelOptionMeta: { fontSize: 11 },
   roleGrid: { flexDirection: "row", flexWrap: "wrap", gap: 6 },
   roleTab: { flexGrow: 1, minWidth: "46%", minHeight: 36, borderWidth: 1, borderRadius: 6, alignItems: "center", justifyContent: "center", paddingHorizontal: 8 },
   roleTabText: { fontSize: 12 },

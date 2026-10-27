@@ -83,6 +83,7 @@ export class HostController {
   private readonly desktopReplayRefreshes = new Map<string, { timer: ReturnType<typeof setTimeout>; refreshing: boolean; replayQueued: boolean; pendingItems: TimelineItem[] }>();
   private readonly pendingDesktopAsks = new Map<string, { target: DesktopPluginTarget; request: DesktopAskRequest; event: Extract<HostEvent, { type: "extension_ui_request" }> }>();
   private readonly pendingDesktopPlans = new Map<string, { target: DesktopPluginTarget; request: DesktopPlanRequest }>();
+  private readonly pendingDesktopRefines = new Map<string, { target: DesktopPluginTarget; message: DesktopPlanRefineSnapshot }>();
   private readonly desktopRuntimeStatuses = new Map<string, DesktopPluginRuntimeStatus>();
   private readonly desktopExecutionSourceRevisions = new Map<string, number>();
   private readonly desktopExecutionEventRevisions = new Map<string, number>();
@@ -582,7 +583,31 @@ export class HostController {
     if (this.disposed || !this.sessionDirectory.resolve(target, "plan")) return;
     const body = toMobileRefineHostEvent(target, message);
     if (!body) return;
+    const key = `${target.sessionId}\u0000${message.refineSessionId}`;
+    if (message.type === "desktop_plan_refine_snapshot") {
+      this.pendingDesktopRefines.set(key, { target: { ...target }, message });
+    } else if (message.type === "desktop_plan_refine_update") {
+      const prior = this.pendingDesktopRefines.get(key);
+      if (prior) {
+        const current = prior.message;
+        const turns = message.turn ? [...current.turns, message.turn] : current.turns;
+        this.pendingDesktopRefines.set(key, {
+          target: { ...target },
+          message: { ...current, status: message.status, turns, sequence: message.sequence },
+        });
+      }
+      if (message.status === "applied" || message.status === "discarded" || message.status === "cancelled") {
+        this.pendingDesktopRefines.delete(key);
+      }
+    }
     this.emitToListeners(this.eventLog.record(body as Parameters<typeof this.eventLog.record>[0]));
+  }
+
+  pendingDesktopRefineEvents(): HostEvent[] {
+    return [...this.pendingDesktopRefines.values()]
+      .map(({ target, message }) => toMobileRefineHostEvent(target, message))
+      .filter((e): e is HostEvent => Boolean(e))
+      .map((body) => this.eventLog.record(body as Parameters<typeof this.eventLog.record>[0]));
   }
 
   async respondToDesktopPlan(sessionId: string, requestId: string, response: DesktopPlanResponse, target?: SessionTargetIdentity): Promise<boolean> {

@@ -242,6 +242,14 @@ export interface I18nDictionary {
   planRefineApplyDraft: string;
   planRefineApplyFeedback: string;
   planRefineBack: string;
+  planRefineRoleLabel: string;
+  planRefineModelLabel: string;
+  planRefineModelNone: string;
+  planRefineModelPicker: string;
+  planRefineModelSearch: string;
+  planRefineNoModels: string;
+  planRefineTurns: string;
+  planRefineRowInput: string;
   planActionRollback: string;
   planActionExit: string;
   planActionClose: string;
@@ -509,6 +517,14 @@ export const DICTIONARIES: Record<Language, I18nDictionary> = {
     planRefineApplyDraft: "优化官将覆盖计划草稿",
     planRefineApplyFeedback: "结果将作为讨论意见返回",
     planRefineBack: "返回计划",
+    planRefineRoleLabel: "角色",
+    planRefineModelLabel: "模型",
+    planRefineModelNone: "未选择",
+    planRefineModelPicker: "选择模型",
+    planRefineModelSearch: "搜索模型…",
+    planRefineNoModels: "没有可用模型",
+    planRefineTurns: "轮",
+    planRefineRowInput: "指令（选填）",
     planActionRollback: "回滚到历史草稿",
     planActionExit: "退出计划模式",
     planActionClose: "关闭",
@@ -787,6 +803,14 @@ export const DICTIONARIES: Record<Language, I18nDictionary> = {
     planRefineApplyDraft: "Optimizer output will replace the Plan draft",
     planRefineApplyFeedback: "Result will be sent as discussion feedback",
     planRefineBack: "Back to Plan",
+    planRefineRoleLabel: "Role",
+    planRefineModelLabel: "Model",
+    planRefineModelNone: "Not selected",
+    planRefineModelPicker: "Select model",
+    planRefineModelSearch: "Search models…",
+    planRefineNoModels: "No models available",
+    planRefineTurns: "turns",
+    planRefineRowInput: "Instruction (optional)",
     planActionRollback: "Rollback to Draft",
     planActionExit: "Exit Plan Mode",
     planActionClose: "Close",

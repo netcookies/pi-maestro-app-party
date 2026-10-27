@@ -99,7 +99,14 @@ function textContent(node: ReactTestInstance | string): string {
 }
 
 async function press(root: ReactTestInstance, label: string): Promise<void> {
-  const button = hosts(root, "Pressable").find((node) => node.props.accessibilityLabel === label)
+  // The refine panel numbers its rows (`4. Run`), so match the label itself or a
+  // numbered variant of it rather than requiring an exact string.
+  const matchesLabel = (value: unknown): boolean => {
+    if (typeof value !== "string") return false;
+    return value === label || new RegExp(`^\\d+\\.\\s*${label.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}$`).test(value);
+  };
+  const button = hosts(root, "Pressable").find((node) => matchesLabel(node.props.accessibilityLabel))
+    ?? hosts(root, "TouchableOpacity").find((node) => matchesLabel(node.props.accessibilityLabel))
     ?? hosts(root, "TouchableOpacity").find((node) => textContent(node) === label);
   if (!button) throw new Error(`Button not found: ${label}`);
   await act(async () => { button.props.onPress(); });
@@ -193,9 +200,10 @@ describe("mounted Plan Markdown integration", () => {
       />,
     );
     await press(renderer.root, t.planActionRefine);
-    // Native panel is open: four role tabs are visible
+    // Native panel is open in TUI row layout: the role row shows the *current*
+    // role, and cycling it (or the model row) is how other roles are reached.
     expect(renderer.root.findAll((node) => node.type === "Text" && textContent(node).includes(t.planRefineRoleReviewer))).toHaveLength(1);
-    expect(renderer.root.findAll((node) => node.type === "Text" && textContent(node).includes(t.planRefineRoleOptimizer))).toHaveLength(1);
+    expect(renderer.root.findAll((node) => node.type === "Text" && textContent(node).includes(t.planRefineModelLabel))).toHaveLength(1);
 
     // Press Run role
     await press(renderer.root, t.planRefineRun);

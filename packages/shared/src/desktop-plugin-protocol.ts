@@ -588,7 +588,7 @@ export function isDesktopPlanRefineRole(value: unknown): value is DesktopPlanRef
 function isDesktopPlanRefineTurn(value: unknown): value is DesktopPlanRefineTurn {
   return isRecord(value) && stringFields(value, "turnId") && isDesktopPlanRefineRole(value.role)
     && boundedText(value.model, 512)
-    && (value.userInput === undefined || boundedText(value.userInput, DESKTOP_PLAN_REFINE_MAX_ACTION_TEXT_LENGTH))
+    && (value.userInput === undefined || (typeof value.userInput === "string" && value.userInput.length <= DESKTOP_PLAN_REFINE_MAX_ACTION_TEXT_LENGTH))
     && (value.output === undefined || boundedText(value.output, DESKTOP_PLAN_REFINE_MAX_OUTPUT_LENGTH))
     && (value.error === undefined || boundedText(value.error, DESKTOP_PLAN_REFINE_MAX_OUTPUT_LENGTH))
     && (value.status === "running" || value.status === "succeeded" || value.status === "failed" || value.status === "cancelled")
@@ -606,7 +606,7 @@ export function isDesktopPlanRefineSnapshot(value: unknown): value is DesktopPla
     && nonNegativeInteger(value.operationId) && nonNegativeInteger(value.revision) && nonNegativeInteger(value.sequence)
     && isDesktopPlanRefineStatus(value.status) && boundedText(value.markdown, DESKTOP_PLAN_REFINE_MAX_MARKDOWN_LENGTH)
     && Array.isArray(value.turns) && value.turns.length <= 128 && value.turns.every(isDesktopPlanRefineTurn)
-    && isDesktopPlanRefineRole(value.currentRole) && boundedText(value.currentModel, 512)
+    && isDesktopPlanRefineRole(value.currentRole) && typeof value.currentModel === "string" && value.currentModel.length <= 512
     && Array.isArray(value.modelOptions) && value.modelOptions.length <= 128
     && value.modelOptions.every((model) => isRecord(model) && boundedText(model.id, 512) && boundedText(model.name, 512))
     && Array.isArray(value.availableActions) && value.availableActions.every((action) =>
@@ -621,7 +621,7 @@ export function isDesktopPlanRefineAction(value: unknown): value is DesktopPlanR
   switch (value.action.action) {
     case "select_role": return isDesktopPlanRefineRole(value.action.role);
     case "select_model": return boundedText(value.action.model, 512);
-    case "run": return boundedText(value.action.userInput, DESKTOP_PLAN_REFINE_MAX_ACTION_TEXT_LENGTH);
+    case "run": return typeof value.action.userInput === "string" && value.action.userInput.length <= DESKTOP_PLAN_REFINE_MAX_ACTION_TEXT_LENGTH;
     case "apply": return stringFields(value.action, "turnId");
     case "discard": case "cancel": case "snapshot": return true;
     default: return false;

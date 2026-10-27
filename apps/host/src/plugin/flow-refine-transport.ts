@@ -12,6 +12,7 @@
  */
 
 import { randomUUID } from "node:crypto";
+import { appendFile } from "node:fs/promises";
 import type {
   DesktopPlanRefineAction,
   DesktopPlanRefineActionPayload,
@@ -150,6 +151,9 @@ interface PendingRefine {
   modelLabel: string;
   /** Most recent turn id, required by Flow's apply guard. */
   latestTurnId?: string;
+  /** Latest authoritative snapshot, re-broadcast when a selection changes. */
+  latestSnapshot?: FlowRefineTransportSnapshot;
+  latestSequence?: number;
   readonly actions: Map<string, { fingerprint: string; promise: Promise<boolean> }>;
   sendTail: Promise<void>;
   resolve(result: { action: "apply" | "discard" | "cancel"; turnId?: string; terminal?: string }): void;
@@ -216,13 +220,21 @@ function enqueueFrame(entry: PendingRefine, client: RefineClient, frame: Desktop
   entry.sendTail = entry.sendTail
     .catch(() => undefined)
     .then(() => client.sendPlanRefine(frame))
-    .catch(() => undefined);
+    .catch((error) => {
+      void appendFile("/tmp/refine-diag.jsonl", JSON.stringify({ at: new Date().toISOString(), event: "flow-refine-send-failed", error: error instanceof Error ? error.message : String(error), frameType: frame.type }) + "\n").catch(() => {});
+      console.error(`[refine-transport] sendPlanRefine FAILED:`, error);
+    });
 }
 
 export function createDesktopRefineTransport(options: {
   getClient: () => RefineClient | undefined;
   isCurrent: (request: FlowRefineTransportRequest) => boolean;
   supportsRefine: () => boolean;
+  /**
+   * The session's current runtime model (`provider/modelId`). Used only when a
+   * refine snapshot arrives without one, so the phone still has a runnable model.
+   */
+  getSessionModel?: () => string | undefined;
 }): DesktopRefineTransport {
   const pending = new Map<string, PendingRefine>();
 
@@ -257,9 +269,21 @@ export function createDesktopRefineTransport(options: {
           const client = options.getClient();
           if (!client) return;
           if (event.type === "snapshot") {
+            entry.latestSnapshot = event.snapshot;
+            entry.latestSequence = event.sequence;
             entry.role = event.snapshot.session.currentRole;
             entry.model = event.snapshot.session.currentModel.model;
             entry.modelLabel = event.snapshot.session.currentModel.label;
+            // A refine session runs on the main session's model by default. If the
+            // snapshot arrived without one, adopt the session's real runtime model
+            // rather than leaving the phone unable to start a run.
+            if (!entry.model) {
+              const runtimeModel = options.getSessionModel?.();
+              if (runtimeModel) {
+                entry.model = runtimeModel;
+                entry.modelLabel = runtimeModel;
+              }
+            }
             enqueueFrame(entry, client, snapshotToWire(entry.request, event.snapshot, client.target, event.sequence));
             return;
           }
@@ -366,11 +390,22 @@ export function createDesktopRefineTransport(options: {
     },
 
     async handleAction(action) {
+      void appendFile("/tmp/refine-diag.jsonl", JSON.stringify({ at: new Date().toISOString(), event: "flow-refine-handleAction", action: action.action.action, refineSessionId: action.refineSessionId, pendingSize: pending.size }) + "\n").catch(() => {});
+      console.log(`[refine-host-handle] action=${action.action.action} sessionId=${action.refineSessionId} pendingSize=${pending.size}`);
       const entry = pending.get(action.refineSessionId);
-      if (!entry || action.planRequestId !== entry.request.refineSessionId
+      if (!entry) {
+        void appendFile("/tmp/refine-diag.jsonl", JSON.stringify({ at: new Date().toISOString(), event: "flow-refine-rejected-no-entry", refineSessionId: action.refineSessionId, availableKeys: [...pending.keys()] }) + "\n").catch(() => {});
+        console.log(`[refine-host-handle] REJECTED: pending entry not found for ${action.refineSessionId}; available keys: ${[...pending.keys()].join(",")}`);
+        return false;
+      }
+      if (action.planRequestId !== entry.request.refineSessionId
         || action.operationId !== entry.request.operationId
         || action.revision !== entry.request.revision
-        || !sameTarget(action.target, options.getClient()?.target)) return false;
+        || !sameTarget(action.target, options.getClient()?.target)) {
+        void appendFile("/tmp/refine-diag.jsonl", JSON.stringify({ at: new Date().toISOString(), event: "flow-refine-rejected-mismatch", planRequestId: action.planRequestId === entry.request.refineSessionId, opId: action.operationId === entry.request.operationId, rev: action.revision === entry.request.revision, targetMatch: sameTarget(action.target, options.getClient()?.target) }) + "\n").catch(() => {});
+        console.log(`[refine-host-handle] REJECTED: match mismatch: planRequestId=${action.planRequestId===entry.request.refineSessionId} opId=${action.operationId===entry.request.operationId} rev=${action.revision===entry.request.revision} target=${sameTarget(action.target, options.getClient()?.target)}`);
+        return false;
+      }
       const fingerprint = JSON.stringify({
         target: action.target,
         refineSessionId: action.refineSessionId,
@@ -384,7 +419,23 @@ export function createDesktopRefineTransport(options: {
       const promise = (async (): Promise<boolean> => {
         if (action.action.action === "apply" && action.action.turnId !== entry.latestTurnId) return false;
         // Selection is Host-side state: Flow only receives the resolved run.
-        if (applySelection(action.action, entry)) return true;
+        if (applySelection(action.action, entry)) {
+          // Selection lives on the Host, so echo it back: without this the phone
+          // keeps rendering the snapshot's original role/model and a picked model
+          // never appears selected.
+          const snap = entry.latestSnapshot;
+          const client = options.getClient();
+          if (snap && client) {
+            entry.latestSequence = (entry.latestSequence ?? 0) + 1;
+            enqueueFrame(entry, client, snapshotToWire(
+              entry.request,
+              { ...snap, session: { ...snap.session, currentRole: entry.role, currentModel: { model: entry.model, label: entry.modelLabel } } },
+              client.target,
+              entry.latestSequence,
+            ));
+          }
+          return true;
+        }
         const payload = actionToFlow(action, entry);
         if (!payload) return false;
         try {
@@ -434,9 +485,15 @@ function actionToFlow(
   state: RefineSelectionState,
 ): FlowRefineTransportAction | undefined {
   const actionId = action.actionId;
+  void appendFile("/tmp/refine-diag.jsonl", JSON.stringify({ at: new Date().toISOString(), event: "flow-refine-actionToFlow", action: action.action.action, model: state.model, role: state.role }) + "\n").catch(() => {});
+  console.log(`[refine-host-flow] actionToFlow action=${action.action.action} state.model=${state.model} state.role=${state.role}`);
   switch (action.action.action) {
     case "run":
-      if (!state.model) return undefined;
+      if (!state.model) {
+        void appendFile("/tmp/refine-diag.jsonl", JSON.stringify({ at: new Date().toISOString(), event: "flow-refine-rejected-empty-model" }) + "\n").catch(() => {});
+        console.log(`[refine-host-flow] REJECTED: state.model is empty!`);
+        return undefined;
+      }
       return {
         type: "run",
         actionId,

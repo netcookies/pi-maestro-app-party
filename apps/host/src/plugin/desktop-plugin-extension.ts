@@ -695,6 +695,9 @@ export function createDesktopPluginExtension(options: DesktopPluginExtensionOpti
           && request.target.sessionId === target.sessionId
           && request.target.normalizedCwd === target.normalizedCwd,
         supportsRefine: () => client?.isPlanRefineSupported === true,
+        // The refine session defaults to the main session's model, so the phone
+        // never has to pick one before it can run.
+        getSessionModel: () => (latestModel ? `${latestModel.provider}/${latestModel.id}` : undefined),
       });
       unregisterFlowRefineTransport = registerFlowRefineTransport(refineTransport);
       queueMicrotask(() => {

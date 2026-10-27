@@ -234,7 +234,9 @@ export function HostStoreProvider({ children }: { children: React.ReactNode }) {
       return target?.sessionId === sessionId ? target : undefined;
     }
     const matches = [...sessionTargetsRef.current.values()].filter((target) => target.sessionId === sessionId);
-    return matches.length === 1 ? matches[0] : undefined;
+    if (matches.length === 1) return matches[0];
+    const liveMatch = matches.find((target) => target.endpointId !== "history" && target.processGeneration !== "persisted");
+    return liveMatch ?? (matches.length > 0 ? matches[0] : undefined);
   }, []);
 
   const targetOptions = useCallback((sessionId: string): { target: SessionTargetIdentity } => {

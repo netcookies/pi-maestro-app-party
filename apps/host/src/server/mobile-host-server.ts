@@ -358,6 +358,9 @@ export class MobileHostServer {
       if (hello.capabilities.includes("plan")) {
         for (const event of this.controller.pendingDesktopPlanEvents()) this.sendFrame(client, event, "required", event.type);
       }
+      if (hello.capabilities.includes("plan_refine")) {
+        for (const event of this.controller.pendingDesktopRefineEvents()) this.sendFrame(client, event, "required", event.type);
+      }
     }
   }
 
@@ -789,7 +792,12 @@ export class MobileHostServer {
   }
 
   private targetForCommand(command: { sessionId: string; target?: unknown }): SessionTargetIdentity | undefined {
-    return command.target !== undefined && isSessionTargetIdentity(command.target) ? command.target : undefined;
+    if (command.target !== undefined && isSessionTargetIdentity(command.target)) return command.target;
+    if (command.sessionId) {
+      const active = this.controller.directory.list().find((t) => t.identity.sessionId === command.sessionId && t.kind === "desktop");
+      if (active) return active.identity;
+    }
+    return undefined;
   }
 
   private scopedRequestId(client: ClientSocket, command: ClientCommand, target: SessionTargetIdentity): string {
@@ -1077,12 +1085,26 @@ export class MobileHostServer {
           break;
         }
         case "plan_refine_action": {
-          if (!client.capabilities.includes("plan_refine")) { this.sendUnavailable(client, command, "capability_mismatch"); break; }
+          console.log(`[refine-wire] plan_refine_action received: client=${client.id} action=${command.refine?.action?.action}`);
+          if (!client.capabilities.includes("plan_refine")) {
+            console.log(`[refine-wire] rejected: capability_mismatch`);
+            this.sendUnavailable(client, command, "capability_mismatch");
+            break;
+          }
           const target = this.targetForCommand(command);
-          if (!target || !this.controller.directory.resolve(target, "plan")) { this.sendUnavailable(client, command, "target_unavailable"); break; }
+          if (!target || !this.controller.directory.resolve(target, "plan")) {
+            console.log(`[refine-wire] rejected: target_unavailable (target=${JSON.stringify(target)})`);
+            this.sendUnavailable(client, command, "target_unavailable");
+            break;
+          }
           const projected = toDesktopRefineAction(command.refine, target);
-          if (!projected) { this.sendUnavailable(client, command, "target_mismatch"); break; }
+          if (!projected) {
+            console.log(`[refine-wire] rejected: target_mismatch`);
+            this.sendUnavailable(client, command, "target_mismatch");
+            break;
+          }
           const ok = await this.controller.respondToDesktopRefine(projected, target);
+          console.log(`[refine-wire] respondToDesktopRefine result: ${ok}`);
           if (ok) this.sendAck(client, command, {});
           else this.sendError(client, "refine_session_unavailable", undefined, command.id);
           break;

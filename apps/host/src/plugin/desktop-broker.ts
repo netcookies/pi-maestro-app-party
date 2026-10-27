@@ -7,6 +7,7 @@ import type {
   DesktopAskResponse,
   DesktopAskResult,
   DesktopPlanRequest,
+  DesktopPlanRefineSnapshot,
   DesktopPlanResponse,
   DesktopPlanResult,
   DesktopBrokerAskResult,
@@ -114,6 +115,11 @@ export class DesktopBroker {
   }
 
   private readonly pendingPlanRequests = new Map<string, { target: DesktopPluginTarget; request: DesktopPlanRequest }>();
+  private readonly pendingRefineSnapshots = new Map<string, { target: DesktopPluginTarget; message: DesktopPlanRefineSnapshot }>();
+
+  private refineKey(target: DesktopPluginTarget, refineSessionId: string): string {
+    return JSON.stringify([target.sessionId, target.endpointId, target.normalizedCwd, target.processGeneration, refineSessionId]);
+  }
 
   private planKey(target: DesktopPluginTarget, requestId: string, kind: DesktopPlanRequest["kind"]): string {
     return JSON.stringify([target.sessionId, target.endpointId, target.normalizedCwd, target.processGeneration, requestId, kind]);
@@ -127,6 +133,11 @@ export class DesktopBroker {
   pendingPlanFrames(): DesktopBrokerToHostFrame[] {
     return [...this.pendingPlanRequests.values()]
       .map(({ target, request }) => ({ type: "desktop_broker_plan_request", target, request }));
+  }
+
+  pendingRefineFrames(): DesktopBrokerToHostFrame[] {
+    return [...this.pendingRefineSnapshots.values()]
+      .map(({ target, message }) => ({ type: "desktop_broker_plan_refine", target, message }));
   }
 
   constructor(private readonly options: DesktopBrokerOptions) {
@@ -202,6 +213,24 @@ export class DesktopBroker {
       },
       onPlanRefine: (target, message) => {
         if (!this.registry.resolve(target)) return;
+        const key = this.refineKey(target, message.refineSessionId);
+        if (message.type === "desktop_plan_refine_snapshot") {
+          this.pendingRefineSnapshots.set(key, { target: { ...target }, message });
+        } else if (message.type === "desktop_plan_refine_update") {
+          const prior = this.pendingRefineSnapshots.get(key);
+          if (prior) {
+            const merged = {
+              ...prior.message,
+              status: message.status,
+              sequence: message.sequence,
+              turns: message.turn ? [...prior.message.turns, message.turn] : prior.message.turns,
+            };
+            this.pendingRefineSnapshots.set(key, { target: { ...target }, message: merged });
+          }
+          if (message.status === "applied" || message.status === "discarded" || message.status === "cancelled") {
+            this.pendingRefineSnapshots.delete(key);
+          }
+        }
         this.emit({ type: "desktop_broker_plan_refine", target: { ...target }, message });
       },
       onAskResponse: (target, response) => {
@@ -610,6 +639,7 @@ export class DesktopBrokerHostClient {
               for (const frame of this.broker.createSnapshotFrames()) connection.send(frame);
               for (const frame of this.broker.pendingAskFrames()) connection.send(frame);
               for (const frame of this.broker.pendingPlanFrames()) connection.send(frame);
+              for (const frame of this.broker.pendingRefineFrames()) connection.send(frame);
               this.unsubscribeBroker = this.broker.subscribe((frame) => {
                 try {
                   connection.send(frame);

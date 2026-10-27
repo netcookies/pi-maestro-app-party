@@ -72,7 +72,7 @@ function modelNameOf(value: unknown): string | undefined {
 export default function SessionScreen() {
   const { id, targetKey, from } = useLocalSearchParams<{ id: string; targetKey?: string; from?: string }>();
   const router = useRouter();
-  const { state, hostUrl, sendPrompt, sendAbort, answerDialog, cancelDialog, respondPlan, cancelPlan, supportsRefine, refineState, refineTarget, sendRefineAction, selectSessionTarget, loadSessionHistory, loadMoreHistory, searchHistory, setThinking, listSkills, isConnected, connectionState, lastError, clearError: dispatchLocalError } = useHost();
+  const { state, hostUrl, sendPrompt, sendAbort, answerDialog, cancelDialog, respondPlan, cancelPlan, supportsRefine, refineState, refineTarget, sendRefineAction, selectSessionTarget, loadSessionHistory, loadMoreHistory, searchHistory, setThinking, listSkills, listModels, isConnected, connectionState, lastError, clearError: dispatchLocalError } = useHost();
   const { theme } = useTheme();
   const { t } = useI18n();
   const cfg = getConfig();
@@ -1136,17 +1136,36 @@ export default function SessionScreen() {
       />
       </View>
 
-      {visiblePlan && (
+      {Boolean(visiblePlan || (refineState?.kind === "live" && refineTarget?.sessionId === id)) && (
         <PlanSurface
-          request={visiblePlan.request}
-          target={visiblePlan.target}
-          initialDraft={visiblePlan.editedMarkdown}
+          request={visiblePlan?.request ?? {
+            type: "desktop_plan_request" as const,
+            requestId: refineState?.kind === "live" ? refineState.snapshot.planRequestId : "plan:unknown",
+            kind: "confirm" as const,
+            sessionId: id ?? "",
+            operationId: refineState?.kind === "live" ? refineState.snapshot.operationId : 1,
+            cwd: refineTarget?.normalizedCwd ?? "",
+            mode: "tui",
+            markdown: refineState?.kind === "live" ? refineState.snapshot.markdown : "",
+            revision: refineState?.kind === "live" ? refineState.snapshot.revision : 1,
+            pathLabel: "current.md",
+            availableActions: ["execute", "modify", "refine"],
+            workflow: { allowNew: true },
+            modelTransition: { current: refineState?.kind === "live" ? refineState.snapshot.currentModel : "" },
+            decisionDocuments: [],
+            drafts: [],
+          }}
+          target={visiblePlan?.target ?? refineTarget!}
+          initialDraft={visiblePlan?.editedMarkdown}
+          initialRefineOpen={Boolean(refineState?.kind === "live" && refineTarget?.sessionId === id)}
           onResponse={handlePlanResponse}
           onCancel={handlePlanCancel}
           supportsRefine={supportsRefine}
           refineState={refineState}
           refineTarget={refineTarget}
           onRefineAction={sendRefineAction}
+          onListModels={listModels}
+          sessionModel={modelIdOf(session?.model) ?? currentModelId}
         />
       )}
 
