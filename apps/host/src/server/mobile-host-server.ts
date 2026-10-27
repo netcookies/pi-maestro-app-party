@@ -559,6 +559,36 @@ export class MobileHostServer {
         return;
       }
 
+      if (request.method === "GET" && url.pathname === "/api/herdr-favorites") {
+        const settings = await this.controller.getHerdrSettings();
+        writeJson(response, 200, { favorites: settings.favorites });
+        return;
+      }
+      if (request.method === "POST" && url.pathname === "/api/herdr-favorites") {
+        const body = await readJsonBody(request);
+        const patch = typeof body === "object" && body !== null ? body as Record<string, unknown> : {};
+        const addFavorite = typeof patch.addFavorite === "string" ? patch.addFavorite : undefined;
+        const removeFavorite = typeof patch.removeFavorite === "string" ? patch.removeFavorite : undefined;
+        const reorderFavorites = Array.isArray(patch.reorderFavorites)
+          ? patch.reorderFavorites.filter((entry): entry is string => typeof entry === "string")
+          : undefined;
+        if (addFavorite !== undefined && !(await isSafeFavoritePath(addFavorite))) {
+          writeJson(response, 400, { error: "addFavorite must be an existing absolute directory path" });
+          return;
+        }
+        if (reorderFavorites !== undefined && !reorderFavorites.every(isSafeFavoritePath)) {
+          writeJson(response, 400, { error: "reorderFavorites entries must be existing absolute directory paths" });
+          return;
+        }
+        const updated = await this.controller.updateHerdrSettings({
+          ...(addFavorite !== undefined ? { addFavorite: await realpath(addFavorite) } : {}),
+          ...(removeFavorite !== undefined ? { removeFavorite } : {}),
+          ...(reorderFavorites !== undefined ? { reorderFavorites } : {}),
+        });
+        writeJson(response, 200, { favorites: updated.favorites });
+        return;
+      }
+
       if (request.method === "GET" && url.pathname === "/api/notifications") {
         writeJson(response, 200, await this.controller.readNotificationConfig());
         return;
@@ -1278,6 +1308,16 @@ function desktopTargetFromQuery(url: URL): DesktopPluginTarget | null | undefine
   };
   return isDesktopPluginTarget(target) ? target : null;
 }
+/** favorites 只接受已存在的绝对目录路径（TUI manager-fav 经 HTTP 落盘） */
+async function isSafeFavoritePath(value: string): Promise<boolean> {
+  if (!value.startsWith("/") || value.length > 4096) return false;
+  try {
+    return (await stat(value)).isDirectory();
+  } catch {
+    return false;
+  }
+}
+
 async function readJsonBody(request: IncomingMessage): Promise<Record<string, unknown>> {
   const chunks: Buffer[] = [];
   let size = 0;

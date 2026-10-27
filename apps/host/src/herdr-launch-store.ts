@@ -155,6 +155,12 @@ export class HerdrLaunchStore {
       .then((data) => data.favorites);
   }
 
+  /** 整表替换：表达排序与批量整理（协议层已校验唯一性与长度） */
+  async replaceFavorites(paths: string[]): Promise<string[]> {
+    return this.mutate(async (data) => ({ ...data, favorites: [...paths] }))
+      .then((data) => data.favorites);
+  }
+
   async recordLaunch(entry: HerdrLaunchedSpaceRecord): Promise<void> {
     await this.mutate(async (data) => ({ ...data, launchedSpaces: [...data.launchedSpaces, { ...entry }] }));
   }

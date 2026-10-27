@@ -739,7 +739,7 @@ export type ClientCommandPayload =
   | { type: "launch_pi_session"; cwd: string; label?: string; runtime?: HerdrRuntime; /** 历史 JSONL 绝对路径；Host realpath 验证后拼 --session */ resumeSessionRef?: string }
   | { type: "get_herdr_status" }
   | { type: "get_herdr_settings" }
-  | { type: "update_herdr_settings"; patch: { settings?: Partial<Pick<HerdrLaunchSettings, "runtime" | "resumeHistory" | "autoCleanupSpace">>; addFavorite?: string; removeFavorite?: string } }
+  | { type: "update_herdr_settings"; patch: { settings?: Partial<Pick<HerdrLaunchSettings, "runtime" | "resumeHistory" | "autoCleanupSpace">>; addFavorite?: string; removeFavorite?: string; /** 整表替换，表达排序与批量整理 */ reorderFavorites?: string[] } }
   | ({ type: "close_herdr_session" } & TargetedSessionCommand)
   | ({ type: "load_more_history"; count?: number } & TargetedSessionCommand)
   | ({ type: "search_history"; keyword: string; maxResults?: number; previewLength?: number } & TargetedSessionCommand)
@@ -1302,6 +1302,11 @@ function isHerdrSettingsPatch(value: unknown): boolean {
   }
   if (value.addFavorite !== undefined && !(isString(value.addFavorite) && isValidSessionRefPath(value.addFavorite))) return false;
   if (value.removeFavorite !== undefined && !(isString(value.removeFavorite) && isValidSessionRefPath(value.removeFavorite))) return false;
+  if (value.reorderFavorites !== undefined) {
+    if (!Array.isArray(value.reorderFavorites) || value.reorderFavorites.length > 100) return false;
+    if (!value.reorderFavorites.every((entry) => isString(entry) && isValidSessionRefPath(entry))) return false;
+    if (new Set(value.reorderFavorites).size !== value.reorderFavorites.length) return false;
+  }
   return true;
 }
 

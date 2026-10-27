@@ -26,6 +26,7 @@ import { getDesktopPluginRuntimeRecord } from "./plugin/desktop-plugin-runtime-s
 import { getPackageDir, type ExtensionAPI, type ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { maestroFlowWarning } from "./flow-dependency.js";
 import { runNotificationTui } from "./notification-tui.js";
+import { runFavoriteTui } from "./favorites-tui.js";
 
 const PID_FILE = join(homedir(), ".pi", "maestro-mobile.pid");
 const TOKEN_FILE = join(homedir(), ".pi", "maestro-mobile-token");
@@ -388,10 +389,10 @@ export default function maestroHostExtension(pi: ExtensionAPI): void {
   });
 
   pi.registerCommand("maestro-mobile", {
-    description: "Maestro Mobile Host 遥控（status / start / stop / qr）",
+    description: "Maestro Mobile Host 遥控（status / start / stop / qr / notify / manager-fav）",
     getArgumentCompletions: (prefix) => {
       const normalized = prefix.trimStart();
-      const subcommands = ["status", "start", "stop", "qr", "notify"];
+      const subcommands = ["status", "start", "stop", "qr", "notify", "manager-fav"];
       if (!normalized || !normalized.includes(" ")) {
         const query = normalized.trim();
         return subcommands
@@ -432,6 +433,41 @@ export default function maestroHostExtension(pi: ExtensionAPI): void {
         await runNotificationTui(ctx);
         return;
       }
+
+      if (sub === "manager-fav") {
+        await runFavoriteTui(
+          ctx,
+          {
+            commit: async (patch) => {
+              if (!alive) return false;
+              const token = await readToken();
+              if (!token) return false;
+              const response = await fetch(`http://127.0.0.1:${port}/api/herdr-favorites`, {
+                method: "POST",
+                headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+                body: JSON.stringify(patch),
+                signal: AbortSignal.timeout(5000),
+              }).catch(() => undefined);
+              return response?.ok === true;
+            },
+          },
+          ctx.cwd ?? process.cwd(),
+          async () => {
+            if (!alive) return [];
+            const token = await readToken();
+            if (!token) return [];
+            const response = await fetch(`http://127.0.0.1:${port}/api/herdr-favorites`, {
+              headers: { Authorization: `Bearer ${token}` },
+              signal: AbortSignal.timeout(5000),
+            }).catch(() => undefined);
+            if (!response?.ok) return [];
+            const data = await response.json().catch(() => undefined) as { favorites?: unknown } | undefined;
+            return Array.isArray(data?.favorites) ? data.favorites.filter((entry): entry is string => typeof entry === "string") : [];
+          },
+        );
+        return;
+      }
+
 
       if (sub === "status" || sub === "default") {
         if (!alive) {

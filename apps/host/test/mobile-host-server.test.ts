@@ -2,7 +2,7 @@ import { describe, expect, it, beforeEach, afterEach, vi } from "vitest";
 import { MobileHostServer } from "../src/server/mobile-host-server.js";
 import { HostController } from "../src/host-controller.js";
 import { MaestroStateReader } from "../src/maestro-state.js";
-import { mkdir, rm, writeFile, readFile } from "node:fs/promises";
+import { mkdir, rm, writeFile, readFile, realpath } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { randomUUID } from "node:crypto";
@@ -101,6 +101,34 @@ describe("MobileHostServer", () => {
     await ctx.server.close();
     await ctx.controller.dispose();
     await rm(ctx.tmpDir, { recursive: true, force: true });
+  });
+
+  it("serves /api/herdr-favorites and rejects unsafe paths", async () => {
+    const normalized = await realpath(ctx.tmpDir);
+    const add = await fetch(`${ctx.url}/api/herdr-favorites`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ addFavorite: ctx.tmpDir }),
+    });
+    expect(add.status).toBe(200);
+    expect(((await add.json()) as { favorites: string[] }).favorites).toEqual([normalized]);
+
+    const reorder = await fetch(`${ctx.url}/api/herdr-favorites`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ reorderFavorites: [normalized] }),
+    });
+    expect(reorder.status).toBe(200);
+
+    const unsafe = await fetch(`${ctx.url}/api/herdr-favorites`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ addFavorite: "/definitely/not/a/directory" }),
+    });
+    expect(unsafe.status).toBe(400);
+
+    const list = await fetch(`${ctx.url}/api/herdr-favorites`);
+    expect(((await list.json()) as { favorites: string[] }).favorites).toEqual([normalized]);
   });
 
   it("preserves Herdr unknown launch outcomes in command_result", async () => {

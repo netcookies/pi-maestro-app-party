@@ -30,8 +30,10 @@ import { NotificationConfigStore } from "./notifications/notification-config.js"
 import { NotificationDispatcher } from "./notifications/notification-dispatcher.js";
 import { notificationProviders } from "./notifications/providers/index.js";
 import { notificationEventFromHostEvent } from "./notifications/notification-normalizer.js";
-import { HerdrAdapter, type HerdrServerStatus } from "./herdr-adapter.js";
+import type { HerdrLaunchSettings, HerdrRuntime, HerdrSettingsSnapshot } from "@maestro-mobile/mobile-sdk/protocol";
+import { HerdrAdapter, type HerdrRuntimeProbe, type HerdrServerStatus } from "./herdr-adapter.js";
 import { HerdrSessionLaunchService } from "./herdr-session-launch-service.js";
+import { HerdrLaunchStore, type HerdrLaunchStoreData } from "./herdr-launch-store.js";
 
 function targetKey(target: DesktopPluginTarget): string {
   return [target.sessionId, target.endpointId, target.normalizedCwd, target.processGeneration].join("\u0000");
@@ -107,6 +109,7 @@ export class HostController {
   private readonly notificationDispatcher: NotificationDispatcher;
   private readonly herdrAdapter = new HerdrAdapter();
   private readonly herdrLaunchService: HerdrSessionLaunchService;
+  private readonly herdrLaunchStore = new HerdrLaunchStore();
   private readonly notificationHostInstanceId = `${process.pid}-${Date.now()}`;
   private notificationSequence = 0;
   private readonly emitToListeners: (event: HostEvent) => void;
@@ -123,7 +126,7 @@ export class HostController {
     notificationPaths?: { configPath?: string; outboxPath?: string },
   ) {
     this.desktopPluginRegistry = desktopRegistry ?? new DesktopBrokerProjectedRegistry();
-    this.herdrLaunchService = new HerdrSessionLaunchService(this.desktopPluginRegistry, this.herdrAdapter);
+    this.herdrLaunchService = new HerdrSessionLaunchService(this.desktopPluginRegistry, this.herdrAdapter, this.herdrLaunchStore);
     this.maestroReader = maestroReader ?? new MaestroStateReader();
     this.telemetryReader = new WorkspaceTelemetryReader();
     this.monitorReadService = new MonitorReadService(() => this.telemetryReader.read());
@@ -200,8 +203,37 @@ export class HostController {
     return this.sessionDirectory;
   }
 
-  async getHerdrStatus(): Promise<HerdrServerStatus> {
-    return this.herdrAdapter.probe();
+  async getHerdrStatus(): Promise<HerdrServerStatus & { runtimes?: HerdrRuntimeProbe }> {
+    const status = await this.herdrAdapter.probe();
+    try {
+      const runtimes = await this.herdrAdapter.probeRuntimes();
+      return { ...status, runtimes };
+    } catch {
+      return status;
+    }
+  }
+
+  /** 供 TUI manager-fav 与 Mobile 设置页读取的 Herdr 启动配置快照 */
+  async getHerdrSettings(): Promise<HerdrSettingsSnapshot> {
+    const data = await this.herdrLaunchStore.read();
+    return {
+      settings: { ...data.settings },
+      favorites: [...data.favorites],
+      launchedSpaces: data.launchedSpaces.map((entry) => ({
+        paneId: entry.paneId,
+        cwd: entry.cwd,
+        launchedAt: entry.launchedAt,
+        ...(entry.workspaceId !== undefined ? { workspaceId: entry.workspaceId } : {}),
+        ...(entry.label !== undefined ? { label: entry.label } : {}),
+      })),
+    };
+  }
+
+  async updateHerdrSettings(patch: { settings?: Partial<HerdrLaunchSettings>; addFavorite?: string; removeFavorite?: string; reorderFavorites?: string[] }): Promise<HerdrSettingsSnapshot> {    if (patch.settings) await this.herdrLaunchStore.updateSettings(patch.settings);
+    if (patch.addFavorite) await this.herdrLaunchStore.addFavorite(patch.addFavorite);
+    if (patch.removeFavorite) await this.herdrLaunchStore.removeFavorite(patch.removeFavorite);
+    if (patch.reorderFavorites) await this.herdrLaunchStore.replaceFavorites(patch.reorderFavorites);
+    return this.getHerdrSettings();
   }
 
   publishHerdrAvailability(status: HerdrServerStatus, requestId?: string): void {
@@ -214,8 +246,8 @@ export class HostController {
     }));
   }
 
-  async launchPiSession(requestId: string, cwd: string, label?: string) {
-    const result = await this.herdrLaunchService.launch(requestId, cwd, label);
+  async launchPiSession(requestId: string, cwd: string, label?: string, options: { runtime?: HerdrRuntime; resumeSessionRef?: string } = {}) {
+    const result = await this.herdrLaunchService.launch(requestId, cwd, label, options);
     this.emitToListeners(this.eventLog.record({ type: "herdr_launch", ...result }));
     return { ...result, ok: result.status === "ready", revision: this.directory.revision };
   }
