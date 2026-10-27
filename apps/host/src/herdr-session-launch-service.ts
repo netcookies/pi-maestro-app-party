@@ -62,14 +62,17 @@ export class HerdrSessionLaunchService {
     return this.adapter.probeRuntimes();
   }
 
-  /** 启动时对账：登记项中已不存在的 pane 剔除并写回。 */
+  /** 启动时对账：登记项对应的 pane 已不存在，或其内已无存活 agent，即剔除并写回。 */
   async reconcileLaunchedSpaces(): Promise<number> {
     if (!this.store) return 0;
     let removed = 0;
     try {
-      const live = new Set((await this.adapter.listPanes()).map((pane) => pane.paneId));
+      const live = await this.adapter.listPanes();
+      const byPane = new Map(live.map((pane) => [pane.paneId, pane]));
       for (const record of await this.store.listLaunches()) {
-        if (live.has(record.paneId)) continue;
+        const pane = byPane.get(record.paneId);
+        // pane 不存在，或 pane 里只剩 shell（Pi 已退出）→ 登记失效
+        if (pane && HerdrAdapter.hasLiveAgent(pane)) continue;
         await this.store.removeLaunch(record.paneId);
         removed += 1;
       }
@@ -132,6 +135,7 @@ export class HerdrSessionLaunchService {
     return match !== undefined && (match as { runtimeStatus?: string }).runtimeStatus === "running";
   }
 
+  /** 会话退出后清理空 space：按「workspace 内是否还有存活 agent」判断，而不是按 pane 是否存在（Pi 退出后 shell pane 仍残留）。 */
   private async cleanupSpace(record: HerdrLaunchedSpaceRecord): Promise<void> {
     if (!this.store || !record.workspaceId) return;
     let data: { settings: { autoCleanupSpace: boolean } };
@@ -143,7 +147,7 @@ export class HerdrSessionLaunchService {
     if (!data.settings.autoCleanupSpace) return;
     try {
       const live = await this.adapter.listPanes();
-      if (live.some((pane) => pane.workspaceId === record.workspaceId)) return;
+      if (live.some((pane) => pane.workspaceId === record.workspaceId && HerdrAdapter.hasLiveAgent(pane))) return;
       await this.adapter.closeWorkspace(record.workspaceId);
     } catch {
       // 清理失败不阻塞关闭结果；空间留给下次对账或手动处理。

@@ -46,6 +46,10 @@ export interface HerdrRuntimeProbe {
 export interface HerdrPaneSummary {
   paneId: string;
   workspaceId?: string;
+  /** Herdr 识别的 agent 类型（pi / pi-bolt / claude…）；pane 只剩 shell 时缺失 */
+  agent?: string;
+  /** Herdr 的 agent 生命周期状态；只剩 shell 时为 unknown 或缺失 */
+  agentStatus?: string;
 }
 
 export class HerdrAdapterError extends Error {
@@ -231,8 +235,18 @@ export class HerdrAdapter {
       : [];
     return panes.flatMap((entry) => {
       if (!isRecord(entry) || !isString(entry.pane_id)) return [];
-      return [{ paneId: entry.pane_id, ...(isString(entry.workspace_id) ? { workspaceId: entry.workspace_id } : {}) }];
+      return [{
+        paneId: entry.pane_id,
+        ...(isString(entry.workspace_id) ? { workspaceId: entry.workspace_id } : {}),
+        ...(isString(entry.agent) ? { agent: entry.agent } : {}),
+        ...(isString(entry.agent_status) ? { agentStatus: entry.agent_status } : {}),
+      }];
     });
+  }
+
+  /** pane 内是否仍有 Herdr 识别的存活 agent（Pi 退出后只剩 shell，agent 缺失） */
+  static hasLiveAgent(pane: HerdrPaneSummary): boolean {
+    return typeof pane.agent === "string" && pane.agent.length > 0 && pane.agentStatus !== "unknown";
   }
 
   private async findExecutable(name: string): Promise<boolean> {

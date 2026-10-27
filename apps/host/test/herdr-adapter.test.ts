@@ -133,7 +133,10 @@ describe("HerdrAdapter", () => {
     const run: NonNullable<HerdrAdapterOptions["run"]> = async (_binary, args) => {
       calls.push(args);
       if (args[0] === "status") return status;
-      if (args[0] === "pane" && args[1] === "list") return JSON.stringify({ result: { panes: [{ pane_id: "w1:p1", workspace_id: "w1" }, { pane_id: "w2:p1", workspace_id: "w2" }] } });
+      if (args[0] === "pane" && args[1] === "list") return JSON.stringify({ result: { panes: [
+        { pane_id: "w1:p1", workspace_id: "w1", agent: "pi", agent_status: "idle" },
+        { pane_id: "w2:p1", workspace_id: "w2", agent_status: "unknown" },
+      ] } });
       return "{}";
     };
     const value = adapter(run);
@@ -141,7 +144,14 @@ describe("HerdrAdapter", () => {
     await value.closeWorkspace("w1");
     expect(calls.at(-2)).toEqual(["pane", "send-keys", "w1:p1", "ctrl+d"]);
     expect(calls.at(-1)).toEqual(["workspace", "close", "w1"]);
-    await expect(value.listPanes()).resolves.toEqual([{ paneId: "w1:p1", workspaceId: "w1" }, { paneId: "w2:p1", workspaceId: "w2" }]);
+    const panes = await value.listPanes();
+    expect(panes).toEqual([
+      { paneId: "w1:p1", workspaceId: "w1", agent: "pi", agentStatus: "idle" },
+      { paneId: "w2:p1", workspaceId: "w2", agentStatus: "unknown" },
+    ]);
+    // Pi 退出后 shell pane 仍在，但没有存活 agent
+    expect(HerdrAdapter.hasLiveAgent(panes[0]!)).toBe(true);
+    expect(HerdrAdapter.hasLiveAgent(panes[1]!)).toBe(false);
     await expect(value.sendCtrlD("bad;id")).rejects.toMatchObject({ stage: "validate_request" });
   });
 });

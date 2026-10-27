@@ -79,7 +79,7 @@ describe("HerdrSessionLaunchService", () => {
   });
 });
 
-function closeHarness(options: { registered?: boolean; running?: boolean; livePanes?: Array<{ paneId: string; workspaceId?: string }> } = {}) {
+function closeHarness(options: { registered?: boolean; running?: boolean; livePanes?: Array<{ paneId: string; workspaceId?: string; agent?: string; agentStatus?: string }> } = {}) {
   const projection = registry();
   const target = { ...targetA };
   if (options.registered !== false) {
@@ -171,7 +171,9 @@ describe("HerdrSessionLaunchService.close", () => {
   });
 
   it("does not close the space while another pane still lives there", async () => {
-    const { projection, target, adapterStub, closeWorkspace } = closeHarness({ livePanes: [{ paneId: "w9:p1", workspaceId: "w9" }, { paneId: "w9:p2", workspaceId: "w9" }] });
+    const { projection, target, adapterStub, closeWorkspace } = closeHarness({
+      livePanes: [{ paneId: "w9:p1", workspaceId: "w9", agentStatus: "unknown" }, { paneId: "w9:p2", workspaceId: "w9", agent: "pi", agentStatus: "idle" }],
+    });
     const { store, file } = await tempStore();
     try {
       await store.recordLaunch(launchRecord(target));
@@ -185,6 +187,48 @@ describe("HerdrSessionLaunchService.close", () => {
       );
       await expect(service.close("c1", target)).resolves.toMatchObject({ status: "closed" });
       expect(closeWorkspace).not.toHaveBeenCalled();
+    } finally {
+      await rm(join(file, ".."), { recursive: true, force: true });
+    }
+  });
+
+  it("closes the space when only a leftover shell pane remains", async () => {
+    // Pi 退出后 Herdr 仍保留 shell pane；此时 workspace 内没有存活 agent，应清理。
+    const { projection, target, adapterStub, closeWorkspace } = closeHarness({
+      livePanes: [{ paneId: "w9:p1", workspaceId: "w9", agentStatus: "unknown" }],
+    });
+    const { store, file } = await tempStore();
+    try {
+      await store.recordLaunch(launchRecord(target));
+      let elapsed = 0;
+      const service = new HerdrSessionLaunchService(
+        projection,
+        adapterStub,
+        store,
+        () => elapsed,
+        async () => { elapsed += 200; projection.records.length = 0; },
+      );
+      await expect(service.close("c1", target)).resolves.toMatchObject({ status: "closed" });
+      expect(closeWorkspace).toHaveBeenCalledWith("w9");
+    } finally {
+      await rm(join(file, ".."), { recursive: true, force: true });
+    }
+  });
+
+  it("drops registrations whose pane has no live agent during reconciliation", async () => {
+    const { projection, target, adapterStub } = closeHarness({
+      livePanes: [
+        { paneId: "w9:p1", workspaceId: "w9", agentStatus: "unknown" },
+        { paneId: "w8:p1", workspaceId: "w8", agent: "pi", agentStatus: "idle" },
+      ],
+    });
+    const { store, file } = await tempStore();
+    try {
+      await store.recordLaunch(launchRecord(target, "w9:p1"));
+      await store.recordLaunch(launchRecord({ ...target, sessionId: "s-2" }, "w8:p1"));
+      const service = new HerdrSessionLaunchService(projection, adapterStub, store);
+      await expect(service.reconcileLaunchedSpaces()).resolves.toBe(1);
+      expect((await store.listLaunches()).map((entry) => entry.paneId)).toEqual(["w8:p1"]);
     } finally {
       await rm(join(file, ".."), { recursive: true, force: true });
     }
