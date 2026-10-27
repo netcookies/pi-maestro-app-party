@@ -2,6 +2,12 @@
 
 本文件记录 Maestro Mobile 的显著变更。格式基于 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)。
 
+## [0.16.5] — 2026-10-27
+
+### 修复
+
+- resolve JS runtime executable in pi-bolt environment
+
 ## [0.16.4] — 2026-10-27
 
 ### 测试
