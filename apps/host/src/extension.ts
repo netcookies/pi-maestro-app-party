@@ -20,6 +20,7 @@ import { homedir } from "node:os";
 import { fileURLToPath } from "node:url";
 import qrcodeTerminal from "qrcode-terminal";
 import { DEFAULT_DESKTOP_BROKER_PID_FILE, isOwnedProcessCommand } from "./plugin/desktop-broker-supervisor.js";
+import { resolveNodeExecutable } from "./node-runtime.js";
 import { compareDesktopCurrentStatus, formatDesktopCurrentStatus, type DesktopHostDiagnostic } from "./current-desktop-status.js";
 import { getDesktopPluginRuntimeRecord } from "./plugin/desktop-plugin-runtime-state.js";
 import { getPackageDir, type ExtensionAPI, type ExtensionContext } from "@earendil-works/pi-coding-agent";
@@ -195,7 +196,10 @@ async function startHostDetached(
   try {
     await rotateHostLog();
     const logFd = openHostLogFd();
-    const child = spawn(process.execPath, [hostCliPath(), "--port", String(port)], {
+    // `process.execPath` 在 pi-bolt 这类单文件构建里是 Pi 应用本身，直接 spawn 会
+    // 再起一个 Pi 会话（而不是 host），每次重试都多一个 agent 进程。
+    const runtime = resolveNodeExecutable();
+    const child = spawn(runtime, [hostCliPath(), "--port", String(port)], {
       detached: true,
       // 以前固定 "ignore"：host 的退出原因（OOM / EADDRINUSE / uncaught / 被信号杀）全进 /dev/null，
       // 只能表现为“无声消失”。日志必须 0600：cli 启动横幅会打印完整 token。
@@ -206,8 +210,8 @@ async function startHostDetached(
     child.unref();
 
     if (child.pid === undefined) {
-      await appendHostLog(`spawn 失败：无 pid（cli=${hostCliPath()}）`);
-      notify("maestro-mobile: 启动失败 —— 未能创建子进程", "warning");
+      await appendHostLog(`spawn 失败：无 pid（runtime=${runtime} cli=${hostCliPath()}）`);
+      notify(`maestro-mobile: 启动失败 —— 无法用 ${runtime} 创建 Host 子进程，请确认 node 在 PATH 中（日志 ${LOG_FILE}）`, "warning");
       return;
     }
     const spawnedPid = child.pid;

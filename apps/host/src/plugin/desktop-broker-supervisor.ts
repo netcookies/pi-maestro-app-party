@@ -4,6 +4,7 @@ import { closeSync, openSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join, posix, win32 } from "node:path";
 import { fileURLToPath } from "node:url";
+import { isJavaScriptRuntimePath, resolveNodeExecutable } from "../node-runtime.js";
 
 export const DEFAULT_DESKTOP_BROKER_PLUGIN_SOCKET = join(homedir(), ".pi", "maestro-mobile", "ipc", "desktop-plugin.sock");
 export const DEFAULT_DESKTOP_BROKER_HOST_SOCKET = join(homedir(), ".pi", "maestro-mobile", "ipc", "desktop-broker-host.sock");
@@ -139,15 +140,10 @@ function normalizeCommandPath(value: string, platform: NodeJS.Platform): string 
   return platform === "win32" ? withoutTrailingSeparator.toLowerCase() : withoutTrailingSeparator;
 }
 
-function isNodeExecutable(value: string, platform: NodeJS.Platform): boolean {
-  const name = value.split(platform === "win32" ? /[\\/]/ : "/").pop()?.toLowerCase();
-  return name === "node" || name === "node.exe" || name === "nodejs" || name === "nodejs.exe";
-}
-
 /**
  * Check ownership by argv position, rather than accepting a path anywhere in a
  * process command line. The managed path is either the executable itself or
- * the script immediately invoked by a Node executable.
+ * the script immediately invoked by a JS runtime.
  */
 export function isOwnedProcessCommand(
   commandLine: string,
@@ -161,7 +157,7 @@ export function isOwnedProcessCommand(
   const expected = normalizeCommandPath(expectedCommandPath, platform);
   if (normalizeCommandPath(args[0], platform) === expected) return true;
   return args.length > 1
-    && isNodeExecutable(args[0], platform)
+    && isJavaScriptRuntimePath(args[0])
     && normalizeCommandPath(args[1], platform) === expected;
 }
 
@@ -232,7 +228,7 @@ export class DesktopBrokerSupervisor {
         if (fd !== undefined) closeSync(fd);
         throw new Error("desktop broker supervisor is stopping");
       }
-      const child = spawn(process.execPath, [
+      const child = spawn(resolveNodeExecutable(), [
         this.options.brokerCliPath,
         "--secret-file", this.options.secretFile,
         "--plugin-socket", this.options.pluginSocketPath,
