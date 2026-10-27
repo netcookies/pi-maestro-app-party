@@ -1,4 +1,4 @@
-import { mkdtemp, realpath, rm } from "node:fs/promises";
+import { mkdtemp, realpath, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -65,5 +65,83 @@ describe("HerdrAdapter", () => {
       return "{}";
     };
     await expect(adapter(run).launchPiPane({ requestId: "r", cwd: await cwd(), label: "x; rm -rf /" })).rejects.toMatchObject({ stage: "validate_request" });
+  });
+
+  it("accepts the mm: label prefix after the label validator allows colon", async () => {
+    const run: NonNullable<HerdrAdapterOptions["run"]> = async (_binary, args) => {
+      if (args[0] === "status") return status;
+      if (args[0] === "workspace") return JSON.stringify({ result: { root_pane: { pane_id: "w:p1" }, workspace: { workspace_id: "w1" } } });
+      return "{}";
+    };
+    const workingDirectory = await cwd();
+    await expect(adapter(run).launchPiPane({ requestId: "r", cwd: workingDirectory, label: "mm:app" })).resolves.toMatchObject({ paneId: "w:p1", workspaceId: "w1" });
+  });
+
+  it("selects the pi-bolt runtime when requested and falls back to pi otherwise", async () => {
+    const calls: string[][] = [];
+    const run: NonNullable<HerdrAdapterOptions["run"]> = async (_binary, args) => {
+      calls.push(args);
+      if (args[0] === "status") return status;
+      if (args[0] === "workspace") return JSON.stringify({ result: { root_pane: { pane_id: "w:p1" } } });
+      return "{}";
+    };
+    const workingDirectory = await cwd();
+    await adapter(run).launchPiPane({ requestId: "r", cwd: workingDirectory, runtime: "pi-bolt" });
+    await adapter(run).launchPiPane({ requestId: "r2", cwd: workingDirectory });
+    const runCalls = calls.filter((args) => args[0] === "pane");
+    expect(runCalls[0]).toEqual(["pane", "run", "w:p1", "pi-bolt"]);
+    expect(runCalls[1]).toEqual(["pane", "run", "w:p1", "pi"]);
+  });
+
+  it("appends --session with a realpath-verified session file instead of --resume", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "herdr-session-"));
+    dirs.push(dir);
+    const sessionFile = join(dir, "session.jsonl");
+    await writeFile(sessionFile, "{}\n", "utf8");
+    const calls: string[][] = [];
+    const run: NonNullable<HerdrAdapterOptions["run"]> = async (_binary, args) => {
+      calls.push(args);
+      if (args[0] === "status") return status;
+      if (args[0] === "workspace") return JSON.stringify({ result: { root_pane: { pane_id: "w:p1" } } });
+      return "{}";
+    };
+    const workingDirectory = await cwd();
+    await adapter(run).launchPiPane({ requestId: "r", cwd: workingDirectory, resumeSessionRef: sessionFile });
+    const runCall = calls.find((args) => args[0] === "pane");
+    expect(runCall?.[2]).toBe("w:p1");
+    expect(runCall?.[3]).toBe("pi");
+    expect(runCall?.[4]).toBe("--session");
+    expect(runCall?.[5]).toBe(await realpath(sessionFile));
+    expect(runCall).not.toContain("--resume");
+  });
+
+  it("rejects a resume session ref that escapes or does not exist", async () => {
+    const run: NonNullable<HerdrAdapterOptions["run"]> = async (_binary, args) => (args[0] === "status" ? status : "{}");
+    const workingDirectory = await cwd();
+    await expect(adapter(run).launchPiPane({ requestId: "r", cwd: workingDirectory, resumeSessionRef: "/work/../etc/passwd" })).rejects.toMatchObject({ stage: "validate_request" });
+    await expect(adapter(run).launchPiPane({ requestId: "r2", cwd: workingDirectory, resumeSessionRef: "/definitely/missing/session.jsonl" })).rejects.toMatchObject({ stage: "validate_request" });
+  });
+
+  it("probes pi and pi-bolt executability through PATH overrides", async () => {
+    const run: NonNullable<HerdrAdapterOptions["run"]> = async () => status;
+    await expect(adapter(run, { PATH: "", HERDR_PI_BIN: "/bin/sh", HERDR_PI_BOLT_BIN: "/bin/sh" }).probeRuntimes()).resolves.toEqual({ pi: true, piBolt: true });
+    await expect(adapter(run, { PATH: "", HERDR_PI_BIN: "/bin/sh", HERDR_PI_BOLT_BIN: "/definitely/missing/pi-bolt" }).probeRuntimes()).resolves.toEqual({ pi: true, piBolt: false });
+  });
+
+  it("sends ctrl+d to a pane and closes a workspace as argv", async () => {
+    const calls: string[][] = [];
+    const run: NonNullable<HerdrAdapterOptions["run"]> = async (_binary, args) => {
+      calls.push(args);
+      if (args[0] === "status") return status;
+      if (args[0] === "pane" && args[1] === "list") return JSON.stringify({ result: { panes: [{ pane_id: "w1:p1", workspace_id: "w1" }, { pane_id: "w2:p1", workspace_id: "w2" }] } });
+      return "{}";
+    };
+    const value = adapter(run);
+    await value.sendCtrlD("w1:p1");
+    await value.closeWorkspace("w1");
+    expect(calls.at(-2)).toEqual(["pane", "send-keys", "w1:p1", "ctrl+d"]);
+    expect(calls.at(-1)).toEqual(["workspace", "close", "w1"]);
+    await expect(value.listPanes()).resolves.toEqual([{ paneId: "w1:p1", workspaceId: "w1" }, { paneId: "w2:p1", workspaceId: "w2" }]);
+    await expect(value.sendCtrlD("bad;id")).rejects.toMatchObject({ stage: "validate_request" });
   });
 });

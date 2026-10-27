@@ -26,11 +26,26 @@ export interface HerdrPaneLaunch {
   requestId: string;
   cwd: string;
   label?: string;
+  /** 历史 JSONL 绝对路径；经 realpath 验证后拼 --session（--resume 是无参布尔，不能带 id） */
+  resumeSessionRef?: string;
+  /** 显式选择运行时；缺省按 pi */
+  runtime?: "pi" | "pi-bolt";
 }
 
 export interface HerdrPaneLaunchResult {
   paneId: string;
+  workspaceId?: string;
   launchNonce: string;
+}
+
+export interface HerdrRuntimeProbe {
+  pi: boolean;
+  piBolt: boolean;
+}
+
+export interface HerdrPaneSummary {
+  paneId: string;
+  workspaceId?: string;
 }
 
 export class HerdrAdapterError extends Error {
@@ -73,11 +88,31 @@ function parseStatus(output: string): Record<string, unknown> | undefined {
 }
 
 function validLabel(label: string | undefined): boolean {
-  return label === undefined || (label.length > 0 && label.length <= 80 && /^[\p{L}\p{N} ._-]+$/u.test(label));
+  // `:` 允许 `mm:<name>` 前缀（Host 启动的 space 标识）
+  return label === undefined || (label.length > 0 && label.length <= 80 && /^[\p{L}\p{N} .:_-]+$/u.test(label));
 }
 
 function validNonce(value: string): boolean {
   return /^[a-f0-9]{32}$/.test(value);
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function isString(value: unknown): value is string {
+  return typeof value === "string";
+}
+
+function validPaneId(value: string): boolean {
+  return value.length > 0 && value.length <= 128 && /^[\w:.\-]+$/u.test(value);
+}
+
+/** 与协议层 isValidSessionRefPath 同语义的 Host 侧复检（协议已拦，此处防御） */
+function isValidSessionRef(value: string): boolean {
+  return value.length > 0 && value.length <= 4096 && value.startsWith("/")
+    && !/[\u0000-\u001f\u007f]/.test(value)
+    && value.split("/").every((segment) => segment !== "..");
 }
 
 export class HerdrAdapter {
@@ -133,6 +168,15 @@ export class HerdrAdapter {
   async launchPiPane(request: HerdrPaneLaunch): Promise<HerdrPaneLaunchResult> {
     const cwd = await this.validateCwd(request.cwd);
     if (!validLabel(request.label)) throw new HerdrAdapterError("herdr_operation_failed", "validate_request", "Invalid workspace label");
+    let sessionRef: string | undefined;
+    if (request.resumeSessionRef !== undefined) {
+      if (!isValidSessionRef(request.resumeSessionRef)) throw new HerdrAdapterError("herdr_operation_failed", "validate_request", "Invalid resume session ref");
+      try {
+        sessionRef = await realpath(request.resumeSessionRef);
+      } catch {
+        throw new HerdrAdapterError("herdr_operation_failed", "validate_request", "Resume session file does not exist");
+      }
+    }
     const status = await this.probe();
     if (status.status === "not_installed") throw new HerdrAdapterError("herdr_not_installed", "probe", "Herdr is not installed");
     if (status.status === "not_running") throw new HerdrAdapterError("herdr_not_running", "probe", "Herdr server is not running");
@@ -148,8 +192,67 @@ export class HerdrAdapter {
     const workspaceResult = parseStatus(workspaceOutput);
     const paneId = this.rootPaneId(workspaceResult);
     if (!paneId) throw new HerdrAdapterError("herdr_operation_failed", "create_pane", "Herdr did not return a root pane id");
-    await this.invoke(binary, ["pane", "run", paneId, "pi"], "start_pi");
-    return { paneId, launchNonce: nonce };
+    const workspaceId = this.workspaceIdOf(workspaceResult);
+    const runtimeBinary = request.runtime === "pi-bolt" ? "pi-bolt" : "pi";
+    const runArgs = ["pane", "run", paneId, runtimeBinary];
+    if (sessionRef) runArgs.push("--session", sessionRef);
+    await this.invoke(binary, runArgs, "start_pi");
+    return { paneId, workspaceId, launchNonce: nonce };
+  }
+
+  /** 探测 pi / pi-bolt 可执行性（HERDR_PI_BOLT_BIN 覆盖 → PATH） */
+  async probeRuntimes(): Promise<HerdrRuntimeProbe> {
+    const pi = await this.findExecutable(this.env.HERDR_PI_BIN ?? "pi");
+    const piBolt = await this.findExecutable(this.env.HERDR_PI_BOLT_BIN ?? "pi-bolt");
+    return { pi, piBolt };
+  }
+
+  async sendCtrlD(paneId: string): Promise<void> {
+    if (!validPaneId(paneId)) throw new HerdrAdapterError("herdr_operation_failed", "validate_request", "Invalid pane id");
+    const binary = await this.resolveBinary();
+    if (!binary) throw new HerdrAdapterError("herdr_not_installed", "probe", "Herdr is not installed");
+    await this.invoke(binary, ["pane", "send-keys", paneId, "ctrl+d"], "send_keys");
+  }
+
+  async closeWorkspace(workspaceId: string): Promise<void> {
+    if (!validPaneId(workspaceId)) throw new HerdrAdapterError("herdr_operation_failed", "validate_request", "Invalid workspace id");
+    const binary = await this.resolveBinary();
+    if (!binary) throw new HerdrAdapterError("herdr_not_installed", "probe", "Herdr is not installed");
+    await this.invoke(binary, ["workspace", "close", workspaceId], "close_workspace");
+  }
+
+  async listPanes(): Promise<HerdrPaneSummary[]> {
+    const binary = await this.resolveBinary();
+    if (!binary) throw new HerdrAdapterError("herdr_not_installed", "probe", "Herdr is not installed");
+    const output = await this.invoke(binary, ["pane", "list"], "list_panes");
+    const value = parseStatus(output);
+    const panes = typeof value?.result === "object" && value.result !== null && Array.isArray((value.result as Record<string, unknown>).panes)
+      ? (value.result as { panes: unknown[] }).panes
+      : [];
+    return panes.flatMap((entry) => {
+      if (!isRecord(entry) || !isString(entry.pane_id)) return [];
+      return [{ paneId: entry.pane_id, ...(isString(entry.workspace_id) ? { workspaceId: entry.workspace_id } : {}) }];
+    });
+  }
+
+  private async findExecutable(name: string): Promise<boolean> {
+    if (name.includes("/")) {
+      try {
+        await access(name);
+        return true;
+      } catch {
+        return false;
+      }
+    }
+    for (const directory of (this.env.PATH ?? "").split(delimiter)) {
+      try {
+        await access(`${directory}/${name}`);
+        return true;
+      } catch {
+        // Continue searching PATH.
+      }
+    }
+    return false;
   }
 
   private async resolveBinary(): Promise<string | undefined> {
@@ -203,5 +306,14 @@ export class HerdrAdapter {
     const pane = typeof result.root_pane === "object" && result.root_pane !== null ? result.root_pane as Record<string, unknown> : undefined;
     const paneId = pane?.pane_id ?? pane?.id ?? result.root_pane_id;
     return typeof paneId === "string" && paneId.length > 0 && paneId.length <= 128 ? paneId : undefined;
+  }
+
+  private workspaceIdOf(value: Record<string, unknown> | undefined): string | undefined {
+    if (!value) return undefined;
+    const result = typeof value.result === "object" && value.result !== null ? value.result as Record<string, unknown> : value;
+    const workspace = typeof result.workspace === "object" && result.workspace !== null ? result.workspace as Record<string, unknown> : undefined;
+    const pane = typeof result.root_pane === "object" && result.root_pane !== null ? result.root_pane as Record<string, unknown> : undefined;
+    const workspaceId = workspace?.workspace_id ?? pane?.workspace_id ?? result.workspace_id;
+    return typeof workspaceId === "string" && workspaceId.length > 0 && workspaceId.length <= 128 ? workspaceId : undefined;
   }
 }
