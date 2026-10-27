@@ -54,6 +54,8 @@ function RootNavigator() {
         <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
         <Stack.Screen name="session" options={{ headerShown: false }} />
         <Stack.Screen name="model-select" options={{ headerShown: false }} />
+        <Stack.Screen name="herdr-directories" options={{ headerShown: false }} />
+        <Stack.Screen name="herdr-new-session" options={{ headerShown: false }} />
         <Stack.Screen name="pair-scan" options={{ headerShown: false }} />
         <Stack.Screen name="diagnostics" options={{ headerShown: false }} />
       </Stack>
