@@ -196,4 +196,40 @@ describe("protocol", () => {
     const parsed = JSON.parse(json) as ExtensionUiRequest;
     expect(parsed).toEqual(req);
   });
+
+  it("accepts herdr launch with runtime and a valid resumeSessionRef", () => {
+    expect(isClientCommand({ type: "launch_pi_session", cwd: "/work/app", runtime: "auto" })).toBe(true);
+    expect(isClientCommand({ type: "launch_pi_session", cwd: "/work/app", runtime: "pi-bolt" })).toBe(true);
+    expect(isClientCommand({ type: "launch_pi_session", cwd: "/work/app", resumeSessionRef: "/home/u/.pi/agent/sessions/x/s.jsonl" })).toBe(true);
+    expect(isClientCommand({ type: "launch_pi_session", cwd: "/work/app", runtime: "cmd-inject" })).toBe(false);
+  });
+
+  it("rejects resumeSessionRef injection and traversal attempts", () => {
+    const base = { type: "launch_pi_session", cwd: "/work/app" };
+    expect(isClientCommand({ ...base, resumeSessionRef: "/work/../etc/passwd.jsonl" })).toBe(false);
+    expect(isClientCommand({ ...base, resumeSessionRef: "/work/a;b.jsonl" })).toBe(false);
+    expect(isClientCommand({ ...base, resumeSessionRef: "/work/a b.jsonl" })).toBe(false);
+    expect(isClientCommand({ ...base, resumeSessionRef: "/work/a\nb.jsonl" })).toBe(false);
+    expect(isClientCommand({ ...base, resumeSessionRef: "relative/path.jsonl" })).toBe(false);
+    expect(isClientCommand({ ...base, resumeSessionRef: `/${"x".repeat(4096)}.jsonl` })).toBe(false);
+    expect(isClientCommand({ ...base, resumeSessionRef: "`rm -rf /`" })).toBe(false);
+  });
+
+  it("requires close_herdr_session to be targeted and validates herdr settings commands", () => {
+    const target = { sessionId: "s1", endpointId: "e1", normalizedCwd: "/work", processGeneration: "g1" };
+    expect(isClientCommand({ type: "close_herdr_session", sessionId: "s1", target })).toBe(true);
+    expect(isClientCommand({ type: "close_herdr_session", sessionId: "s1" })).toBe(false);
+    expect(isClientCommand({ type: "close_herdr_session", sessionId: "s1", target: { ...target, sessionId: "other" } })).toBe(false);
+    expect(isClientCommand({ type: "get_herdr_settings" })).toBe(true);
+    expect(isClientCommand({ type: "update_herdr_settings", patch: { settings: { resumeHistory: false } } })).toBe(true);
+    expect(isClientCommand({ type: "update_herdr_settings", patch: { addFavorite: "/work/app" } })).toBe(true);
+    expect(isClientCommand({ type: "update_herdr_settings", patch: {} })).toBe(false);
+    expect(isClientCommand({ type: "update_herdr_settings", patch: { settings: { runtime: "evil" } } })).toBe(false);
+    expect(isClientCommand({ type: "update_herdr_settings", patch: { addFavorite: "../escape" } })).toBe(false);
+  });
+
+  it("validates herdr_launch event runtime echo", () => {
+    expect(isHostEvent({ type: "herdr_launch", requestId: "r1", status: "ready", stage: "ready", runtime: "pi-bolt", seq: 1 })).toBe(true);
+    expect(isHostEvent({ type: "herdr_launch", requestId: "r1", status: "ready", stage: "ready", runtime: "auto", seq: 1 })).toBe(false);
+  });
 });

@@ -59,7 +59,9 @@ export type ProtocolCapability =
   | "plan_refine"
   | "notification_control"
   | "background_transport"
-  | "herdr_launch";
+  | "herdr_launch"
+  | "herdr_settings"
+  | "herdr_session_close";
 
 export type OperationStatus = "requested" | "accepted" | "observed" | "failed" | "unknown";
 
@@ -677,7 +679,7 @@ export type HostEvent =
   | { type: "notification_event"; eventId: string; kind: "ask_pending" | "plan_pending" | "plan_review_pending" | "plan_confirm_pending" | "agent_settled" | "session_error"; sessionId: string; target?: SessionTargetIdentity; requestId?: string; deadlineAt?: number; title: string; body: string; occurredAt: string; dedupeKey: string; seq: number }
   | { type: "error"; code: string; message: string; seq: number }
   | { type: "herdr_availability"; status: string; version?: string; protocol?: number; requestId?: string; seq: number }
-  | { type: "herdr_launch"; requestId: string; status: "accepted" | "ready" | "failed" | "unknown"; stage: string; paneId?: string; target?: SessionTargetIdentity; error?: HostError; seq: number };
+  | { type: "herdr_launch"; requestId: string; status: "accepted" | "ready" | "failed" | "unknown"; stage: string; paneId?: string; target?: SessionTargetIdentity; /** 实际使用的运行时（auto 解析后回显） */ runtime?: "pi" | "pi-bolt"; error?: HostError; seq: number };
 
 // ─────────────────────────────────────────────────────────────────────────────
 // ClientCommand — 客户端发给 host 的命令
@@ -694,12 +696,51 @@ export type TargetedSessionCommand = {
   target: SessionTargetIdentity;
 };
 
+/** Herdr 启动的 Pi 会话运行时选择；auto 由 Host 按探测结果解析 */
+export type HerdrRuntime = "auto" | "pi" | "pi-bolt";
+
+/** Herdr 会话启动配置（Host 持久化，Mobile/TUI 经协议读写） */
+export interface HerdrLaunchSettings {
+  runtime: HerdrRuntime;
+  /** 从历史会话页恢复历史会话到新 space */
+  resumeHistory: boolean;
+  /** 会话退出后自动清理无其他存活 pane 的 space */
+  autoCleanupSpace: boolean;
+}
+
+/** Host 经本功能启动的 Herdr space 登记（供 Mobile 判定「本 Host 启动」） */
+export interface HerdrLaunchedSpace {
+  paneId: string;
+  workspaceId?: string;
+  label?: string;
+  cwd: string;
+  launchedAt: string;
+}
+
+export interface HerdrSettingsSnapshot {
+  settings: HerdrLaunchSettings;
+  favorites: string[];
+  launchedSpaces: HerdrLaunchedSpace[];
+}
+
+/** close_herdr_session 的业务结果；帧级 status 恒为 observed/failed */
+export type HerdrCloseOutcome = "closed" | "close_timeout" | "herdr_session_busy" | "herdr_session_not_owned";
+
+export interface HerdrCloseResult {
+  status: HerdrCloseOutcome;
+  paneId?: string;
+  workspaceId?: string;
+}
+
 export type ClientCommandPayload =
   /** Deprecated compatibility envelope: Host always rejects it and never creates/attaches a session. */
   | { type: "open_session"; cwd: string; mode?: "create" | "continue"; sessionFile?: string; target?: SessionTargetIdentity }
   | { type: "list_host_sessions"; cwd?: string; limit?: number; cursor?: string; query?: string; includeMonitor?: boolean; sessionIds?: string[]; latestForCwds?: string[] }
-  | { type: "launch_pi_session"; cwd: string; label?: string }
+  | { type: "launch_pi_session"; cwd: string; label?: string; runtime?: HerdrRuntime; /** 历史 JSONL 绝对路径；Host realpath 验证后拼 --session */ resumeSessionRef?: string }
   | { type: "get_herdr_status" }
+  | { type: "get_herdr_settings" }
+  | { type: "update_herdr_settings"; patch: { settings?: Partial<Pick<HerdrLaunchSettings, "runtime" | "resumeHistory" | "autoCleanupSpace">>; addFavorite?: string; removeFavorite?: string } }
+  | ({ type: "close_herdr_session" } & TargetedSessionCommand)
   | ({ type: "load_more_history"; count?: number } & TargetedSessionCommand)
   | ({ type: "search_history"; keyword: string; maxResults?: number; previewLength?: number } & TargetedSessionCommand)
   | ({ type: "list_models" } & TargetedSessionCommand)
@@ -763,6 +804,14 @@ export interface HostStatus {
   maestroCliVersion?: string;
   sessions: number;
   uptimeMs: number;
+  /** Herdr 运行时探测结果（get_herdr_status 合并后下发） */
+  herdr?: {
+    status: string;
+    running: boolean;
+    version?: string;
+    protocol?: number;
+    runtimes?: { pi: boolean; piBolt: boolean };
+  };
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -886,6 +935,7 @@ export function isHostEvent(value: unknown): value is HostEvent {
       return isString(value.requestId) && optionalEnum(value.status, "accepted", "ready", "failed", "unknown")
         && value.status !== undefined && isString(value.stage)
         && optionalString(value.paneId)
+        && optionalEnum(value.runtime, "pi", "pi-bolt")
         && (value.target === undefined || isSessionTargetIdentity(value.target))
         && (value.error === undefined || isHostError(value.error));
     case "error":
@@ -907,12 +957,22 @@ export function isClientCommand(value: unknown): value is ClientCommand {
     && value.type !== "get_execution_projections" && value.type !== "ping"
     && value.type !== "update_maestro_settings"
     && value.type !== "launch_pi_session" && value.type !== "get_herdr_status"
+    && value.type !== "get_herdr_settings" && value.type !== "update_herdr_settings"
     && (value.target === undefined || !isSessionTargetIdentity(value.target))) return false;
   switch (value.type) {
     case "launch_pi_session":
-      return isString(value.cwd) && (value.label === undefined || isString(value.label));
+      return isString(value.cwd) && (value.label === undefined || isString(value.label))
+        && optionalEnum(value.runtime, "auto", "pi", "pi-bolt")
+        && (value.resumeSessionRef === undefined || isValidSessionRefPath(value.resumeSessionRef));
     case "get_herdr_status":
       return true;
+    case "get_herdr_settings":
+      return true;
+    case "update_herdr_settings":
+      return isHerdrSettingsPatch(value.patch);
+    case "close_herdr_session":
+      return isString(value.sessionId) && isSessionTargetIdentity(value.target)
+        && value.target.sessionId === value.sessionId;
     case "open_session":
       return isString(value.cwd) && optionalEnum(value.mode, "create", "continue") && optionalString(value.sessionFile);
     case "list_host_sessions":
@@ -1219,6 +1279,30 @@ function optionalRolloutMode(value: unknown): boolean {
 
 function isStringArray(value: unknown): value is string[] {
   return Array.isArray(value) && value.every(isString);
+}
+
+/** resumeSessionRef 白名单：绝对路径、无 .. 段、无控制字符、长度上限（注入防护） */
+function isValidSessionRefPath(value: unknown): value is string {
+  if (!isString(value) || value.length > 4096) return false;
+  if (!value.startsWith("/")) return false;
+  if (/[\u0000-\u001f\u007f]/.test(value)) return false;
+  // 分隔符白名单：路径段禁止 ..、shell 元字符与空格；真实 Pi session 路径（目录名形如 --Users-x-Projects-y--）不含这些字符
+  return value.split("/").every((segment) => segment !== ".." && /^[^\s;`$|&<>\\'"?!\[\]{}()#~%*+=:]*$/u.test(segment));
+}
+
+function isHerdrSettingsPatch(value: unknown): boolean {
+  if (!isRecord(value)) return false;
+  if (Object.keys(value).length === 0) return false;
+  const settings = value.settings;
+  if (settings !== undefined) {
+    if (!isRecord(settings)) return false;
+    if (settings.runtime !== undefined && !optionalEnum(settings.runtime, "auto", "pi", "pi-bolt")) return false;
+    if (settings.resumeHistory !== undefined && typeof settings.resumeHistory !== "boolean") return false;
+    if (settings.autoCleanupSpace !== undefined && typeof settings.autoCleanupSpace !== "boolean") return false;
+  }
+  if (value.addFavorite !== undefined && !(isString(value.addFavorite) && isValidSessionRefPath(value.addFavorite))) return false;
+  if (value.removeFavorite !== undefined && !(isString(value.removeFavorite) && isValidSessionRefPath(value.removeFavorite))) return false;
+  return true;
 }
 
 function optionalStringArray(value: unknown): boolean {
