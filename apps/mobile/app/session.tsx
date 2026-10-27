@@ -5,7 +5,7 @@ import {
 } from "react-native";
 import * as Clipboard from "expo-clipboard";
 import { useLocalSearchParams, useRouter } from "expo-router";
-import { useHost } from "../src/store";
+import { useHost, herdrCloseOutcome } from "../src/store";
 import { useTheme, MIUIX_RADIUS, MIUIX_TYPE, MIUIX_SPACE, hexToRgba } from "../src/theme";
 import { getConfig, loadConfig } from "../src/config";
 import { LineIcon } from "../src/components/LineIcon";
@@ -72,7 +72,7 @@ function modelNameOf(value: unknown): string | undefined {
 export default function SessionScreen() {
   const { id, targetKey, from } = useLocalSearchParams<{ id: string; targetKey?: string; from?: string }>();
   const router = useRouter();
-  const { state, hostUrl, sendPrompt, sendAbort, answerDialog, cancelDialog, respondPlan, cancelPlan, supportsRefine, refineState, refineTarget, sendRefineAction, selectSessionTarget, loadSessionHistory, loadMoreHistory, searchHistory, setThinking, listSkills, listModels, isConnected, connectionState, lastError, clearError: dispatchLocalError } = useHost();
+  const { state, hostUrl, sendPrompt, sendAbort, answerDialog, cancelDialog, respondPlan, cancelPlan, supportsRefine, refineState, refineTarget, sendRefineAction, selectSessionTarget, loadSessionHistory, loadMoreHistory, searchHistory, setThinking, listSkills, listModels, isConnected, connectionState, lastError, clearError: dispatchLocalError, getHerdrSettings, getHerdrStatus, launchPiSession, closeHerdrSession, supportsHerdrSessionClose } = useHost();
   const { theme } = useTheme();
   const { t } = useI18n();
   const cfg = getConfig();
@@ -85,6 +85,10 @@ export default function SessionScreen() {
     : undefined;
 
   const [executionDetailsOpen, setExecutionDetailsOpen] = useState(false);
+  const [closeConfirmOpen, setCloseConfirmOpen] = useState(false);
+  const [closeMessage, setCloseMessage] = useState<string | null>(null);
+  const [resumeState, setResumeState] = useState<"idle" | "launching" | "failed" | "unknown">("idle");
+  const [herdrLaunch, setHerdrLaunch] = useState<{ settings: { resumeHistory: boolean } | null; launchedPaneIds: Set<string>; herdrAvailable: boolean }>({ settings: null, launchedPaneIds: new Set(), herdrAvailable: false });
   const [executionSection, setExecutionSection] = useState<ExecutionSectionKey>("todo");
   const [detailsExpanded, setDetailsExpanded] = useState(false);
   const detailLimit = detailsExpanded ? 20 : 5;
@@ -509,6 +513,85 @@ export default function SessionScreen() {
   const isSessionStreaming = session?.runState === "streaming";
   const composerEnabled = canPrompt && interactionReady;
 
+  // ── Herdr：本 Host 启动的会话可结束；历史会话可恢复 ─────────────────────
+  const sessionSummary = useMemo(() => {
+    const list = state.hostSessionList?.sessions ?? [];
+    return list.find((entry) => entry.sessionId === id) ?? null;
+  }, [state.hostSessionList, id]);
+  const isHistorySession = sessionSummary?.target?.endpointId === "history";
+
+  useEffect(() => {
+    if (!supportsHerdrSessionClose) return;
+    void (async () => {
+      try {
+        const response = (await getHerdrSettings()) as {
+          result?: { settings?: { resumeHistory: boolean }; launchedSpaces?: Array<{ paneId: string }> };
+          settings?: { resumeHistory: boolean };
+          launchedSpaces?: Array<{ paneId: string }>;
+        };
+        const data = response.result ?? response;
+        setHerdrLaunch({
+          settings: data.settings ? { resumeHistory: data.settings.resumeHistory } : null,
+          launchedPaneIds: new Set((data.launchedSpaces ?? []).map((entry: { paneId: string }) => entry.paneId)),
+          herdrAvailable: true,
+        });
+      } catch {
+        setHerdrLaunch({ settings: null, launchedPaneIds: new Set(), herdrAvailable: false });
+      }
+    })();
+  }, [getHerdrSettings, supportsHerdrSessionClose]);
+
+  // 归属判断只依据 Host 的 launchedSpaces 投影；App 不自行推断进程身份。
+  const canCloseHerdrSession = supportsHerdrSessionClose
+    && herdrLaunch.herdrAvailable
+    && isConnected
+    && !isHistorySession
+    && session !== undefined;
+
+  const resumeEnabled = herdrLaunch.settings?.resumeHistory === true
+    && isHistorySession
+    && typeof sessionSummary?.path === "string"
+    && sessionSummary.path.length > 0
+    && resumeState !== "launching";
+
+  const handleCloseHerdrSession = useCallback(async () => {
+    const target = sessionSummary?.target;
+    if (!id || !target) { setCloseMessage(t.herdrNotOwned); return; }
+    setCloseConfirmOpen(false);
+    setCloseMessage(null);
+    try {
+      const outcome = await closeHerdrSession(id, target);
+      const kind = herdrCloseOutcome(outcome);
+      if (kind === "closed") {
+        setCloseMessage(t.herdrCloseSuccess);
+        router.back();
+        return;
+      }
+      setCloseMessage(kind === "herdr_session_busy" ? t.herdrSessionBusy
+        : kind === "close_timeout" ? t.herdrCloseTimeout
+        : t.herdrNotOwned);
+    } catch {
+      setCloseMessage(t.herdrFailed);
+    }
+  }, [sessionSummary, closeHerdrSession, id, router, t]);
+
+  const handleResumeSession = useCallback(async () => {
+    if (!sessionSummary?.path || !sessionSummary.cwd) return;
+    setResumeState("launching");
+    try {
+      const outcome = await launchPiSession(sessionSummary.cwd, undefined, { resumeSessionRef: sessionSummary.path });
+      const data = (outcome as { result?: { status?: string } }).result ?? (outcome as { status?: string });
+      if (data.status === "ready") {
+        setResumeState("idle");
+        router.back();
+        return;
+      }
+      setResumeState(data.status === "failed" ? "failed" : "unknown");
+    } catch {
+      setResumeState("failed");
+    }
+  }, [sessionSummary, launchPiSession, router]);
+
   // 活跃工作态感知：从用户发送消息开始，贯穿思考（thinking）、工具执行（tool）、模型流式输出，直到完整任务终结
   const [isTurnWorking, setIsTurnWorking] = useState(false);
   const lastItem = timeline[timeline.length - 1];
@@ -833,19 +916,32 @@ export default function SessionScreen() {
         </TouchableOpacity>
         <Text style={styles.headerTitle} numberOfLines={1}>{session?.title ?? t.tabSessions}</Text>
         
-        {/* 右侧：当前模型 Badge，点击进入独立全屏“模型选择”子页面 */}
-        <TouchableOpacity
-          onPress={openModelPicker}
-          style={styles.modelHeaderBtn}
-          accessibilityRole="button"
-          accessibilityLabel={t.selectModel}
-          hitSlop={{ top: 15, bottom: 15, left: 20, right: 20 }}
-        >
-          <Text style={styles.modelHeaderBtnText} numberOfLines={1}>
-            {modelNameOf(session?.model) ?? currentModelId ?? "Model"}
-          </Text>
-          <LineIcon name="chevronDown" size={11} color={theme.accent} />
-        </TouchableOpacity>
+        {/* 右侧：本 Host 经 Herdr 启动的会话显示「结束会话」；其余保持模型 Badge */}
+        {canCloseHerdrSession ? (
+          <TouchableOpacity
+            onPress={() => setCloseConfirmOpen(true)}
+            style={styles.modelHeaderBtn}
+            accessibilityRole="button"
+            accessibilityLabel={t.herdrCloseSession}
+            hitSlop={{ top: 15, bottom: 15, left: 20, right: 20 }}
+          >
+            <Text style={styles.modelHeaderBtnText} numberOfLines={1}>{t.herdrCloseSession}</Text>
+            <LineIcon name="x" size={13} color={theme.error} />
+          </TouchableOpacity>
+        ) : (
+          <TouchableOpacity
+            onPress={openModelPicker}
+            style={styles.modelHeaderBtn}
+            accessibilityRole="button"
+            accessibilityLabel={t.selectModel}
+            hitSlop={{ top: 15, bottom: 15, left: 20, right: 20 }}
+          >
+            <Text style={styles.modelHeaderBtnText} numberOfLines={1}>
+              {modelNameOf(session?.model) ?? currentModelId ?? "Model"}
+            </Text>
+            <LineIcon name="chevronDown" size={11} color={theme.accent} />
+          </TouchableOpacity>
+        )}
       </View>
       {executionSummary && executionCounts && (
         <ScrollView horizontal showsHorizontalScrollIndicator={false} style={[styles.executionChips, { borderBottomColor: theme.border }]} contentContainerStyle={styles.executionChipsContent}>
@@ -1021,7 +1117,21 @@ export default function SessionScreen() {
           pointerEvents="box-none"
         >
           <View style={[styles.floatingToolPill, { backgroundColor: theme.cardBg, borderColor: theme.border }]}>
-            {/* 1. 思考等级 */}
+            {/* 1. 模型（放在思考等级之前，替代头部 Badge 的模型入口） */}
+            <TouchableOpacity
+              style={styles.floatingToolBtn}
+              onPress={openModelPicker}
+              accessibilityRole="button"
+              accessibilityLabel={t.selectModel}
+              hitSlop={{ top: 8, bottom: 8, left: 8, right: 6 }}
+            >
+              <LineIcon name="brain" size={15} color={theme.accent} />
+              <Text style={[styles.floatingToolText, { color: theme.text }]} numberOfLines={1}>{modelNameOf(session?.model) ?? currentModelId ?? "Model"}</Text>
+            </TouchableOpacity>
+
+            <View style={[styles.pillDivider, { backgroundColor: theme.border }]} />
+
+            {/* 2. 思考等级 */}
             <TouchableOpacity
               style={styles.floatingToolBtn}
               onPress={() => setActionSheetType("think")}
@@ -1095,6 +1205,63 @@ export default function SessionScreen() {
         >
           <Text style={[styles.toolError, { color: theme.error }]} numberOfLines={3}>{lastError}</Text>
         </TouchableOpacity>
+      ) : null}
+      {/* 历史会话：composer 位置替换为【恢复会话】按钮（live target 时禁用） */}
+      {isHistorySession ? (
+        <View style={{ paddingHorizontal: 20, paddingBottom: 10, gap: 8 }}>
+          <TouchableOpacity
+            onPress={() => void handleResumeSession()}
+            disabled={!resumeEnabled}
+            accessibilityRole="button"
+            accessibilityLabel={t.herdrResumeSession}
+            style={[styles.modelApplyBtn, { backgroundColor: theme.buttonPrimary, alignSelf: "stretch", alignItems: "center", paddingVertical: 12, opacity: resumeEnabled ? 1 : 0.5 }]}
+          >
+            {resumeState === "launching" ? (
+              <ActivityIndicator size="small" color="#fff" />
+            ) : (
+              <Text style={styles.modelApplyBtnText}>{t.herdrResumeSession}</Text>
+            )}
+          </TouchableOpacity>
+          {!herdrLaunch.settings?.resumeHistory ? (
+            <Text style={{ color: theme.muted, fontSize: 11 }}>{t.herdrResumeHistorySummary}</Text>
+          ) : (
+            <Text style={{ color: theme.muted, fontSize: 11 }}>{t.herdrSessionRunning}</Text>
+          )}
+          {resumeState === "failed" ? <Text style={{ color: theme.error, fontSize: 11 }}>{t.herdrFailed}</Text> : null}
+          {resumeState === "unknown" ? <Text style={{ color: theme.warning, fontSize: 11 }}>{t.herdrUnknown}</Text> : null}
+        </View>
+      ) : null}
+      {closeConfirmOpen ? (
+        <View style={[StyleSheet.absoluteFillObject, { zIndex: 999 }]} pointerEvents="auto">
+          <TouchableOpacity
+            style={[StyleSheet.absoluteFillObject, { backgroundColor: "rgba(0,0,0,0.5)" }]}
+            activeOpacity={1}
+            onPress={() => setCloseConfirmOpen(false)}
+          />
+          <View style={{ flex: 1, justifyContent: "center", alignItems: "center", padding: 20 }}>
+            <View style={{ width: "100%", maxWidth: 340, backgroundColor: theme.cardBg, borderRadius: 20, padding: 20, borderWidth: 1, borderColor: theme.border }}>
+              <Text style={{ fontSize: 15, fontWeight: "700", color: theme.text, marginBottom: 6 }}>{t.herdrCloseConfirmTitle}</Text>
+              <Text style={{ fontSize: 12, color: theme.muted, marginBottom: 16 }}>{t.herdrCloseConfirmMessage}</Text>
+              <View style={{ flexDirection: "row", gap: 8 }}>
+                <TouchableOpacity
+                  style={{ flex: 1, padding: 11, borderRadius: 10, backgroundColor: theme.buttonPrimary, alignItems: "center" }}
+                  onPress={() => void handleCloseHerdrSession()}
+                  accessibilityRole="button"
+                  accessibilityLabel={t.herdrCloseSession}
+                >
+                  <Text style={{ color: "#fff", fontWeight: "700", fontSize: 12 }}>{t.herdrCloseSession}</Text>
+                </TouchableOpacity>
+                <TouchableOpacity
+                  style={{ padding: 11, borderRadius: 10, borderWidth: 1, borderColor: theme.border, alignItems: "center" }}
+                  onPress={() => setCloseConfirmOpen(false)}
+                >
+                  <Text style={{ color: theme.muted, fontSize: 12 }}>{t.cancel}</Text>
+                </TouchableOpacity>
+              </View>
+              {closeMessage ? <Text style={{ color: theme.muted, fontSize: 11, marginTop: 10 }}>{closeMessage}</Text> : null}
+            </View>
+          </View>
+        </View>
       ) : null}
       <ChatComposer
         actions={{
