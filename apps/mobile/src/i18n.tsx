@@ -171,16 +171,11 @@ export interface I18nDictionary {
   modelWindow: string;
   filterSessions: string;
   clearSearch: string;
-  herdrLaunch: string;
-  herdrCwdPrompt: string;
-  herdrLabelPrompt: string;
-  herdrCheck: string;
   herdrReady: string;
   herdrNotInstalled: string;
   herdrNotRunning: string;
   herdrIncompatible: string;
   herdrUnavailable: string;
-  herdrLaunching: string;
   herdrUnknown: string;
   herdrFailed: string;
   secNotifications: string;
@@ -494,16 +489,11 @@ export const DICTIONARIES: Record<Language, I18nDictionary> = {
     modelWindow: "视窗上限",
     filterSessions: "筛选会话",
     clearSearch: "清除搜索",
-    herdrLaunch: "启动 Pi",
-    herdrCwdPrompt: "工作目录绝对路径",
-    herdrLabelPrompt: "窗口名称（可选）",
-    herdrCheck: "检查 Herdr",
     herdrReady: "Herdr 已就绪",
     herdrNotInstalled: "未安装 Herdr",
     herdrNotRunning: "Herdr 服务未运行",
     herdrIncompatible: "Herdr 版本不兼容",
     herdrUnavailable: "Herdr 状态不可用",
-    herdrLaunching: "正在启动并等待 Pi 注册…",
     herdrUnknown: "启动结果未知，请检查 Herdr 窗格；不要重复请求",
     herdrFailed: "启动失败",
     secNotifications: "通知",
@@ -828,16 +818,11 @@ export const DICTIONARIES: Record<Language, I18nDictionary> = {
     modelWindow: "Max Window",
     filterSessions: "Filter sessions",
     clearSearch: "Clear search",
-    herdrLaunch: "Launch Pi",
-    herdrCwdPrompt: "Absolute working directory",
-    herdrLabelPrompt: "Pane label (optional)",
-    herdrCheck: "Check Herdr",
     herdrReady: "Herdr is ready",
     herdrNotInstalled: "Herdr is not installed",
     herdrNotRunning: "Herdr server is not running",
     herdrIncompatible: "Herdr version is incompatible",
     herdrUnavailable: "Herdr status unavailable",
-    herdrLaunching: "Starting Pi and waiting for registration…",
     herdrUnknown: "Launch outcome is unknown. Check the Herdr pane; do not retry",
     herdrFailed: "Launch failed",
     secNotifications: "Notifications",
