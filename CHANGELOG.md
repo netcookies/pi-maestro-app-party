@@ -2,6 +2,12 @@
 
 本文件记录 Maestro Mobile 的显著变更。格式基于 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)。
 
+## [0.16.6] — 2026-10-27
+
+### 修复
+
+- fallback to managed Pi SDK runtime
+
 ## [0.16.5] — 2026-10-27
 
 ### 修复
