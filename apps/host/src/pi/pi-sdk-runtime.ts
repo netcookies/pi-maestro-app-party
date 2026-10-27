@@ -1,5 +1,6 @@
 import { existsSync } from "node:fs";
 import { readFile } from "node:fs/promises";
+import { homedir } from "node:os";
 import { delimiter, join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import type { SessionInfo } from "@earendil-works/pi-coding-agent";
@@ -51,6 +52,25 @@ async function importPackageDir(packageDir: string): Promise<PiSdkRuntime | unde
   }
 }
 
+export async function findManagedPiSdkPackageDir(): Promise<string | undefined> {
+  const agentDir = process.env.PI_CODING_AGENT_DIR?.trim() || join(homedir(), ".pi", "agent");
+  try {
+    const version = (await readFile(join(agentDir, "install", "current-version"), "utf8")).trim();
+    if (!/^[A-Za-z0-9][A-Za-z0-9.+-]*$/.test(version)) return undefined;
+    const packageDir = join(
+      agentDir,
+      "install",
+      "releases",
+      version,
+      "node_modules",
+      PI_SDK_PACKAGE,
+    );
+    return await entryFromPackageDir(packageDir) ? packageDir : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 /**
  * PATH / NODE_PATH 推导出的全局 node_modules 候选。
  * npm 全局布局差异大：homebrew/nvm 是 `<prefix>/bin` → `<prefix>/lib/node_modules`，
@@ -77,7 +97,8 @@ function globalNodeModulesRoots(): string[] {
  *  1. `PI_PACKAGE_DIR`（Pi 官方约定，`getPackageDir()` 读同一个变量）：extension 启动子进程时
  *     注入宿主自身包目录，复用宿主正在运行的那一份 runtime，不额外安装副本；
  *  2. 常规 Node 解析：workspace 开发，或 npm 本地/全局安装（peer dependency 随包安装）;
- *  3. 全局 node_modules：Pi 装在全局、Host 独立安装（本机 ~/.pi/agent/npm）的形态。
+ *  3. 全局 node_modules：Pi 装在全局、Host 独立安装；
+ *  4. Pi managed install：从 `PI_CODING_AGENT_DIR/install/current-version` 定位当前 release。
  */
 export async function loadPiSdk(): Promise<PiSdkRuntime> {
   const injected = process.env.PI_PACKAGE_DIR?.trim();
@@ -94,10 +115,14 @@ export async function loadPiSdk(): Promise<PiSdkRuntime> {
     const fromGlobal = await importPackageDir(join(root, PI_SDK_PACKAGE));
     if (fromGlobal) return fromGlobal;
   }
+  const managedPackageDir = await findManagedPiSdkPackageDir();
+  if (managedPackageDir) {
+    const fromManaged = await importPackageDir(managedPackageDir);
+    if (fromManaged) return fromManaged;
+  }
   throw new Error(
-    `无法加载 Pi runtime ${PI_SDK_PACKAGE}（PI_PACKAGE_DIR=${injected ?? "未设置"}）。`
-    + "请在 Pi 宿主内用 /maestro-mobile start 启动（扩展会注入宿主 runtime 目录），"
-    + `或把 PI_PACKAGE_DIR 指向 Pi 包目录，或安装 ${PI_SDK_PACKAGE}。`,
+    `无法加载 Pi SDK runtime ${PI_SDK_PACKAGE}（PI_PACKAGE_DIR=${injected ?? "未设置"}）。`
+    + "请确保 Pi 的 Node SDK 包已安装，且 PI_PACKAGE_DIR（如设置）指向包含可导入入口的 Pi package 目录。",
   );
 }
 

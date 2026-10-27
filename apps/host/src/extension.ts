@@ -14,7 +14,7 @@
 import { spawn, execFile } from "node:child_process";
 import { networkInterfaces } from "node:os";
 import { readFile, writeFile, unlink, chmod, readdir, appendFile, stat, rename } from "node:fs/promises";
-import { openSync, closeSync, chmodSync } from "node:fs";
+import { existsSync, openSync, closeSync, chmodSync } from "node:fs";
 import { join } from "node:path";
 import { homedir } from "node:os";
 import { fileURLToPath } from "node:url";
@@ -162,8 +162,13 @@ export function hostChildEnv(port: number, base: NodeJS.ProcessEnv = process.env
   const env: NodeJS.ProcessEnv = { ...base, MAESTRO_MOBILE_PORT: String(port) };
   try {
     const packageDir = getPackageDir();
-    if (packageDir) env.PI_PACKAGE_DIR = packageDir;
+    if (packageDir && existsSync(join(packageDir, "dist", "index.js"))) {
+      env.PI_PACKAGE_DIR = packageDir;
+    } else {
+      delete env.PI_PACKAGE_DIR;
+    }
   } catch {
+    delete env.PI_PACKAGE_DIR;
     // 取不到宿主目录时留给子进程按常规解析 / 全局前缀回退
   }
   return env;
