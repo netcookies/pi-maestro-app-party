@@ -2,6 +2,12 @@
 
 本文件记录 Maestro Mobile 的显著变更。格式基于 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)。
 
+## [0.17.1] — 2026-10-28
+
+### 新增
+
+- Ask/Plan 弹窗未作答时禁用提交并支持最小化为悬浮按钮
+
 ## [0.17.0] — 2026-10-28
 
 ### 测试
