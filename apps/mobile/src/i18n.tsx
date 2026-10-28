@@ -257,6 +257,10 @@ export interface I18nDictionary {
   planReviewTitle: string;
   planRevision: string;
   planCancel: string;
+  dialogMinimize: string;
+  dialogRestore: string;
+  dialogAskPill: string;
+  dialogPlanPill: string;
   planEditor: string;
   planDiscussionInput: string;
   planDiscussionPlaceholder: string;
@@ -575,6 +579,10 @@ export const DICTIONARIES: Record<Language, I18nDictionary> = {
     planReviewTitle: "审阅计划",
     planRevision: "版本",
     planCancel: "取消计划",
+    dialogMinimize: "最小化",
+    dialogRestore: "展开弹窗",
+    dialogAskPill: "待答复",
+    dialogPlanPill: "待确认 Plan",
     planEditor: "计划编辑器",
     planDiscussionInput: "计划讨论内容",
     planDiscussionPlaceholder: "输入反馈或问题，继续讨论当前计划",
@@ -904,6 +912,10 @@ export const DICTIONARIES: Record<Language, I18nDictionary> = {
     planReviewTitle: "Review Plan",
     planRevision: "Revision",
     planCancel: "Cancel Plan",
+    dialogMinimize: "Minimize",
+    dialogRestore: "Restore dialog",
+    dialogAskPill: "Needs answer",
+    dialogPlanPill: "Plan pending",
     planEditor: "Plan editor",
     planDiscussionInput: "Plan discussion",
     planDiscussionPlaceholder: "Enter feedback or a question about the current Plan",

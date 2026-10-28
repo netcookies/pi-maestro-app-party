@@ -10,6 +10,8 @@ import {
   ActivityIndicator,
 } from "react-native";
 import { useTheme } from "../theme";
+import { useI18n } from "../i18n";
+import { MinimizedDialogPill } from "./MinimizedDialogPill";
 
 export interface QuestionOption {
   label: string;
@@ -47,6 +49,7 @@ function withAlpha(hex: string, alphaSuffix: string): string {
 
 export function AskWizardDialog({ questions, onAnswer, onCancel }: Props) {
   const { theme } = useTheme();
+  const { t } = useI18n();
   const [step, setStep] = useState(0);
   const [submitting, setSubmitting] = useState(false);
 
@@ -68,6 +71,7 @@ export function AskWizardDialog({ questions, onAnswer, onCancel }: Props) {
   const [answersState, setAnswersState] = useState<Array<{ selected: string[]; text: string }>>(() =>
     questions.map(() => ({ selected: [], text: "" })),
   );
+  const [minimized, setMinimized] = useState(false);
 
   const total = normalizedQuestions.length;
   const currentQ = normalizedQuestions[step] ?? { question: "", options: [] };
@@ -76,6 +80,10 @@ export function AskWizardDialog({ questions, onAnswer, onCancel }: Props) {
   const isMulti = Boolean(currentQ.multiSelect);
   const hasOptions = options.length > 0;
   const isNoneSelected = currentAnswer.selected.includes(NONE_OPTION_LABEL);
+  // 未作答时不允许前进/提交：多选与单选都必须真正选中一项（「以上都不是」需配合自定义文本），纯文本题需有内容
+  const currentAnswered = currentAnswer.text.trim().length > 0
+    || currentAnswer.selected.some((label) => label !== NONE_OPTION_LABEL);
+  const primaryDisabled = submitting || !currentAnswered;
 
   // 选项点击逻辑
   const handleSelectOption = (label: string) => {
@@ -169,6 +177,16 @@ export function AskWizardDialog({ questions, onAnswer, onCancel }: Props) {
       .finally(() => setSubmitting(false));
   };
 
+  if (minimized) {
+    return (
+      <MinimizedDialogPill
+        label={t.dialogAskPill}
+        accessibilityLabel={t.dialogRestore}
+        onRestore={() => setMinimized(false)}
+      />
+    );
+  }
+
   return (
     <Modal transparent animationType="fade" visible>
       <View style={styles.overlay}>
@@ -208,6 +226,15 @@ export function AskWizardDialog({ questions, onAnswer, onCancel }: Props) {
                 </Text>
               ))}
             </ScrollView>
+            <TouchableOpacity
+              onPress={() => setMinimized(true)}
+              accessibilityRole="button"
+              accessibilityLabel={t.dialogMinimize}
+              hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+              style={styles.minimizeButton}
+            >
+              <Text style={[styles.minimizeText, { color: theme.muted }]}>—</Text>
+            </TouchableOpacity>
           </View>
 
           {/* 题目内容 */}
@@ -326,15 +353,16 @@ export function AskWizardDialog({ questions, onAnswer, onCancel }: Props) {
             </TouchableOpacity>
 
             <TouchableOpacity
-              style={[styles.btnPrimary, { backgroundColor: theme.buttonPrimary }]}
+              style={[styles.btnPrimary, { backgroundColor: primaryDisabled ? theme.border : theme.buttonPrimary }]}
               onPress={handleNext}
-              disabled={submitting}
+              disabled={primaryDisabled}
               accessibilityRole="button"
+              accessibilityState={{ disabled: primaryDisabled }}
             >
               {submitting ? (
                 <ActivityIndicator size="small" color="#FFFFFF" />
               ) : (
-                <Text style={styles.btnPrimaryText}>
+                <Text style={[styles.btnPrimaryText, primaryDisabled && { color: theme.muted }]}>
                   {step < total - 1 ? "下一题 ›" : "✓ 提交全部"}
                 </Text>
               )}
@@ -364,6 +392,8 @@ const styles = StyleSheet.create({
     alignItems: "center",
     marginBottom: 12,
   },
+  minimizeButton: { paddingHorizontal: 6, paddingVertical: 2 },
+  minimizeText: { fontSize: 16, fontWeight: "700" },
   badgeWrap: {
     marginRight: 8,
   },

@@ -4,6 +4,8 @@ import {
 } from "react-native";
 import type { ExtensionUiRequest } from "@maestro-mobile/shared";
 import { useTheme } from "../../src/theme";
+import { useI18n } from "../../src/i18n";
+import { MinimizedDialogPill } from "./MinimizedDialogPill";
 
 interface Props {
   request: ExtensionUiRequest;
@@ -18,6 +20,8 @@ function withAlpha(hex: string, alphaSuffix: string): string {
 
 export function ExtensionUiDialog({ request, onAnswer, onCancel }: Props) {
   const { theme } = useTheme();
+  const { t } = useI18n();
+  const [minimized, setMinimized] = React.useState(false);
   const [selected, setSelected] = React.useState<string[]>([]);
   const [freeText, setFreeText] = React.useState("");
   const [submitting, setSubmitting] = React.useState(false);
@@ -80,6 +84,16 @@ export function ExtensionUiDialog({ request, onAnswer, onCancel }: Props) {
     runAnswer(onCancel);
   };
 
+  if (minimized) {
+    return (
+      <MinimizedDialogPill
+        label={t.dialogAskPill}
+        accessibilityLabel={t.dialogRestore}
+        onRestore={() => setMinimized(false)}
+      />
+    );
+  }
+
   return (
     <Modal transparent animationType="fade" visible>
       <View style={styles.overlay}>
@@ -97,7 +111,18 @@ export function ExtensionUiDialog({ request, onAnswer, onCancel }: Props) {
             },
           ]}
         >
-          <Text style={[styles.title, { color: theme.text }]}>{request.title ?? "询问"}</Text>
+          <View style={styles.titleRow}>
+            <Text style={[styles.title, { color: theme.text }]}>{request.title ?? "询问"}</Text>
+            <TouchableOpacity
+              onPress={() => setMinimized(true)}
+              accessibilityRole="button"
+              accessibilityLabel={t.dialogMinimize}
+              hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+              style={styles.minimizeButton}
+            >
+              <Text style={[styles.minimizeText, { color: theme.muted }]}>—</Text>
+            </TouchableOpacity>
+          </View>
           {request.message ? <Text style={[styles.message, { color: theme.muted }]}>{request.message}</Text> : null}
 
           <ScrollView style={styles.optionsList}>
@@ -151,7 +176,7 @@ export function ExtensionUiDialog({ request, onAnswer, onCancel }: Props) {
               <Text style={[styles.cancelText, { color: theme.muted }]}>取消</Text>
             </TouchableOpacity>
             <TouchableOpacity
-              style={[styles.confirmButton, { backgroundColor: theme.buttonPrimary }, confirmDisabled && styles.buttonDisabled]}
+              style={[styles.confirmButton, { backgroundColor: confirmDisabled ? theme.border : theme.buttonPrimary }]}
               onPress={handleConfirm}
               disabled={confirmDisabled}
               accessibilityRole="button"
@@ -161,7 +186,7 @@ export function ExtensionUiDialog({ request, onAnswer, onCancel }: Props) {
               {submitting ? (
                 <ActivityIndicator size="small" color={styles.confirmText.color} />
               ) : (
-                <Text style={styles.confirmText}>确认</Text>
+                <Text style={[styles.confirmText, confirmDisabled && { color: theme.muted }]}>确认</Text>
               )}
             </TouchableOpacity>
           </View>
@@ -217,4 +242,7 @@ const styles = StyleSheet.create({
   },
   confirmText: { color: "#fff", fontWeight: "600" },
   buttonDisabled: { opacity: 0.5 },
+  titleRow: { flexDirection: "row", alignItems: "center", gap: 8 },
+  minimizeButton: { paddingHorizontal: 6, paddingVertical: 2 },
+  minimizeText: { fontSize: 16, fontWeight: "700" },
 });

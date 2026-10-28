@@ -17,6 +17,7 @@ import type {
 import type { PlanRefineState } from "@maestro-mobile/mobile-sdk";
 import { useTheme } from "../theme";
 import { useI18n, type I18nDictionary } from "../i18n";
+import { MinimizedDialogPill } from "./MinimizedDialogPill";
 import { normalizePlanAction } from "../plan-actions";
 import { ChatMarkdown } from "./chat/ChatMarkdown";
 import { MarkdownExpandContent, type MarkdownExpandRequest } from "./chat/MarkdownExpandViewer";
@@ -102,6 +103,8 @@ export function PlanSurface({
   const [discussing, setDiscussing] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [expanded, setExpanded] = useState<MarkdownExpandRequest | null>(null);
+  // 最小化：弹窗收成右侧悬浮按钮，便于先阅读会话正文再裁决
+  const [minimized, setMinimized] = useState(false);
 
   // Native Review & Refine state
   const [nativeRefineOpen, setNativeRefineOpen] = useState(initialRefineOpen ?? false);
@@ -307,6 +310,16 @@ export function PlanSurface({
     setNativeRefineOpen(false);
   };
 
+  if (!expanded && minimized) {
+    return (
+      <MinimizedDialogPill
+        label={t.dialogPlanPill}
+        accessibilityLabel={t.dialogRestore}
+        onRestore={() => setMinimized(false)}
+      />
+    );
+  }
+
   return (
     <Modal transparent={!expanded} animationType="fade" visible onRequestClose={() => {
       if (expanded) setExpanded(null);
@@ -331,6 +344,16 @@ export function PlanSurface({
                 {request.pathLabel} · {t.planRevision} {request.revision}
               </Text>
             </View>
+            <TouchableOpacity
+              onPress={() => setMinimized(true)}
+              disabled={submitting}
+              accessibilityRole="button"
+              accessibilityLabel={t.dialogMinimize}
+              hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+              style={styles.minimizeButton}
+            >
+              <Text style={[styles.minimizeText, { color: theme.muted }]}>—</Text>
+            </TouchableOpacity>
             <TouchableOpacity
               onPress={() => {
                 if (nativeRefineOpen) closeNativeRefine();
@@ -652,6 +675,8 @@ const styles = StyleSheet.create({
   title: { fontSize: 19, fontWeight: "700" },
   meta: { fontSize: 12 },
   closeButton: { width: 32, height: 32, alignItems: "center", justifyContent: "center" },
+  minimizeButton: { width: 32, height: 32, alignItems: "center", justifyContent: "center" },
+  minimizeText: { fontSize: 16, fontWeight: "700" },
   close: { fontSize: 26, lineHeight: 28 },
   preview: { maxHeight: 360, borderWidth: 1, borderRadius: 6 },
   previewContent: { padding: 12 },
