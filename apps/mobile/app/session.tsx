@@ -1,7 +1,7 @@
 import React, { useCallback, useEffect, useRef, useState, useMemo } from "react";
 import {
   View, Text, StyleSheet, FlatList, TextInput, TouchableOpacity, Pressable, KeyboardAvoidingView, Platform, ActivityIndicator,
-  Animated, AccessibilityInfo, LayoutAnimation, UIManager, PanResponder, Dimensions, ScrollView,
+  Animated, AccessibilityInfo, LayoutAnimation, UIManager, PanResponder, Dimensions, ScrollView, Modal,
 } from "react-native";
 import * as Clipboard from "expo-clipboard";
 import { useLocalSearchParams, useRouter } from "expo-router";
@@ -90,7 +90,7 @@ export default function SessionScreen() {
   const [resumeState, setResumeState] = useState<"idle" | "launching" | "failed" | "unknown">("idle");
   const [herdrLaunch, setHerdrLaunch] = useState<{
     settings: { resumeHistory: boolean } | null;
-    launchedSpaces: Array<{ paneId: string; sessionId?: string; endpointId?: string; processGeneration?: string }>;
+    launchedSpaces: Array<{ paneId: string; cwd: string; sessionId?: string; endpointId?: string; processGeneration?: string }>;
     herdrAvailable: boolean;
   }>({ settings: null, launchedSpaces: [], herdrAvailable: false });
   const [executionSection, setExecutionSection] = useState<ExecutionSectionKey>("todo");
@@ -529,9 +529,9 @@ export default function SessionScreen() {
     void (async () => {
       try {
         const response = (await getHerdrSettings()) as {
-          result?: { settings?: { resumeHistory: boolean }; launchedSpaces?: Array<{ paneId: string; sessionId?: string; endpointId?: string; processGeneration?: string }> };
+          result?: { settings?: { resumeHistory: boolean }; launchedSpaces?: Array<{ paneId: string; cwd: string; sessionId?: string; endpointId?: string; processGeneration?: string }> };
           settings?: { resumeHistory: boolean };
-          launchedSpaces?: Array<{ paneId: string; sessionId?: string; endpointId?: string; processGeneration?: string }>;
+          launchedSpaces?: Array<{ paneId: string; cwd: string; sessionId?: string; endpointId?: string; processGeneration?: string }>;
         };
         const data = response.result ?? response;
         setHerdrLaunch({
@@ -545,12 +545,10 @@ export default function SessionScreen() {
     })();
   }, [getHerdrSettings, supportsHerdrSessionClose]);
 
-  // 归属判断必须同时满足 capability、Herdr 可用、已连接，且当前 target 在 Host 登记中。
-  const currentTarget = sessionSummary?.target;
-  const isOwnedHerdrSession = currentTarget !== undefined && herdrLaunch.launchedSpaces.some((entry) =>
-    entry.sessionId === currentTarget.sessionId
-    && entry.endpointId === currentTarget.endpointId
-    && entry.processGeneration === currentTarget.processGeneration);
+  // 归属判断：直接比对 Host freshly-fetched launchedSpaces（不依赖可能尚未刷新的 hostSessionList 缓存）。
+  // 只要本页面会话 id 存在于 Host 登记项中，即确认为本 Host 经 Herdr 启动的会话。
+  const ownedRecord = herdrLaunch.launchedSpaces.find((entry) => entry.sessionId === id);
+  const isOwnedHerdrSession = Boolean(id && ownedRecord);
 
   const canCloseHerdrSession = supportsHerdrSessionClose
     && herdrLaunch.herdrAvailable
@@ -565,7 +563,10 @@ export default function SessionScreen() {
     && resumeState !== "launching";
 
   const handleCloseHerdrSession = useCallback(async () => {
-    const target = sessionSummary?.target;
+    // 优先使用 Host freshly-fetched 登记项中记录的完整 exact target
+    const target = ownedRecord?.sessionId && ownedRecord.endpointId && ownedRecord.processGeneration
+      ? { sessionId: ownedRecord.sessionId, endpointId: ownedRecord.endpointId, normalizedCwd: ownedRecord.cwd, processGeneration: ownedRecord.processGeneration }
+      : sessionSummary?.target;
     if (!id || !target) { setCloseMessage(t.herdrNotOwned); return; }
     setCloseConfirmOpen(false);
     setCloseMessage(null);
@@ -583,7 +584,7 @@ export default function SessionScreen() {
     } catch {
       setCloseMessage(t.herdrFailed);
     }
-  }, [sessionSummary, closeHerdrSession, id, router, t]);
+  }, [ownedRecord, sessionSummary, closeHerdrSession, id, router, t]);
 
   const handleResumeSession = useCallback(async () => {
     if (!sessionSummary?.path || !sessionSummary.cwd) return;
@@ -1241,38 +1242,36 @@ export default function SessionScreen() {
           {resumeState === "unknown" ? <Text style={{ color: theme.warning, fontSize: 11 }}>{t.herdrUnknown}</Text> : null}
         </View>
       ) : null}
-      {closeConfirmOpen ? (
-        <View style={[StyleSheet.absoluteFillObject, { zIndex: 999 }]} pointerEvents="auto">
-          <TouchableOpacity
-            style={[StyleSheet.absoluteFillObject, { backgroundColor: "rgba(0,0,0,0.5)" }]}
-            activeOpacity={1}
-            onPress={() => setCloseConfirmOpen(false)}
-          />
-          <View style={{ flex: 1, justifyContent: "center", alignItems: "center", padding: 20 }}>
-            <View style={{ width: "100%", maxWidth: 340, backgroundColor: theme.cardBg, borderRadius: 20, padding: 20, borderWidth: 1, borderColor: theme.border }}>
-              <Text style={{ fontSize: 15, fontWeight: "700", color: theme.text, marginBottom: 6 }}>{t.herdrCloseConfirmTitle}</Text>
-              <Text style={{ fontSize: 12, color: theme.muted, marginBottom: 16 }}>{t.herdrCloseConfirmMessage}</Text>
-              <View style={{ flexDirection: "row", gap: 8 }}>
-                <TouchableOpacity
-                  style={{ flex: 1, padding: 11, borderRadius: 10, backgroundColor: theme.buttonPrimary, alignItems: "center" }}
-                  onPress={() => void handleCloseHerdrSession()}
-                  accessibilityRole="button"
-                  accessibilityLabel={t.herdrCloseSession}
-                >
-                  <Text style={{ color: "#fff", fontWeight: "700", fontSize: 12 }}>{t.herdrCloseSession}</Text>
-                </TouchableOpacity>
-                <TouchableOpacity
-                  style={{ padding: 11, borderRadius: 10, borderWidth: 1, borderColor: theme.border, alignItems: "center" }}
-                  onPress={() => setCloseConfirmOpen(false)}
-                >
-                  <Text style={{ color: theme.muted, fontSize: 12 }}>{t.cancel}</Text>
-                </TouchableOpacity>
-              </View>
-              {closeMessage ? <Text style={{ color: theme.muted, fontSize: 11, marginTop: 10 }}>{closeMessage}</Text> : null}
+      <Modal
+        visible={closeConfirmOpen}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setCloseConfirmOpen(false)}
+      >
+        <View style={{ flex: 1, backgroundColor: "rgba(0,0,0,0.6)", justifyContent: "center", alignItems: "center", padding: 24 }}>
+          <View style={{ width: "100%", maxWidth: 320, backgroundColor: theme.cardBg, borderRadius: 20, padding: 20, borderWidth: 1, borderColor: theme.border }}>
+            <Text style={{ fontSize: 16, fontWeight: "700", color: theme.text, marginBottom: 8 }}>{t.herdrCloseConfirmTitle}</Text>
+            <Text style={{ fontSize: 13, color: theme.muted, marginBottom: 20, lineHeight: 18 }}>{t.herdrCloseConfirmMessage}</Text>
+            <View style={{ flexDirection: "row", gap: 10 }}>
+              <TouchableOpacity
+                style={{ flex: 1, paddingVertical: 12, borderRadius: 12, backgroundColor: theme.error, alignItems: "center", justifyContent: "center" }}
+                onPress={() => void handleCloseHerdrSession()}
+                accessibilityRole="button"
+                accessibilityLabel={t.herdrCloseSession}
+              >
+                <Text style={{ color: "#fff", fontWeight: "700", fontSize: 13 }}>{t.herdrCloseSession}</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={{ flex: 1, paddingVertical: 12, borderRadius: 12, borderWidth: 1, borderColor: theme.border, alignItems: "center", justifyContent: "center" }}
+                onPress={() => setCloseConfirmOpen(false)}
+              >
+                <Text style={{ color: theme.muted, fontSize: 13, fontWeight: "600" }}>{t.cancel}</Text>
+              </TouchableOpacity>
             </View>
+            {closeMessage ? <Text style={{ color: theme.muted, fontSize: 11, marginTop: 10, textAlign: "center" }}>{closeMessage}</Text> : null}
           </View>
         </View>
-      ) : null}
+      </Modal>
       <ChatComposer
         actions={{
           send: async (text, imgs) => {

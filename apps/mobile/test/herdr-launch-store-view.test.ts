@@ -32,11 +32,16 @@ vi.mock("react-native", () => ({
 import { herdrCloseOutcome, isHerdrLaunchedSpace } from "../src/store";
 
 describe("herdr close outcome classification", () => {
-  it("reads the business outcome from the command result payload", () => {
+  it("reads the business outcome from unwrapped SDK results as well as raw frames", () => {
+    // SDK sendCommand 拆包后形式（常见）
+    expect(herdrCloseOutcome({ status: "closed", paneId: "w1:p1" })).toBe("closed");
+    expect(herdrCloseOutcome({ status: "close_timeout" })).toBe("close_timeout");
+    expect(herdrCloseOutcome({ status: "herdr_session_busy" })).toBe("herdr_session_busy");
+    expect(herdrCloseOutcome({ status: "herdr_session_not_owned" })).toBe("herdr_session_not_owned");
+
+    // 原始 command_result.result 包裹形式（防御兼顾）
     expect(herdrCloseOutcome({ ok: true, status: "observed", result: { status: "closed" } })).toBe("closed");
     expect(herdrCloseOutcome({ ok: true, status: "observed", result: { status: "close_timeout" } })).toBe("close_timeout");
-    expect(herdrCloseOutcome({ ok: true, status: "observed", result: { status: "herdr_session_busy" } })).toBe("herdr_session_busy");
-    expect(herdrCloseOutcome({ ok: true, status: "observed", result: { status: "herdr_session_not_owned" } })).toBe("herdr_session_not_owned");
   });
 
   it("classifies a missing or malformed payload as unknown instead of assuming closed", () => {

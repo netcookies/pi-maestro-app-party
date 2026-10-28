@@ -101,7 +101,8 @@ export default function HerdrNewSessionScreen() {
         else setLaunch({ kind: "unknown", message: t.herdrUnknown });
         return;
       }
-      setLaunch({ kind: "failed", message: t.herdrFailed });
+      // 非协议拒绝（如客户端超时/断连）：Host 可能仍在启动，属于结果未知，不得提供重试。
+      setLaunch({ kind: "unknown", message: t.herdrUnknown });
     }
   }, [cwd, label, launch.kind, isConnected, launchPiSession, runtime, t.herdrFailed, t.herdrUnknown]);
 

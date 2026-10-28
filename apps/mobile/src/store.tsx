@@ -110,9 +110,13 @@ export interface HostStoreValue {
 export type HerdrCloseOutcomeView = "closed" | "close_timeout" | "herdr_session_busy" | "herdr_session_not_owned" | "unknown";
 
 export function herdrCloseOutcome(result: unknown): HerdrCloseOutcomeView {
-  const status = (result as { result?: { status?: unknown } } | null | undefined)?.result?.status;
-  return status === "closed" || status === "close_timeout" || status === "herdr_session_busy" || status === "herdr_session_not_owned"
-    ? status
+  // 业务结果优先看 result.status（原始 command_result 包裹），其次看顶层 status（SDK sendCommand 拆包后）。
+  const record = result as { status?: unknown; result?: { status?: unknown } } | null | undefined;
+  const candidate = (typeof record?.result === "object" && record?.result !== null && typeof (record.result as { status?: unknown }).status === "string")
+    ? (record.result as { status: string }).status
+    : typeof record?.status === "string" ? record.status : undefined;
+  return candidate === "closed" || candidate === "close_timeout" || candidate === "herdr_session_busy" || candidate === "herdr_session_not_owned"
+    ? candidate
     : "unknown";
 }
 
@@ -755,13 +759,16 @@ export function HostStoreProvider({ children }: { children: React.ReactNode }) {
   const updateHerdrSettings = useCallback((patch: unknown) => getClient().sendCommand({ type: "update_herdr_settings", patch: patch as never }), [getClient]);
   const closeHerdrSession = useCallback((sessionId: string, target: SessionTargetIdentity) => getClient().sendCommand({ type: "close_herdr_session", sessionId, target }), [getClient]);
   const closeAllHerdrSessions = useCallback(() => getClient().sendCommand({ type: "close_all_herdr_sessions" }), [getClient]);
+  // 客户端超时必须长于 Host 的注册等待窗口（30s）：否则 Pi 注册稍慢时客户端先超时，
+  // 把一次实际成功的启动误报成可重试的「失败」，用户重试会产生重复 pane。
+  const HERDR_LAUNCH_COMMAND_TIMEOUT_MS = 45_000;
   const launchPiSession = useCallback((cwd: string, label?: string, options?: { runtime?: HerdrRuntime; resumeSessionRef?: string }) => getClient().sendCommand({
     type: "launch_pi_session",
     cwd,
     ...(label ? { label } : {}),
     ...(options?.runtime ? { runtime: options.runtime } : {}),
     ...(options?.resumeSessionRef ? { resumeSessionRef: options.resumeSessionRef } : {}),
-  }), [getClient]);
+  }, HERDR_LAUNCH_COMMAND_TIMEOUT_MS), [getClient]);
 
   const value = useMemo<HostStoreValue>(
     () => ({
