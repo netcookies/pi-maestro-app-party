@@ -303,9 +303,6 @@ export default function HostSessionsScreen({ active = true }: { active?: boolean
                 size="small"
                 style={styles.headerRefreshIndicator}
               />
-              <TouchableOpacity onPress={() => setSearchOpen((value) => !value)} accessibilityRole="button" accessibilityLabel={t.searchPlaceholder} style={styles.iconButton}>
-                <LineIcon name="search" size={18} color={theme.text} />
-              </TouchableOpacity>
               {supportsHerdrLaunch && herdrAvailable ? (
                 <TouchableOpacity
                   onPress={() => router.push("/herdr-new-session")}
@@ -316,6 +313,9 @@ export default function HostSessionsScreen({ active = true }: { active?: boolean
                   <Text style={{ color: theme.text, fontSize: 20, fontWeight: "600", lineHeight: 22 }}>+</Text>
                 </TouchableOpacity>
               ) : null}
+              <TouchableOpacity onPress={() => setSearchOpen((value) => !value)} accessibilityRole="button" accessibilityLabel={t.searchPlaceholder} style={styles.iconButton}>
+                <LineIcon name="search" size={18} color={theme.text} />
+              </TouchableOpacity>
             </View>
           </View>
           {searchOpen && (

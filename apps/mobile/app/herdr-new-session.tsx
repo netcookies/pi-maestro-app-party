@@ -11,6 +11,7 @@ import {
 import { router } from "expo-router";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { LineIcon } from "../src/components/LineIcon";
+import { CommandFailedError } from "@maestro-mobile/mobile-sdk";
 import { useHost } from "../src/store";
 import { useTheme } from "../src/theme";
 import { useI18n } from "../src/i18n";
@@ -92,7 +93,14 @@ export default function HerdrNewSessionScreen() {
       }
       // unknown：不自动重试，与历史 smoke 语义一致
       setLaunch({ kind: "unknown", message: t.herdrUnknown });
-    } catch {
+    } catch (cause) {
+      // Host 对非 ready 结果回 ok:false，SDK 会抛 CommandFailedError；
+      // 必须区分「确定失败（可重试）」与「结果未知（禁止重试）」，否则会把 unknown 误当成 failed。
+      if (cause instanceof CommandFailedError) {
+        if (cause.status === "failed") setLaunch({ kind: "failed", message: t.herdrFailed });
+        else setLaunch({ kind: "unknown", message: t.herdrUnknown });
+        return;
+      }
       setLaunch({ kind: "failed", message: t.herdrFailed });
     }
   }, [cwd, label, launch.kind, isConnected, launchPiSession, runtime, t.herdrFailed, t.herdrUnknown]);

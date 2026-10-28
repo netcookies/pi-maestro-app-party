@@ -407,7 +407,8 @@ export class MobileClient {
       clientVersion: this.productVersion,
       // Kept during the bridge period for old Hosts; never used by the new SDK to gate ready.
       releaseVersion: this.options.releaseVersion ?? this.productVersion,
-      capabilities: this.options.capabilities ?? ["session_control", "extension_ui", "monitor_read", "session_filter", "execution_projection_read", "plan", "plan_refine", "notification_control", "background_transport"],
+      // 客户端必须声明它实际会发起的命令族；Host 对新命令逐个做 capability 门禁，漏声明会得到 capability_mismatch。
+      capabilities: this.options.capabilities ?? ["session_control", "extension_ui", "monitor_read", "session_filter", "execution_projection_read", "plan", "plan_refine", "notification_control", "background_transport", "herdr_launch", "herdr_settings", "herdr_session_close"],
       requestId: `hello-${++this.helloSeq}`,
     };
     this.sendRaw(JSON.stringify(hello));
