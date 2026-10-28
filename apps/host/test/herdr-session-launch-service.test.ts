@@ -291,3 +291,60 @@ describe("HerdrSessionLaunchService runtime resolution", () => {
     }
   });
 });
+
+describe("HerdrSessionLaunchService.cleanupSpace race", () => {
+  it("waits for the Herdr agent state to catch up before closing the workspace", async () => {
+    // Broker 注册已消失，但 Herdr pane 短暂仍报存活 agent（竞态窗口）；cleanup 必须等它消失后再关。
+    const { projection, target, adapterStub, closeWorkspace } = closeHarness({ livePanes: [] });
+    const { store, file } = await tempStore();
+    try {
+      await store.recordLaunch(launchRecord(target));
+      let elapsed = 0;
+      let poll = 0;
+      const agentLag = [false, true, true, false]; // 注册消失后：第 1 次无 agent，之后两次竞态，最后消失
+      // closeHarness 的 listPanes 固定；这里用可变序列覆盖
+      (adapterStub as unknown as { listPanes: () => Promise<Array<{ paneId: string; workspaceId?: string; agent?: string; agentStatus?: string }>> }).listPanes = async () => {
+        const lag = agentLag[Math.min(poll, agentLag.length - 1)]!;
+        poll += 1;
+        return lag
+          ? [{ paneId: "w9:p1", workspaceId: "w9", agent: "pi", agentStatus: "working" }]
+          : [{ paneId: "w9:p1", workspaceId: "w9", agentStatus: "unknown" }];
+      };
+      const service = new HerdrSessionLaunchService(
+        projection,
+        adapterStub,
+        store,
+        () => elapsed,
+        async () => { elapsed += 400; projection.records.length = 0; },
+      );
+      await expect(service.close("c1", target)).resolves.toMatchObject({ status: "closed" });
+      expect(closeWorkspace).toHaveBeenCalledWith("w9");
+      expect((await store.listLaunches()).length).toBe(0);
+    } finally {
+      await rm(join(file, ".."), { recursive: true, force: true });
+    }
+  });
+
+  it("gives up cleanup after the bounded wait and still reports closed", async () => {
+    const { projection, target, adapterStub, closeWorkspace } = closeHarness({ livePanes: [] });
+    const { store, file } = await tempStore();
+    try {
+      await store.recordLaunch(launchRecord(target));
+      let elapsed = 0;
+      (adapterStub as unknown as { listPanes: () => Promise<Array<{ paneId: string; workspaceId?: string; agent?: string; agentStatus?: string }>> }).listPanes = async () => {
+        return [{ paneId: "w9:p1", workspaceId: "w9", agent: "pi", agentStatus: "working" }];
+      };
+      const service = new HerdrSessionLaunchService(
+        projection,
+        adapterStub,
+        store,
+        () => elapsed,
+        async () => { elapsed += 6_000; projection.records.length = 0; },
+      );
+      await expect(service.close("c1", target)).resolves.toMatchObject({ status: "closed" });
+      expect(closeWorkspace).not.toHaveBeenCalled();
+    } finally {
+      await rm(join(file, ".."), { recursive: true, force: true });
+    }
+  });
+});

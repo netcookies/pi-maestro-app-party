@@ -42,6 +42,9 @@ const PENDING_TTL_MS = 5 * 60_000;
 const REGISTRATION_TIMEOUT_MS = 30_000;
 const CLOSE_TIMEOUT_MS = 10_000;
 const POLL_INTERVAL_MS = 100;
+/** Broker 注册消失与 Herdr agent 状态更新之间的竞态窗口；实测 Pi 退出后约 1-2s 内 agent 字段消失 */
+const SPACE_CLEANUP_WAIT_MS = 5_000;
+const SPACE_CLEANUP_POLL_MS = 300;
 
 export class HerdrSessionLaunchService {
   private readonly pending = new Map<string, PendingLaunch>();
@@ -135,7 +138,11 @@ export class HerdrSessionLaunchService {
     return match !== undefined && (match as { runtimeStatus?: string }).runtimeStatus === "running";
   }
 
-  /** 会话退出后清理空 space：按「workspace 内是否还有存活 agent」判断，而不是按 pane 是否存在（Pi 退出后 shell pane 仍残留）。 */
+  /**
+   * 会话退出后清理空 space：按「workspace 内是否还有存活 agent」判断。
+   * Broker 注册消失与 Herdr agent 状态更新之间存在竞态（Pi 刚退出时 pane 可能仍报 agent），
+   * 所以这里有界等待 agent 消失后再关 workspace；超时则跳过，留给下次对账或手动处理。
+   */
   private async cleanupSpace(record: HerdrLaunchedSpaceRecord): Promise<void> {
     if (!this.store || !record.workspaceId) return;
     let data: { settings: { autoCleanupSpace: boolean } };
@@ -146,9 +153,15 @@ export class HerdrSessionLaunchService {
     }
     if (!data.settings.autoCleanupSpace) return;
     try {
-      const live = await this.adapter.listPanes();
-      if (live.some((pane) => pane.workspaceId === record.workspaceId && HerdrAdapter.hasLiveAgent(pane))) return;
-      await this.adapter.closeWorkspace(record.workspaceId);
+      const deadline = this.now() + SPACE_CLEANUP_WAIT_MS;
+      while (this.now() < deadline) {
+        const live = await this.adapter.listPanes();
+        if (!live.some((pane) => pane.workspaceId === record.workspaceId && HerdrAdapter.hasLiveAgent(pane))) {
+          await this.adapter.closeWorkspace(record.workspaceId);
+          return;
+        }
+        await this.sleep(SPACE_CLEANUP_POLL_MS);
+      }
     } catch {
       // 清理失败不阻塞关闭结果；空间留给下次对账或手动处理。
     }
