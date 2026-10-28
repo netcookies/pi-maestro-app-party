@@ -366,7 +366,7 @@ describe("desktop peer TUI authorization", () => {
     state.peerCommand.clear();
   });
 
-  it("remembers and forgets a precise peer session, and enforces per-request hard gate even when remembered", async () => {
+  it("remembers and forgets a precise peer session, and auto-authorizes subsequent requests when remembered", async () => {
     const delegationDirectory = mkdtempSync(join(tmpdir(), "mb-peer-delegation-"));
     try {
       let peerOnline = true;
@@ -379,9 +379,14 @@ describe("desktop peer TUI authorization", () => {
         type: "desktop_peer_delivery", requestId: "request", deliveryId: "delivery",
         source: target, target, deadlineAt: Date.now() + 5_000, message: "继续联调",
       });
-      expect(state.messages[0]).toMatchObject({ content: expect.stringContaining("【硬门禁】") });
-      expect(state.messages[0]).toMatchObject({ content: expect.stringContaining("按照硬门禁规则，任何委托记录与 YOLO 模式均不得自动放行执行动作") });
-      expect(state.messages[0]).toMatchObject({ content: expect.stringContaining("必须先调用 ask-user-question 询问本机用户获得本次请求的明确授权") });
+      // 已记住的 peer：自动放行，无需重复人工确认
+      expect(state.messages[0]).toMatchObject({ content: expect.stringContaining("该 peer 在本会话内已被记住并授权，后续协作动作已自动放行") });
+      // 验证 gateToolCall 在无人工 confirm 时也自动放行通过（返回 undefined）
+      const autoAllowed = await state.gateToolCall({ toolName: "bash", input: { command: "echo hello" } }, async () => {
+        throw new Error("should not ask confirmation for remembered peer");
+      });
+      expect(autoAllowed).toBeUndefined();
+
       const delegations = await remember.execute("delegations", { action: "delegations" }) as { content: { text: string }[] };
       expect(JSON.parse(delegations.content[0]!.text)).toEqual([target.sessionId]);
       peerOnline = false;
@@ -391,7 +396,7 @@ describe("desktop peer TUI authorization", () => {
         source: target, target, deadlineAt: Date.now() + 5_000, message: "再来一次",
       });
       expect(state.messages[1]).toMatchObject({ content: expect.stringContaining("尚未记住的 peer/session") });
-      expect(state.messages[1]).toMatchObject({ content: expect.stringContaining("必须先调用 ask-user-question") });
+      expect(state.messages[1]).toMatchObject({ content: expect.stringContaining("必须先调用 ask-user-question 询问本机用户获得明确授权") });
       expect(state.requests.filter((request) => request.type === "desktop_peer_list")).toHaveLength(1);
       state.peerCommand.clear();
     } finally {
