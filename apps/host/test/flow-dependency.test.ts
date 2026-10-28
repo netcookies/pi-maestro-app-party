@@ -162,6 +162,7 @@ describe("actual /maestro-mobile command warning ordering", () => {
       { value: "stop ", label: "stop" },
       { value: "qr ", label: "qr" },
       { value: "notify ", label: "notify" },
+      { value: "manager-fav ", label: "manager-fav" },
     ]);
     expect(cmd.complete("sta")).toEqual([{ value: "status ", label: "status" }, { value: "start ", label: "start" }]);
     expect(cmd.complete("status --c")).toEqual([{ value: "status --current ", label: "--current", description: "显示当前 Pi 会话状态" }]);
