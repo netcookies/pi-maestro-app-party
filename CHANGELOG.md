@@ -2,6 +2,37 @@
 
 本文件记录 Maestro Mobile 的显著变更。格式基于 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)。
 
+## [0.17.0] — 2026-10-28
+
+### 测试
+
+- 补齐 /maestro-mobile manager-fav 命令自动补全断言
+- 固定 runtime 探测与实际执行的四种组合一致性
+
+### 新增
+
+- 恢复记住后本会话内后续转发自动放行
+- 会话列表增加新建入口并移除旧启动行
+- 会话页接入 Model 药丸、头部结束会话与历史恢复
+- 拆分通知卡并新增 Herdr 会话启动卡
+- 新增常用工作目录与新建 Herdr 会话滑入页
+- store 接入 Herdr 设置/关闭/运行时透传
+- 接线 Herdr 设置/关闭命令面与重启对账
+- 新增 TUI manager-fav 弹窗维护常用工作目录
+- Herdr 启动配置持久化与运行时/恢复/关闭能力
+- 补齐 Herdr 会话启动与通知卡中英文案
+- 协议层新增运行时选择、会话恢复引用、设置与关闭命令
+- 增加经 Herdr 启动独立 Pi 会话
+
+### 修复
+
+- 会话页关闭弹窗居中与拆包后结果状态优先
+- 声明 Herdr capability 并区分 unknown/failed 启动结果
+- 清理空 space 时等待 Herdr agent 状态收敛
+- 启动时使用 HERDR_PI_BOLT_BIN 解析出的绝对路径
+- 修复评审发现的运行时回显、归属门禁与异步校验缺陷
+- 按存活 agent 判定 Herdr space 清理与登记对账
+
 ## [0.16.6] — 2026-10-27
 
 ### 修复
