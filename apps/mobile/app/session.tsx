@@ -18,7 +18,7 @@ import type { PlanEntry } from "../src/plan-queue";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { ExtensionUiDialog } from "../src/components/ExtensionUiDialog";
 import { AskWizardDialog, type AskAnswer } from "../src/components/AskWizardDialog";
-import { shouldClearRefiningPlan } from "../src/plan-refine-cleanup";
+import { isRefiningPlanVisible, shouldClearRefiningPlan } from "../src/plan-refine-cleanup";
 import { PlanSurface } from "../src/components/PlanSurface";
 import { selectActiveAskWizard, buildAskWizardPayload } from "../src/ask-wizard";
 import { setActiveViewingSession } from "../src/notifications";
@@ -503,11 +503,12 @@ export default function SessionScreen() {
     && sessionTargetKey(entry.target) === selectedTargetKey) : undefined,
   [id, interactionReady, selectedTargetKey, state.planRequests]);
 
-  const isRefiningPlanMatching = Boolean(
-    selectedTargetKey
-    && refiningPlan?.target
-    && sessionTargetKey(refiningPlan.target) === selectedTargetKey,
-  );
+  const isRefiningPlanMatching = isRefiningPlanVisible({
+    selectedTargetKey,
+    refiningPlanTargetKey: refiningPlan?.target ? sessionTargetKey(refiningPlan.target) : undefined,
+    refiningPlanRequestId: refiningPlan?.request.requestId,
+    refineState,
+  });
   const visiblePlan = activePlan ?? (isRefiningPlanMatching ? refiningPlan : undefined);
   const isSameRefineTarget = Boolean(
     refineTarget && selectedTargetKey && sessionTargetKey(refineTarget) === selectedTargetKey,

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { PlanRefineState } from "@maestro-mobile/mobile-sdk";
-import { shouldClearRefiningPlan } from "../src/plan-refine-cleanup";
+import { isRefiningPlanVisible, shouldClearRefiningPlan } from "../src/plan-refine-cleanup";
 
 function live(status: string, revision = 1, planRequestId = "plan-1"): PlanRefineState {
   return {
@@ -140,5 +140,31 @@ describe("shouldClearRefiningPlan", () => {
       refiningPlanRevision: 1,
       hasPendingPlanRequest: true,
     })).toBe(false);
+  });
+});
+
+describe("isRefiningPlanVisible", () => {
+  const base = {
+    selectedTargetKey: target,
+    refiningPlanTargetKey: target,
+    refiningPlanRequestId: "plan-1",
+  };
+
+  it("does not render before the exact target resolves", () => {
+    expect(isRefiningPlanVisible({ ...base, selectedTargetKey: undefined, refineState: live("running") })).toBe(false);
+  });
+
+  it("does not render a staged plan from another exact target", () => {
+    expect(isRefiningPlanVisible({ ...base, refiningPlanTargetKey: otherTarget, refineState: live("running") })).toBe(false);
+  });
+
+  it("renders for the matching target and request", () => {
+    expect(isRefiningPlanVisible({ ...base, refineState: live("running") })).toBe(true);
+    expect(isRefiningPlanVisible({ ...base, refineState: { kind: "idle" } })).toBe(true);
+  });
+
+  it("hides instead of flashing when another request owns the live refine", () => {
+    // RV-004：target 刚就绪但 refine 属于别的请求时，不得先渲染旧 plan
+    expect(isRefiningPlanVisible({ ...base, refineState: live("running", 1, "other-request") })).toBe(false);
   });
 });

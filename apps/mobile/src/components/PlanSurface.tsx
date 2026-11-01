@@ -137,7 +137,10 @@ export function PlanSurface({
 
   const liveRefineCandidate = refineState?.kind === "live"
     && refineTarget?.sessionId === target.sessionId
+    && refineTarget?.endpointId === target.endpointId
     && refineTarget?.normalizedCwd === target.normalizedCwd
+    && refineTarget?.processGeneration === target.processGeneration
+    && refineState.snapshot.planRequestId === request.requestId
     ? refineState : undefined;
   const liveRefine = liveRefineCandidate?.snapshot.revision === request.revision ? liveRefineCandidate : undefined;
   // When Desktop opens Review & Refine, the remote mobile app is the mirror of that

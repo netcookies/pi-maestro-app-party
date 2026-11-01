@@ -66,3 +66,22 @@ export function shouldClearRefiningPlan(input: RefineCleanupInput): boolean {
     && (input.refiningPlanRevision === undefined || live.snapshot.revision === input.refiningPlanRevision);
   return !isMatchingRefineLive;
 }
+
+export interface RefiningPlanVisibilityInput {
+  readonly selectedTargetKey: string | undefined;
+  readonly refiningPlanTargetKey: string | undefined;
+  readonly refiningPlanRequestId: string | undefined;
+  readonly refineState: PlanRefineState | undefined;
+}
+
+/**
+ * 本地暂存 plan 是否允许渲染：必须已选定 exact target 且与之完全匹配，并且当前 live refine（若存在）
+ * 必须属于同一个 plan request。后者避免 target 刚就绪时先用别的请求的 refine 快照渲染一帧。
+ */
+export function isRefiningPlanVisible(input: RefiningPlanVisibilityInput): boolean {
+  if (!input.selectedTargetKey || !input.refiningPlanTargetKey) return false;
+  if (input.refiningPlanTargetKey !== input.selectedTargetKey) return false;
+  const live = input.refineState?.kind === "live" ? input.refineState : undefined;
+  if (live && input.refiningPlanRequestId && live.snapshot.planRequestId !== input.refiningPlanRequestId) return false;
+  return true;
+}
