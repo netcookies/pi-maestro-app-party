@@ -14,6 +14,7 @@ import type {
   MobilePlanRefineAction,
   MobilePlanRefineRole,
 } from "@maestro-mobile/mobile-sdk/protocol";
+import { isMobilePlanRefineTerminalStatus } from "@maestro-mobile/mobile-sdk/protocol";
 import type { PlanRefineState } from "@maestro-mobile/mobile-sdk";
 import { useTheme } from "../theme";
 import { useI18n, type I18nDictionary } from "../i18n";
@@ -143,9 +144,7 @@ export function PlanSurface({
   // overlay. It must open automatically as long as the snapshot is live, without
   // requiring the phone to have pressed the button first.
   const isRefineActive = liveRefine !== undefined
-    && liveRefine.snapshot.status !== "discarded"
-    && liveRefine.snapshot.status !== "applied"
-    && liveRefine.snapshot.status !== "cancelled";
+    && !isMobilePlanRefineTerminalStatus(liveRefine.snapshot.status);
   const isRefineShowing = nativeRefineOpen || isRefineActive;
   const latestTurn = liveRefine?.turns.at(-1);
   const isRunning = liveRefine?.snapshot.status === "running";

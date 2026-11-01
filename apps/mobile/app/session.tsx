@@ -18,6 +18,7 @@ import type { PlanEntry } from "../src/plan-queue";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { ExtensionUiDialog } from "../src/components/ExtensionUiDialog";
 import { AskWizardDialog, type AskAnswer } from "../src/components/AskWizardDialog";
+import { shouldClearRefiningPlan } from "../src/plan-refine-cleanup";
 import { PlanSurface } from "../src/components/PlanSurface";
 import { selectActiveAskWizard, buildAskWizardPayload } from "../src/ask-wizard";
 import { setActiveViewingSession } from "../src/notifications";
@@ -503,42 +504,34 @@ export default function SessionScreen() {
   [id, interactionReady, selectedTargetKey, state.planRequests]);
 
   const visiblePlan = activePlan ?? refiningPlan;
+  const isSameRefineTarget = Boolean(
+    refineTarget && selectedTargetKey && sessionTargetKey(refineTarget) === selectedTargetKey,
+  );
   const isLiveRefineMatching = Boolean(
     refineState?.kind === "live"
-    && refineTarget?.sessionId === id
+    && isSameRefineTarget
     && (!visiblePlan || refineState.snapshot.revision === visiblePlan.request.revision),
   );
   useEffect(() => {
     if (activePlan && refiningPlan && activePlan.request.requestId !== refiningPlan.request.requestId) setRefiningPlan(undefined);
   }, [activePlan, refiningPlan]);
 
-  // refine 进入 terminal 终态（applied / discarded / cancelled 等）时，清理本地暂存的 refiningPlan，
-  // 避免弹窗在 apply 之后因为 visiblePlan 残留而永远挂起。
-  useEffect(() => {
-    if (!refineState || refineState.kind !== "live") return;
-    const status = refineState.snapshot.status;
-    const isTerminalStatus = status === "applied" || status === "discarded" || status === "cancelled" || status === "failed";
-    if (isTerminalStatus && refineTarget?.sessionId === id) {
-      setRefiningPlan(undefined);
-    }
-  }, [refineState, refineTarget, id]);
-
-  // 若当前会话不再有 pending plan（例如收到 desktop_plan_cleared 被移出队列），同样清理 refiningPlan。
+  // refine 终态或 plan 移出队列时清理本地暂存的 refiningPlan，避免弹窗在 apply 后永远挂起。
   useEffect(() => {
     if (!refiningPlan) return;
-    const stillPending = state.planRequests.some((entry) =>
+    const hasPending = state.planRequests.some((entry) =>
       entry.sessionId === id && entry.status === "pending" && entry.request.requestId === refiningPlan.request.requestId);
-    const refineLive = refineState?.kind === "live"
-      && refineTarget?.sessionId === id
-      && refineState.snapshot.status !== "applied"
-      && refineState.snapshot.status !== "discarded"
-      && refineState.snapshot.status !== "cancelled"
-      && refineState.snapshot.status !== "failed"
-      && refineState.snapshot.revision === refiningPlan.request.revision;
-    if (!stillPending && !refineLive) {
+    const refineTargetKey = refineTarget ? sessionTargetKey(refineTarget) : undefined;
+    if (shouldClearRefiningPlan({
+      refineState,
+      refineTargetKey,
+      selectedTargetKey,
+      refiningPlanRevision: refiningPlan.request.revision,
+      hasPendingPlanRequest: hasPending,
+    })) {
       setRefiningPlan(undefined);
     }
-  }, [state.planRequests, refiningPlan, id, refineState, refineTarget]);
+  }, [state.planRequests, refiningPlan, id, refineState, refineTarget, selectedTargetKey]);
 
   const control = session?.presentation?.control;
   const canPrompt = control?.canPrompt === true;

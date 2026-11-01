@@ -129,18 +129,20 @@ interface TodoContentProjection {
   description?: string;
 }
 
-let todoContentCache: { key: string; contents: Map<string, TodoContentProjection> } | undefined;
+// Keyed by the entries array identity so two sessions in the same Host process can
+// never share a projection, even when their entry counts and ids happen to match.
+const todoContentCache = new WeakMap<readonly unknown[], { key: string; contents: Map<string, TodoContentProjection> }>();
 
 /**
  * Flow appends `todo-content` deltas (one or a few `contents` keys per entry), so
  * every entry must be folded forward to recover a task's summary.
- * Memoized by entry count plus the newest entry id, which is unique per append.
  */
 function todoContentProjection(entries: readonly unknown[]): Map<string, TodoContentProjection> {
   const last = entries[entries.length - 1];
   const lastId = isRecord(last) && typeof last.id === "string" ? last.id : "";
   const key = `${entries.length}:${lastId}`;
-  if (todoContentCache?.key === key) return todoContentCache.contents;
+  const cached = todoContentCache.get(entries);
+  if (cached?.key === key) return cached.contents;
   const contents = new Map<string, TodoContentProjection>();
   for (const entry of entries) {
     if (!isRecord(entry) || entry.type !== "custom" || entry.customType !== "todo-content") continue;
@@ -158,7 +160,7 @@ function todoContentProjection(entries: readonly unknown[]): Map<string, TodoCon
       });
     }
   }
-  todoContentCache = { key, contents };
+  todoContentCache.set(entries, { key, contents });
   return contents;
 }
 

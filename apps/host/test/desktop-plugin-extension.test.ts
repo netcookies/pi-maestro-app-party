@@ -466,6 +466,30 @@ describe("Desktop Plugin extension (TUI side)", () => {
       { id: "b", subject: "Task B", status: "completed", updatedAt: 10, completedAt: 10, summary: "shipped", description: "second description", durationMs: 30000 },
       { id: "c", subject: "Task C", status: "pending", updatedAt: 30, durationMs: 0 },
     ]);
+
+    // An unrelated session with the same entry count and lastId must never adopt the cached content.
+    fake.setSessionEntries([
+      contentEntry("content-1", { refA: { description: "session-two description" } }),
+      contentEntry("content-2", { refA: { summary: "session-two summary" } }),
+      contentEntry("content-3", {}),
+      {
+        type: "custom",
+        customType: "todo-state",
+        data: {
+          version: 8,
+          tasks: {
+            a: { id: "a", subject: "Task A2", status: "completed", updatedAt: 5, contentRef: "refA" },
+          },
+        },
+      },
+    ]);
+    fake.emit("turn_end", { type: "turn_end" });
+    await waitFor(() => registry.list()[0]?.executionSummary?.todos[0]?.subject === "Task A2");
+    expect(registry.list()[0].executionSummary?.todos[0]).toMatchObject({
+      subject: "Task A2",
+      summary: "session-two summary",
+      description: "session-two description",
+    });
   });
 
   it("projects the latest live Goal and hides finished or cleared Goals", async () => {
