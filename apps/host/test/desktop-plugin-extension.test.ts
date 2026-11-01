@@ -429,7 +429,43 @@ describe("Desktop Plugin extension (TUI side)", () => {
     createDesktopPluginExtension({ socketPath: join(dir, "plugin.sock"), secret: "test-secret" })(fake.pi as never);
     fake.emit("session_start", { type: "session_start", reason: "startup" });
     await waitFor(() => registry.list()[0]?.executionSummary?.todos[0]?.id === "todo-root");
-    expect(registry.list()[0]?.executionSummary?.todos).toEqual([{ id: "todo-root", subject: "Root task", status: "pending", updatedAt: 10, assigneeLabel: "root" }]);
+    expect(registry.list()[0]?.executionSummary?.todos).toEqual([{ id: "todo-root", subject: "Root task", status: "pending", updatedAt: 10, assigneeLabel: "root", durationMs: 0 }]);
+  });
+
+  it("folds every todo-content entry into summary and active duration", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "maestro-ext-todo-content-"));
+    const registry = new DesktopPluginRegistry();
+    server = new DesktopPluginIpcServer({ socketPath: join(dir, "plugin.sock"), secret: "test-secret", registry, supportedEvents: ["execution_summary"] });
+    await server.start();
+    const contentEntry = (id: string, contents: Record<string, unknown>) => ({ type: "custom", id, customType: "todo-content", data: { version: 1, contents } });
+    const fake = fakePi({
+      models: [],
+      entries: [
+        contentEntry("content-1", { refA: { description: "first description" }, refB: { description: "second description" } }),
+        contentEntry("content-2", { refA: { summary: "done and verified" } }),
+        contentEntry("content-3", { refB: { summary: "shipped" } }),
+        {
+          type: "custom",
+          customType: "todo-state",
+          data: {
+            version: 8,
+            tasks: {
+              a: { id: "a", subject: "Task A", status: "completed", updatedAt: 20, completedAt: 20, activeDurationMs: 90000, contentRef: "refA" },
+              b: { id: "b", subject: "Task B", status: "completed", updatedAt: 10, completedAt: 10, activeDurationMs: 30000, contentRef: "refB" },
+              c: { id: "c", subject: "Task C", status: "pending", updatedAt: 30 },
+            },
+          },
+        },
+      ],
+    });
+    createDesktopPluginExtension({ socketPath: join(dir, "plugin.sock"), secret: "test-secret" })(fake.pi as never);
+    fake.emit("session_start", { type: "session_start", reason: "startup" });
+    await waitFor(() => registry.list()[0]?.executionSummary?.todos.length === 3);
+    expect(registry.list()[0].executionSummary?.todos).toEqual([
+      { id: "a", subject: "Task A", status: "completed", updatedAt: 20, completedAt: 20, summary: "done and verified", description: "first description", durationMs: 90000 },
+      { id: "b", subject: "Task B", status: "completed", updatedAt: 10, completedAt: 10, summary: "shipped", description: "second description", durationMs: 30000 },
+      { id: "c", subject: "Task C", status: "pending", updatedAt: 30, durationMs: 0 },
+    ]);
   });
 
   it("projects the latest live Goal and hides finished or cleared Goals", async () => {

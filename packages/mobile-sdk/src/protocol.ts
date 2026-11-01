@@ -572,6 +572,14 @@ export interface MonitorTodoSummary {
   status: string;
   assigneeLabel?: string;
   updatedAt: number;
+  /** Completion timestamp from Flow, when the task already finished. */
+  completedAt?: number;
+  /** Completion summary/evidence text, truncated by the producer to 512 chars. */
+  summary?: string;
+  /** Task description, truncated by the producer to 512 chars. */
+  description?: string;
+  /** Active working time in milliseconds; producers may default it to 0. */
+  durationMs?: number;
 }
 
 export interface MonitorAttentionSummary {
@@ -1281,8 +1289,16 @@ function isSessionLoopSummary(value: unknown): value is SessionLoopSummary {
 }
 
 function isMonitorTodoSummary(value: unknown): value is MonitorTodoSummary {
-  return isRecord(value) && isString(value.id) && isString(value.subject) && isString(value.status)
-    && isFiniteNumber(value.updatedAt) && (value.assigneeLabel === undefined || isString(value.assigneeLabel));
+  if (!isRecord(value) || !isString(value.id) || !isString(value.subject) || !isString(value.status)
+    || !isFiniteNumber(value.updatedAt)) return false;
+  if (value.assigneeLabel !== undefined && !isString(value.assigneeLabel)) return false;
+  // Optional Todo extras degrade per field: an older or newer producer must not
+  // invalidate the whole execution summary over a summary/duration mismatch.
+  dropInvalidOptional(value, "summary", isString);
+  dropInvalidOptional(value, "description", isString);
+  dropInvalidOptional(value, "completedAt", isFiniteNumber);
+  dropInvalidOptional(value, "durationMs", isNonNegativeSafeInteger);
+  return true;
 }
 
 function isTeammateAgentState(value: unknown): value is TeammateAgentState {

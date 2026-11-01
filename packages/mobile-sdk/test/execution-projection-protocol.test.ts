@@ -81,3 +81,21 @@ describe("SessionExecutionSummary loop projection", () => {
     expect((event.summary as Record<string, unknown>).loop).toEqual([]);
   });
 });
+
+describe("MonitorTodoSummary optional extras", () => {
+  const todo = { id: "1", subject: "Task", status: "completed", updatedAt: 10, summary: "done", description: "why", completedAt: 10, durationMs: 90000 };
+
+  it("keeps a well-formed Todo extra set", () => {
+    const event = executionEvent({ todos: [todo] });
+    expect(isHostEvent(event)).toBe(true);
+    expect((event.summary as Record<string, unknown>).todos).toEqual([todo]);
+  });
+
+  it("drops only the invalid Todo extras", () => {
+    const event = executionEvent({ todos: [{ ...todo, summary: 5, description: null, completedAt: "yesterday", durationMs: -1 }] });
+    expect(isHostEvent(event)).toBe(true);
+    expect((event.summary as Record<string, unknown>).todos).toEqual([
+      { id: "1", subject: "Task", status: "completed", updatedAt: 10 },
+    ]);
+  });
+});

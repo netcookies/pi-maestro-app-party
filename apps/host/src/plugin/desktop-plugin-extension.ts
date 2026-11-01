@@ -124,6 +124,44 @@ function boundedText(value: unknown, maxLength = 512): string | undefined {
   return typeof value === "string" && value.length > 0 && value.length <= maxLength ? value : undefined;
 }
 
+interface TodoContentProjection {
+  summary?: string;
+  description?: string;
+}
+
+let todoContentCache: { key: string; contents: Map<string, TodoContentProjection> } | undefined;
+
+/**
+ * Flow appends `todo-content` deltas (one or a few `contents` keys per entry), so
+ * every entry must be folded forward to recover a task's summary.
+ * Memoized by entry count plus the newest entry id, which is unique per append.
+ */
+function todoContentProjection(entries: readonly unknown[]): Map<string, TodoContentProjection> {
+  const last = entries[entries.length - 1];
+  const lastId = isRecord(last) && typeof last.id === "string" ? last.id : "";
+  const key = `${entries.length}:${lastId}`;
+  if (todoContentCache?.key === key) return todoContentCache.contents;
+  const contents = new Map<string, TodoContentProjection>();
+  for (const entry of entries) {
+    if (!isRecord(entry) || entry.type !== "custom" || entry.customType !== "todo-content") continue;
+    const data = entry.data;
+    if (!isRecord(data) || !isRecord(data.contents)) continue;
+    for (const [contentRef, value] of Object.entries(data.contents)) {
+      if (!isRecord(value)) continue;
+      const summary = typeof value.summary === "string" ? value.summary.slice(0, 512) : undefined;
+      const description = typeof value.description === "string" ? value.description.slice(0, 512) : undefined;
+      if (!summary && !description) continue;
+      const previous = contents.get(contentRef);
+      contents.set(contentRef, {
+        ...(summary ?? previous?.summary ? { summary: summary ?? previous?.summary } : {}),
+        ...(description ?? previous?.description ? { description: description ?? previous?.description } : {}),
+      });
+    }
+  }
+  todoContentCache = { key, contents };
+  return contents;
+}
+
 function todoSnapshotFromSessionEntries(entries: readonly unknown[]): MonitorTodoSummary[] | undefined {
   let entry: Record<string, unknown> | undefined;
   for (let index = entries.length - 1; index >= 0; index -= 1) {
@@ -136,6 +174,7 @@ function todoSnapshotFromSessionEntries(entries: readonly unknown[]): MonitorTod
   if (!entry) return [];
   const data = entry.data;
   if (!isRecord(data) || !isRecord(data.tasks)) return undefined;
+  const contents = todoContentProjection(entries);
   const todos: MonitorTodoSummary[] = [];
   const ids = new Set<string>();
   for (const [entryId, value] of Object.entries(data.tasks)) {
@@ -148,7 +187,20 @@ function todoSnapshotFromSessionEntries(entries: readonly unknown[]): MonitorTod
     if (!id || !subject || !status || typeof updatedAt !== "number" || !Number.isFinite(updatedAt) || ids.has(id)) return undefined;
     if (isRecord(value.assignee) && value.assignee.label !== undefined && !assignee) return undefined;
     ids.add(id);
-    todos.push({ id, subject, status, updatedAt, ...(assignee ? { assigneeLabel: assignee } : {}) });
+    const contentRef = boundedText(value.contentRef, 128);
+    const content = contentRef ? contents.get(contentRef) : undefined;
+    const completedAt = nonNegativeInteger(value.completedAt);
+    todos.push({
+      id,
+      subject,
+      status,
+      updatedAt,
+      ...(assignee ? { assigneeLabel: assignee } : {}),
+      ...(completedAt !== undefined ? { completedAt } : {}),
+      ...(content?.summary ? { summary: content.summary } : {}),
+      ...(content?.description ? { description: content.description } : {}),
+      durationMs: nonNegativeInteger(value.activeDurationMs) ?? 0,
+    });
     if (todos.length >= 32) break;
   }
   return todos;
@@ -275,7 +327,21 @@ function flowTodoSnapshot(entries?: readonly unknown[]): MonitorTodoSummary[] | 
       const assigneeLabel = data.assigneeLabel === undefined ? undefined : boundedText(data.assigneeLabel);
       if (data.assigneeLabel !== undefined && !assigneeLabel) return undefined;
       ids.add(id);
-      todos.push({ id, subject, status, updatedAt: data.updatedAt, ...(assigneeLabel ? { assigneeLabel } : {}) });
+      const summary = typeof data.summary === "string" ? data.summary.slice(0, 512) : undefined;
+      const description = typeof data.description === "string" ? data.description.slice(0, 512) : undefined;
+      const completedAt = nonNegativeInteger(data.completedAt);
+      const durationMs = nonNegativeInteger(data.durationMs);
+      todos.push({
+        id,
+        subject,
+        status,
+        updatedAt: data.updatedAt,
+        ...(assigneeLabel ? { assigneeLabel } : {}),
+        ...(completedAt !== undefined ? { completedAt } : {}),
+        ...(summary ? { summary } : {}),
+        ...(description ? { description } : {}),
+        ...(durationMs !== undefined ? { durationMs } : {}),
+      });
       if (todos.length >= 32) break;
     }
     return todos;

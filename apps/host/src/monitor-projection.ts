@@ -72,6 +72,10 @@ function projectTodos(values: unknown): MonitorTodoSummary[] {
       status: d.status,
       ...(typeof d.assigneeLabel === "string" ? { assigneeLabel: d.assigneeLabel.slice(0, 128) } : {}),
       updatedAt: typeof d.updatedAt === "number" && Number.isFinite(d.updatedAt) ? d.updatedAt : 0,
+      ...(typeof d.completedAt === "number" && Number.isFinite(d.completedAt) ? { completedAt: d.completedAt } : {}),
+      ...(typeof d.summary === "string" && d.summary ? { summary: d.summary.slice(0, 512) } : {}),
+      ...(typeof d.description === "string" && d.description ? { description: d.description.slice(0, 512) } : {}),
+      ...(typeof d.durationMs === "number" && Number.isFinite(d.durationMs) && d.durationMs >= 0 ? { durationMs: d.durationMs } : {}),
     }];
   });
 }

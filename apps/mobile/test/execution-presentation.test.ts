@@ -19,6 +19,7 @@ import {
   isExecutionItemDone,
   loopChipLabel,
   loopTone,
+  todoDurationBars,
 } from "../src/execution-presentation";
 
 const sampleSummary: SessionExecutionSummary = {
@@ -172,6 +173,39 @@ describe("execution-presentation", () => {
     expect(goalBudgetProgress({ text: "x", status: "active", tokenBudget: 100000, tokensUsed: 45000 })).toBeCloseTo(0.45);
     expect(goalBudgetProgress({ text: "x", status: "active", tokenBudget: 100000, tokensUsed: 250000 })).toBe(1);
     expect(goalBudgetProgress({ text: "x", status: "active", tokenBudget: 100000 })).toBe(0);
+  });
+
+  it("normalizes Todo duration bars for the most recently completed tasks", () => {
+    expect(todoDurationBars([])).toEqual([]);
+    expect(todoDurationBars([{ id: "1", subject: "x", status: "pending", updatedAt: 5, durationMs: 90000 }])).toEqual([]);
+    expect(todoDurationBars([{ id: "1", subject: "x", status: "completed", updatedAt: 5 }])).toEqual([]);
+
+    const bars = todoDurationBars([
+      { id: "1", subject: "old", status: "completed", updatedAt: 10, completedAt: 10, durationMs: 30000 },
+      { id: "2", subject: "new", status: "done", updatedAt: 20, completedAt: 20, durationMs: 90000 },
+      { id: "3", subject: "tiny", status: "completed", updatedAt: 30, completedAt: 30, durationMs: 1000 },
+    ]);
+    expect(bars.map((bar) => bar.id)).toEqual(["#3", "#2", "#1"]);
+    expect(bars[0].height).toBe(2);
+    expect(bars[1].height).toBe(32);
+    expect(bars[2].height).toBe(11);
+    expect(bars.map((bar) => bar.durationMs)).toEqual([1000, 90000, 30000]);
+  });
+
+  it("caps the duration strip and stays stable regardless of list expansion", () => {
+    const todos = Array.from({ length: 8 }, (_, index) => ({
+      id: String(index + 1),
+      subject: `task ${index + 1}`,
+      status: "completed",
+      updatedAt: index + 1,
+      completedAt: index + 1,
+      durationMs: (index + 1) * 1000,
+    }));
+    const bars = todoDurationBars(todos);
+    expect(bars).toHaveLength(5);
+    expect(bars.map((bar) => bar.id)).toEqual(["#8", "#7", "#6", "#5", "#4"]);
+    expect(Math.max(...bars.map((bar) => bar.height))).toBe(32);
+    expect(todoDurationBars(todos)).toEqual(bars);
   });
 
   it("formats goal tokens and elapsed time", () => {

@@ -331,6 +331,8 @@ export interface I18nDictionary {
   executionLoopCount: string;
   executionLoopRuns: string;
   executionLoopInterval: string;
+  executionTodoDuration: string;
+  executionTodoSummaryToggle: string;
   executionStatusLabels: Record<string, string>;
   expand: string;
   code: string;
@@ -672,6 +674,8 @@ export const DICTIONARIES: Record<Language, I18nDictionary> = {
     executionLoopCount: "循环",
     executionLoopRuns: "轮次",
     executionLoopInterval: "间隔",
+    executionTodoDuration: "耗时",
+    executionTodoSummaryToggle: "展开或收起总结",
     executionStatusLabels: {
       completed: "已完成",
       in_progress: "进行中",
@@ -1027,6 +1031,8 @@ export const DICTIONARIES: Record<Language, I18nDictionary> = {
     executionLoopCount: "loops",
     executionLoopRuns: "Runs",
     executionLoopInterval: "Interval",
+    executionTodoDuration: "Duration",
+    executionTodoSummaryToggle: "Toggle summary",
     executionStatusLabels: {
       completed: "completed",
       in_progress: "in progress",

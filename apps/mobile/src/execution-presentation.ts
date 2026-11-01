@@ -4,7 +4,7 @@
  * Kept free of React and i18n so the tone/active rules can be unit-tested and
  * reused by both the header chips and the detail sheet.
  */
-import type { SessionExecutionSummary, SessionGoalSummary, SessionLoopSummary } from "@maestro-mobile/mobile-sdk/protocol";
+import type { MonitorTodoSummary, SessionExecutionSummary, SessionGoalSummary, SessionLoopSummary } from "@maestro-mobile/mobile-sdk/protocol";
 
 export type ExecutionSectionKey = "todo" | "teammate" | "background" | "goal" | "loop";
 export type ExecutionTone = "success" | "warning" | "error" | "muted";
@@ -195,6 +195,38 @@ export function loopTone(loops: readonly SessionLoopSummary[] | undefined): Exec
 export function formatLoopInterval(intervalMs: number | undefined): string {
   if (typeof intervalMs !== "number" || !Number.isFinite(intervalMs) || intervalMs <= 0) return "";
   return formatGoalDuration(Math.round(intervalMs / 1000));
+}
+
+/** One bar in the Todo duration strip; `height` is already normalized to px. */
+export interface TodoDurationBar {
+  readonly id: string;
+  readonly durationMs: number;
+  readonly height: number;
+}
+
+/**
+ * Most recently completed Todos with a measured duration, newest first.
+ * Heights normalize against the largest selected duration so the strip stays
+ * comparable after the detail list expands or collapses.
+ */
+export function todoDurationBars(
+  todos: readonly MonitorTodoSummary[],
+  options: { readonly limit?: number; readonly maxHeight?: number } = {},
+): TodoDurationBar[] {
+  const limit = options.limit ?? 5;
+  const maxHeight = options.maxHeight ?? 32;
+  const completed = todos
+    .map((todo) => ({ todo, durationMs: todo.durationMs ?? 0 }))
+    .filter((item) => item.durationMs > 0 && isExecutionItemDone("todo", item.todo.status))
+    .sort((a, b) => (b.todo.completedAt ?? b.todo.updatedAt) - (a.todo.completedAt ?? a.todo.updatedAt))
+    .slice(0, limit);
+  if (completed.length === 0) return [];
+  const longest = Math.max(...completed.map((item) => item.durationMs));
+  return completed.map((item) => ({
+    id: formatExecutionId(item.todo.id),
+    durationMs: item.durationMs,
+    height: Math.max(2, Math.round((item.durationMs / longest) * maxHeight)),
+  }));
 }
 
 /**

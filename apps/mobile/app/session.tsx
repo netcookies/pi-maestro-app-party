@@ -47,6 +47,7 @@ import {
   isExecutionItemDone,
   loopChipLabel,
   loopTone,
+  todoDurationBars,
   type ExecutionSectionCount,
   type ExecutionSectionKey,
 } from "../src/execution-presentation";
@@ -104,6 +105,13 @@ export default function SessionScreen() {
     herdrAvailable: boolean;
   }>({ settings: null, launchedSpaces: [], herdrAvailable: false });
   const [executionSection, setExecutionSection] = useState<ExecutionSectionKey>("todo");
+  const [expandedTodoSummaries, setExpandedTodoSummaries] = useState<Set<string>>(() => new Set());
+  const toggleTodoSummary = (key: string) => setExpandedTodoSummaries((previous) => {
+    const next = new Set(previous);
+    if (next.has(key)) next.delete(key);
+    else next.add(key);
+    return next;
+  });
   const [detailsExpanded, setDetailsExpanded] = useState(false);
   const detailLimit = detailsExpanded ? 20 : 5;
   const executionSummary = selectExecutionSummaryForSession(state, selectedTargetKey);
@@ -133,6 +141,7 @@ export default function SessionScreen() {
   const goalBudget = goalBudgetProgress(executionGoal);
   const executionLoops = executionSummary?.loop;
   const executionLoopLabel = loopChipLabel(executionLoops, { title: t.executionLoop, count: t.executionLoopCount });
+  const todoBars = useMemo(() => (executionSummary ? todoDurationBars(executionSummary.todos) : []), [executionSummary]);
   const hasSectionContent = (section: ExecutionSectionKey): boolean => {
     if (!executionSummary) return false;
     if (section === "goal") return Boolean(executionSummary.goal);
@@ -152,7 +161,11 @@ export default function SessionScreen() {
         id: formatExecutionId(item.id),
         assignee: item.assigneeLabel ? (item.assigneeLabel.startsWith("@") ? item.assigneeLabel : `@${item.assigneeLabel}`) : undefined,
         title: item.subject,
-        meta: executionStatusLabel(item.status),
+        meta: [
+          executionStatusLabel(item.status),
+          item.durationMs && item.durationMs > 0 ? formatGoalDuration(Math.round(item.durationMs / 1000)) : "",
+        ].filter(Boolean).join(" · "),
+        summary: item.summary,
         glyph: executionGlyph("todo", item.status),
         isDone: isExecutionItemDone("todo", item.status),
         color: toneColor(executionTone("todo", item.status)),
@@ -165,6 +178,7 @@ export default function SessionScreen() {
         assignee: item.agent ? (item.agent.startsWith("@") ? item.agent : `@${item.agent}`) : undefined,
         title: item.name ?? item.agent ?? item.correlationId ?? "—",
         meta: [executionStatusLabel(item.status), item.phase, item.pendingInteractions ? `${item.pendingInteractions} ${t.executionRunning}` : ""].filter(Boolean).join(" · "),
+        summary: undefined,
         glyph: executionGlyph("teammate", item.status),
         isDone: isExecutionItemDone("teammate", item.status),
         color: toneColor(executionTone("teammate", item.status)),
@@ -177,6 +191,7 @@ export default function SessionScreen() {
         assignee: undefined,
         title: item.label ?? item.id,
         meta: [executionStatusLabel(item.status), typeof item.progress === "number" ? `${Math.round(item.progress * 100)}%` : ""].filter(Boolean).join(" · "),
+        summary: undefined,
         glyph: executionGlyph("background", item.status),
         isDone: isExecutionItemDone("background", item.status),
         color: toneColor(executionTone("background", item.status)),
@@ -1603,6 +1618,21 @@ export default function SessionScreen() {
                 contentContainerStyle={{ gap: 10, paddingBottom: 16 }}
                 showsVerticalScrollIndicator
               >
+                {executionSection === "todo" && todoBars.length > 0 ? (
+                  <View
+                    style={styles.todoBars}
+                    accessible
+                    accessibilityRole="image"
+                    accessibilityLabel={`${t.executionTodoDuration} ${todoBars.map((bar) => `${bar.id} ${formatGoalDuration(Math.round(bar.durationMs / 1000))}`).join(", ")}`}
+                  >
+                    {todoBars.map((bar) => (
+                      <View key={bar.id} style={styles.todoBarItem}>
+                        <View style={[styles.todoBarFill, { height: bar.height, backgroundColor: theme.accent }]} />
+                        <Text style={[styles.todoBarLabel, { color: theme.dim }]} numberOfLines={1}>{bar.id}</Text>
+                      </View>
+                    ))}
+                  </View>
+                ) : null}
                 {executionRows.slice(0, detailLimit).map((row) => (
                   <View key={row.key} style={styles.executionRow}>
                     <View style={styles.executionRowHeader}>
@@ -1638,6 +1668,20 @@ export default function SessionScreen() {
                           <Text style={[styles.executionRowMeta, { color: theme.muted }]} numberOfLines={1}>
                             {row.meta}
                           </Text>
+                        ) : null}
+                        {row.summary ? (
+                          <TouchableOpacity
+                            onPress={() => toggleTodoSummary(row.key)}
+                            accessibilityRole="button"
+                            accessibilityLabel={t.executionTodoSummaryToggle}
+                          >
+                            <Text
+                              style={[styles.executionRowSummary, { color: theme.muted }]}
+                              numberOfLines={expandedTodoSummaries.has(row.key) ? undefined : 2}
+                            >
+                              {row.summary}
+                            </Text>
+                          </TouchableOpacity>
                         ) : null}
                       </View>
                     </View>
@@ -1917,6 +1961,11 @@ function makeStyles(theme: ReturnType<typeof useTheme>["theme"]) {
     executionAssigneeTag: { fontSize: 12, fontWeight: "600", lineHeight: 20 },
     executionRowTitle: { flex: 1, minWidth: "60%", fontSize: MIUIX_TYPE.footnote1, fontWeight: "500", lineHeight: 20 },
     executionRowMeta: { fontSize: 11, lineHeight: 15, marginLeft: 24 },
+    executionRowSummary: { fontSize: 11, lineHeight: 15, marginLeft: 24, marginTop: 2 },
+    todoBars: { flexDirection: "row", alignItems: "flex-end", gap: 8, minHeight: 48, paddingHorizontal: 2, paddingBottom: 2 },
+    todoBarItem: { flex: 1, maxWidth: 56, alignItems: "center", justifyContent: "flex-end", gap: 3 },
+    todoBarFill: { width: "100%", minHeight: 2, borderRadius: 2 },
+    todoBarLabel: { fontSize: 9, lineHeight: 12 },
     goalMetaRow: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", gap: 8 },
     goalMetaLabel: { fontSize: 11, lineHeight: 15 },
     goalBudgetTrack: { height: 6, borderRadius: 3, overflow: "hidden" },
