@@ -2,6 +2,14 @@
 
 本文件记录 Maestro Mobile 的显著变更。格式基于 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)。
 
+## [0.18.1] — 2026-11-01
+
+### 修复
+
+- 关闭 refine 同 target 跨请求关联漏洞
+- 消除未决 target 时的暂存计划透传与跨请求 refine 关联缺陷
+- 修复跨 target 切换时暂存 plan 泄漏与清理判定缺陷 (REV2-001)
+
 ## [0.18.0] — 2026-11-01
 
 ### 修复
