@@ -2,10 +2,17 @@ import { describe, expect, it } from "vitest";
 import type { SessionExecutionSummary } from "@maestro-mobile/mobile-sdk/protocol";
 import {
   EXECUTION_SECTION_ORDER,
+  availableExecutionSections,
   executionGlyph,
   executionSectionCounts,
   executionTone,
   formatExecutionId,
+  formatGoalDuration,
+  formatGoalTokens,
+  goalBudgetProgress,
+  goalChipDetail,
+  goalChipLabel,
+  goalTone,
   hasActiveExecution,
   isExecutionItemDone,
 } from "../src/execution-presentation";
@@ -72,6 +79,71 @@ describe("execution-presentation", () => {
 
   it("preserves stable section order for tabs and chips", () => {
     expect(EXECUTION_SECTION_ORDER).toEqual(["todo", "teammate", "background"]);
+  });
+
+  it("adds the goal section only when a goal is projected", () => {
+    expect(availableExecutionSections(sampleSummary)).toEqual(["todo", "teammate", "background"]);
+    expect(availableExecutionSections({ ...sampleSummary, goal: { text: "Ship", status: "active" } }))
+      .toEqual(["todo", "teammate", "background", "goal"]);
+    expect(executionSectionCounts(sampleSummary).goal).toEqual({ active: 0, done: 0, total: 0 });
+    expect(executionSectionCounts({ ...sampleSummary, goal: { text: "Ship", status: "active" } }).goal)
+      .toEqual({ active: 1, done: 0, total: 1 });
+  });
+
+  it("keeps goal work out of the shared active pulse", () => {
+    const goalOnly: SessionExecutionSummary = {
+      ...sampleSummary,
+      todos: [{ id: "1", subject: "x", status: "completed", updatedAt: 1 }],
+      teammate: { running: 0, total: 1, agents: [{ status: "completed" }] },
+      backgroundJobs: [{ id: "j1", status: "completed" }],
+      goal: { text: "Ship", status: "active" },
+    };
+    expect(hasActiveExecution(executionSectionCounts(goalOnly))).toBe(false);
+  });
+
+  it("maps goal status to tones and glyphs", () => {
+    expect(goalTone(undefined)).toBe("muted");
+    expect(goalTone({ text: "x", status: "active" })).toBe("warning");
+    expect(goalTone({ text: "x", status: "paused" })).toBe("warning");
+    expect(goalTone({ text: "x", status: "done" })).toBe("success");
+    expect(goalTone({ text: "x", status: "abandoned" })).toBe("error");
+    expect(executionTone("goal", "paused")).toBe("warning");
+    expect(executionGlyph("goal", "paused")).toBe("❙❙");
+    expect(executionGlyph("goal", "active")).toBe("◎");
+  });
+
+  it("labels the goal chip with budget, iteration, or pause", () => {
+    const labels = { title: "Goal", paused: "·paused" };
+    expect(goalChipLabel(undefined, labels)).toBe("");
+    expect(goalChipLabel({ text: "x", status: "active", tokenBudget: 100000, tokensUsed: 45000 }, labels)).toBe("Goal 45k/100k");
+    expect(goalChipLabel({ text: "x", status: "active", iteration: 3 }, labels)).toBe("Goal ⟳3");
+    expect(goalChipLabel({ text: "x", status: "paused", tokenBudget: 100000, tokensUsed: 45000 }, labels)).toBe("Goal 45k/100k ·paused");
+    expect(goalChipLabel({ text: "x", status: "active" }, labels)).toBe("Goal");
+    expect(goalChipDetail({ text: "x", status: "active", iteration: 0 })).toBe("⟳0");
+  });
+
+  it("never produces NaN budget progress", () => {
+    expect(goalBudgetProgress(undefined)).toBeUndefined();
+    expect(goalBudgetProgress({ text: "x", status: "active" })).toBeUndefined();
+    expect(goalBudgetProgress({ text: "x", status: "active", tokenBudget: 0, tokensUsed: 10 })).toBeUndefined();
+    expect(goalBudgetProgress({ text: "x", status: "active", tokenBudget: 100000, tokensUsed: 45000 })).toBeCloseTo(0.45);
+    expect(goalBudgetProgress({ text: "x", status: "active", tokenBudget: 100000, tokensUsed: 250000 })).toBe(1);
+    expect(goalBudgetProgress({ text: "x", status: "active", tokenBudget: 100000 })).toBe(0);
+  });
+
+  it("formats goal tokens and elapsed time", () => {
+    expect(formatGoalTokens(999)).toBe("999");
+    expect(formatGoalTokens(1000)).toBe("1k");
+    expect(formatGoalTokens(1234)).toBe("1.2k");
+    expect(formatGoalTokens(45000)).toBe("45k");
+    expect(formatGoalTokens(100000)).toBe("100k");
+    expect(formatGoalTokens(undefined)).toBe("0");
+
+    expect(formatGoalDuration(undefined)).toBe("");
+    expect(formatGoalDuration(45)).toBe("45s");
+    expect(formatGoalDuration(600)).toBe("10m");
+    expect(formatGoalDuration(7500)).toBe("2h 5m");
+    expect(formatGoalDuration(7200)).toBe("2h");
   });
 
   it("maps status to TUI-matching glyphs and done state", () => {

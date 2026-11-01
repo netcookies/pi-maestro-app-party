@@ -317,6 +317,15 @@ export interface I18nDictionary {
   executionShowAll: string;
   executionRunning: string;
   executionDone: string;
+  executionGoal: string;
+  executionGoalPaused: string;
+  executionGoalEmpty: string;
+  executionGoalBudget: string;
+  executionGoalElapsed: string;
+  executionGoalIterations: string;
+  executionGoalPauseReason: string;
+  executionGoalAcceptance: string;
+  executionGoalVerificationFailures: string;
   executionStatusLabels: Record<string, string>;
   expand: string;
   code: string;
@@ -644,6 +653,15 @@ export const DICTIONARIES: Record<Language, I18nDictionary> = {
     executionShowAll: "查看全部",
     executionRunning: "运行中",
     executionDone: "已完成",
+    executionGoal: "目标",
+    executionGoalPaused: "·暂停",
+    executionGoalEmpty: "暂无目标",
+    executionGoalBudget: "Token 预算",
+    executionGoalElapsed: "已用时长",
+    executionGoalIterations: "迭代",
+    executionGoalPauseReason: "暂停原因",
+    executionGoalAcceptance: "验收命令",
+    executionGoalVerificationFailures: "验收失败",
     executionStatusLabels: {
       completed: "已完成",
       in_progress: "进行中",
@@ -657,6 +675,8 @@ export const DICTIONARIES: Record<Language, I18nDictionary> = {
       queued: "排队中",
       cancelled: "已取消",
       unknown: "未知",
+      active: "进行中",
+      paused: "已暂停",
     },
     expand: "展开",
     code: "代码",
@@ -982,6 +1002,15 @@ export const DICTIONARIES: Record<Language, I18nDictionary> = {
     executionShowAll: "Show all",
     executionRunning: "running",
     executionDone: "done",
+    executionGoal: "Goal",
+    executionGoalPaused: "·paused",
+    executionGoalEmpty: "No goal",
+    executionGoalBudget: "Token budget",
+    executionGoalElapsed: "Elapsed",
+    executionGoalIterations: "Iterations",
+    executionGoalPauseReason: "Pause reason",
+    executionGoalAcceptance: "Acceptance commands",
+    executionGoalVerificationFailures: "Verification failures",
     executionStatusLabels: {
       completed: "completed",
       in_progress: "in progress",
@@ -995,6 +1024,8 @@ export const DICTIONARIES: Record<Language, I18nDictionary> = {
       queued: "queued",
       cancelled: "cancelled",
       unknown: "unknown",
+      active: "active",
+      paused: "paused",
     },
     expand: "Expand",
     code: "Code",

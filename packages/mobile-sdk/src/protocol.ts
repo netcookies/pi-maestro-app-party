@@ -345,11 +345,31 @@ export interface BackgroundJobSummary {
   error?: HostError;
 }
 
+/**
+ * Flow Goal snapshot projected from the latest `goal-state` session entry.
+ * Producer whitelists and bounds every field; consumers must treat all but
+ * `text`/`status` as optional because Flow omits them when unset.
+ */
+export interface SessionGoalSummary {
+  id?: string;
+  /** Goal objective, truncated by the producer to 512 chars. */
+  text: string;
+  status: string;
+  pauseReason?: string;
+  tokenBudget?: number;
+  tokensUsed?: number;
+  timeUsedSeconds?: number;
+  iteration?: number;
+  verificationFailures?: number;
+  acceptance?: string[];
+}
+
 /** Session-scoped execution data. The target is mandatory to prevent heuristic attribution. */
 export interface SessionExecutionSummary {
   target: SessionTargetIdentity;
   revision: number;
   todos: MonitorTodoSummary[];
+  goal?: SessionGoalSummary;
   teammate: {
     running: number;
     total: number;
@@ -1211,7 +1231,29 @@ function isSessionExecutionSummary(value: unknown): value is SessionExecutionSum
     || (value.workspace.workspaceId !== undefined && !isString(value.workspace.workspaceId))
     || (value.workspace.ownerId !== undefined && !isString(value.workspace.ownerId))
     || ![value.workspace.label, value.workspace.workspaceId, value.workspace.ownerId].some(isString))) return false;
+  // Layered validation: a malformed optional projection loses only that field so an
+  // unrelated producer bug cannot suppress the whole execution summary.
+  dropInvalidOptional(value, "goal", isSessionGoalSummary);
   return true;
+}
+
+function dropInvalidOptional(
+  value: Record<string, unknown>,
+  key: string,
+  isValid: (candidate: unknown) => boolean,
+): void {
+  if (value[key] !== undefined && !isValid(value[key])) delete value[key];
+}
+
+function isSessionGoalSummary(value: unknown): value is SessionGoalSummary {
+  if (!isRecord(value) || !isString(value.text) || !isString(value.status)) return false;
+  if (value.id !== undefined && !isString(value.id)) return false;
+  if (value.pauseReason !== undefined && !isString(value.pauseReason)) return false;
+  for (const field of ["tokenBudget", "tokensUsed", "timeUsedSeconds", "iteration", "verificationFailures"] as const) {
+    const candidate = value[field];
+    if (candidate !== undefined && (!isFiniteNumber(candidate) || candidate < 0 || !Number.isInteger(candidate))) return false;
+  }
+  return value.acceptance === undefined || isStringArray(value.acceptance);
 }
 
 function isMonitorTodoSummary(value: unknown): value is MonitorTodoSummary {

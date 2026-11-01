@@ -31,10 +31,16 @@ import { useSessionDraft, draftScopeKey } from "../src/drafts";
 import { selectExecutionSummaryForSession, executionTodoCounts } from "../src/session-execution";
 import {
   EXECUTION_SECTION_ORDER,
+  availableExecutionSections,
   executionGlyph,
   executionSectionCounts,
   executionTone,
   formatExecutionId,
+  formatGoalDuration,
+  formatGoalTokens,
+  goalBudgetProgress,
+  goalChipLabel,
+  goalTone,
   hasActiveExecution,
   isExecutionItemDone,
   type ExecutionSectionCount,
@@ -107,22 +113,37 @@ export default function SessionScreen() {
       todo: { title: t.executionTodo, count: executionCounts.todo, empty: t.executionEmptyTodo },
       teammate: { title: t.executionTeammate, count: executionCounts.teammate, empty: t.executionEmptyTeammate },
       background: { title: t.executionBackground, count: executionCounts.background, empty: t.executionEmptyBackground },
+      goal: { title: t.executionGoal, count: executionCounts.goal, empty: t.executionGoalEmpty },
     }
-    : { todo: { title: "", count: { active: 0, done: 0, total: 0 }, empty: "" }, teammate: { title: "", count: { active: 0, done: 0, total: 0 }, empty: "" }, background: { title: "", count: { active: 0, done: 0, total: 0 }, empty: "" } };
+    : {
+      todo: { title: "", count: { active: 0, done: 0, total: 0 }, empty: "" },
+      teammate: { title: "", count: { active: 0, done: 0, total: 0 }, empty: "" },
+      background: { title: "", count: { active: 0, done: 0, total: 0 }, empty: "" },
+      goal: { title: "", count: { active: 0, done: 0, total: 0 }, empty: "" },
+    };
+  const executionSections = executionSummary ? availableExecutionSections(executionSummary) : EXECUTION_SECTION_ORDER;
+  const executionGoal = executionSummary?.goal;
+  const executionGoalLabel = goalChipLabel(executionGoal, { title: t.executionGoal, paused: t.executionGoalPaused });
+  const goalBudget = goalBudgetProgress(executionGoal);
+  const hasSectionContent = (section: ExecutionSectionKey): boolean => {
+    if (!executionSummary) return false;
+    if (section === "goal") return Boolean(executionSummary.goal);
+    return executionSectionMeta[section].count.total > 0;
+  };
 
   const toneColor = (tone: ReturnType<typeof executionTone>): string =>
     tone === "success" ? theme.success : tone === "warning" ? theme.warning : tone === "error" ? theme.error : theme.muted;
+  const executionStatusLabel = (status: string | undefined): string =>
+    status ? (t.executionStatusLabels[status.toLowerCase()] ?? status) : "";
   const executionRows = useMemo(() => {
     if (!executionSummary) return [];
-    const statusLabel = (status: string | undefined): string =>
-      status ? (t.executionStatusLabels[status.toLowerCase()] ?? status) : "";
     if (executionSection === "todo") {
       return executionSummary.todos.map((item) => ({
         key: `todo-${item.id}`,
         id: formatExecutionId(item.id),
         assignee: item.assigneeLabel ? (item.assigneeLabel.startsWith("@") ? item.assigneeLabel : `@${item.assigneeLabel}`) : undefined,
         title: item.subject,
-        meta: statusLabel(item.status),
+        meta: executionStatusLabel(item.status),
         glyph: executionGlyph("todo", item.status),
         isDone: isExecutionItemDone("todo", item.status),
         color: toneColor(executionTone("todo", item.status)),
@@ -134,22 +155,26 @@ export default function SessionScreen() {
         id: undefined,
         assignee: item.agent ? (item.agent.startsWith("@") ? item.agent : `@${item.agent}`) : undefined,
         title: item.name ?? item.agent ?? item.correlationId ?? "—",
-        meta: [statusLabel(item.status), item.phase, item.pendingInteractions ? `${item.pendingInteractions} ${t.executionRunning}` : ""].filter(Boolean).join(" · "),
+        meta: [executionStatusLabel(item.status), item.phase, item.pendingInteractions ? `${item.pendingInteractions} ${t.executionRunning}` : ""].filter(Boolean).join(" · "),
         glyph: executionGlyph("teammate", item.status),
         isDone: isExecutionItemDone("teammate", item.status),
         color: toneColor(executionTone("teammate", item.status)),
       }));
     }
-    return executionSummary.backgroundJobs.map((item) => ({
-      key: `job-${item.id}`,
-      id: undefined,
-      assignee: undefined,
-      title: item.label ?? item.id,
-      meta: [statusLabel(item.status), typeof item.progress === "number" ? `${Math.round(item.progress * 100)}%` : ""].filter(Boolean).join(" · "),
-      glyph: executionGlyph("background", item.status),
-      isDone: isExecutionItemDone("background", item.status),
-      color: toneColor(executionTone("background", item.status)),
-    }));
+    if (executionSection === "background") {
+      return executionSummary.backgroundJobs.map((item) => ({
+        key: `job-${item.id}`,
+        id: undefined,
+        assignee: undefined,
+        title: item.label ?? item.id,
+        meta: [executionStatusLabel(item.status), typeof item.progress === "number" ? `${Math.round(item.progress * 100)}%` : ""].filter(Boolean).join(" · "),
+        glyph: executionGlyph("background", item.status),
+        isDone: isExecutionItemDone("background", item.status),
+        color: toneColor(executionTone("background", item.status)),
+      }));
+    }
+    // Goal 段由专用区块渲染，不进入通用行模型。
+    return [];
   }, [executionSummary, executionSection, theme, t]);
 
   const [reduceMotion, setReduceMotion] = useState(false);
@@ -982,23 +1007,31 @@ export default function SessionScreen() {
       </View>
       {executionSummary && executionCounts && (
         <ScrollView horizontal showsHorizontalScrollIndicator={false} style={[styles.executionChips, { borderBottomColor: theme.border }]} contentContainerStyle={styles.executionChipsContent}>
-          {EXECUTION_SECTION_ORDER.map((section) => {
+          {executionSections.map((section) => {
             const meta = executionSectionMeta[section];
-            const live = meta.count.active > 0;
-            const tone = live ? theme.warning : meta.count.total > 0 && meta.count.done === meta.count.total ? theme.success : theme.muted;
+            const isGoal = section === "goal";
+            const live = isGoal ? true : meta.count.active > 0;
+            const tone = isGoal
+              ? toneColor(goalTone(executionGoal))
+              : live ? theme.warning : meta.count.total > 0 && meta.count.done === meta.count.total ? theme.success : theme.muted;
+            const chipText = isGoal
+              ? executionGoalLabel
+              : live ? `${meta.title} ${meta.count.active} · ${meta.count.done}/${meta.count.total}` : `${meta.title} ${meta.count.done}/${meta.count.total}`;
             return (
               <TouchableOpacity
                 key={section}
                 onPress={() => openExecutionSection(section)}
                 style={[styles.executionChip, { backgroundColor: theme.cardBg, borderColor: live ? theme.warning : theme.border }]}
                 accessibilityRole="button"
-                accessibilityLabel={live
-                  ? `${meta.title} ${meta.count.active} ${t.executionRunning}, ${meta.count.done} ${t.executionDone}, ${meta.count.total}`
-                  : `${meta.title} ${meta.count.done} ${t.executionDone} / ${meta.count.total}`}
+                accessibilityLabel={isGoal
+                  ? executionGoalLabel
+                  : live
+                    ? `${meta.title} ${meta.count.active} ${t.executionRunning}, ${meta.count.done} ${t.executionDone}, ${meta.count.total}`
+                    : `${meta.title} ${meta.count.done} ${t.executionDone} / ${meta.count.total}`}
               >
                 <View style={[styles.executionChipDot, { backgroundColor: tone }]} />
                 <Text style={[styles.executionChipText, { color: theme.text }]} numberOfLines={1}>
-                  {live ? `${meta.title} ${meta.count.active} · ${meta.count.done}/${meta.count.total}` : `${meta.title} ${meta.count.done}/${meta.count.total}`}
+                  {chipText}
                 </Text>
               </TouchableOpacity>
             );
@@ -1390,7 +1423,9 @@ export default function SessionScreen() {
       <SpringBottomSheet
         visible={executionDetailsOpen && Boolean(executionSummary)}
         onClose={() => setExecutionDetailsOpen(false)}
-        contentHeight={Math.min(Math.round(Dimensions.get("window").height * 0.78), 220 + executionRows.length * 48)}
+        contentHeight={executionSection === "goal"
+          ? Math.min(Math.round(Dimensions.get("window").height * 0.78), 420)
+          : Math.min(Math.round(Dimensions.get("window").height * 0.78), 220 + executionRows.length * 48)}
         containerStyle={{ maxHeight: Math.round(Dimensions.get("window").height * 0.82) }}
       >
         {executionSummary && (
@@ -1413,9 +1448,11 @@ export default function SessionScreen() {
 
             {/* Section switcher: each header chip opens its own section here. */}
             <View style={styles.executionSegments}>
-              {EXECUTION_SECTION_ORDER.map((section) => {
+              {executionSections.map((section) => {
                 const meta = executionSectionMeta[section];
                 const selected = executionSection === section;
+                const title = section === "goal" ? t.executionGoal : meta.title;
+                const total = section === "goal" ? (executionGoal ? 1 : 0) : meta.count.total;
                 return (
                   <TouchableOpacity
                     key={section}
@@ -1429,21 +1466,88 @@ export default function SessionScreen() {
                     ]}
                     accessibilityRole="button"
                     accessibilityState={{ selected }}
-                    accessibilityLabel={`${meta.title} ${meta.count.total}`}
+                    accessibilityLabel={`${title} ${total}`}
                   >
                     <Text
                       style={[styles.executionSegmentText, { color: selected ? theme.accent : theme.muted, fontWeight: selected ? "700" : "500" }]}
                       numberOfLines={1}
                     >
-                      {meta.title} {meta.count.total}
+                      {title} {total}
                     </Text>
                   </TouchableOpacity>
                 );
               })}
             </View>
 
-            {executionRows.length === 0 ? (
+            {!hasSectionContent(executionSection) ? (
               <Text style={[styles.sheetDesc, { color: theme.muted }]}>{executionSectionMeta[executionSection].empty}</Text>
+            ) : executionSection === "goal" && executionGoal ? (
+              <ScrollView
+                style={{ maxHeight: Math.round(Dimensions.get("window").height * 0.52) }}
+                contentContainerStyle={{ gap: 10, paddingBottom: 16 }}
+                showsVerticalScrollIndicator
+              >
+                <View style={styles.executionRow}>
+                  <View style={styles.executionRowHeader}>
+                    <Text style={[styles.executionGlyph, { color: toneColor(goalTone(executionGoal)) }]}>
+                      {executionGlyph("goal", executionGoal.status)}
+                    </Text>
+                    <View style={styles.executionRowMain}>
+                      <Text style={[styles.executionRowTitle, { color: theme.text }]} selectable>
+                        {executionGoal.text}
+                      </Text>
+                      <Text style={[styles.executionRowMeta, { color: theme.muted }]} numberOfLines={1}>
+                        {[
+                          executionStatusLabel(executionGoal.status),
+                          typeof executionGoal.iteration === "number" ? `${t.executionGoalIterations} ${executionGoal.iteration}` : "",
+                          typeof executionGoal.verificationFailures === "number" && executionGoal.verificationFailures > 0
+                            ? `${t.executionGoalVerificationFailures} ${executionGoal.verificationFailures}`
+                            : "",
+                        ].filter(Boolean).join(" · ")}
+                      </Text>
+                    </View>
+                  </View>
+                </View>
+                {typeof executionGoal.timeUsedSeconds === "number" ? (
+                  <View style={[styles.goalMetaRow, { marginLeft: 24 }]}>
+                    <Text style={[styles.goalMetaLabel, { color: theme.muted }]}>{t.executionGoalElapsed}</Text>
+                    <Text style={[styles.goalMetaLabel, { color: theme.text }]}>{formatGoalDuration(executionGoal.timeUsedSeconds)}</Text>
+                  </View>
+                ) : null}
+                {goalBudget !== undefined ? (
+                  <View style={{ gap: 5, marginLeft: 24 }}>
+                    <View style={styles.goalMetaRow}>
+                      <Text style={[styles.goalMetaLabel, { color: theme.muted }]}>{t.executionGoalBudget}</Text>
+                      <Text style={[styles.goalMetaLabel, { color: theme.text }]}>
+                        {`${formatGoalTokens(executionGoal.tokensUsed)}/${formatGoalTokens(executionGoal.tokenBudget)} · ${Math.round(goalBudget * 100)}%`}
+                      </Text>
+                    </View>
+                    <View style={[styles.goalBudgetTrack, { backgroundColor: theme.border }]}>
+                      <View style={[styles.goalBudgetFill, { width: `${Math.round(goalBudget * 100)}%`, backgroundColor: goalBudget >= 1 ? theme.error : theme.warning }]} />
+                    </View>
+                  </View>
+                ) : null}
+                {executionGoal.pauseReason ? (
+                  <View style={{ gap: 4, marginLeft: 24 }}>
+                    <Text style={[styles.goalMetaLabel, { color: theme.muted }]}>{t.executionGoalPauseReason}</Text>
+                    <Text style={[styles.sheetDesc, { color: theme.warning }]}>{executionGoal.pauseReason}</Text>
+                  </View>
+                ) : null}
+                {executionGoal.acceptance && executionGoal.acceptance.length > 0 ? (
+                  <View style={{ gap: 4, marginLeft: 24 }}>
+                    <Text style={[styles.goalMetaLabel, { color: theme.muted }]}>{t.executionGoalAcceptance}</Text>
+                    {executionGoal.acceptance.map((command, index) => (
+                      <Text
+                        key={`${index}-${command.slice(0, 24)}`}
+                        style={[styles.goalAcceptanceCommand, { color: theme.text }]}
+                        selectable
+                      >
+                        {command}
+                      </Text>
+                    ))}
+                  </View>
+                ) : null}
+              </ScrollView>
             ) : (
               <ScrollView
                 style={{ maxHeight: Math.round(Dimensions.get("window").height * 0.52) }}
@@ -1764,6 +1868,11 @@ function makeStyles(theme: ReturnType<typeof useTheme>["theme"]) {
     executionAssigneeTag: { fontSize: 12, fontWeight: "600", lineHeight: 20 },
     executionRowTitle: { flex: 1, minWidth: "60%", fontSize: MIUIX_TYPE.footnote1, fontWeight: "500", lineHeight: 20 },
     executionRowMeta: { fontSize: 11, lineHeight: 15, marginLeft: 24 },
+    goalMetaRow: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", gap: 8 },
+    goalMetaLabel: { fontSize: 11, lineHeight: 15 },
+    goalBudgetTrack: { height: 6, borderRadius: 3, overflow: "hidden" },
+    goalBudgetFill: { height: 6, borderRadius: 3 },
+    goalAcceptanceCommand: { fontSize: 11, lineHeight: 16, fontFamily: Platform.OS === "ios" ? "Menlo" : "monospace" },
     container: { flex: 1, backgroundColor: theme.bg },
     header: {
       flexDirection: "row",

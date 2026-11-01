@@ -432,8 +432,79 @@ describe("Desktop Plugin extension (TUI side)", () => {
     expect(registry.list()[0]?.executionSummary?.todos).toEqual([{ id: "todo-root", subject: "Root task", status: "pending", updatedAt: 10, assigneeLabel: "root" }]);
   });
 
-  it("publishes an empty root Todo summary when no durable Todo state exists", async () => {
-    const dir = await mkdtemp(join(tmpdir(), "maestro-ext-empty-todo-"));
+  it("projects the latest live Goal and hides finished or cleared Goals", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "maestro-ext-goal-"));
+    const registry = new DesktopPluginRegistry();
+    server = new DesktopPluginIpcServer({
+      socketPath: join(dir, "plugin.sock"),
+      secret: "test-secret",
+      registry,
+      supportedEvents: ["execution_summary"],
+    });
+    await server.start();
+    const activeGoal = {
+      id: "goal-1",
+      text: "Ship the release",
+      status: "active",
+      iteration: 3,
+      tokensUsed: 45000,
+      tokenBudget: 100000,
+      timeUsedSeconds: 7500,
+      pauseReason: "verification",
+      verificationFailures: 2,
+      acceptance: ["pnpm test", 42, "git diff --check"],
+      baselineTokens: 72779362,
+      supersededByGoalId: "older-goal",
+    };
+    const goalEntry = (goal: unknown) => ({ type: "custom", customType: "goal-state", data: { version: 2, goal } });
+    const fake = fakePi({
+      models: [],
+      entries: [goalEntry({ ...activeGoal, status: "done" }), goalEntry(activeGoal)],
+    });
+    createDesktopPluginExtension({ socketPath: join(dir, "plugin.sock"), secret: "test-secret" })(fake.pi as never);
+    fake.emit("session_start", { type: "session_start", reason: "startup" });
+    await waitFor(() => registry.list()[0]?.executionSummary?.goal?.text === "Ship the release");
+    const goal = registry.list()[0].executionSummary!.goal!;
+    expect(goal).toEqual({
+      id: "goal-1",
+      text: "Ship the release",
+      status: "active",
+      iteration: 3,
+      tokensUsed: 45000,
+      tokenBudget: 100000,
+      timeUsedSeconds: 7500,
+      pauseReason: "verification",
+      verificationFailures: 2,
+      acceptance: ["pnpm test", "git diff --check"],
+    });
+    expect(registry.list()[0].executionSummary?.todos).toEqual([]);
+
+    // A malformed Todo projection must not suppress an otherwise valid Goal.
+    fake.setSessionEntries([
+      { type: "custom", customType: "todo-state", data: { version: 8, tasks: { broken: { id: "broken", status: "pending", updatedAt: 1 } } } },
+      goalEntry({ ...activeGoal, text: "Ship v2" }),
+    ]);
+    fake.emit("turn_end", { type: "turn_end" });
+    await waitFor(() => registry.list()[0]?.executionSummary?.goal?.text === "Ship v2");
+    expect(registry.list()[0].executionSummary?.todos).toEqual([]);
+
+    fake.setSessionEntries([goalEntry({ ...activeGoal, text: "x".repeat(700) })]);
+    fake.emit("turn_end", { type: "turn_end" });
+    await waitFor(() => registry.list()[0]?.executionSummary?.goal?.text.length === 512);
+
+    fake.setSessionEntries([goalEntry(activeGoal), goalEntry(null)]);
+    fake.emit("turn_end", { type: "turn_end" });
+    await waitFor(() => registry.list()[0]?.executionSummary?.goal === undefined);
+
+    fake.setSessionEntries([goalEntry({ ...activeGoal, text: "Ship v3" })]);
+    fake.emit("turn_end", { type: "turn_end" });
+    await waitFor(() => registry.list()[0]?.executionSummary?.goal?.text === "Ship v3");
+    fake.setSessionEntries([goalEntry({ ...activeGoal, status: "done" })]);
+    fake.emit("turn_end", { type: "turn_end" });
+    await waitFor(() => registry.list()[0]?.executionSummary?.goal === undefined);
+  });
+
+  it("publishes an empty root Todo summary when no durable Todo state exists", async () => {    const dir = await mkdtemp(join(tmpdir(), "maestro-ext-empty-todo-"));
     const registry = new DesktopPluginRegistry();
     server = new DesktopPluginIpcServer({ socketPath: join(dir, "plugin.sock"), secret: "test-secret", registry, supportedEvents: ["execution_summary"] });
     await server.start();

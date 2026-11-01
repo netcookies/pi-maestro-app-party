@@ -4,7 +4,7 @@ import { join, normalize } from "node:path";
 import { randomUUID } from "node:crypto";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import type { ImageContent, Model, TextContent } from "@earendil-works/pi-ai";
-import type { BackgroundJobSummary, DesktopPluginEvent, DesktopPluginExecutionSummary, DesktopPluginModel, DesktopPluginRuntimeStatus, DesktopPluginSessionSummary, DesktopPluginTarget, DesktopAskRequest, DesktopPlanResponse, JsonValue, MonitorTodoSummary, TeammateAgentState } from "@maestro-mobile/shared";
+import type { BackgroundJobSummary, DesktopPluginEvent, DesktopPluginExecutionSummary, DesktopPluginModel, DesktopPluginRuntimeStatus, DesktopPluginSessionSummary, DesktopPluginTarget, DesktopAskRequest, DesktopPlanResponse, JsonValue, MonitorTodoSummary, SessionGoalSummary, TeammateAgentState } from "@maestro-mobile/shared";
 import { DESKTOP_PEER_FEATURE, DESKTOP_PLAN_REFINE_FEATURE } from "@maestro-mobile/shared";
 import { registerDesktopPeerCommand } from "./desktop-peer-extension.js";
 import { DesktopPluginIpcClient } from "./desktop-plugin-ipc.js";
@@ -152,6 +152,62 @@ function todoSnapshotFromSessionEntries(entries: readonly unknown[]): MonitorTod
     if (todos.length >= 32) break;
   }
   return todos;
+}
+
+function nonNegativeInteger(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isFinite(value) && Number.isInteger(value) && value >= 0 ? value : undefined;
+}
+
+/** Goal statuses that stay projected but must not surface a chip. */
+const HIDDEN_GOAL_STATUSES = new Set(["done", "completed", "abandoned"]);
+
+/**
+ * Latest Flow Goal snapshot from `goal-state` custom entries.
+ * Wholly snapshotted (never accumulated), whitelist-projected so an upstream
+ * field rename cannot leak unvalidated payloads to mobile.
+ */
+function goalSnapshotFromSessionEntries(entries: readonly unknown[]): SessionGoalSummary | undefined {
+  let goal: Record<string, unknown> | undefined;
+  for (let index = entries.length - 1; index >= 0; index -= 1) {
+    const candidate = entries[index];
+    if (!isRecord(candidate) || candidate.type !== "custom" || candidate.customType !== "goal-state") continue;
+    const data = candidate.data;
+    // Cleared Goal: the newest snapshot wins, never an older still-active one.
+    if (isRecord(data) && data.goal === null) return undefined;
+    if (isRecord(data) && isRecord(data.goal)) {
+      goal = data.goal;
+      break;
+    }
+  }
+  if (!goal) return undefined;
+  const status = boundedText(goal.status, 64);
+  const text = typeof goal.text === "string" ? goal.text.slice(0, 512) : "";
+  if (!status || !text.trim()) return undefined;
+  if (HIDDEN_GOAL_STATUSES.has(status.toLowerCase())) return undefined;
+  const id = boundedText(goal.id, 128);
+  const pauseReason = boundedText(goal.pauseReason, 128);
+  const tokenBudget = nonNegativeInteger(goal.tokenBudget);
+  const tokensUsed = nonNegativeInteger(goal.tokensUsed);
+  const timeUsedSeconds = nonNegativeInteger(goal.timeUsedSeconds);
+  const iteration = nonNegativeInteger(goal.iteration);
+  const verificationFailures = nonNegativeInteger(goal.verificationFailures);
+  const acceptance = Array.isArray(goal.acceptance)
+    ? goal.acceptance.filter((item): item is string => typeof item === "string" && item.trim().length > 0)
+      .slice(0, 16)
+      .map((item) => item.slice(0, 512))
+    : undefined;
+  return {
+    text,
+    status,
+    ...(id ? { id } : {}),
+    ...(pauseReason ? { pauseReason } : {}),
+    ...(tokenBudget !== undefined ? { tokenBudget } : {}),
+    ...(tokensUsed !== undefined ? { tokensUsed } : {}),
+    ...(timeUsedSeconds !== undefined ? { timeUsedSeconds } : {}),
+    ...(iteration !== undefined ? { iteration } : {}),
+    ...(verificationFailures !== undefined ? { verificationFailures } : {}),
+    ...(acceptance && acceptance.length > 0 ? { acceptance } : {}),
+  };
 }
 
 function flowTodoSnapshot(entries?: readonly unknown[]): MonitorTodoSummary[] | undefined {
@@ -824,12 +880,16 @@ export function createDesktopPluginExtension(options: DesktopPluginExtensionOpti
 
     const currentExecutionSummary = (): DesktopPluginExecutionSummary | undefined => {
       reconcileExecutionTeammateProjection();
-      const todos = flowTodoSnapshot(executionTodoEntries?.());
-      if (!todos) return undefined;
+      const entries = executionTodoEntries?.();
+      const todos = flowTodoSnapshot(entries);
+      const goal = entries ? goalSnapshotFromSessionEntries(entries) : undefined;
+      // A missing Todo projection must not hide an otherwise valid Goal projection.
+      if (!todos && !goal) return undefined;
       const agents = [...executionAgents.values()].slice(0, 64);
       return {
         revision: executionRevision,
-        todos,
+        todos: todos ?? [],
+        ...(goal ? { goal } : {}),
         teammate: {
           running: agents.filter((agent) => agent.status === "running" || agent.status === "retrying").length,
           total: agents.length,
@@ -843,7 +903,7 @@ export function createDesktopPluginExtension(options: DesktopPluginExtensionOpti
       if (!executionSessionId || !client) return;
       const next = currentExecutionSummary();
       if (!next) return;
-      const fingerprint = JSON.stringify({ todos: next.todos, teammate: next.teammate, backgroundJobs: next.backgroundJobs });
+      const fingerprint = JSON.stringify({ todos: next.todos, goal: next.goal, teammate: next.teammate, backgroundJobs: next.backgroundJobs });
       if (fingerprint === executionFingerprint && executionRevision > 0) return;
       executionFingerprint = fingerprint;
       executionRevision += 1;
@@ -852,6 +912,18 @@ export function createDesktopPluginExtension(options: DesktopPluginExtensionOpti
         event: "execution_summary",
         summary: { ...next, revision: executionRevision },
       }).catch(() => undefined);
+    };
+
+    // turn_end fires far more often than the Goal/Todo projections change, so
+    // coalesce refreshes and let the fingerprint dedupe the trailing publish.
+    let executionRefreshTimer: ReturnType<typeof setTimeout> | undefined;
+    const scheduleExecutionSummaryRefresh = (): void => {
+      if (executionRefreshTimer || stopping) return;
+      executionRefreshTimer = setTimeout(() => {
+        executionRefreshTimer = undefined;
+        publishExecutionSummary();
+      }, 250);
+      executionRefreshTimer.unref?.();
     };
 
     const updateExecutionAgent = (value: unknown): void => {
@@ -910,7 +982,7 @@ export function createDesktopPluginExtension(options: DesktopPluginExtensionOpti
         executionJobs = jobs;
         publishExecutionSummary();
       });
-      eventBus.on("maestro:todo-state-changed", () => publishExecutionSummary());
+      eventBus.on("maestro:todo-state-changed", () => scheduleExecutionSummaryRefresh());
     }
 
     const currentSummary = (): DesktopPluginSessionSummary => ({
@@ -967,6 +1039,10 @@ export function createDesktopPluginExtension(options: DesktopPluginExtensionOpti
       publishRuntimeStatus("idle");
     });
 
+    // `maestro:todo-state-changed` is not emitted by current pi-maestro-flow builds, so
+    // `turn_end` is the live trigger for Goal/Todo session-file projections.
+    pi.on("turn_end", () => scheduleExecutionSummaryRefresh());
+
     pi.on("session_shutdown", async () => {
       peerCommand.clear();
       const shutdownTarget = activeTarget;
@@ -979,6 +1055,10 @@ export function createDesktopPluginExtension(options: DesktopPluginExtensionOpti
         : undefined;
       stopping = true;
       sessionGeneration += 1;
+      if (executionRefreshTimer) {
+        clearTimeout(executionRefreshTimer);
+        executionRefreshTimer = undefined;
+      }
       executionSessionId = undefined;
       executionTodoEntries = undefined;
       executionTargetGeneration = undefined;

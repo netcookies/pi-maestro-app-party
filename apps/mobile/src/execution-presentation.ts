@@ -4,11 +4,12 @@
  * Kept free of React and i18n so the tone/active rules can be unit-tested and
  * reused by both the header chips and the detail sheet.
  */
-import type { SessionExecutionSummary } from "@maestro-mobile/mobile-sdk/protocol";
+import type { SessionExecutionSummary, SessionGoalSummary } from "@maestro-mobile/mobile-sdk/protocol";
 
-export type ExecutionSectionKey = "todo" | "teammate" | "background";
+export type ExecutionSectionKey = "todo" | "teammate" | "background" | "goal";
 export type ExecutionTone = "success" | "warning" | "error" | "muted";
 
+/** Sections with a generic row model. `goal` renders its own detail block. */
 export const EXECUTION_SECTION_ORDER: readonly ExecutionSectionKey[] = ["todo", "teammate", "background"];
 
 const TODO_TONES: Record<string, ExecutionTone> = {
@@ -41,6 +42,16 @@ const BACKGROUND_TONES: Record<string, ExecutionTone> = {
   unknown: "muted",
 };
 
+const GOAL_TONES: Record<string, ExecutionTone> = {
+  active: "warning",
+  running: "warning",
+  paused: "warning",
+  done: "success",
+  completed: "success",
+  abandoned: "error",
+  failed: "error",
+};
+
 function toneFrom(table: Record<string, ExecutionTone>, status: string | undefined): ExecutionTone {
   if (!status) return "muted";
   return table[status.toLowerCase()] ?? "muted";
@@ -49,6 +60,7 @@ function toneFrom(table: Record<string, ExecutionTone>, status: string | undefin
 export function executionTone(section: ExecutionSectionKey, status: string | undefined): ExecutionTone {
   if (section === "todo") return toneFrom(TODO_TONES, status);
   if (section === "teammate") return toneFrom(TEAMMATE_TONES, status);
+  if (section === "goal") return toneFrom(GOAL_TONES, status);
   return toneFrom(BACKGROUND_TONES, status);
 }
 
@@ -69,6 +81,7 @@ export function executionGlyph(section: ExecutionSectionKey, status: string | un
     if (s === "failed" || s === "terminated") return "✗";
     return "□";
   }
+  if (section === "goal") return s === "paused" ? "❙❙" : "◎";
   if (s === "completed") return "✓";
   if (s === "running") return "■";
   if (s === "failed" || s === "cancelled") return "✗";
@@ -100,6 +113,7 @@ export function executionSectionCounts(
   const todoStatuses = summary.todos.map((item) => item.status);
   const agentStatuses = summary.teammate.agents.map((item) => item.status ?? "");
   const jobStatuses = summary.backgroundJobs.map((item) => item.status);
+  const goal = summary.goal;
 
   return {
     todo: {
@@ -117,10 +131,79 @@ export function executionSectionCounts(
       done: jobStatuses.filter((status) => executionTone("background", status) === "success").length,
       total: jobStatuses.length,
     },
+    goal: {
+      active: goal && goalTone(goal) === "warning" && goal.status.toLowerCase() !== "paused" ? 1 : 0,
+      done: goal && goalTone(goal) === "success" ? 1 : 0,
+      total: goal ? 1 : 0,
+    },
   };
 }
 
 /** True when any section still has live work, so the chips can pulse. */
 export function hasActiveExecution(counts: Record<ExecutionSectionKey, ExecutionSectionCount>): boolean {
   return EXECUTION_SECTION_ORDER.some((key) => counts[key].active > 0);
+}
+
+/**
+ * Sections to render, in stable order. The Goal section exists only when a live
+ * Goal is projected, so Goal-less sessions keep exactly three chips.
+ */
+export function availableExecutionSections(summary: SessionExecutionSummary): ExecutionSectionKey[] {
+  return summary.goal ? [...EXECUTION_SECTION_ORDER, "goal"] : [...EXECUTION_SECTION_ORDER];
+}
+
+export function goalTone(goal: SessionGoalSummary | undefined): ExecutionTone {
+  if (!goal) return "muted";
+  // `active` and `paused` are both unfinished work; the label carries the pause.
+  return toneFrom(GOAL_TONES, goal.status);
+}
+
+/** 45000 -> "45k", 1234 -> "1.2k", 999 -> "999". */
+export function formatGoalTokens(value: number | undefined): string {
+  if (typeof value !== "number" || !Number.isFinite(value) || value < 0) return "0";
+  if (value < 1000) return String(Math.round(value));
+  const thousands = value / 1000;
+  const digits = thousands < 10 ? 1 : 0;
+  return `${thousands.toFixed(digits).replace(/\.0$/, "")}k`;
+}
+
+/** Elapsed seconds as `45s` / `12m` / `2h 5m`. Empty when not projected. */
+export function formatGoalDuration(seconds: number | undefined): string {
+  if (typeof seconds !== "number" || !Number.isFinite(seconds) || seconds < 0) return "";
+  const total = Math.floor(seconds);
+  if (total < 60) return `${total}s`;
+  const minutes = Math.floor(total / 60);
+  if (minutes < 60) return `${minutes}m`;
+  const rest = minutes % 60;
+  return rest > 0 ? `${Math.floor(minutes / 60)}h ${rest}m` : `${Math.floor(minutes / 60)}h`;
+}
+
+/** Budget progress in [0, 1]; undefined when no budget is set (never NaN). */
+export function goalBudgetProgress(goal: SessionGoalSummary | undefined): number | undefined {
+  if (!goal || typeof goal.tokenBudget !== "number" || !Number.isFinite(goal.tokenBudget) || goal.tokenBudget <= 0) return undefined;
+  const used = typeof goal.tokensUsed === "number" && Number.isFinite(goal.tokensUsed) && goal.tokensUsed > 0 ? goal.tokensUsed : 0;
+  return Math.min(1, used / goal.tokenBudget);
+}
+
+/**
+ * Chip caption without the section title, e.g. "45k/100k" or "⟳3".
+ * Empty when neither a budget nor an iteration counter is projected.
+ */
+export function goalChipDetail(goal: SessionGoalSummary | undefined): string {
+  if (!goal) return "";
+  const budget = goalBudgetProgress(goal);
+  if (budget !== undefined) return `${formatGoalTokens(goal.tokensUsed)}/${formatGoalTokens(goal.tokenBudget)}`;
+  if (typeof goal.iteration === "number" && Number.isFinite(goal.iteration) && goal.iteration >= 0) return `⟳${goal.iteration}`;
+  return "";
+}
+
+/** Full chip label: `Goal 45k/100k`, `Goal ⟳3`, paused appends `·暂停`. */
+export function goalChipLabel(
+  goal: SessionGoalSummary | undefined,
+  labels: { readonly title: string; readonly paused: string },
+): string {
+  if (!goal) return "";
+  const detail = goalChipDetail(goal);
+  const base = detail ? `${labels.title} ${detail}` : labels.title;
+  return goal.status.toLowerCase() === "paused" ? `${base} ${labels.paused}` : base;
 }
