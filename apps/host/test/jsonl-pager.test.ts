@@ -288,7 +288,7 @@ describe("jsonl-pager oversized-line carry bound", () => {
     }
   });
 
-  it("支持 custom_message 格式的跨窗口注入消息回放", async () => {
+  it("支持 custom_message 格式的系统通告回放（notice 类型，不再误当成 user 气泡）", async () => {
     const dir2 = join(tmpdir(), `jsonl-custom-${randomUUID()}`);
     await mkdir(dir2, { recursive: true });
     const p = join(dir2, "s.jsonl");
@@ -302,7 +302,8 @@ describe("jsonl-pager oversized-line carry bound", () => {
       await writeFile(p, customLine + "\n");
       const tail = await replayTailFromJsonl(p, 10);
       expect(tail.items).toHaveLength(1);
-      expect(tail.items[0].kind).toBe("user");
+      expect(tail.items[0].kind).toBe("notice");
+      expect(tail.items[0].noticeKind).toBe("teammate");
       expect(tail.items[0].text).toBe("这是一条历史信箱消息");
     } finally {
       await rm(dir2, { recursive: true, force: true });

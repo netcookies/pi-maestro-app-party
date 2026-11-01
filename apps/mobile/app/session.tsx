@@ -12,7 +12,7 @@ import { LineIcon } from "../src/components/LineIcon";
 import { useI18n } from "../src/i18n";
 import { hapticImpactLight, hapticImpactMedium, hapticNotificationSuccess } from "../src/utils/haptics";
 import { SafeAreaView, useSafeAreaInsets } from "react-native-safe-area-context";
-import { sessionTargetKey, type DesktopPlanResponse } from "@maestro-mobile/shared";
+import { sessionTargetKey, type DesktopPlanResponse, type TimelineItem } from "@maestro-mobile/shared";
 import type { PlanEntry } from "../src/plan-queue";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { ExtensionUiDialog } from "../src/components/ExtensionUiDialog";
@@ -807,6 +807,10 @@ export default function SessionScreen() {
       );
     }
     const timelineItem = item.item;
+    // 系统通告（peer / teammate / background / loop / system）：居中浅色行，不占用左右气泡
+    if (timelineItem.kind === "notice") {
+      return <NoticeRow item={timelineItem} theme={theme} t={t} />;
+    }
     const isUser = timelineItem.kind === "user";
     const isTool = timelineItem.kind === "tool";
     const isThinking = timelineItem.kind === "thinking";
@@ -1673,6 +1677,70 @@ export default function SessionScreen() {
       })()}
     </KeyboardAvoidingView>
     </SafeAreaView>
+    </View>
+  );
+}
+
+const NOTICE_ICON: Record<string, { glyph: string; tone: "accent" | "muted" | "warning" }> = {
+  peer: { glyph: "←", tone: "accent" },
+  teammate: { glyph: "●", tone: "muted" },
+  background: { glyph: "▶", tone: "muted" },
+  loop: { glyph: "⟳", tone: "muted" },
+  system: { glyph: "◆", tone: "muted" },
+};
+
+/** 需要用户响应、不得截断的通告类型 */
+const NOTICE_EXPANDED_KINDS = new Set(["peer", "system"]);
+
+/**
+ * 系统通告行：peer / teammate / 后台任务 / 循环 / 系统消息的居中浅色展示。
+ * 不再占用左右气泡位，避免被误读为用户自己说的话。
+ */
+function NoticeRow({
+  item,
+  theme,
+  t,
+}: {
+  item: TimelineItem;
+  theme: ReturnType<typeof useTheme>["theme"];
+  t: ReturnType<typeof useI18n>["t"];
+}) {
+  const noticeKind = item.noticeKind ?? "system";
+  const icon = NOTICE_ICON[noticeKind] ?? NOTICE_ICON.system!;
+  const forcedExpanded = NOTICE_EXPANDED_KINDS.has(noticeKind);
+  const [expanded, setExpanded] = useState(forcedExpanded);
+  const toneColor = icon.tone === "accent" ? theme.accent : icon.tone === "warning" ? theme.warning : theme.muted;
+  const label = noticeKind === "peer" ? t.noticePrefixPeer
+    : noticeKind === "teammate" ? t.noticePrefixTeammate
+    : noticeKind === "background" ? t.noticePrefixBackground
+    : noticeKind === "loop" ? t.noticePrefixLoop
+    : t.noticePrefixSystem;
+  const collapsible = !forcedExpanded && item.text.length > 80;
+  return (
+    <View style={{ alignItems: "center", marginVertical: 4 }}>
+      <TouchableOpacity
+        activeOpacity={collapsible ? 0.6 : 1}
+        disabled={!collapsible}
+        onPress={() => setExpanded((value) => !value)}
+        accessibilityRole={collapsible ? "button" : "text"}
+        accessibilityLabel={`${label} ${item.text}`}
+        style={{
+          maxWidth: "92%",
+          borderWidth: StyleSheet.hairlineWidth,
+          borderColor: theme.border,
+          backgroundColor: theme.cardBg,
+          borderRadius: MIUIX_RADIUS.sm,
+          paddingHorizontal: 10,
+          paddingVertical: 6,
+        }}
+      >
+        <Text style={{ color: toneColor, fontSize: MIUIX_TYPE.footnote2, fontWeight: "700", marginBottom: 2 }} numberOfLines={1}>
+          {icon.glyph} {label}
+        </Text>
+        <Text style={{ color: theme.muted, fontSize: MIUIX_TYPE.footnote2, lineHeight: 17 }} numberOfLines={expanded ? undefined : 1}>
+          {item.text}
+        </Text>
+      </TouchableOpacity>
     </View>
   );
 }

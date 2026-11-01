@@ -261,6 +261,11 @@ export interface I18nDictionary {
   dialogRestore: string;
   dialogAskPill: string;
   dialogPlanPill: string;
+  noticePrefixPeer: string;
+  noticePrefixTeammate: string;
+  noticePrefixBackground: string;
+  noticePrefixLoop: string;
+  noticePrefixSystem: string;
   planEditor: string;
   planDiscussionInput: string;
   planDiscussionPlaceholder: string;
@@ -583,6 +588,11 @@ export const DICTIONARIES: Record<Language, I18nDictionary> = {
     dialogRestore: "展开弹窗",
     dialogAskPill: "待答复",
     dialogPlanPill: "待确认 Plan",
+    noticePrefixPeer: "来自协作会话",
+    noticePrefixTeammate: "子代理",
+    noticePrefixBackground: "后台任务",
+    noticePrefixLoop: "循环",
+    noticePrefixSystem: "系统",
     planEditor: "计划编辑器",
     planDiscussionInput: "计划讨论内容",
     planDiscussionPlaceholder: "输入反馈或问题，继续讨论当前计划",
@@ -916,6 +926,11 @@ export const DICTIONARIES: Record<Language, I18nDictionary> = {
     dialogRestore: "Restore dialog",
     dialogAskPill: "Needs answer",
     dialogPlanPill: "Plan pending",
+    noticePrefixPeer: "From peer session",
+    noticePrefixTeammate: "Sub-agent",
+    noticePrefixBackground: "Background task",
+    noticePrefixLoop: "Loop",
+    noticePrefixSystem: "System",
     planEditor: "Plan editor",
     planDiscussionInput: "Plan discussion",
     planDiscussionPlaceholder: "Enter feedback or a question about the current Plan",

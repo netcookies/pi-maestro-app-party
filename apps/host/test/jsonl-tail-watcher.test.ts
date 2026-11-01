@@ -210,7 +210,7 @@ describe("JsonlTailWatcher (AC1, AC2, AC5)", () => {
     await watcher.dispose();
   });
 
-  it("支持 custom_message（从信箱注入 TUI 的消息增量解析为 user 气泡）", async () => {
+  it("支持 custom_message（从信箱注入 TUI 的通告增量解析为 notice 行，不再误当成 user 气泡）", async () => {
     const { filePath } = await makeFixture([]);
     const received: TimelineItem[] = [];
     const watcher = new JsonlTailWatcher(filePath, (items) => received.push(...items), { pollIntervalMs: 50 });
@@ -228,7 +228,8 @@ describe("JsonlTailWatcher (AC1, AC2, AC5)", () => {
     await watcher.checkNewContent();
 
     expect(received).toHaveLength(1);
-    expect(received[0].kind).toBe("user");
+    expect(received[0].kind).toBe("notice");
+    expect(received[0].noticeKind).toBe("teammate");
     expect(received[0].text).toBe("这是一条通过信箱发出的测试消息");
 
     await watcher.dispose();

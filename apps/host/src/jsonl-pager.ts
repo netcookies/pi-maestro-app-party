@@ -17,6 +17,7 @@
  */
 import { open } from "node:fs/promises";
 import type { TimelineItem, JsonValue } from "@maestro-mobile/shared";
+import { classifyCustomMessage } from "./timeline-notice.js";
 import { imageBlocksFromContent, materializeImages } from "./image-cache.js";
 import { normalizeHostError } from "./host-error.js";
 
@@ -201,19 +202,18 @@ function parseMessageLineItems(
   } catch {
     return [];
   }
-  // 支持跨窗口注入的 custom_message（如从手机信箱注入到 TUI 的消息）
+  // 支持跨窗口注入的 custom_message（按 timeline-notice 单一函数分类为 notice 或 user）
   if (entry.type === "custom_message") {
-    const rawContent = typeof entry.content === "string" ? entry.content : "";
-    const cut = rawContent.indexOf("\n---\n");
-    const userText = cut >= 0 ? rawContent.slice(cut + 5).trim() : rawContent.trim();
-    if (!userText) return [];
+    const classified = classifyCustomMessage(entry);
+    if (!classified) return [];
     const timestamp = typeof entry.timestamp === "number" ? entry.timestamp : (typeof entry.timestamp === "string" ? Date.parse(entry.timestamp) : 0);
     const createdAt = timestamp > 0 ? new Date(timestamp).toISOString() : "";
     return [{
       id: `replay-custom-${index}`,
-      kind: "user",
-      text: userText,
+      kind: classified.kind,
+      text: classified.text,
       createdAt,
+      ...(classified.kind === "notice" ? { noticeKind: classified.noticeKind } : {}),
     }];
   }
 

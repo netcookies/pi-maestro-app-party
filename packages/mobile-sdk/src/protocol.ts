@@ -190,9 +190,11 @@ export type ClientFrame = ProtocolHello | ClientCommand;
 
 export interface TimelineItem {
   id: string;
-  kind: "user" | "assistant" | "thinking" | "tool" | "system";
+  kind: "user" | "assistant" | "thinking" | "tool" | "system" | "notice";
   text: string;
   createdAt: string;
+  /** notice 专属类型：peer / teammate / background / loop / system */
+  noticeKind?: string;
   toolName?: string;
   toolCallId?: string;
   toolArgs?: JsonValue;
@@ -834,6 +836,14 @@ export class ProtocolError extends Error {
   }
 }
 
+export function isTimelineItem(value: unknown): value is TimelineItem {
+  if (!isRecord(value) || !isString(value.id) || !isString(value.createdAt)) return false;
+  if (typeof value.text !== "string") return false;
+  if (!["user", "assistant", "thinking", "tool", "system", "notice"].includes(String(value.kind))) return false;
+  if (value.kind === "notice" && !isString(value.noticeKind)) return false;
+  return true;
+}
+
 export function isSessionPresentation(value: unknown): value is SessionPresentation {
   if (!isRecord(value) || !isRecord(value.control)) return false;
   const control = value.control;
@@ -863,10 +873,10 @@ export function isHostEvent(value: unknown): value is HostEvent {
         && isFiniteNumber(value.revision)
         && value.revision >= 0;
     case "timeline_item":
-      return isString(value.sessionId) && isRecord(value.item)
+      return isString(value.sessionId) && isTimelineItem(value.item)
         && (value.target === undefined || isSessionTargetIdentity(value.target));
     case "timeline_snapshot":
-      return isString(value.sessionId) && Array.isArray(value.items) && value.items.every(isRecord)
+      return isString(value.sessionId) && Array.isArray(value.items) && value.items.every(isTimelineItem)
         && (value.target === undefined || isSessionTargetIdentity(value.target));
     case "timeline_delta":
       return isString(value.sessionId) && isString(value.itemId) && isString(value.delta)

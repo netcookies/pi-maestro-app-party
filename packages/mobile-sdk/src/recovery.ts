@@ -93,7 +93,7 @@ function assertSnapshot(value: unknown, target: SessionTargetIdentity): asserts 
     || !isNonNegativeInteger(value.session.messageCount) || !isNonNegativeInteger(value.session.pendingMessageCount)
     || typeof value.session.updatedAt !== "string" || !Array.isArray(value.timeline)
     || !value.timeline.every((item) => isRecord(item) && typeof item.id === "string" && typeof item.text === "string"
-      && typeof item.createdAt === "string" && ["user", "assistant", "thinking", "tool", "system"].includes(String(item.kind)))
+      && typeof item.createdAt === "string" && ["user", "assistant", "thinking", "tool", "system", "notice"].includes(String(item.kind)))
     || !isNonNegativeInteger(value.nextSeq) || (value.wireSeq !== undefined && !isNonNegativeInteger(value.wireSeq))
     || (value.historyAvailable !== undefined && typeof value.historyAvailable !== "boolean")
     || (value.hasMoreHistory !== undefined && typeof value.hasMoreHistory !== "boolean")) {
