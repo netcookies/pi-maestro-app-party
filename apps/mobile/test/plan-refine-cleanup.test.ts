@@ -104,7 +104,33 @@ describe("shouldClearRefiningPlan", () => {
     })).toBe(true);
   });
 
-  it("does not clear when pending on the same target while refine is not terminal", () => {
+  it("clears a pending plan when a nonterminal refine snapshot arrives for a different plan request ID", () => {
+    // RV-002 核心修复：同 target 出现新 plan request 的非终态 refine 时，旧 pending 暂存必须清理
+    expect(shouldClearRefiningPlan({
+      refineState: live("running", 1, "new-request-id"),
+      refineTargetKey: target,
+      selectedTargetKey: target,
+      refiningPlanTargetKey: target,
+      refiningPlanRequestId: "plan-1",
+      refiningPlanRevision: 1,
+      hasPendingPlanRequest: true,
+    })).toBe(true);
+  });
+
+  it("does not clear during transient target resolution when selectedTargetKey is undefined", () => {
+    // RV-001 核心测试：selectedTargetKey 尚未解析完成时，不误伤本地暂存
+    expect(shouldClearRefiningPlan({
+      refineState: live("running"),
+      refineTargetKey: target,
+      selectedTargetKey: undefined,
+      refiningPlanTargetKey: target,
+      refiningPlanRequestId: "plan-1",
+      refiningPlanRevision: 1,
+      hasPendingPlanRequest: true,
+    })).toBe(false);
+  });
+
+  it("does not clear when pending on the same target while refine is not terminal and requests match", () => {
     expect(shouldClearRefiningPlan({
       refineState: live("ready"),
       refineTargetKey: target,

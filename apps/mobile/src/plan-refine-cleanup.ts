@@ -6,9 +6,10 @@
  * 旧版本的 refine 面板上；若切换到同一 session ID 但不同 target 的页面，也不得泄漏。
  *
  * 判定规则：
+ * - target 未决时不误伤状态（保留）；
  * - 暂存 plan 的 target 与当前选中的 exact target 不匹配 → 清理；
- * - plan 仍在队列中等待裁决：同目标的 refine 达到终态 → 清理；
- * - plan 已移出队列：只有同目标且 request/revision 完全吻合的非终态 refine 才保留，否则清理。
+ * - plan 仍在队列中等待裁决：同目标的 refine 出现不同 planRequestId 或达到终态 → 清理；
+ * - plan 已移出队列：只有同目标、同 planRequestId、同 revision 的非终态 refine 才保留，否则清理。
  */
 import { isMobilePlanRefineTerminalStatus } from "@maestro-mobile/mobile-sdk/protocol";
 import type { PlanRefineState } from "@maestro-mobile/mobile-sdk";
@@ -30,21 +31,30 @@ export interface RefineCleanupInput {
 }
 
 export function shouldClearRefiningPlan(input: RefineCleanupInput): boolean {
+  // 未选定 target（例如进入会话过程中的瞬态 target 尚未就绪），不盲目丢弃暂存
+  if (!input.selectedTargetKey) {
+    return false;
+  }
+
   // 1. Target 隔离：若暂存 plan 记录了 exact target，且当前已选 target 与之不一致，立即清理。
-  if (input.refiningPlanTargetKey && input.selectedTargetKey && input.refiningPlanTargetKey !== input.selectedTargetKey) {
+  if (input.refiningPlanTargetKey && input.refiningPlanTargetKey !== input.selectedTargetKey) {
     return true;
   }
 
   const live = input.refineState?.kind === "live" ? input.refineState : undefined;
   const sameTarget = Boolean(
-    input.refineTargetKey && input.selectedTargetKey && input.refineTargetKey === input.selectedTargetKey,
+    input.refineTargetKey && input.refineTargetKey === input.selectedTargetKey,
   );
   const terminal = live !== undefined && isMobilePlanRefineTerminalStatus(live.snapshot.status);
 
-  // 2. 若 plan 还在等裁决（pending）：只有当同目标的 refine 已经达到终态时才丢弃本地暂存。
+  // 2. 若 plan 还在等裁决（pending）：
+  // - 若同目标的 refine snapshot 已经属于不同的 planRequestId，说明前置请求已被新请求取代，立即清理；
+  // - 若同目标的同一 refine 已经达到终态（applied/discarded/cancelled 等），清理本地暂存。
   if (input.hasPendingPlanRequest) {
-    const isMatchingRequest = input.refiningPlanRequestId === undefined || live?.snapshot.planRequestId === input.refiningPlanRequestId;
-    return Boolean(live && sameTarget && terminal && isMatchingRequest);
+    if (live && sameTarget && input.refiningPlanRequestId && live.snapshot.planRequestId !== input.refiningPlanRequestId) {
+      return true;
+    }
+    return Boolean(live && sameTarget && terminal);
   }
 
   // 3. 若 plan 已不在 pending 队列（例如已提交/已取消）：

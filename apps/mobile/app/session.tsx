@@ -504,8 +504,9 @@ export default function SessionScreen() {
   [id, interactionReady, selectedTargetKey, state.planRequests]);
 
   const isRefiningPlanMatching = Boolean(
-    refiningPlan
-    && (!refiningPlan.target || !selectedTargetKey || sessionTargetKey(refiningPlan.target) === selectedTargetKey),
+    selectedTargetKey
+    && refiningPlan?.target
+    && sessionTargetKey(refiningPlan.target) === selectedTargetKey,
   );
   const visiblePlan = activePlan ?? (isRefiningPlanMatching ? refiningPlan : undefined);
   const isSameRefineTarget = Boolean(
@@ -514,7 +515,10 @@ export default function SessionScreen() {
   const isLiveRefineMatching = Boolean(
     refineState?.kind === "live"
     && isSameRefineTarget
-    && (!visiblePlan || refineState.snapshot.revision === visiblePlan.request.revision),
+    && (!visiblePlan || (
+      refineState.snapshot.revision === visiblePlan.request.revision
+      && refineState.snapshot.planRequestId === visiblePlan.request.requestId
+    )),
   );
   useEffect(() => {
     if (activePlan && refiningPlan && activePlan.request.requestId !== refiningPlan.request.requestId) setRefiningPlan(undefined);
