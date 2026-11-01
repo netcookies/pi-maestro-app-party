@@ -2,6 +2,21 @@
 
 本文件记录 Maestro Mobile 的显著变更。格式基于 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)。
 
+## [0.18.0] — 2026-11-01
+
+### 修复
+
+- 修复 gpt-6.1-sol 评审发现的 target 身份隔离、终态闭包与缓存串味缺陷
+- 修复 refine 跨版本残留导致的弹窗挂起与 peer 来源短标识展示
+- 修复 Review & Refine 应用结果后弹窗不消失缺陷
+
+### 新增
+
+- 抽屉 Todo 段补齐 summary、耗时与迷你柱状条
+- 状态栏新增 Loop chip 与抽屉 Loop 段明细
+- 状态栏新增 Goal chip 与抽屉 Goal 段明细
+- 系统通告消息归位，不再误渲染为用户发言
+
 ## [0.17.1] — 2026-10-28
 
 ### 新增
