@@ -503,7 +503,11 @@ export default function SessionScreen() {
     && sessionTargetKey(entry.target) === selectedTargetKey) : undefined,
   [id, interactionReady, selectedTargetKey, state.planRequests]);
 
-  const visiblePlan = activePlan ?? refiningPlan;
+  const isRefiningPlanMatching = Boolean(
+    refiningPlan
+    && (!refiningPlan.target || !selectedTargetKey || sessionTargetKey(refiningPlan.target) === selectedTargetKey),
+  );
+  const visiblePlan = activePlan ?? (isRefiningPlanMatching ? refiningPlan : undefined);
   const isSameRefineTarget = Boolean(
     refineTarget && selectedTargetKey && sessionTargetKey(refineTarget) === selectedTargetKey,
   );
@@ -522,10 +526,13 @@ export default function SessionScreen() {
     const hasPending = state.planRequests.some((entry) =>
       entry.sessionId === id && entry.status === "pending" && entry.request.requestId === refiningPlan.request.requestId);
     const refineTargetKey = refineTarget ? sessionTargetKey(refineTarget) : undefined;
+    const refiningPlanTargetKey = refiningPlan.target ? sessionTargetKey(refiningPlan.target) : undefined;
     if (shouldClearRefiningPlan({
       refineState,
       refineTargetKey,
       selectedTargetKey,
+      refiningPlanTargetKey,
+      refiningPlanRequestId: refiningPlan.request.requestId,
       refiningPlanRevision: refiningPlan.request.revision,
       hasPendingPlanRequest: hasPending,
     })) {
