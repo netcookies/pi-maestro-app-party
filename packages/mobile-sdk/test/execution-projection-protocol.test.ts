@@ -51,3 +51,33 @@ describe("SessionExecutionSummary goal projection", () => {
     expect(isHostEvent(event)).toBe(false);
   });
 });
+
+describe("SessionExecutionSummary loop projection", () => {
+  const loop = { id: "loop-1", kind: "prompt", task: "watch CI", status: "scheduled", runCount: 3, maxRuns: 10, intervalMs: 300000 };
+
+  it("keeps a well-formed loop array", () => {
+    const event = executionEvent({ loop: [loop] });
+    expect(isHostEvent(event)).toBe(true);
+    expect((event.summary as Record<string, unknown>).loop).toEqual([loop]);
+  });
+
+  it("drops only the invalid loop field", () => {
+    const missingRuns = executionEvent({ loop: [{ id: "loop-1", task: "watch", status: "scheduled", maxRuns: 10 }] });
+    expect(isHostEvent(missingRuns)).toBe(true);
+    expect("loop" in (missingRuns.summary as Record<string, unknown>)).toBe(false);
+
+    const notAnArray = executionEvent({ loop: loop });
+    expect(isHostEvent(notAnArray)).toBe(true);
+    expect("loop" in (notAnArray.summary as Record<string, unknown>)).toBe(false);
+
+    const negative = executionEvent({ loop: [{ ...loop, runCount: -1 }] });
+    expect(isHostEvent(negative)).toBe(true);
+    expect("loop" in (negative.summary as Record<string, unknown>)).toBe(false);
+  });
+
+  it("accepts an empty loop array as a cleared snapshot", () => {
+    const event = executionEvent({ loop: [] });
+    expect(isHostEvent(event)).toBe(true);
+    expect((event.summary as Record<string, unknown>).loop).toEqual([]);
+  });
+});

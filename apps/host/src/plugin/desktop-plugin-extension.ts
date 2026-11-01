@@ -4,7 +4,7 @@ import { join, normalize } from "node:path";
 import { randomUUID } from "node:crypto";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import type { ImageContent, Model, TextContent } from "@earendil-works/pi-ai";
-import type { BackgroundJobSummary, DesktopPluginEvent, DesktopPluginExecutionSummary, DesktopPluginModel, DesktopPluginRuntimeStatus, DesktopPluginSessionSummary, DesktopPluginTarget, DesktopAskRequest, DesktopPlanResponse, JsonValue, MonitorTodoSummary, SessionGoalSummary, TeammateAgentState } from "@maestro-mobile/shared";
+import type { BackgroundJobSummary, DesktopPluginEvent, DesktopPluginExecutionSummary, DesktopPluginModel, DesktopPluginRuntimeStatus, DesktopPluginSessionSummary, DesktopPluginTarget, DesktopAskRequest, DesktopPlanResponse, JsonValue, MonitorTodoSummary, SessionGoalSummary, SessionLoopSummary, TeammateAgentState } from "@maestro-mobile/shared";
 import { DESKTOP_PEER_FEATURE, DESKTOP_PLAN_REFINE_FEATURE } from "@maestro-mobile/shared";
 import { registerDesktopPeerCommand } from "./desktop-peer-extension.js";
 import { DesktopPluginIpcClient } from "./desktop-plugin-ipc.js";
@@ -208,6 +208,46 @@ function goalSnapshotFromSessionEntries(entries: readonly unknown[]): SessionGoa
     ...(verificationFailures !== undefined ? { verificationFailures } : {}),
     ...(acceptance && acceptance.length > 0 ? { acceptance } : {}),
   };
+}
+
+/**
+ * Latest Flow Loop snapshot from `loop-state` custom entries. Flow persists the
+ * whole scheduler state on every change, so only the newest entry is read and
+ * nothing is accumulated.
+ */
+function loopSnapshotFromSessionEntries(entries: readonly unknown[]): SessionLoopSummary[] | undefined {
+  let data: unknown;
+  for (let index = entries.length - 1; index >= 0; index -= 1) {
+    const candidate = entries[index];
+    if (!isRecord(candidate) || candidate.type !== "custom" || candidate.customType !== "loop-state") continue;
+    data = candidate.data;
+    break;
+  }
+  if (!isRecord(data) || !Array.isArray(data.loops)) return undefined;
+  const loops: SessionLoopSummary[] = [];
+  const ids = new Set<string>();
+  for (const value of data.loops.slice(0, 32)) {
+    if (!isRecord(value)) continue;
+    const id = boundedText(value.id, 128);
+    const status = boundedText(value.status, 64);
+    const task = typeof value.task === "string" ? value.task.slice(0, 512) : "";
+    const runCount = nonNegativeInteger(value.runCount);
+    const maxRuns = nonNegativeInteger(value.maxRuns);
+    const kind = boundedText(value.kind, 32);
+    const intervalMs = nonNegativeInteger(value.intervalMs);
+    if (!id || !status || !task.trim() || runCount === undefined || maxRuns === undefined || ids.has(id)) continue;
+    ids.add(id);
+    loops.push({
+      id,
+      task,
+      status,
+      runCount,
+      maxRuns,
+      ...(kind ? { kind } : {}),
+      ...(intervalMs !== undefined ? { intervalMs } : {}),
+    });
+  }
+  return loops;
 }
 
 function flowTodoSnapshot(entries?: readonly unknown[]): MonitorTodoSummary[] | undefined {
@@ -883,13 +923,15 @@ export function createDesktopPluginExtension(options: DesktopPluginExtensionOpti
       const entries = executionTodoEntries?.();
       const todos = flowTodoSnapshot(entries);
       const goal = entries ? goalSnapshotFromSessionEntries(entries) : undefined;
-      // A missing Todo projection must not hide an otherwise valid Goal projection.
-      if (!todos && !goal) return undefined;
+      const loops = entries ? loopSnapshotFromSessionEntries(entries) : undefined;
+      // A missing Todo projection must not hide otherwise valid Goal/Loop projections.
+      if (!todos && !goal && !(loops && loops.length > 0)) return undefined;
       const agents = [...executionAgents.values()].slice(0, 64);
       return {
         revision: executionRevision,
         todos: todos ?? [],
         ...(goal ? { goal } : {}),
+        ...(loops && loops.length > 0 ? { loop: loops } : {}),
         teammate: {
           running: agents.filter((agent) => agent.status === "running" || agent.status === "retrying").length,
           total: agents.length,
@@ -903,7 +945,7 @@ export function createDesktopPluginExtension(options: DesktopPluginExtensionOpti
       if (!executionSessionId || !client) return;
       const next = currentExecutionSummary();
       if (!next) return;
-      const fingerprint = JSON.stringify({ todos: next.todos, goal: next.goal, teammate: next.teammate, backgroundJobs: next.backgroundJobs });
+      const fingerprint = JSON.stringify({ todos: next.todos, goal: next.goal, loop: next.loop, teammate: next.teammate, backgroundJobs: next.backgroundJobs });
       if (fingerprint === executionFingerprint && executionRevision > 0) return;
       executionFingerprint = fingerprint;
       executionRevision += 1;
@@ -983,6 +1025,7 @@ export function createDesktopPluginExtension(options: DesktopPluginExtensionOpti
         publishExecutionSummary();
       });
       eventBus.on("maestro:todo-state-changed", () => scheduleExecutionSummaryRefresh());
+      eventBus.on("loop:update", () => scheduleExecutionSummaryRefresh());
     }
 
     const currentSummary = (): DesktopPluginSessionSummary => ({

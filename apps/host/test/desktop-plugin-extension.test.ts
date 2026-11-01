@@ -504,6 +504,53 @@ describe("Desktop Plugin extension (TUI side)", () => {
     await waitFor(() => registry.list()[0]?.executionSummary?.goal === undefined);
   });
 
+  it("projects only the latest Loop snapshot with a whitelisted shape", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "maestro-ext-loop-"));
+    const registry = new DesktopPluginRegistry();
+    server = new DesktopPluginIpcServer({
+      socketPath: join(dir, "plugin.sock"),
+      secret: "test-secret",
+      registry,
+      supportedEvents: ["execution_summary"],
+    });
+    await server.start();
+    const loopEntry = (loops: unknown[]) => ({ type: "custom", customType: "loop-state", data: { loops, updatedAt: 1 } });
+    const liveLoop = {
+      id: "loop-1",
+      kind: "prompt",
+      task: "watch CI",
+      status: "scheduled",
+      runCount: 3,
+      maxRuns: 10,
+      intervalMs: 300000,
+      createdAt: 1,
+      cwd: "/work/app",
+    };
+    const fake = fakePi({
+      models: [],
+      entries: [
+        loopEntry([{ ...liveLoop, id: "stale", task: "stale snapshot", status: "running" }]),
+        loopEntry([liveLoop, { id: "broken", task: "missing status", runCount: 1, maxRuns: 2 }]),
+      ],
+    });
+    createDesktopPluginExtension({ socketPath: join(dir, "plugin.sock"), secret: "test-secret" })(fake.pi as never);
+    fake.emit("session_start", { type: "session_start", reason: "startup" });
+    await waitFor(() => registry.list()[0]?.executionSummary?.loop?.length === 1);
+    expect(registry.list()[0].executionSummary?.loop).toEqual([{
+      id: "loop-1",
+      kind: "prompt",
+      task: "watch CI",
+      status: "scheduled",
+      runCount: 3,
+      maxRuns: 10,
+      intervalMs: 300000,
+    }]);
+
+    fake.setSessionEntries([loopEntry([liveLoop]), loopEntry([])]);
+    fake.emitBus("loop:update", { jobs: [] });
+    await waitFor(() => registry.list()[0]?.executionSummary?.loop === undefined);
+  });
+
   it("publishes an empty root Todo summary when no durable Todo state exists", async () => {    const dir = await mkdtemp(join(tmpdir(), "maestro-ext-empty-todo-"));
     const registry = new DesktopPluginRegistry();
     server = new DesktopPluginIpcServer({ socketPath: join(dir, "plugin.sock"), secret: "test-secret", registry, supportedEvents: ["execution_summary"] });

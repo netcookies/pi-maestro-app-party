@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import type { SessionExecutionSummary } from "@maestro-mobile/mobile-sdk/protocol";
 import {
   EXECUTION_SECTION_ORDER,
+  activeLoopCount,
   availableExecutionSections,
   executionGlyph,
   executionSectionCounts,
@@ -9,12 +10,15 @@ import {
   formatExecutionId,
   formatGoalDuration,
   formatGoalTokens,
+  formatLoopInterval,
   goalBudgetProgress,
   goalChipDetail,
   goalChipLabel,
   goalTone,
   hasActiveExecution,
   isExecutionItemDone,
+  loopChipLabel,
+  loopTone,
 } from "../src/execution-presentation";
 
 const sampleSummary: SessionExecutionSummary = {
@@ -88,6 +92,45 @@ describe("execution-presentation", () => {
     expect(executionSectionCounts(sampleSummary).goal).toEqual({ active: 0, done: 0, total: 0 });
     expect(executionSectionCounts({ ...sampleSummary, goal: { text: "Ship", status: "active" } }).goal)
       .toEqual({ active: 1, done: 0, total: 1 });
+  });
+
+  it("adds the loop section only while a loop is still active", () => {
+    const running = { id: "loop-1", task: "watch CI", status: "scheduled", runCount: 3, maxRuns: 10, intervalMs: 300000 };
+    const finished = { ...running, status: "completed" };
+    expect(availableExecutionSections({ ...sampleSummary, loop: [running] })).toEqual(["todo", "teammate", "background", "loop"]);
+    expect(availableExecutionSections({ ...sampleSummary, loop: [finished] })).toEqual(["todo", "teammate", "background"]);
+    expect(activeLoopCount([running, finished])).toBe(1);
+    expect(activeLoopCount(undefined)).toBe(0);
+    expect(executionSectionCounts({ ...sampleSummary, loop: [running, finished] }).loop)
+      .toEqual({ active: 1, done: 1, total: 2 });
+  });
+
+  it("labels the loop chip with progress or an active count", () => {
+    const labels = { title: "Loop", count: "loops" };
+    const running = { id: "loop-1", task: "watch CI", status: "scheduled", runCount: 3, maxRuns: 10 };
+    const running2 = { ...running, id: "loop-2", status: "running", runCount: 1, maxRuns: 4 };
+    expect(loopChipLabel(undefined, labels)).toBe("");
+    expect(loopChipLabel([{ ...running, status: "completed" }], labels)).toBe("");
+    expect(loopChipLabel([running], labels)).toBe("Loop ⟳ 3/10");
+    expect(loopChipLabel([running, running2], labels)).toBe("Loop ⟳ 2 loops");
+    expect(loopTone(undefined)).toBe("muted");
+    expect(loopTone([running])).toBe("warning");
+    expect(loopTone([running, { ...running2, status: "failed" }])).toBe("error");
+    expect(loopTone([{ ...running, status: "completed" }])).toBe("success");
+  });
+
+  it("maps loop status to tones, glyphs, and intervals", () => {
+    expect(executionTone("loop", "scheduled")).toBe("warning");
+    expect(executionTone("loop", "completed")).toBe("success");
+    expect(executionTone("loop", "cancelled")).toBe("error");
+    expect(executionGlyph("loop", "scheduled")).toBe("◷");
+    expect(executionGlyph("loop", "running")).toBe("■");
+    expect(executionGlyph("loop", "completed")).toBe("✓");
+    expect(executionGlyph("loop", "failed")).toBe("✗");
+    expect(formatLoopInterval(300000)).toBe("5m");
+    expect(formatLoopInterval(90000)).toBe("1m");
+    expect(formatLoopInterval(undefined)).toBe("");
+    expect(formatLoopInterval(0)).toBe("");
   });
 
   it("keeps goal work out of the shared active pulse", () => {

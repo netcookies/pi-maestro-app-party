@@ -326,6 +326,11 @@ export interface I18nDictionary {
   executionGoalPauseReason: string;
   executionGoalAcceptance: string;
   executionGoalVerificationFailures: string;
+  executionLoop: string;
+  executionLoopEmpty: string;
+  executionLoopCount: string;
+  executionLoopRuns: string;
+  executionLoopInterval: string;
   executionStatusLabels: Record<string, string>;
   expand: string;
   code: string;
@@ -662,6 +667,11 @@ export const DICTIONARIES: Record<Language, I18nDictionary> = {
     executionGoalPauseReason: "暂停原因",
     executionGoalAcceptance: "验收命令",
     executionGoalVerificationFailures: "验收失败",
+    executionLoop: "循环",
+    executionLoopEmpty: "暂无循环任务",
+    executionLoopCount: "循环",
+    executionLoopRuns: "轮次",
+    executionLoopInterval: "间隔",
     executionStatusLabels: {
       completed: "已完成",
       in_progress: "进行中",
@@ -677,6 +687,7 @@ export const DICTIONARIES: Record<Language, I18nDictionary> = {
       unknown: "未知",
       active: "进行中",
       paused: "已暂停",
+      scheduled: "已排期",
     },
     expand: "展开",
     code: "代码",
@@ -1011,6 +1022,11 @@ export const DICTIONARIES: Record<Language, I18nDictionary> = {
     executionGoalPauseReason: "Pause reason",
     executionGoalAcceptance: "Acceptance commands",
     executionGoalVerificationFailures: "Verification failures",
+    executionLoop: "Loop",
+    executionLoopEmpty: "No loops",
+    executionLoopCount: "loops",
+    executionLoopRuns: "Runs",
+    executionLoopInterval: "Interval",
     executionStatusLabels: {
       completed: "completed",
       in_progress: "in progress",
@@ -1026,6 +1042,7 @@ export const DICTIONARIES: Record<Language, I18nDictionary> = {
       unknown: "unknown",
       active: "active",
       paused: "paused",
+      scheduled: "scheduled",
     },
     expand: "Expand",
     code: "Code",

@@ -4,12 +4,12 @@
  * Kept free of React and i18n so the tone/active rules can be unit-tested and
  * reused by both the header chips and the detail sheet.
  */
-import type { SessionExecutionSummary, SessionGoalSummary } from "@maestro-mobile/mobile-sdk/protocol";
+import type { SessionExecutionSummary, SessionGoalSummary, SessionLoopSummary } from "@maestro-mobile/mobile-sdk/protocol";
 
-export type ExecutionSectionKey = "todo" | "teammate" | "background" | "goal";
+export type ExecutionSectionKey = "todo" | "teammate" | "background" | "goal" | "loop";
 export type ExecutionTone = "success" | "warning" | "error" | "muted";
 
-/** Sections with a generic row model. `goal` renders its own detail block. */
+/** Sections with a generic row model. `goal`/`loop` render their own blocks. */
 export const EXECUTION_SECTION_ORDER: readonly ExecutionSectionKey[] = ["todo", "teammate", "background"];
 
 const TODO_TONES: Record<string, ExecutionTone> = {
@@ -52,6 +52,14 @@ const GOAL_TONES: Record<string, ExecutionTone> = {
   failed: "error",
 };
 
+const LOOP_TONES: Record<string, ExecutionTone> = {
+  scheduled: "warning",
+  running: "warning",
+  completed: "success",
+  failed: "error",
+  cancelled: "error",
+};
+
 function toneFrom(table: Record<string, ExecutionTone>, status: string | undefined): ExecutionTone {
   if (!status) return "muted";
   return table[status.toLowerCase()] ?? "muted";
@@ -61,6 +69,7 @@ export function executionTone(section: ExecutionSectionKey, status: string | und
   if (section === "todo") return toneFrom(TODO_TONES, status);
   if (section === "teammate") return toneFrom(TEAMMATE_TONES, status);
   if (section === "goal") return toneFrom(GOAL_TONES, status);
+  if (section === "loop") return toneFrom(LOOP_TONES, status);
   return toneFrom(BACKGROUND_TONES, status);
 }
 
@@ -82,6 +91,13 @@ export function executionGlyph(section: ExecutionSectionKey, status: string | un
     return "□";
   }
   if (section === "goal") return s === "paused" ? "❙❙" : "◎";
+  if (section === "loop") {
+    if (s === "completed") return "✓";
+    if (s === "running") return "■";
+    if (s === "scheduled") return "◷";
+    if (s === "failed" || s === "cancelled") return "✗";
+    return "□";
+  }
   if (s === "completed") return "✓";
   if (s === "running") return "■";
   if (s === "failed" || s === "cancelled") return "✗";
@@ -114,6 +130,7 @@ export function executionSectionCounts(
   const agentStatuses = summary.teammate.agents.map((item) => item.status ?? "");
   const jobStatuses = summary.backgroundJobs.map((item) => item.status);
   const goal = summary.goal;
+  const loops = summary.loop ?? [];
 
   return {
     todo: {
@@ -136,6 +153,11 @@ export function executionSectionCounts(
       done: goal && goalTone(goal) === "success" ? 1 : 0,
       total: goal ? 1 : 0,
     },
+    loop: {
+      active: loops.filter((item) => executionTone("loop", item.status) === "warning").length,
+      done: loops.filter((item) => executionTone("loop", item.status) === "success").length,
+      total: loops.length,
+    },
   };
 }
 
@@ -149,7 +171,45 @@ export function hasActiveExecution(counts: Record<ExecutionSectionKey, Execution
  * Goal is projected, so Goal-less sessions keep exactly three chips.
  */
 export function availableExecutionSections(summary: SessionExecutionSummary): ExecutionSectionKey[] {
-  return summary.goal ? [...EXECUTION_SECTION_ORDER, "goal"] : [...EXECUTION_SECTION_ORDER];
+  return [
+    ...EXECUTION_SECTION_ORDER,
+    ...(summary.goal ? ["goal" as const] : []),
+    ...(activeLoopCount(summary.loop) > 0 ? ["loop" as const] : []),
+  ];
+}
+
+/** Loops still being scheduled or running; terminal loops do not keep the chip alive. */
+export function activeLoopCount(loops: readonly SessionLoopSummary[] | undefined): number {
+  return (loops ?? []).filter((item) => executionTone("loop", item.status) === "warning").length;
+}
+
+export function loopTone(loops: readonly SessionLoopSummary[] | undefined): ExecutionTone {
+  const list = loops ?? [];
+  if (list.length === 0) return "muted";
+  if (list.some((item) => executionTone("loop", item.status) === "error")) return "error";
+  if (list.some((item) => executionTone("loop", item.status) === "warning")) return "warning";
+  return list.every((item) => executionTone("loop", item.status) === "success") ? "success" : "muted";
+}
+
+/** Interval milliseconds as a compact duration (`5m` for 300000). */
+export function formatLoopInterval(intervalMs: number | undefined): string {
+  if (typeof intervalMs !== "number" || !Number.isFinite(intervalMs) || intervalMs <= 0) return "";
+  return formatGoalDuration(Math.round(intervalMs / 1000));
+}
+
+/**
+ * Loop chip label: one loop shows its progress (`Loop ⟳ 3/10`), several show
+ * the active count (`Loop ⟳ 2 loops`). Empty when nothing is active.
+ */
+export function loopChipLabel(
+  loops: readonly SessionLoopSummary[] | undefined,
+  labels: { readonly title: string; readonly count: string },
+): string {
+  const list = loops ?? [];
+  const active = list.filter((item) => executionTone("loop", item.status) === "warning");
+  if (active.length === 0) return "";
+  if (active.length === 1) return `${labels.title} ⟳ ${active[0].runCount}/${active[0].maxRuns}`;
+  return `${labels.title} ⟳ ${active.length} ${labels.count}`;
 }
 
 export function goalTone(goal: SessionGoalSummary | undefined): ExecutionTone {

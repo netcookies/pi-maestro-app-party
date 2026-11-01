@@ -364,12 +364,28 @@ export interface SessionGoalSummary {
   acceptance?: string[];
 }
 
+/**
+ * Flow Loop snapshot projected from the latest `loop-state` session entry.
+ * The whole array is one snapshot; consumers must never accumulate entries.
+ */
+export interface SessionLoopSummary {
+  id: string;
+  kind?: string;
+  /** Loop task text, truncated by the producer to 512 chars. */
+  task: string;
+  status: string;
+  runCount: number;
+  maxRuns: number;
+  intervalMs?: number;
+}
+
 /** Session-scoped execution data. The target is mandatory to prevent heuristic attribution. */
 export interface SessionExecutionSummary {
   target: SessionTargetIdentity;
   revision: number;
   todos: MonitorTodoSummary[];
   goal?: SessionGoalSummary;
+  loop?: SessionLoopSummary[];
   teammate: {
     running: number;
     total: number;
@@ -1234,6 +1250,7 @@ function isSessionExecutionSummary(value: unknown): value is SessionExecutionSum
   // Layered validation: a malformed optional projection loses only that field so an
   // unrelated producer bug cannot suppress the whole execution summary.
   dropInvalidOptional(value, "goal", isSessionGoalSummary);
+  dropInvalidOptional(value, "loop", (candidate) => Array.isArray(candidate) && candidate.every(isSessionLoopSummary));
   return true;
 }
 
@@ -1254,6 +1271,13 @@ function isSessionGoalSummary(value: unknown): value is SessionGoalSummary {
     if (candidate !== undefined && (!isFiniteNumber(candidate) || candidate < 0 || !Number.isInteger(candidate))) return false;
   }
   return value.acceptance === undefined || isStringArray(value.acceptance);
+}
+
+function isSessionLoopSummary(value: unknown): value is SessionLoopSummary {
+  if (!isRecord(value) || !isString(value.id) || !isString(value.task) || !isString(value.status)) return false;
+  if (!isNonNegativeSafeInteger(value.runCount) || !isNonNegativeSafeInteger(value.maxRuns)) return false;
+  if (value.kind !== undefined && !isString(value.kind)) return false;
+  return value.intervalMs === undefined || isNonNegativeSafeInteger(value.intervalMs);
 }
 
 function isMonitorTodoSummary(value: unknown): value is MonitorTodoSummary {

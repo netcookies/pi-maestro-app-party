@@ -31,6 +31,7 @@ import { useSessionDraft, draftScopeKey } from "../src/drafts";
 import { selectExecutionSummaryForSession, executionTodoCounts } from "../src/session-execution";
 import {
   EXECUTION_SECTION_ORDER,
+  activeLoopCount,
   availableExecutionSections,
   executionGlyph,
   executionSectionCounts,
@@ -38,11 +39,14 @@ import {
   formatExecutionId,
   formatGoalDuration,
   formatGoalTokens,
+  formatLoopInterval,
   goalBudgetProgress,
   goalChipLabel,
   goalTone,
   hasActiveExecution,
   isExecutionItemDone,
+  loopChipLabel,
+  loopTone,
   type ExecutionSectionCount,
   type ExecutionSectionKey,
 } from "../src/execution-presentation";
@@ -114,20 +118,25 @@ export default function SessionScreen() {
       teammate: { title: t.executionTeammate, count: executionCounts.teammate, empty: t.executionEmptyTeammate },
       background: { title: t.executionBackground, count: executionCounts.background, empty: t.executionEmptyBackground },
       goal: { title: t.executionGoal, count: executionCounts.goal, empty: t.executionGoalEmpty },
+      loop: { title: t.executionLoop, count: executionCounts.loop, empty: t.executionLoopEmpty },
     }
     : {
       todo: { title: "", count: { active: 0, done: 0, total: 0 }, empty: "" },
       teammate: { title: "", count: { active: 0, done: 0, total: 0 }, empty: "" },
       background: { title: "", count: { active: 0, done: 0, total: 0 }, empty: "" },
       goal: { title: "", count: { active: 0, done: 0, total: 0 }, empty: "" },
+      loop: { title: "", count: { active: 0, done: 0, total: 0 }, empty: "" },
     };
   const executionSections = executionSummary ? availableExecutionSections(executionSummary) : EXECUTION_SECTION_ORDER;
   const executionGoal = executionSummary?.goal;
   const executionGoalLabel = goalChipLabel(executionGoal, { title: t.executionGoal, paused: t.executionGoalPaused });
   const goalBudget = goalBudgetProgress(executionGoal);
+  const executionLoops = executionSummary?.loop;
+  const executionLoopLabel = loopChipLabel(executionLoops, { title: t.executionLoop, count: t.executionLoopCount });
   const hasSectionContent = (section: ExecutionSectionKey): boolean => {
     if (!executionSummary) return false;
     if (section === "goal") return Boolean(executionSummary.goal);
+    if (section === "loop") return activeLoopCount(executionSummary.loop) > 0;
     return executionSectionMeta[section].count.total > 0;
   };
 
@@ -173,7 +182,7 @@ export default function SessionScreen() {
         color: toneColor(executionTone("background", item.status)),
       }));
     }
-    // Goal 段由专用区块渲染，不进入通用行模型。
+    // Goal/Loop 段由专用区块渲染，不进入通用行模型。
     return [];
   }, [executionSummary, executionSection, theme, t]);
 
@@ -1010,13 +1019,18 @@ export default function SessionScreen() {
           {executionSections.map((section) => {
             const meta = executionSectionMeta[section];
             const isGoal = section === "goal";
-            const live = isGoal ? true : meta.count.active > 0;
+            const isLoop = section === "loop";
+            const live = isGoal || isLoop ? true : meta.count.active > 0;
             const tone = isGoal
               ? toneColor(goalTone(executionGoal))
-              : live ? theme.warning : meta.count.total > 0 && meta.count.done === meta.count.total ? theme.success : theme.muted;
+              : isLoop
+                ? toneColor(loopTone(executionLoops))
+                : live ? theme.warning : meta.count.total > 0 && meta.count.done === meta.count.total ? theme.success : theme.muted;
             const chipText = isGoal
               ? executionGoalLabel
-              : live ? `${meta.title} ${meta.count.active} · ${meta.count.done}/${meta.count.total}` : `${meta.title} ${meta.count.done}/${meta.count.total}`;
+              : isLoop
+                ? executionLoopLabel
+                : live ? `${meta.title} ${meta.count.active} · ${meta.count.done}/${meta.count.total}` : `${meta.title} ${meta.count.done}/${meta.count.total}`;
             return (
               <TouchableOpacity
                 key={section}
@@ -1025,9 +1039,11 @@ export default function SessionScreen() {
                 accessibilityRole="button"
                 accessibilityLabel={isGoal
                   ? executionGoalLabel
-                  : live
-                    ? `${meta.title} ${meta.count.active} ${t.executionRunning}, ${meta.count.done} ${t.executionDone}, ${meta.count.total}`
-                    : `${meta.title} ${meta.count.done} ${t.executionDone} / ${meta.count.total}`}
+                  : isLoop
+                    ? executionLoopLabel
+                    : live
+                      ? `${meta.title} ${meta.count.active} ${t.executionRunning}, ${meta.count.done} ${t.executionDone}, ${meta.count.total}`
+                      : `${meta.title} ${meta.count.done} ${t.executionDone} / ${meta.count.total}`}
               >
                 <View style={[styles.executionChipDot, { backgroundColor: tone }]} />
                 <Text style={[styles.executionChipText, { color: theme.text }]} numberOfLines={1}>
@@ -1425,7 +1441,9 @@ export default function SessionScreen() {
         onClose={() => setExecutionDetailsOpen(false)}
         contentHeight={executionSection === "goal"
           ? Math.min(Math.round(Dimensions.get("window").height * 0.78), 420)
-          : Math.min(Math.round(Dimensions.get("window").height * 0.78), 220 + executionRows.length * 48)}
+          : executionSection === "loop"
+            ? Math.min(Math.round(Dimensions.get("window").height * 0.78), 200 + (executionLoops?.length ?? 0) * 72)
+            : Math.min(Math.round(Dimensions.get("window").height * 0.78), 220 + executionRows.length * 48)}
         containerStyle={{ maxHeight: Math.round(Dimensions.get("window").height * 0.82) }}
       >
         {executionSummary && (
@@ -1451,7 +1469,7 @@ export default function SessionScreen() {
               {executionSections.map((section) => {
                 const meta = executionSectionMeta[section];
                 const selected = executionSection === section;
-                const title = section === "goal" ? t.executionGoal : meta.title;
+                const title = section === "goal" ? t.executionGoal : section === "loop" ? t.executionLoop : meta.title;
                 const total = section === "goal" ? (executionGoal ? 1 : 0) : meta.count.total;
                 return (
                   <TouchableOpacity
@@ -1547,6 +1565,37 @@ export default function SessionScreen() {
                     ))}
                   </View>
                 ) : null}
+              </ScrollView>
+            ) : executionSection === "loop" && executionLoops && executionLoops.length > 0 ? (
+              <ScrollView
+                style={{ maxHeight: Math.round(Dimensions.get("window").height * 0.52) }}
+                contentContainerStyle={{ gap: 10, paddingBottom: 16 }}
+                showsVerticalScrollIndicator
+              >
+                {executionLoops.map((item) => (
+                  <View key={item.id} style={styles.executionRow}>
+                    <View style={styles.executionRowHeader}>
+                      <Text style={[styles.executionGlyph, { color: toneColor(executionTone("loop", item.status)) }]}>
+                        {executionGlyph("loop", item.status)}
+                      </Text>
+                      <View style={styles.executionRowMain}>
+                        <View style={styles.executionRowHeadline}>
+                          <Text style={[styles.executionIdTag, { color: theme.dim }]}>{item.id}</Text>
+                          <Text style={[styles.executionRowTitle, { color: theme.text }]} numberOfLines={2}>
+                            {item.task}
+                          </Text>
+                        </View>
+                        <Text style={[styles.executionRowMeta, { color: theme.muted }]} numberOfLines={1}>
+                          {[
+                            executionStatusLabel(item.status),
+                            `${t.executionLoopRuns} ${item.runCount}/${item.maxRuns}`,
+                            formatLoopInterval(item.intervalMs) ? `${t.executionLoopInterval} ${formatLoopInterval(item.intervalMs)}` : "",
+                          ].filter(Boolean).join(" · ")}
+                        </Text>
+                      </View>
+                    </View>
+                  </View>
+                ))}
               </ScrollView>
             ) : (
               <ScrollView
