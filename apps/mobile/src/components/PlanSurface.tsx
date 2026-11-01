@@ -157,6 +157,15 @@ export function PlanSurface({
     setCancelAfterSnapshot(false);
   }, [cancelAfterSnapshot, liveRefine, isRunning]);
 
+  // refine 进入 terminal 终态（applied / discarded / cancelled / failed）时自动退出 refine 模式
+  React.useEffect(() => {
+    if (!liveRefine) return;
+    const status = liveRefine.snapshot.status;
+    if (status === "applied" || status === "discarded" || status === "cancelled" || status === "failed") {
+      setNativeRefineOpen(false);
+    }
+  }, [liveRefine?.snapshot.status]);
+
   const actions = useMemo(() => {
     const available = request.availableActions.length > 0 ? request.availableActions : ["execute"];
     return [...new Set(available.map(normalizePlanAction))];
@@ -297,11 +306,13 @@ export function PlanSurface({
 
   const handleApplyResult = (): void => {
     if (!latestTurn?.turnId) return;
-    dispatchRefineAction({ action: "apply", turnId: latestTurn.turnId });
+    void dispatchRefineAction({ action: "apply", turnId: latestTurn.turnId });
+    setNativeRefineOpen(false);
   };
 
   const handleDiscardResult = (): void => {
-    dispatchRefineAction({ action: "discard" });
+    void dispatchRefineAction({ action: "discard" });
+    setNativeRefineOpen(false);
   };
 
   const closeNativeRefine = (): void => {

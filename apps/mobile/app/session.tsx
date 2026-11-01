@@ -457,6 +457,28 @@ export default function SessionScreen() {
     if (activePlan && refiningPlan && activePlan.request.requestId !== refiningPlan.request.requestId) setRefiningPlan(undefined);
   }, [activePlan, refiningPlan]);
 
+  // refine 进入 terminal 终态（applied / discarded / cancelled 等）时，清理本地暂存的 refiningPlan，
+  // 避免弹窗在 apply 之后因为 visiblePlan 残留而永远挂起。
+  useEffect(() => {
+    if (!refineState || refineState.kind !== "live") return;
+    const status = refineState.snapshot.status;
+    const isTerminalStatus = status === "applied" || status === "discarded" || status === "cancelled" || status === "failed";
+    if (isTerminalStatus && refineTarget?.sessionId === id) {
+      setRefiningPlan(undefined);
+    }
+  }, [refineState, refineTarget, id]);
+
+  // 若当前会话不再有 pending plan（例如收到 desktop_plan_cleared 被移出队列），同样清理 refiningPlan。
+  useEffect(() => {
+    if (!refiningPlan) return;
+    const stillPending = state.planRequests.some((entry) =>
+      entry.sessionId === id && entry.status === "pending" && entry.request.requestId === refiningPlan.request.requestId);
+    const refineLive = refineState?.kind === "live" && refineTarget?.sessionId === id && refineState.snapshot.status !== "applied";
+    if (!stillPending && !refineLive) {
+      setRefiningPlan(undefined);
+    }
+  }, [state.planRequests, refiningPlan, id, refineState, refineTarget]);
+
   const control = session?.presentation?.control;
   const canPrompt = control?.canPrompt === true;
   const canAbort = control?.canAbort === true;
