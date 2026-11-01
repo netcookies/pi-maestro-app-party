@@ -195,6 +195,8 @@ export interface TimelineItem {
   createdAt: string;
   /** notice 专属类型：peer / teammate / background / loop / system */
   noticeKind?: string;
+  /** 通告来源短标识（如 peer 会话短 id），用于区分同一类通告 */
+  noticeSource?: string;
   toolName?: string;
   toolCallId?: string;
   toolArgs?: JsonValue;
@@ -885,6 +887,7 @@ export function isTimelineItem(value: unknown): value is TimelineItem {
   if (typeof value.text !== "string") return false;
   if (!["user", "assistant", "thinking", "tool", "system", "notice"].includes(String(value.kind))) return false;
   if (value.kind === "notice" && !isString(value.noticeKind)) return false;
+  if (value.noticeSource !== undefined && !isString(value.noticeSource)) return false;
   return true;
 }
 

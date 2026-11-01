@@ -6,7 +6,7 @@
  * 本函数作为唯一权威，把 custom_message 正确分类为 notice，未知类型保守保持 user。
  */
 export type CustomMessageClassification =
-  | { kind: "notice"; noticeKind: string; text: string }
+  | { kind: "notice"; noticeKind: string; text: string; source?: string }
   | { kind: "user"; text: string };
 
 const NOTICE_KIND_MAP: Record<string, string> = {
@@ -70,6 +70,15 @@ function splitLegacyMarker(text: string): string {
 
 const MAX_NOTICE_CHARS = 2000;
 
+/** peer 短 id：优先取 details.peer.sessionId，回退解析文本前缀里的 peer id */
+function peerSource(details: unknown, rawText: string): string | undefined {
+  const peer = typeof details === "object" && details !== null ? (details as Record<string, unknown>).peer : undefined;
+  const sessionId = typeof peer === "object" && peer !== null ? (peer as Record<string, unknown>).sessionId : undefined;
+  if (typeof sessionId === "string" && sessionId.trim()) return sessionId.trim().slice(0, 8);
+  const match = /^(?:←|→)\s*(?:来自|发给)\s+peer\s+([A-Za-z0-9-]{4,})/u.exec(rawText);
+  return match ? match[1].slice(0, 8) : undefined;
+}
+
 export function classifyCustomMessage(entry: Record<string, unknown>): CustomMessageClassification | null {
   const customType = typeof entry.customType === "string" ? entry.customType : "";
   let rawText = extractContentText(entry.content);
@@ -87,7 +96,8 @@ export function classifyCustomMessage(entry: Record<string, unknown>): CustomMes
 
   const noticeKind = NOTICE_KIND_MAP[customType];
   if (noticeKind) {
-    return { kind: "notice", noticeKind, text };
+    const source = customType === "mb-peer" ? peerSource(entry.details, rawText) : undefined;
+    return { kind: "notice", noticeKind, text, ...(source ? { source } : {}) };
   }
 
   // 保守兜底：未知 customType 保留 user，避免不可逆把历史用户输入降级为系统通告

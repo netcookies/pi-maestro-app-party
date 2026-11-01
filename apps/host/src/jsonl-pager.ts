@@ -213,7 +213,9 @@ function parseMessageLineItems(
       kind: classified.kind,
       text: classified.text,
       createdAt,
-      ...(classified.kind === "notice" ? { noticeKind: classified.noticeKind } : {}),
+      ...(classified.kind === "notice"
+        ? { noticeKind: classified.noticeKind, ...(classified.source ? { noticeSource: classified.source } : {}) }
+        : {}),
     }];
   }
 

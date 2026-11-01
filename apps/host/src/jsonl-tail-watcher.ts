@@ -272,7 +272,9 @@ export class JsonlTailWatcher {
         kind: classified.kind,
         text: classified.text,
         createdAt: timestamp,
-        ...(classified.kind === "notice" ? { noticeKind: classified.noticeKind } : {}),
+        ...(classified.kind === "notice"
+        ? { noticeKind: classified.noticeKind, ...(classified.source ? { noticeSource: classified.source } : {}) }
+        : {}),
       }];
     }
 

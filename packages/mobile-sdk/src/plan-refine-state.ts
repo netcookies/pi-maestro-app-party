@@ -119,6 +119,7 @@ export class PlanRefineTracker {
     const turns = update.turn
       ? upsertTurn(live.turns, update.turn)
       : live.turns;
+    const terminal = isTerminal(update.status) ? update.status : live.terminal;
     this.emit({
       ...live,
       snapshot: {
@@ -128,6 +129,7 @@ export class PlanRefineTracker {
       },
       turns,
       expectedSequence: update.sequence + 1,
+      ...(terminal !== undefined ? { terminal } : {}),
     });
     return "applied";
   }

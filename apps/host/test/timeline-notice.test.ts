@@ -17,7 +17,27 @@ describe("classifyCustomMessage", () => {
       kind: "notice",
       noticeKind: "peer",
       text: "继续联调一下接口",
+      source: "peer-ses",
     });
+  });
+
+  it("keeps the peer short id even when details.peer is absent", () => {
+    expect(classifyCustomMessage({
+      type: "custom_message",
+      customType: "mb-peer",
+      content: "← 来自 peer 3f9a2c\n\nHost 侧字段已确认。",
+    })).toEqual({
+      kind: "notice",
+      noticeKind: "peer",
+      text: "Host 侧字段已确认。",
+      source: "3f9a2c",
+    });
+
+    expect(classifyCustomMessage({
+      type: "custom_message",
+      customType: "teammate-started",
+      content: "● @explorer spawned @researcher",
+    })).not.toHaveProperty("source");
   });
 
   it("classifies teammate started and complete as teammate notices", () => {

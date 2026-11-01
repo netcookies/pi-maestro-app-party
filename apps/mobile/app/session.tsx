@@ -12,7 +12,8 @@ import { LineIcon } from "../src/components/LineIcon";
 import { useI18n } from "../src/i18n";
 import { hapticImpactLight, hapticImpactMedium, hapticNotificationSuccess } from "../src/utils/haptics";
 import { SafeAreaView, useSafeAreaInsets } from "react-native-safe-area-context";
-import { sessionTargetKey, type DesktopPlanResponse, type TimelineItem } from "@maestro-mobile/shared";
+import { sessionTargetKey, type DesktopPlanResponse, type SessionTargetIdentity, type TimelineItem } from "@maestro-mobile/shared";
+import type { MobilePlanRefineAction } from "@maestro-mobile/mobile-sdk/protocol";
 import type { PlanEntry } from "../src/plan-queue";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { ExtensionUiDialog } from "../src/components/ExtensionUiDialog";
@@ -502,6 +503,11 @@ export default function SessionScreen() {
   [id, interactionReady, selectedTargetKey, state.planRequests]);
 
   const visiblePlan = activePlan ?? refiningPlan;
+  const isLiveRefineMatching = Boolean(
+    refineState?.kind === "live"
+    && refineTarget?.sessionId === id
+    && (!visiblePlan || refineState.snapshot.revision === visiblePlan.request.revision),
+  );
   useEffect(() => {
     if (activePlan && refiningPlan && activePlan.request.requestId !== refiningPlan.request.requestId) setRefiningPlan(undefined);
   }, [activePlan, refiningPlan]);
@@ -522,7 +528,13 @@ export default function SessionScreen() {
     if (!refiningPlan) return;
     const stillPending = state.planRequests.some((entry) =>
       entry.sessionId === id && entry.status === "pending" && entry.request.requestId === refiningPlan.request.requestId);
-    const refineLive = refineState?.kind === "live" && refineTarget?.sessionId === id && refineState.snapshot.status !== "applied";
+    const refineLive = refineState?.kind === "live"
+      && refineTarget?.sessionId === id
+      && refineState.snapshot.status !== "applied"
+      && refineState.snapshot.status !== "discarded"
+      && refineState.snapshot.status !== "cancelled"
+      && refineState.snapshot.status !== "failed"
+      && refineState.snapshot.revision === refiningPlan.request.revision;
     if (!stillPending && !refineLive) {
       setRefiningPlan(undefined);
     }
@@ -573,9 +585,19 @@ export default function SessionScreen() {
     if (response.status === "decision" && response.decision.action === "refine") {
       const entry = state.planRequests.find((item) => item.request.requestId === response.requestId && item.status === "pending");
       if (entry) setRefiningPlan(entry);
+    } else {
+      setRefiningPlan(undefined);
     }
     respondPlan(response.requestId, response, target);
   };
+
+  const handleRefineAction = useCallback(async (action: MobilePlanRefineAction, target: SessionTargetIdentity) => {
+    const verb = action.action.action;
+    if (verb === "apply" || verb === "discard" || verb === "cancel") {
+      setRefiningPlan(undefined);
+    }
+    return sendRefineAction(action, target);
+  }, [sendRefineAction]);
 
   const handlePlanCancel = (request: { requestId: string }, target: Parameters<typeof sessionTargetKey>[0]) => {
     cancelPlan(request.requestId, target);
@@ -1402,7 +1424,7 @@ export default function SessionScreen() {
       />
       </View>
 
-      {Boolean(visiblePlan || (refineState?.kind === "live" && refineTarget?.sessionId === id)) && (
+      {Boolean(visiblePlan || isLiveRefineMatching) && (
         <PlanSurface
           request={visiblePlan?.request ?? {
             type: "desktop_plan_request" as const,
@@ -1423,13 +1445,13 @@ export default function SessionScreen() {
           }}
           target={visiblePlan?.target ?? refineTarget!}
           initialDraft={visiblePlan?.editedMarkdown}
-          initialRefineOpen={Boolean(refineState?.kind === "live" && refineTarget?.sessionId === id)}
+          initialRefineOpen={isLiveRefineMatching}
           onResponse={handlePlanResponse}
           onCancel={handlePlanCancel}
           supportsRefine={supportsRefine}
           refineState={refineState}
           refineTarget={refineTarget}
-          onRefineAction={sendRefineAction}
+          onRefineAction={handleRefineAction}
           onListModels={listModels}
           sessionModel={modelIdOf(session?.model) ?? currentModelId}
         />
@@ -1932,7 +1954,7 @@ function NoticeRow({
         }}
       >
         <Text style={{ color: toneColor, fontSize: MIUIX_TYPE.footnote2, fontWeight: "700", marginBottom: 2 }} numberOfLines={1}>
-          {icon.glyph} {label}
+          {icon.glyph} {label}{item.noticeSource ? ` · ${item.noticeSource}` : ""}
         </Text>
         <Text style={{ color: theme.muted, fontSize: MIUIX_TYPE.footnote2, lineHeight: 17 }} numberOfLines={expanded ? undefined : 1}>
           {item.text}
@@ -2032,7 +2054,7 @@ function makeStyles(theme: ReturnType<typeof useTheme>["theme"]) {
     searchResultIndex: { fontSize: MIUIX_TYPE.footnote1, fontWeight: "700", width: 30 },
     searchResultText: { fontSize: MIUIX_TYPE.footnote1, flex: 1, lineHeight: 18 },
     list: { flex: 1 },
-    listContent: { padding: 16 },
+    listContent: { padding: 16, paddingBottom: 120 },
     bubble: {
       borderRadius: MIUIX_RADIUS.md,
       padding: MIUIX_SPACE.md,
