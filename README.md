@@ -24,6 +24,7 @@
   <ol>
     <li><a href="#about-the-project">About the project</a></li>
     <li><a href="#getting-started">Getting started</a></li>
+    <li><a href="#remote-sessions-with-herdr">Remote sessions with Herdr</a></li>
     <li><a href="#usage">Usage</a></li>
     <li><a href="#peer-messaging">Peer messaging (<code>/mb-peer</code>)</a></li>
     <li><a href="#documentation">Documentation</a></li>
@@ -98,6 +99,53 @@ Prefer to build locally? See the [development guide](docs/development.md#run-the
 In the app, open **Settings** and scan the desktop QR code. Alternatively, enter the **8-character short code** and the computer's LAN address. Open **Sessions** and select an existing session.
 
 The app saves your connection and reconnects automatically. The default endpoint is `ws://<computer-ip>:4739/ws`; the Host requires a token. Use a private tunnel for access outside your LAN.
+
+<a id="remote-sessions-with-herdr"></a>
+
+## Remote sessions with Herdr
+
+By default, Maestro Mobile connects to and interacts with Pi sessions that are already open on your desktop. When paired with **[Herdr](https://herdr.dev)**, you unlock full remote lifecycle management: create new independent desktop sessions, resume historical conversations, and close sessions gracefully from your phone.
+
+<p align="center">
+  <a href="docs/images/screenshots/ios-launch-session.png"><img src="docs/images/screenshots/ios-launch-session.png" width="220" alt="Launch new session via Herdr: runtime and directory selector" /></a>
+</p>
+
+### What is Herdr?
+
+[Herdr](https://herdr.dev) is a terminal workspace manager for AI coding agents. It runs as a lightweight daemon in the background to host terminal multiplexer panes and workspaces for CLI agents like Pi, Claude, Codex, and others.
+
+- **Website & Documentation:** [https://herdr.dev](https://herdr.dev)
+- **Minimum supported version:** `≥ 0.9.5`
+
+### 1. Install Herdr on your computer
+
+Install Herdr using Homebrew (macOS) or the official install script:
+
+```bash
+# macOS via Homebrew
+brew install herdr
+
+# Or via official installer
+curl -fsSL https://herdr.dev/install.sh | bash
+```
+
+Verify that Herdr is installed and its background daemon is ready:
+
+```bash
+herdr --version      # should report >= 0.9.5
+herdr status server  # checks daemon status
+```
+
+*Note: Running `herdr` once in your terminal starts the background server daemon automatically.*
+
+### 2. How to use with Maestro Mobile
+
+Once Herdr is running on your host machine, the Mobile app automatically detects it:
+
+- **Launch new sessions (`+` button):** Tap the `+` button in the top-right corner of the **Sessions** tab. Select your desired runtime (`Auto`, `Pi-bolt`, or standard `Pi`), choose from your favorite workspace directories or enter a custom path, optionally specify a label, and tap **Launch Session**. Herdr spawns an isolated workspace pane on your desktop and the mobile app attaches immediately.
+- **Manage favorite directories (`/maestro-mobile manager-fav`):** Run `/maestro-mobile manager-fav` in your desktop Pi TUI to bookmark your frequently used project directories, or edit them in the app under **Settings → Herdr session launch → Favorite directories**.
+- **Resume historical sessions:** When viewing a past read-only session, tap the top resume action to recreate a live workspace in Herdr and continue the discussion with full previous context.
+- **Gracefully close sessions:** Close a session from the session details menu; Host sends `Ctrl+D` to the Herdr pane, cleanly exiting the Pi process and automatically recycling empty panes.
 
 <a id="peer-messaging"></a>
 

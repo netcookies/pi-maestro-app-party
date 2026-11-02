@@ -24,6 +24,7 @@
   <ol>
     <li><a href="#about-the-project">项目介绍</a></li>
     <li><a href="#getting-started">快速开始</a></li>
+    <li><a href="#remote-sessions-with-herdr">结合 Herdr 远程管理会话</a></li>
     <li><a href="#usage">日常使用</a></li>
     <li><a href="#peer-messaging">Pi 会话消息（/mb-peer）</a></li>
     <li><a href="#documentation">相关文档</a></li>
@@ -102,6 +103,53 @@ pi install npm:pi-maestro-flow
 在 App 的 **Settings** 中扫描桌面二维码，也可输入 **8 位短码**与电脑局域网地址。进入 **Sessions**，选择已有会话。
 
 App 会保存连接并自动重连。默认地址为 `ws://<computer-ip>:4739/ws`，Host 始终要求 token；局域网外访问请使用私有隧道。
+
+<a id="remote-sessions-with-herdr"></a>
+
+## 结合 Herdr 远程管理会话
+
+默认情况下，Maestro Mobile 仅用于查看和操作电脑桌面端「已打开」的 Pi 会话窗口。与 **[Herdr](https://herdr.dev)** 搭配使用后，即可解锁完整的远程生命周期管理能力：直接在手机端新建独立会话、恢复历史对话并远程优雅关闭会话。
+
+<p align="center">
+  <a href="docs/images/screenshots/ios-launch-session.png"><img src="docs/images/screenshots/ios-launch-session.png" width="220" alt="通过 Herdr 新建会话：运行时与常用工作目录选择" /></a>
+</p>
+
+### 什么是 Herdr？
+
+[Herdr](https://herdr.dev) 是专为 AI 编码智能体设计的终端多工作区复用管理器（Terminal Workspace Manager for AI Coding Agents）。它在后台作为轻量级守护进程运行，集中托管和维护多个命令行智能体（如 Pi、Claude、Codex 等）的工作区窗口与进程生命周期。
+
+- **官方网站与文档**：[https://herdr.dev](https://herdr.dev)
+- **最低版本要求**：`≥ 0.9.5`
+
+### 1. 在电脑端安装 Herdr
+
+在运行 Host 的电脑上通过 Homebrew（macOS）或官方脚本安装：
+
+```bash
+# macOS (Homebrew)
+brew install herdr
+
+# 或使用官方安装脚本
+curl -fsSL https://herdr.dev/install.sh | bash
+```
+
+检查安装与后台服务状态：
+
+```bash
+herdr --version      # 要求 >= 0.9.5
+herdr status server  # 查看本地后台守护服务状态
+```
+
+*提示：在终端中直接运行一次 `herdr`，后台守护服务会自动启动。*
+
+### 2. 在 Maestro Mobile 中使用
+
+当电脑端已安装并启动 Herdr 后，移动端会自动识别并在界面中启用对应功能：
+
+- **远程新建会话（右上角 `+` 号）**：进入 App「会话」Tab，点击右上角的 `+` 按钮即可进入新建页。选择目标运行时（`自动` / `Pi-bolt` / `Pi`），从常用工作目录中点选工程路径（或手动输入绝对路径），设置可选窗口标签后点击「启动会话」。Herdr 将在桌面自动拉起独立工作区窗口，手机端立即接管并开始对话。
+- **维护常用工作目录（`/maestro-mobile manager-fav`）**：在桌面 Pi TUI 执行 `/maestro-mobile manager-fav`，呼出弹窗快速收藏常用项目路径；也可在手机端「设置 → Herdr 会话启动 → 常用工作目录」中集中管理。
+- **历史会话一键恢复**：在手机上查阅历史只读会话时，详情页顶栏提供恢复入口，Herdr 会自动在桌面新建窗口并加载历史上下文继续执行。
+- **远程优雅结束会话**：在会话详情页菜单选择关闭会话，Host 会通过 Herdr 向目标窗口发送 `Ctrl+D` 信号让智能体安全退出，并在开启「自动清理空窗口」时自动回收窗格。
 
 <a id="peer-messaging"></a>
 
