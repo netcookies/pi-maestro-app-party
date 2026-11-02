@@ -2,6 +2,12 @@
 
 本文件记录 Maestro Mobile 的显著变更。格式基于 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)。
 
+## [0.19.2] — 2026-11-02
+
+### 修复
+
+- 恢复 FTB 经典卡片配色并补齐中断恢复提示归类
+
 ## [0.19.1] — 2026-11-02
 
 ### 文档
