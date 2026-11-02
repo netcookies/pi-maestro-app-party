@@ -139,6 +139,18 @@ export interface I18nDictionary {
   linesOutput: string;
   fullscreen: string;
   close: string;
+  tool: string;
+  error: string;
+  collapse: string;
+  toolOutputFullscreen: string;
+  toolCalls: (count: number) => string;
+  viewAllCalls: (count: number) => string;
+  closeToolDetails: string;
+  statusRunning: string;
+  statusFailed: string;
+  statusCompleted: string;
+  statusPending: string;
+  hasFailedCalls: string;
   enterPairCode: string;
   pairCodeHint: string;
   scanQrTitle: string;
@@ -489,6 +501,18 @@ export const DICTIONARIES: Record<Language, I18nDictionary> = {
     linesOutput: "行输出",
     fullscreen: "全屏",
     close: "关闭",
+    tool: "工具",
+    error: "错误",
+    collapse: "收起",
+    toolOutputFullscreen: "全屏查看工具输出",
+    toolCalls: (count: number) => `工具调用 ${count} 次`,
+    viewAllCalls: (count: number) => `查看全部 ${count} 次调用`,
+    closeToolDetails: "关闭工具详情",
+    statusRunning: "运行中",
+    statusFailed: "失败",
+    statusCompleted: "已完成",
+    statusPending: "处理中",
+    hasFailedCalls: "，有失败调用",
     enterPairCode: "输入 8 位配对码",
     pairCodeHint: "在 Mac 终端运行 /maestro-mobile qr 后的 8 位字符",
     scanQrTitle: "扫描配对二维码",
@@ -853,6 +877,18 @@ export const DICTIONARIES: Record<Language, I18nDictionary> = {
     linesOutput: "lines",
     fullscreen: "Fullscreen",
     close: "Close",
+    tool: "Tool",
+    error: "Error",
+    collapse: "Collapse",
+    toolOutputFullscreen: "View tool output in fullscreen",
+    toolCalls: (count: number) => `${count} Tool Call${count === 1 ? "" : "s"}`,
+    viewAllCalls: (count: number) => `View all ${count} calls`,
+    closeToolDetails: "Close tool details",
+    statusRunning: "Running",
+    statusFailed: "Failed",
+    statusCompleted: "Completed",
+    statusPending: "Pending",
+    hasFailedCalls: ", with failed calls",
     enterPairCode: "Enter 8-digit Pair Code",
     pairCodeHint: "Run /maestro-mobile qr on Mac terminal to get 8-digit code",
     scanQrTitle: "Scan Pairing QR Code",

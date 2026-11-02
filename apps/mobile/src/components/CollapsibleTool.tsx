@@ -66,12 +66,12 @@ export function CollapsibleTool({ toolName, text, isError, summary }: Props) {
         onPress={toggleExpanded}
         activeOpacity={0.7}
         accessibilityRole="button"
-        accessibilityLabel={`${toolName}，${expanded ? "收起" : "展开"}`}
+        accessibilityLabel={`${isError ? t.error : t.tool} ${toolName}，${expanded ? t.collapse : t.expand}`}
         accessibilityState={{ expanded }}
       >
         <View style={styles.header}>
           <Text style={[styles.icon, { color: isError ? theme.error : theme.accent }]}>
-            {isError ? "错误" : "工具"}
+            {isError ? t.error : t.tool}
           </Text>
           <Text style={[styles.name, { color: theme.toolTitle }]} numberOfLines={1}>
             {toolName}
@@ -109,7 +109,7 @@ export function CollapsibleTool({ toolName, text, isError, summary }: Props) {
                 style={styles.fullscreenBtn}
                 onPress={() => setFullscreen(true)}
                 accessibilityRole="button"
-                accessibilityLabel="全屏查看工具输出"
+                accessibilityLabel={t.toolOutputFullscreen}
               >
                 <Text style={[styles.fullscreenText, { color: theme.accent }]}>{t.fullscreen}</Text>
               </TouchableOpacity>
@@ -123,7 +123,7 @@ export function CollapsibleTool({ toolName, text, isError, summary }: Props) {
         <View style={[styles.fsRoot, { backgroundColor: theme.bg }]}>
           <View style={[styles.fsHeader, { backgroundColor: theme.headerBg, borderBottomColor: theme.border }]}>
             <Text style={[styles.fsTitle, { color: theme.text }]}>
-              {isError ? "错误" : "工具"} {toolName}
+              {isError ? t.error : t.tool} {toolName}
             </Text>
             <TouchableOpacity onPress={() => setFullscreen(false)} style={styles.fsClose}>
               <Text style={[styles.fsCloseText, { color: theme.accent }]}>✕ {t.close}</Text>

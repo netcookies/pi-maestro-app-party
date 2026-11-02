@@ -907,10 +907,14 @@ export default function SessionScreen() {
       );
     }
     const timelineItem = item.item;
-    // 系统通告（peer / teammate / background / loop / system）：靠左卡片，不占用左右气泡
+    // 系统通告（peer / teammate / background / loop / system）：靠左卡片，宽度与工具卡一致（90%），使用标准间距
     if (timelineItem.kind === "notice" || (timelineItem.kind === "user" && isSystemContinuationPrompt(timelineItem.text))) {
       const noticeItem = timelineItem.kind === "notice" ? timelineItem : { ...timelineItem, kind: "notice" as const, noticeKind: "system" };
-      return <NoticeRow item={noticeItem} theme={theme} t={t} />;
+      return (
+        <View style={styles.bubbleToolGroup}>
+          <NoticeRow item={noticeItem} theme={theme} t={t} />
+        </View>
+      );
     }
     const isUser = timelineItem.kind === "user";
     const isTool = timelineItem.kind === "tool";
@@ -1986,31 +1990,44 @@ function NoticeRow({
   const toneColor = icon.tone === "accent" ? theme.accent : icon.tone === "warning" ? theme.warning : theme.muted;
   const collapsible = !forcedExpanded && item.text.length > 80;
   return (
-    <View style={{ width: "100%", alignItems: "flex-start", paddingHorizontal: MIUIX_SPACE.md, marginVertical: 10 }}>
+    <View
+      style={{
+        width: "100%",
+        borderWidth: 1,
+        borderColor: theme.border,
+        backgroundColor: theme.cardBg,
+        borderRadius: 8,
+        padding: 10,
+      }}
+    >
       <TouchableOpacity
         activeOpacity={collapsible ? 0.6 : 1}
         disabled={!collapsible}
         onPress={() => setExpanded((value) => !value)}
-        accessibilityRole={collapsible ? "button" : "text"}
-        accessibilityLabel={`${t.noticeLabel} ${item.text}`}
-        style={{
-          width: "100%",
-          maxWidth: "90%",
-          borderWidth: StyleSheet.hairlineWidth,
-          borderColor: theme.border,
-          backgroundColor: theme.cardBg,
-          borderRadius: MIUIX_RADIUS.md,
-          paddingHorizontal: 12,
-          paddingVertical: 9,
-        }}
+        accessibilityRole={collapsible ? "button" : "none"}
+        accessibilityLabel={`${t.noticeLabel}${item.noticeSource ? ` · ${item.noticeSource}` : ""}${collapsible ? `，${expanded ? t.collapse : t.expand}` : ""}`}
+        style={{ flexDirection: "row", alignItems: "center", gap: 8 }}
       >
-        <Text style={{ color: toneColor, fontSize: MIUIX_TYPE.footnote2, fontWeight: "700", marginBottom: 4 }} numberOfLines={1}>
-          {icon.glyph} {t.noticeLabel}{item.noticeSource ? ` · ${item.noticeSource}` : ""}
+        <Text style={{ fontSize: 13, fontWeight: "700", color: toneColor }}>
+          {icon.glyph} {t.noticeLabel}
         </Text>
-        <Text style={{ color: theme.muted, fontSize: MIUIX_TYPE.footnote2, lineHeight: 17 }} numberOfLines={expanded ? undefined : 1}>
-          {item.text}
-        </Text>
+        {item.noticeSource ? (
+          <Text style={{ flex: 1, fontSize: 13, fontWeight: "700", color: theme.toolTitle }} numberOfLines={1}>
+            · {item.noticeSource}
+          </Text>
+        ) : (
+          <View style={{ flex: 1 }} />
+        )}
+        {collapsible && (
+          <Text style={{ fontSize: 11, color: theme.muted }}>{expanded ? "▾" : "▸"}</Text>
+        )}
       </TouchableOpacity>
+      <Text
+        style={{ color: theme.text, fontSize: 12, lineHeight: 18, marginTop: 6 }}
+        numberOfLines={expanded ? undefined : 2}
+      >
+        {item.text}
+      </Text>
     </View>
   );
 }
@@ -2131,7 +2148,7 @@ function makeStyles(theme: ReturnType<typeof useTheme>["theme"]) {
       alignSelf: "flex-start",
       width: "90%",
       maxWidth: "90%",
-      marginBottom: 10,
+      marginBottom: MIUIX_SPACE.md,
     },
     bubbleActionRow: {
       flexDirection: "row",
