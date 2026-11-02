@@ -20,6 +20,7 @@ import { hapticImpactMedium } from "../utils/haptics";
 
 export interface ComposerActions {
   send(text: string, images?: { data: string; mime: string }[]): Promise<void>;
+  followUp?(message: string): Promise<void>;
   abort?(): Promise<void> | void;
   listSkills?(): Promise<{ name: string; description?: string }[]>;
   pickImage?(): Promise<{ data: string; mime: string } | null>;
@@ -49,7 +50,9 @@ interface Props {
   onTextChange?: (text: string) => void;
 }
 
-export function ChatComposer({ actions, sending, isStreaming = false, onAbort, skills = [], placeholder, disabled = false, text: controlledText, onTextChange }: Props) {
+const EMPTY_SKILLS: (string | { name: string; description?: string })[] = [];
+
+export function ChatComposer({ actions, sending, isStreaming = false, onAbort, skills = EMPTY_SKILLS, placeholder, disabled = false, text: controlledText, onTextChange }: Props) {
   const { theme } = useTheme();
   const { t } = useI18n();
   const insets = useSafeAreaInsets();
@@ -135,8 +138,9 @@ export function ChatComposer({ actions, sending, isStreaming = false, onAbort, s
   };
 
   useEffect(() => {
-    setLoadedSkills(Array.isArray(skills) ? skills : []);
-  }, [skills]);
+    if (skills === loadedSkills) return;
+    setLoadedSkills(Array.isArray(skills) ? skills : EMPTY_SKILLS);
+  }, [skills, loadedSkills]);
 
   const loadSkills = async () => {
     if (!actions.listSkills) return;
@@ -154,6 +158,23 @@ export function ChatComposer({ actions, sending, isStreaming = false, onAbort, s
   const skillItems = loadedSkills
     .map((skill) => (typeof skill === "string" ? { name: skill, description: undefined } : skill))
     .filter((skill) => typeof skill.name === "string" && skill.name.toLowerCase().includes(skillQuery.toLowerCase()));
+
+  const [followUpSending, setFollowUpSending] = useState(false);
+  const handleFollowUp = async () => {
+    const message = textValue.trim();
+    if (!message || !actions.followUp || followUpSending) return;
+    void hapticImpactMedium();
+    setFollowUpSending(true);
+    try {
+      await actions.followUp(message);
+      if (controlledText === undefined) setText("");
+      onTextChange?.("");
+    } catch (error) {
+      Alert.alert(t.followUp, error instanceof Error ? error.message : t.followUpFailed);
+    } finally {
+      setFollowUpSending(false);
+    }
+  };
 
   const canSend = (textValue.trim().length > 0 || images.length > 0) && !sending;
 
@@ -285,60 +306,58 @@ export function ChatComposer({ actions, sending, isStreaming = false, onAbort, s
         </View>
         {/* 运行中：停止按钮（旋转进度环 + 中间方块）；空闲中：发送按钮（纸飞机） */}
         {isStreaming ? (
-          <TouchableOpacity
-            style={[
-              styles.sendButton,
-              {
-                backgroundColor: theme.cardBg,
-                borderColor: theme.border,
-                borderWidth: 1,
-                shadowColor: theme.accent,
-                shadowOpacity: 0.25,
-                shadowRadius: 5,
-                elevation: 3,
-                // T7：无 abort 能力（只读会话）时隐藏停止按钮，不伪造成可点击
-                opacity: onAbort ?? actions.abort ? 1 : 0.45,
-              },
-            ]}
-            hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
-            accessibilityRole="button"
-            accessibilityLabel={t.stopRunning}
-            disabled={!(onAbort ?? actions.abort)}
-            onPress={() => {
-              void hapticImpactMedium();
-              onAbort?.() ?? actions.abort?.();
-            }}
-          >
-            {/* 外层旋转圆环：带缺口的强调色边框环 */}
-            <Animated.View
-              style={{
-                position: "absolute",
-                width: 28,
-                height: 28,
-                borderRadius: 14,
-                borderWidth: 2,
-                borderColor: theme.accent,
-                borderTopColor: "transparent",
-                transform: [
-                  {
-                    rotate: spinAnim.interpolate({
-                      inputRange: [0, 1],
-                      outputRange: ["0deg", "360deg"],
-                    }),
-                  },
-                ],
+          <View style={styles.streamingActions}>
+            {actions.followUp ? (
+              <TouchableOpacity
+                style={[styles.sendButton, { backgroundColor: theme.accent, opacity: textValue.trim() && !followUpSending && !disabled ? 1 : 0.45 }]}
+                hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                accessibilityRole="button"
+                accessibilityLabel={t.followUp}
+                accessibilityState={{ disabled: !textValue.trim() || followUpSending || disabled, busy: followUpSending }}
+                disabled={!textValue.trim() || followUpSending || disabled}
+                onPress={() => { void handleFollowUp(); }}
+              >
+                <LineIcon name="send" size={16} color="#fff" strokeWidth={2.2} />
+              </TouchableOpacity>
+            ) : null}
+            <TouchableOpacity
+              style={[
+                styles.sendButton,
+                {
+                  backgroundColor: theme.cardBg,
+                  borderColor: theme.border,
+                  borderWidth: 1,
+                  shadowColor: theme.accent,
+                  shadowOpacity: 0.25,
+                  shadowRadius: 5,
+                  elevation: 3,
+                  opacity: onAbort ?? actions.abort ? 1 : 0.45,
+                },
+              ]}
+              hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+              accessibilityRole="button"
+              accessibilityLabel={t.stopRunning}
+              disabled={!(onAbort ?? actions.abort)}
+              onPress={() => {
+                void hapticImpactMedium();
+                onAbort?.() ?? actions.abort?.();
               }}
-            />
-            {/* 中间停止实心方块 */}
-            <View
-              style={{
-                width: 10,
-                height: 10,
-                borderRadius: 2,
-                backgroundColor: theme.accent,
-              }}
-            />
-          </TouchableOpacity>
+            >
+              <Animated.View
+                style={{
+                  position: "absolute",
+                  width: 28,
+                  height: 28,
+                  borderRadius: 14,
+                  borderWidth: 2,
+                  borderColor: theme.accent,
+                  borderTopColor: "transparent",
+                  transform: [{ rotate: spinAnim.interpolate({ inputRange: [0, 1], outputRange: ["0deg", "360deg"] }) }],
+                }}
+              />
+              <View style={{ width: 10, height: 10, borderRadius: 2, backgroundColor: theme.accent }} />
+            </TouchableOpacity>
+          </View>
         ) : (
           <TouchableOpacity
             style={[
@@ -749,6 +768,7 @@ const styles = StyleSheet.create({
     maxHeight: 480,
   },
   input: { flex: 1, borderRadius: 8, paddingHorizontal: 12, paddingRight: 42, paddingVertical: 10, borderWidth: 1, fontSize: 15, maxHeight: 120 },
+  streamingActions: { flexDirection: "row", alignItems: "center", gap: 6 },
   sendButton: {
     width: 36,
     height: 36,

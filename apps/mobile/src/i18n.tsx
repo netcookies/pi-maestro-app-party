@@ -235,6 +235,12 @@ export interface I18nDictionary {
   steerCapability: string;
   followUpCapability: string;
   abortCapability: string;
+  followUp: string;
+  followUpFailed: string;
+  executionRowExpand: string;
+  executionRowCollapse: string;
+  toolbarExpand: string;
+  toolbarCollapse: string;
   labelThinkLevel: string;
   labelPlanMode: string;
   labelCompactContext: string;
@@ -261,6 +267,7 @@ export interface I18nDictionary {
   dialogRestore: string;
   dialogAskPill: string;
   dialogPlanPill: string;
+  noticeLabel: string;
   noticePrefixPeer: string;
   noticePrefixTeammate: string;
   noticePrefixBackground: string;
@@ -593,6 +600,12 @@ export const DICTIONARIES: Record<Language, I18nDictionary> = {
     expandFullscreen: "展开全屏编辑",
     collapseFullscreen: "收起全屏编辑",
     stopRunning: "停止运行",
+    followUp: "后续发送",
+    followUpFailed: "后续消息发送失败",
+    executionRowExpand: "展开执行状态",
+    executionRowCollapse: "折叠执行状态",
+    toolbarExpand: "展开悬浮状态栏",
+    toolbarCollapse: "折叠悬浮状态栏",
     sendMessage: "发送消息",
     planActMode: "Plan / Act 模式",
     retryLoadModels: "重试加载模型列表",
@@ -604,6 +617,7 @@ export const DICTIONARIES: Record<Language, I18nDictionary> = {
     dialogRestore: "展开弹窗",
     dialogAskPill: "待答复",
     dialogPlanPill: "待确认 Plan",
+    noticeLabel: "通知",
     noticePrefixPeer: "来自协作会话",
     noticePrefixTeammate: "子代理",
     noticePrefixBackground: "后台任务",
@@ -950,6 +964,12 @@ export const DICTIONARIES: Record<Language, I18nDictionary> = {
     expandFullscreen: "Expand fullscreen edit",
     collapseFullscreen: "Collapse fullscreen edit",
     stopRunning: "Stop running",
+    followUp: "Follow-up",
+    followUpFailed: "Failed to queue follow-up",
+    executionRowExpand: "Expand execution status",
+    executionRowCollapse: "Collapse execution status",
+    toolbarExpand: "Expand floating toolbar",
+    toolbarCollapse: "Collapse floating toolbar",
     sendMessage: "Send message",
     planActMode: "Plan / Act Mode",
     retryLoadModels: "Retry loading models",
@@ -961,6 +981,7 @@ export const DICTIONARIES: Record<Language, I18nDictionary> = {
     dialogRestore: "Restore dialog",
     dialogAskPill: "Needs answer",
     dialogPlanPill: "Plan pending",
+    noticeLabel: "Notice",
     noticePrefixPeer: "From peer session",
     noticePrefixTeammate: "Sub-agent",
     noticePrefixBackground: "Background task",

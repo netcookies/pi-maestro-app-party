@@ -81,6 +81,7 @@ export interface HostStoreValue {
 
   sendPrompt(sessionId: string, message: string, images?: { data: string; mime: string }[]): Promise<void>;
   sendSteer(sessionId: string, message: string): Promise<void>;
+  followUp(sessionId: string, message: string): Promise<void>;
   sendAbort(sessionId: string): Promise<void>;
   getNotificationConfig(): Promise<unknown[]>;
   testNotification(providerId?: string): Promise<unknown>;
@@ -638,6 +639,10 @@ export function HostStoreProvider({ children }: { children: React.ReactNode }) {
     await getClient().sendCommand({ type: "steer", sessionId, ...targetOptions(sessionId), message });
   }, [getClient, targetOptions]);
 
+  const followUp = useCallback(async (sessionId: string, message: string) => {
+    await getClient().sendCommand({ type: "follow_up", sessionId, ...targetOptions(sessionId), message });
+  }, [getClient, targetOptions]);
+
   const sendAbort = useCallback(async (sessionId: string) => {
     await getClient().sendCommand({ type: "abort", sessionId, ...targetOptions(sessionId) });
   }, [getClient, targetOptions]);
@@ -797,6 +802,7 @@ export function HostStoreProvider({ children }: { children: React.ReactNode }) {
       setThinking,
       sendPrompt,
       sendSteer,
+      followUp,
       sendAbort,
       getNotificationConfig,
       testNotification,
@@ -820,7 +826,7 @@ export function HostStoreProvider({ children }: { children: React.ReactNode }) {
       supportsHerdrSettings,
       supportsHerdrSessionClose,
     }),
-    [state, connectionState, hostUrl, token, connect, disconnect, activate, listHostSessions, refreshMaestroState, refreshMonitor, refreshExecutionProjections, loadSessionHistory, selectSessionTarget, loadMoreHistory, searchHistory, listModels, listSkills, getMaestroSettings, updateMaestroSettings, fetchSessionUsage, setModel, setThinking, sendPrompt, sendSteer, sendAbort, getNotificationConfig, testNotification, answerDialog, cancelDialog, respondPlan, cancelPlan, supportsRefine, refineState, refineTarget, sendRefineAction, clearError, getHerdrStatus, getHerdrSettings, updateHerdrSettings, closeHerdrSession, closeAllHerdrSessions, launchPiSession],
+    [state, connectionState, hostUrl, token, connect, disconnect, activate, listHostSessions, refreshMaestroState, refreshMonitor, refreshExecutionProjections, loadSessionHistory, selectSessionTarget, loadMoreHistory, searchHistory, listModels, listSkills, getMaestroSettings, updateMaestroSettings, fetchSessionUsage, setModel, setThinking, sendPrompt, sendSteer, followUp, sendAbort, getNotificationConfig, testNotification, answerDialog, cancelDialog, respondPlan, cancelPlan, supportsRefine, refineState, refineTarget, sendRefineAction, clearError, getHerdrStatus, getHerdrSettings, updateHerdrSettings, closeHerdrSession, closeAllHerdrSessions, launchPiSession],
   );
 
   return <HostStoreContext.Provider value={value}>{children}</HostStoreContext.Provider>;

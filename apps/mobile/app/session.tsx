@@ -27,6 +27,7 @@ import { CollapsibleTool } from "../src/components/CollapsibleTool";
 import { SessionErrorBlock } from "../src/components/SessionErrorBlock";
 import { ChatMarkdown } from "../src/components/chat/ChatMarkdown";
 import { splitImageSegments } from "../src/image-paths";
+import { collectImagePaths } from "../src/tool-images";
 import { ChatComposer } from "../src/components/ChatComposer";
 import { pickImagesFromLibrary } from "../src/image-picker";
 import { useSessionDraft, draftScopeKey } from "../src/drafts";
@@ -85,7 +86,7 @@ function modelNameOf(value: unknown): string | undefined {
 export default function SessionScreen() {
   const { id, targetKey, from } = useLocalSearchParams<{ id: string; targetKey?: string; from?: string }>();
   const router = useRouter();
-  const { state, hostUrl, sendPrompt, sendAbort, answerDialog, cancelDialog, respondPlan, cancelPlan, supportsRefine, refineState, refineTarget, sendRefineAction, selectSessionTarget, loadSessionHistory, loadMoreHistory, searchHistory, setThinking, listSkills, listModels, isConnected, connectionState, lastError, clearError: dispatchLocalError, getHerdrSettings, getHerdrStatus, launchPiSession, closeHerdrSession, supportsHerdrSessionClose } = useHost();
+  const { state, hostUrl, sendPrompt, followUp, sendAbort, answerDialog, cancelDialog, respondPlan, cancelPlan, supportsRefine, refineState, refineTarget, sendRefineAction, selectSessionTarget, loadSessionHistory, loadMoreHistory, searchHistory, setThinking, listSkills, listModels, isConnected, connectionState, lastError, clearError: dispatchLocalError, getHerdrSettings, getHerdrStatus, launchPiSession, closeHerdrSession, supportsHerdrSessionClose } = useHost();
   const { theme } = useTheme();
   const { t } = useI18n();
   const cfg = getConfig();
@@ -97,6 +98,7 @@ export default function SessionScreen() {
     ? state.targetedSessions.get(selectedTargetKey!)
     : undefined;
 
+  const [floatingToolbarCollapsed, setFloatingToolbarCollapsed] = useState(false);
   const [executionDetailsOpen, setExecutionDetailsOpen] = useState(false);
   const [closeConfirmOpen, setCloseConfirmOpen] = useState(false);
   const [closeMessage, setCloseMessage] = useState<string | null>(null);
@@ -204,6 +206,26 @@ export default function SessionScreen() {
   }, [executionSummary, executionSection, theme, t]);
 
   const [reduceMotion, setReduceMotion] = useState(false);
+
+  useEffect(() => {
+    let active = true;
+    void AsyncStorage.getItem("maestro-mobile.floating-toolbar-collapsed").then((value) => {
+      if (!active || value !== "true") return;
+      setFloatingToolbarCollapsed(true);
+    }).catch((error) => {
+      console.warn("Failed to load floating-toolbar preference", error);
+    });
+    return () => { active = false; };
+  }, []);
+
+  const toggleFloatingToolbar = () => {
+    animateLayout();
+    const next = !floatingToolbarCollapsed;
+    setFloatingToolbarCollapsed(next);
+    void AsyncStorage.setItem("maestro-mobile.floating-toolbar-collapsed", String(next)).catch((error) => {
+      console.warn("Failed to save floating-toolbar preference", error);
+    });
+  };
 
   // reduce-motion 时跳过布局动画，并隔离 Fabric 初次布局阶段的异常。
   const animateLayout = useCallback(() => {
@@ -547,8 +569,9 @@ export default function SessionScreen() {
 
   const control = session?.presentation?.control;
   const canPrompt = control?.canPrompt === true;
+  const canFollowUp = control?.canFollowUp === true;
   const canAbort = control?.canAbort === true;
-  const readOnly = !session || !canPrompt;
+  const readOnly = !session || (!canPrompt && !(session.runState === "streaming" && canFollowUp));
   const composerPlaceholder = readOnly ? t.readOnlyComposer : "Message...";
 
   // 向导作答只通过会话的 extension-ui 直通通道转发。
@@ -613,7 +636,7 @@ export default function SessionScreen() {
 
   // T7：运行态与可交互性完全来自会话状态与服务端 presentation.control，不再做窗口/PID/name 推断
   const isSessionStreaming = session?.runState === "streaming";
-  const composerEnabled = canPrompt && interactionReady;
+  const composerEnabled = (canPrompt || (session?.runState === "streaming" && canFollowUp)) && interactionReady;
 
   // ── Herdr：本 Host 启动的会话可结束；历史会话可恢复 ─────────────────────
   const sessionSummary = useMemo(() => {
@@ -909,6 +932,7 @@ export default function SessionScreen() {
 
     // tool 消息：单条工具卡片直接占用与工具组相同的行宽，不再套一层带内边距的气泡
     if (isTool) {
+      const toolImages = collectImagePaths(timelineItem);
       return (
         <View style={styles.bubbleToolGroup}>
           <CollapsibleTool
@@ -916,13 +940,10 @@ export default function SessionScreen() {
             text={timelineItem.text}
             isError={timelineItem.isError}
           />
-          {hasImages && (
+          {toolImages.length > 0 && (
             <View style={styles.toolImages}>
-              {imagePaths.map((path: string, i: number) => (
+              {toolImages.map((path: string, i: number) => (
                 <InlineImage key={`item-img-${i}`} path={path} />
-              ))}
-              {segments.filter((s) => s.type === "image").map((seg, i) => (
-                <InlineImage key={`path-img-${i}`} path={seg.path} />
               ))}
             </View>
           )}
@@ -1245,49 +1266,72 @@ export default function SessionScreen() {
           pointerEvents="box-none"
         >
           <View style={[styles.floatingToolPill, { backgroundColor: theme.cardBg, borderColor: theme.border }]}>
-            {/* 1. 模型（放在思考等级之前，替代头部 Badge 的模型入口） */}
-            <TouchableOpacity
-              style={styles.floatingToolBtn}
-              onPress={openModelPicker}
-              accessibilityRole="button"
-              accessibilityLabel={t.selectModel}
-              hitSlop={{ top: 8, bottom: 8, left: 8, right: 6 }}
-            >
-              <LineIcon name="brain" size={15} color={theme.accent} />
-              <Text style={[styles.floatingToolText, { color: theme.text }]} numberOfLines={1}>{modelNameOf(session?.model) ?? currentModelId ?? "Model"}</Text>
-            </TouchableOpacity>
+            {floatingToolbarCollapsed ? (
+              <TouchableOpacity
+                style={styles.floatingToolBtnOnlyIcon}
+                onPress={toggleFloatingToolbar}
+                accessibilityRole="button"
+                accessibilityLabel={t.toolbarExpand}
+                hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+              >
+                <LineIcon name="chevronRight" size={14} color={theme.accent} />
+              </TouchableOpacity>
+            ) : (
+              <>
+                {/* 1. 模型（放在思考等级之前，替代头部 Badge 的模型入口） */}
+                <TouchableOpacity
+                  style={styles.floatingToolBtn}
+                  onPress={openModelPicker}
+                  accessibilityRole="button"
+                  accessibilityLabel={t.selectModel}
+                  hitSlop={{ top: 8, bottom: 8, left: 8, right: 6 }}
+                >
+                  <LineIcon name="brain" size={15} color={theme.accent} />
+                  <Text style={[styles.floatingToolText, { color: theme.text }]} numberOfLines={1}>{modelNameOf(session?.model) ?? currentModelId ?? "Model"}</Text>
+                </TouchableOpacity>
 
-            <View style={[styles.pillDivider, { backgroundColor: theme.border }]} />
+                <View style={[styles.pillDivider, { backgroundColor: theme.border }]} />
 
-            {/* 2. 思考等级 */}
-            <TouchableOpacity
-              style={styles.floatingToolBtn}
-              onPress={() => setActionSheetType("think")}
-              accessibilityRole="button"
-              accessibilityLabel={t.labelThinkLevel}
-              hitSlop={{ top: 8, bottom: 8, left: 8, right: 6 }}
-            >
-              <LineIcon name="thinkBrain" size={15} color={theme.accent} />
-              <Text style={[styles.floatingToolText, { color: theme.text }]}>{thinkLevel}</Text>
-            </TouchableOpacity>
+                {/* 2. 思考等级 */}
+                <TouchableOpacity
+                  style={styles.floatingToolBtn}
+                  onPress={() => setActionSheetType("think")}
+                  accessibilityRole="button"
+                  accessibilityLabel={t.labelThinkLevel}
+                  hitSlop={{ top: 8, bottom: 8, left: 8, right: 6 }}
+                >
+                  <LineIcon name="thinkBrain" size={15} color={theme.accent} />
+                  <Text style={[styles.floatingToolText, { color: theme.text }]}>{thinkLevel}</Text>
+                </TouchableOpacity>
 
-            <View style={[styles.pillDivider, { backgroundColor: theme.border }]} />
+                <View style={[styles.pillDivider, { backgroundColor: theme.border }]} />
 
-            {/* 2. 计划模式 */}
-            <TouchableOpacity
-              style={styles.floatingToolBtn}
-              onPress={() => setActionSheetType("plan")}
-              accessibilityRole="button"
-              accessibilityLabel={t.labelPlanMode}
-              hitSlop={{ top: 8, bottom: 8, left: 6, right: 6 }}
-            >
-              <LineIcon name="planClipboard" size={15} color={theme.accent} />
-              <Text style={[styles.floatingToolText, { color: theme.text }]} numberOfLines={1}>{planMode}</Text>
-            </TouchableOpacity>
+                {/* 3. 计划模式 */}
+                <TouchableOpacity
+                  style={styles.floatingToolBtn}
+                  onPress={() => setActionSheetType("plan")}
+                  accessibilityRole="button"
+                  accessibilityLabel={t.labelPlanMode}
+                  hitSlop={{ top: 8, bottom: 8, left: 6, right: 6 }}
+                >
+                  <LineIcon name="planClipboard" size={15} color={theme.accent} />
+                  <Text style={[styles.floatingToolText, { color: theme.text }]} numberOfLines={1}>{planMode}</Text>
+                </TouchableOpacity>
 
-            <View style={[styles.pillDivider, { backgroundColor: theme.border }]} />
+                <View style={[styles.pillDivider, { backgroundColor: theme.border }]} />
 
-            {/* Desktop TUI 的 compact 由 TUI 自己控制；Mobile 不再触发 Host-owned session 操作。 */}
+                {/* 4. 折叠把手（位于同一个胶囊外框内，右侧无缝包覆，无双圆弧缺陷） */}
+                <TouchableOpacity
+                  style={styles.floatingToolBtnOnlyIcon}
+                  onPress={toggleFloatingToolbar}
+                  accessibilityRole="button"
+                  accessibilityLabel={t.toolbarCollapse}
+                  hitSlop={{ top: 8, bottom: 8, left: 6, right: 8 }}
+                >
+                  <LineIcon name="arrowLeft" size={13} color={theme.muted} />
+                </TouchableOpacity>
+              </>
+            )}
           </View>
 
           {showFab ? (
@@ -1407,6 +1451,11 @@ export default function SessionScreen() {
               setSending(false);
             }
           },
+          followUp: canFollowUp ? async (text) => {
+            if (!id) return;
+            if (!isConnected) throw new Error("未连接到主机");
+            await followUp(id, text);
+          } : undefined,
           listSkills: async () => (id ? listSkills(id) : []),
           pickImage: async () => {
             const picked = await pickImagesFromLibrary(1);
@@ -1917,8 +1966,7 @@ const NOTICE_ICON: Record<string, { glyph: string; tone: "accent" | "muted" | "w
 const NOTICE_EXPANDED_KINDS = new Set(["peer", "system"]);
 
 /**
- * 系统通告行：peer / teammate / 后台任务 / 循环 / 系统消息的居中浅色展示。
- * 不再占用左右气泡位，避免被误读为用户自己说的话。
+ * 系统通告卡：沿用工具输出的白底边框结构，靠左展示并保留来源标记。
  */
 function NoticeRow({
   item,
@@ -1934,32 +1982,28 @@ function NoticeRow({
   const forcedExpanded = NOTICE_EXPANDED_KINDS.has(noticeKind);
   const [expanded, setExpanded] = useState(forcedExpanded);
   const toneColor = icon.tone === "accent" ? theme.accent : icon.tone === "warning" ? theme.warning : theme.muted;
-  const label = noticeKind === "peer" ? t.noticePrefixPeer
-    : noticeKind === "teammate" ? t.noticePrefixTeammate
-    : noticeKind === "background" ? t.noticePrefixBackground
-    : noticeKind === "loop" ? t.noticePrefixLoop
-    : t.noticePrefixSystem;
   const collapsible = !forcedExpanded && item.text.length > 80;
   return (
-    <View style={{ alignItems: "center", marginVertical: 4 }}>
+    <View style={{ width: "100%", alignItems: "flex-start", paddingHorizontal: MIUIX_SPACE.md, marginVertical: 10 }}>
       <TouchableOpacity
         activeOpacity={collapsible ? 0.6 : 1}
         disabled={!collapsible}
         onPress={() => setExpanded((value) => !value)}
         accessibilityRole={collapsible ? "button" : "text"}
-        accessibilityLabel={`${label} ${item.text}`}
+        accessibilityLabel={`${t.noticeLabel} ${item.text}`}
         style={{
-          maxWidth: "92%",
+          width: "100%",
+          maxWidth: "90%",
           borderWidth: StyleSheet.hairlineWidth,
           borderColor: theme.border,
           backgroundColor: theme.cardBg,
-          borderRadius: MIUIX_RADIUS.sm,
-          paddingHorizontal: 10,
-          paddingVertical: 6,
+          borderRadius: MIUIX_RADIUS.md,
+          paddingHorizontal: 12,
+          paddingVertical: 9,
         }}
       >
-        <Text style={{ color: toneColor, fontSize: MIUIX_TYPE.footnote2, fontWeight: "700", marginBottom: 2 }} numberOfLines={1}>
-          {icon.glyph} {label}{item.noticeSource ? ` · ${item.noticeSource}` : ""}
+        <Text style={{ color: toneColor, fontSize: MIUIX_TYPE.footnote2, fontWeight: "700", marginBottom: 4 }} numberOfLines={1}>
+          {icon.glyph} {t.noticeLabel}{item.noticeSource ? ` · ${item.noticeSource}` : ""}
         </Text>
         <Text style={{ color: theme.muted, fontSize: MIUIX_TYPE.footnote2, lineHeight: 17 }} numberOfLines={expanded ? undefined : 1}>
           {item.text}
