@@ -100,8 +100,12 @@ export function classifyCustomMessage(entry: Record<string, unknown>): CustomMes
     return { kind: "notice", noticeKind, text, ...(source ? { source } : {}) };
   }
 
-  // Pi continuation prompts are persisted as custom messages without a stable customType.
-  if (/^continue the active goal(?:\b|\s*[:：])/iu.test(text)) {
+  // Pi continuation / recovery prompts are persisted as custom messages without a stable customType.
+  if (
+    /^continue the active goal(?:\b|\s*[:：])/iu.test(text) ||
+    /^continue the interrupted task from the compacted session checkpoint/iu.test(text) ||
+    /\[maestro-recovery-delivery:[a-f0-9]+\]/i.test(text)
+  ) {
     return { kind: "notice", noticeKind: "system", text };
   }
 

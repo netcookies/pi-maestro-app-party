@@ -106,6 +106,16 @@ describe("classifyCustomMessage", () => {
       noticeKind: "system",
       text: "Continue the active goal: keep going until the acceptance criteria pass.",
     });
+
+    expect(classifyCustomMessage({
+      type: "custom_message",
+      customType: "unknown",
+      content: "Continue the interrupted task from the compacted session checkpoint. Do not wait for another user request.\n\n[maestro-recovery-delivery:33168ea1db5ffa423d543ad3]",
+    })).toEqual({
+      kind: "notice",
+      noticeKind: "system",
+      text: "Continue the interrupted task from the compacted session checkpoint. Do not wait for another user request.\n\n[maestro-recovery-delivery:33168ea1db5ffa423d543ad3]",
+    });
   });
 
   it("keeps unrelated unknown custom messages as user messages", () => {

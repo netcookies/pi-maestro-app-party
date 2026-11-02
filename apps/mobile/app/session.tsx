@@ -1274,7 +1274,7 @@ export default function SessionScreen() {
                 accessibilityLabel={t.toolbarExpand}
                 hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
               >
-                <LineIcon name="chevronRight" size={14} color={theme.accent} />
+                <LineIcon name="chevronRight" size={14} color={theme.accent} strokeWidth={2.2} />
               </TouchableOpacity>
             ) : (
               <>
@@ -1328,7 +1328,7 @@ export default function SessionScreen() {
                   accessibilityLabel={t.toolbarCollapse}
                   hitSlop={{ top: 8, bottom: 8, left: 6, right: 8 }}
                 >
-                  <LineIcon name="arrowLeft" size={13} color={theme.muted} />
+                  <LineIcon name="arrowLeft" size={13} color={theme.muted} strokeWidth={2.2} />
                 </TouchableOpacity>
               </>
             )}
