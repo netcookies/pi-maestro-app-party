@@ -2,6 +2,12 @@
 
 本文件记录 Maestro Mobile 的显著变更。格式基于 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)。
 
+## [0.19.4] — 2026-11-02
+
+### 样式
+
+- 通告卡采用标准 90% 居左与 MIUIX 间距，补齐工具及状态双语
+
 ## [0.19.3] — 2026-11-02
 
 ### 修复
