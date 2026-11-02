@@ -25,6 +25,7 @@ export type LineIconName =
   | "arrowLeft"
   | "arrowDown"
   | "thinkBrain"
+  | "academicCap"
   | "planClipboard"
   | "compactSqueeze"
   | "chevronDown"
@@ -119,6 +120,12 @@ const PATHS: Record<LineIconName, React.ReactNode> = {
       <Path d="M12 5a3 3 0 1 0-5.997.125 4 4 0 0 0-2.526 5.77 4 4 0 0 0 .556 6.588A4 4 0 1 0 12 18Z" />
       <Path d="M12 5a3 3 0 1 1 5.997.125 4 4 0 0 1 2.526 5.77 4 4 0 0 1-.556 6.588A4 4 0 1 1 12 18Z" />
       <Path d="M12 5v14" />
+    </G>
+  ),
+  academicCap: (
+    <G>
+      <Path d="M22 10v6M2 10l10-5 10 5-10 5z" />
+      <Path d="M6 12.5V16c0 2 3 3.5 6 3.5s6-1.5 6-3.5v-3.5" />
     </G>
   ),
   planClipboard: (

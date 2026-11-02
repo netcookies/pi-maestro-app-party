@@ -85,7 +85,7 @@ function modelNameOf(value: unknown): string | undefined {
 }
 
 export default function SessionScreen() {
-  const { id, targetKey, from } = useLocalSearchParams<{ id: string; targetKey?: string; from?: string }>();
+  const { id, targetKey, from, model: paramModel } = useLocalSearchParams<{ id: string; targetKey?: string; from?: string; model?: string }>();
   const router = useRouter();
   const { state, hostUrl, sendPrompt, followUp, sendAbort, answerDialog, cancelDialog, respondPlan, cancelPlan, supportsRefine, refineState, refineTarget, sendRefineAction, selectSessionTarget, loadSessionHistory, loadMoreHistory, searchHistory, setThinking, listSkills, listModels, isConnected, connectionState, lastError, clearError: dispatchLocalError, getHerdrSettings, getHerdrStatus, launchPiSession, closeHerdrSession, supportsHerdrSessionClose } = useHost();
   const { theme } = useTheme();
@@ -95,9 +95,23 @@ export default function SessionScreen() {
   const routeTargetIsCurrent = Boolean(targetKey && state.targetedSessions.has(targetKey));
   const selectedTargetKey = routeTargetIsCurrent ? targetKey : state.activeSessionTargets.get(id ?? "");
   const targetProjectionReady = Boolean(selectedTargetKey && state.targetedSessions.has(selectedTargetKey));
+  const fallbackSession = id ? state.sessions.get(id) : undefined;
+  const targetedFallback = id
+    ? Array.from(state.targetedSessions.values()).find((s) => s.id === id)
+    : undefined;
+  const listFallback = id
+    ? state.hostSessionList?.sessions.find((s) => s.sessionId === id)
+    : undefined;
   const session = targetProjectionReady
     ? state.targetedSessions.get(selectedTargetKey!)
-    : undefined;
+    : (fallbackSession ?? targetedFallback);
+
+  const resolvedModel =
+    session?.model ??
+    paramModel ??
+    fallbackSession?.model ??
+    targetedFallback?.model ??
+    listFallback?.model;
 
   const [floatingToolbarCollapsed, setFloatingToolbarCollapsed] = useState(false);
   const [executionDetailsOpen, setExecutionDetailsOpen] = useState(false);
@@ -331,11 +345,13 @@ export default function SessionScreen() {
   // ChatComposer 状态（store listSkills 返回 {name, description} 对象列表）
   const [availableSkills, setAvailableSkills] = useState<{ name: string; description?: string }[]>([]);
   const [refiningPlan, setRefiningPlan] = useState<PlanEntry | undefined>();
-  const [currentModelId, setCurrentModelId] = useState<string | undefined>(modelIdOf(session?.model));
+  const [currentModelId, setCurrentModelId] = useState<string | undefined>(modelIdOf(resolvedModel));
   // 复制反馈状态（记录被复制消息的 id）
   const [copiedId, setCopiedId] = useState<string | null>(null);
   // 选中文本抽屉状态（存放当前长按查看/选择的消息文本）
   const [selectionText, setSelectionText] = useState<string | null>(null);
+
+  const displayModelName = modelNameOf(resolvedModel) ?? currentModelId ?? "Model";
 
   const handleCopyMessage = useCallback(async (msgId: string, text: string) => {
     if (!text) return;
@@ -355,11 +371,11 @@ export default function SessionScreen() {
 
   // 确保 session.model 发生变更或由子页面更新后同步回显当前模型 Badge
   useEffect(() => {
-    const curName = modelIdOf(session?.model);
+    const curName = modelIdOf(resolvedModel);
     if (curName) {
       setCurrentModelId(curName);
     }
-  }, [session?.model]);
+  }, [resolvedModel]);
   const contentHeightBefore = useRef(0);
   const pendingOffsetRestore = useRef(false);
   // P2-8：FlatList onContentSizeChange/onScroll 记录的真实内容高度与视口高度
@@ -1077,7 +1093,7 @@ export default function SessionScreen() {
             hitSlop={{ top: 15, bottom: 15, left: 20, right: 20 }}
           >
             <Text style={styles.modelHeaderBtnText} numberOfLines={1}>
-              {modelNameOf(session?.model) ?? currentModelId ?? "Model"}
+              {displayModelName}
             </Text>
             <LineIcon name="chevronDown" size={11} color={theme.accent} />
           </TouchableOpacity>
@@ -1292,8 +1308,8 @@ export default function SessionScreen() {
                   accessibilityLabel={t.selectModel}
                   hitSlop={{ top: 8, bottom: 8, left: 8, right: 6 }}
                 >
-                  <LineIcon name="brain" size={15} color={theme.accent} />
-                  <Text style={[styles.floatingToolText, { color: theme.text }]} numberOfLines={1}>{modelNameOf(session?.model) ?? currentModelId ?? "Model"}</Text>
+                  <LineIcon name="bolt" size={15} color={theme.accent} />
+                  <Text style={[styles.floatingToolText, { color: theme.text }]} numberOfLines={1}>{displayModelName}</Text>
                 </TouchableOpacity>
 
                 <View style={[styles.pillDivider, { backgroundColor: theme.border }]} />
@@ -1306,7 +1322,7 @@ export default function SessionScreen() {
                   accessibilityLabel={t.labelThinkLevel}
                   hitSlop={{ top: 8, bottom: 8, left: 8, right: 6 }}
                 >
-                  <LineIcon name="thinkBrain" size={15} color={theme.accent} />
+                  <LineIcon name="academicCap" size={15} color={theme.accent} />
                   <Text style={[styles.floatingToolText, { color: theme.text }]}>{thinkLevel}</Text>
                 </TouchableOpacity>
 
@@ -2274,31 +2290,31 @@ function makeStyles(theme: ReturnType<typeof useTheme>["theme"]) {
       borderBottomLeftRadius: 0,
       borderWidth: 1,
       borderLeftWidth: 0,
-      paddingLeft: 10,
-      paddingRight: 6,
-      paddingVertical: 3,
+      paddingLeft: 4,
+      paddingRight: 4,
+      paddingVertical: 2.5,
       shadowColor: "#000",
       shadowOffset: { width: 0, height: 3 },
       shadowOpacity: 0.2,
       shadowRadius: 6,
       elevation: 5,
-      gap: 2,
+      gap: 1,
     },
     floatingToolBtn: {
       flexDirection: "row",
       alignItems: "center",
-      gap: 4,
-      paddingHorizontal: 8,
-      paddingVertical: 4,
-      borderRadius: 14,
+      gap: 3,
+      paddingHorizontal: 5,
+      paddingVertical: 3.5,
+      borderRadius: 12,
     },
     floatingToolBtnOnlyIcon: {
-      paddingHorizontal: 6,
-      paddingVertical: 4,
-      borderRadius: 14,
+      paddingHorizontal: 4,
+      paddingVertical: 3.5,
+      borderRadius: 12,
     },
     floatingToolText: { fontSize: 11, fontFamily: "monospace", fontWeight: "700" },
-    pillDivider: { width: 1, height: 12, opacity: 0.5 },
+    pillDivider: { width: 1, height: 11, opacity: 0.4 },
     modelApplyBtn: { paddingHorizontal: 12, paddingVertical: 5, borderRadius: 14 },
     modelApplyBtnText: { color: "#fff", fontSize: 11, fontWeight: "700" },
     modelSearchRow: {

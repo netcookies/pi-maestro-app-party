@@ -75,4 +75,18 @@ describe("history session navigation", () => {
   it("requires a server-issued exact target before opening", () => {
     expect(() => selectSessionTarget(historyRow())).toThrow("session_target_unavailable");
   });
+  it("passes the model through navigation so the header and floating toolbar can render it before projection arrives", () => {
+    const target = { sessionId: "history-1", endpointId: "history", normalizedCwd: "/work", processGeneration: "persisted" };
+    const opened = selectSessionTarget(historyRow({ target, model: "gpt-6.1-sol" }));
+    expect(opened.model).toBe("gpt-6.1-sol");
+    expect(routeForOpenedSession(opened, "sessions")).toEqual({
+      pathname: "/session",
+      params: { id: "history-1", targetKey: sessionTargetKey(target), from: "sessions", model: "gpt-6.1-sol" },
+    });
+  });
+  it("accepts model objects with an id field", () => {
+    const target = { sessionId: "history-1", endpointId: "history", normalizedCwd: "/work", processGeneration: "persisted" };
+    const opened = selectSessionTarget(historyRow({ target, model: { id: "deepseek-v4.1-flash" } as unknown as HostSessionSummary["model"] }));
+    expect(opened.model).toBe("deepseek-v4.1-flash");
+  });
 });
