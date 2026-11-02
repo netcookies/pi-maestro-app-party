@@ -2,6 +2,17 @@
 
 本文件记录 Maestro Mobile 的显著变更。格式基于 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)。
 
+## [0.19.1] — 2026-11-02
+
+### 文档
+
+- 在双语 README 中新增 Herdr 结合使用与安装配置章节
+- 更新双语 README、使用指南与 v0.19 高清截图
+
+### 样式
+
+- FTB 左侧贴边平直与停止按钮视觉尺寸对齐
+
 ## [0.19.0] — 2026-11-02
 
 ### 新增

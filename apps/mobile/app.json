@@ -2,7 +2,7 @@
   "expo": {
     "name": "Maestro Mobile",
     "slug": "maestro-mobile",
-    "version": "0.19.0",
+    "version": "0.19.1",
     "orientation": "default",
     "icon": "./assets/icon.png",
     "userInterfaceStyle": "automatic",
@@ -14,7 +14,7 @@
     "ios": {
       "bundleIdentifier": "dev.maestromobile.app",
       "supportsTablet": true,
-      "buildNumber": "58",
+      "buildNumber": "59",
       "infoPlist": {
         "UIApplicationSceneManifest": {
           "UIApplicationSupportsMultipleScenes": false,
@@ -36,7 +36,7 @@
     },
     "android": {
       "package": "dev.maestromobile.app",
-      "versionCode": 58,
+      "versionCode": 59,
       "adaptiveIcon": {
         "backgroundColor": "#0d1117"
       }
