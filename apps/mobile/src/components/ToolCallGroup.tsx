@@ -5,6 +5,7 @@ import { CollapsibleTool } from "./CollapsibleTool";
 import { InlineImage } from "./InlineImage";
 import { useTheme, MIUIX_RADIUS, MIUIX_SPACE, MIUIX_TYPE } from "../theme";
 import { toolInvocationCount } from "../timeline-rows";
+import { collectImagePaths } from "../tool-images";
 
 const PREVIEW_ITEMS = 5;
 
@@ -20,12 +21,21 @@ function statusLabel(status: "running" | "failed" | "completed" | "pending"): st
 function ToolDetails({ items }: { items: TimelineItem[] }) {
   return (
     <>
-      {items.map((item) => (
-        <View key={item.id} style={{ marginTop: MIUIX_SPACE.xs }}>
-          <CollapsibleTool toolName={item.toolName ?? "tool"} text={item.text} isError={item.isError || item.error !== undefined} />
-          {(item.images?.length ?? 0) > 0 ? item.images?.map((path, index) => <InlineImage key={`${item.id}:image:${index}`} path={path} />) : null}
-        </View>
-      ))}
+      {items.map((item) => {
+        const imagePaths = collectImagePaths(item);
+        return (
+          <View key={item.id} style={{ marginTop: MIUIX_SPACE.xs }}>
+            <CollapsibleTool toolName={item.toolName ?? "tool"} text={item.text} isError={item.isError || item.error !== undefined} />
+            {imagePaths.length > 0 ? (
+              <View style={{ marginTop: MIUIX_SPACE.xs }}>
+                {imagePaths.map((path, index) => (
+                  <InlineImage key={`${item.id}:image:${index}`} path={path} />
+                ))}
+              </View>
+            ) : null}
+          </View>
+        );
+      })}
     </>
   );
 }
