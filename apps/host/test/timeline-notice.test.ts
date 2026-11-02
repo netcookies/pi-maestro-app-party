@@ -96,6 +96,26 @@ describe("classifyCustomMessage", () => {
     });
   });
 
+  it("classifies active-goal continuation prompts as system notices", () => {
+    expect(classifyCustomMessage({
+      type: "custom_message",
+      customType: "unknown",
+      content: "Continue the active goal: keep going until the acceptance criteria pass.",
+    })).toEqual({
+      kind: "notice",
+      noticeKind: "system",
+      text: "Continue the active goal: keep going until the acceptance criteria pass.",
+    });
+  });
+
+  it("keeps unrelated unknown custom messages as user messages", () => {
+    expect(classifyCustomMessage({
+      type: "custom_message",
+      customType: "unknown",
+      content: "I want to continue the active goal tomorrow.",
+    })).toEqual({ kind: "user", text: "I want to continue the active goal tomorrow." });
+  });
+
   it("conservatively keeps unknown customType as user to avoid irreversible downgrade of user input", () => {
     expect(classifyCustomMessage({
       type: "custom_message",

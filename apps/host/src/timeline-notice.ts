@@ -100,6 +100,11 @@ export function classifyCustomMessage(entry: Record<string, unknown>): CustomMes
     return { kind: "notice", noticeKind, text, ...(source ? { source } : {}) };
   }
 
+  // Pi continuation prompts are persisted as custom messages without a stable customType.
+  if (/^continue the active goal(?:\b|\s*[:：])/iu.test(text)) {
+    return { kind: "notice", noticeKind: "system", text };
+  }
+
   // 保守兜底：未知 customType 保留 user，避免不可逆把历史用户输入降级为系统通告
   return { kind: "user", text };
 }
