@@ -39,17 +39,20 @@
 Maestro Mobile 是 [Pi](https://github.com/badlogic/pi-mono) 的 iOS / Android 配套 App。会话继续在电脑上运行，手机通过本地 Host 服务查看进度，并操作已授权的运行中会话。
 
 <p align="center">
-  <a href="docs/images/screenshots/ios-launched.png"><img src="docs/images/screenshots/ios-launched.png" width="220" alt="Workbench：使用量、任务与待处理事项" /></a>
-  <a href="docs/images/screenshots/ios-sessions.png"><img src="docs/images/screenshots/ios-sessions.png" width="220" alt="Sessions：浏览与筛选 Pi 会话" /></a>
-  <a href="docs/images/screenshots/ios-chat.png"><img src="docs/images/screenshots/ios-chat.png" width="220" alt="Chat：消息、历史与工具输出" /></a>
+  <a href="docs/images/screenshots/ios-launched.png"><img src="docs/images/screenshots/ios-launched.png" width="180" alt="Workbench：使用量、任务与待处理事项" /></a>
+  <a href="docs/images/screenshots/ios-sessions.png"><img src="docs/images/screenshots/ios-sessions.png" width="180" alt="Sessions：浏览与新建 Pi 会话" /></a>
+  <a href="docs/images/screenshots/ios-chat.png"><img src="docs/images/screenshots/ios-chat.png" width="180" alt="Chat：消息、悬浮状态栏与后续发送" /></a>
+  <a href="docs/images/screenshots/ios-execution-drawer.png"><img src="docs/images/screenshots/ios-execution-drawer.png" width="180" alt="执行状态抽屉：Goal 指标与 Todo 明细" /></a>
 </p>
 
-- **跟进进度**：浏览会话、搜索历史，查看使用量、任务与 Teammate 状态。
-- **继续工作**：发送文本或图片，介入当前轮次、追加后续消息、切换模型或停止任务。
-- **处理决策**：目标桌面会话加载兼容的 `pi-maestro-flow` 后，可在手机回答 Ask、审阅 Plan。
-- **保持连接**：支持二维码或短码配对、断线自动重连和任务通知。
+- **跟进进度**：浏览会话、搜索历史，查看实时使用量、活跃任务、子代理与执行进度。
+- **继续工作**：发送文本或图片，介入当前轮次，流式中排队后续消息，调整思考等级，通过可折叠悬浮状态栏切换模型，或停止长任务。
+- **跟踪执行**：展开执行状态抽屉，查看 Goal 指标（进度、Token、耗时）、Loop 循环轮次，以及带耗时柱状条与 Summary 小字的逐条 Todo 明细。
+- **处理决策**：在手机上回答 Ask、审阅 Plan；可将弹窗最小化为悬浮胶囊以便先查阅会话上下文，也可使用原生 Review & Refine 面板优化计划。
+- **远程会话管理**：通过 Herdr 直接在手机上选择运行时与工作目录，启动独立的桌面 Pi 会话，或远程优雅结束会话。
+- **保持连接**：支持二维码或短码配对、断线自动重连和任务完成通知。
 
-可用操作取决于桌面会话的权限与能力。历史会话只读，新 Pi 会话需从桌面启动；Docker 部署提供只读看板。
+可用操作取决于桌面会话的权限与能力。历史会话只读；主机可用 Herdr 时可直接远程新建 Pi 会话；Docker 部署提供只读看板。
 
 <a id="getting-started"></a>
 
@@ -80,6 +83,8 @@ pi install npm:pi-maestro-flow
 /maestro-mobile start
 /maestro-mobile qr
 ```
+
+如需维护手机端新建会话的常用工作目录，可在桌面 TUI 执行 `/maestro-mobile manager-fav`。
 
 ### 2. 安装 App
 
@@ -127,6 +132,7 @@ App 会保存连接并自动重连。默认地址为 `ws://<computer-ip>:4739/ws
 | --- | --- |
 | `/maestro-mobile status` | 查看 Host 状态与探测到的版本。 |
 | `/maestro-mobile status --current` | 诊断当前桌面连接。 |
+| `/maestro-mobile manager-fav` | 在桌面 TUI 中维护和收藏常用工作目录，供手机端新建会话使用。 |
 | `/maestro-mobile stop` | 停止扩展管理的 Host。 |
 | `/maestro-mobile notify` | 配置通知 Provider 与事件。 |
 

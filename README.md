@@ -37,17 +37,20 @@
 Maestro Mobile is an iOS / Android companion for [Pi](https://github.com/badlogic/pi-mono). Your sessions run on your computer; the app connects through a local Host service to show progress and control authorized live sessions.
 
 <p align="center">
-  <a href="docs/images/screenshots/ios-launched.png"><img src="docs/images/screenshots/ios-launched.png" width="220" alt="Workbench: usage, tasks and pending actions" /></a>
-  <a href="docs/images/screenshots/ios-sessions.png"><img src="docs/images/screenshots/ios-sessions.png" width="220" alt="Sessions: browse and filter Pi sessions" /></a>
-  <a href="docs/images/screenshots/ios-chat.png"><img src="docs/images/screenshots/ios-chat.png" width="220" alt="Chat: messages, history and tool output" /></a>
+  <a href="docs/images/screenshots/ios-launched.png"><img src="docs/images/screenshots/ios-launched.png" width="180" alt="Workbench: usage, tasks and pending actions" /></a>
+  <a href="docs/images/screenshots/ios-sessions.png"><img src="docs/images/screenshots/ios-sessions.png" width="180" alt="Sessions: browse and launch Pi sessions" /></a>
+  <a href="docs/images/screenshots/ios-chat.png"><img src="docs/images/screenshots/ios-chat.png" width="180" alt="Chat: messages, floating toolbar and follow-up" /></a>
+  <a href="docs/images/screenshots/ios-execution-drawer.png"><img src="docs/images/screenshots/ios-execution-drawer.png" width="180" alt="Execution drawer: Goal metrics and Todo breakdown" /></a>
 </p>
 
-- **Stay informed:** browse sessions, search history, and check usage, tasks and teammates.
-- **Keep working:** send text or images, steer a running turn, queue a follow-up, switch models or stop a task.
-- **Make decisions:** answer Ask questions and review Plans from the app when the desktop session has compatible `pi-maestro-flow` loaded.
-- **Stay connected:** pair with a QR code or short code, reconnect automatically, and receive task notifications.
+- **Stay informed:** browse sessions, search history, and inspect real-time usage, active tasks, teammates and execution progress.
+- **Keep working:** send text or images, steer running turns, queue follow-ups while streaming, adjust thinking levels, switch models with collapsible floating controls, or stop long-running tasks.
+- **Track execution:** inspect the execution drawer for Goal metrics (progress, tokens, duration), Loop cycles, and step-by-step Todo breakdowns with duration bars and summary notes.
+- **Make decisions:** answer Ask questions and review Plans from your phone; minimize dialogs to floating pills to check session context before answering, or optimize plans with the native Review & Refine panel.
+- **Remote session control:** launch independent desktop Pi sessions via Herdr directly from your phone with runtime and workspace directory selection, or gracefully close sessions remotely.
+- **Stay connected:** pair with a QR code or short code, reconnect automatically, and receive task completion notifications.
 
-Available actions depend on the desktop session's permissions and capabilities. Historical sessions are read-only; new Pi sessions start on the desktop. Docker deployments provide a read-only dashboard.
+Available actions depend on the desktop session's permissions and capabilities. Historical sessions are read-only; new Pi sessions can be launched remotely when Herdr is available. Docker deployments provide a read-only dashboard.
 
 ## Getting started
 
@@ -76,6 +79,8 @@ Enable the installed extensions, including the Mobile Desktop Plugin, through `p
 /maestro-mobile start
 /maestro-mobile qr
 ```
+
+To manage and favorite workspace directories for launching sessions from Mobile, use `/maestro-mobile manager-fav` in your desktop TUI.
 
 ### 2. Install the app
 
@@ -120,6 +125,7 @@ Use **Workbench** for progress, **Sessions** for conversations, and **Monitor** 
 | --- | --- |
 | `/maestro-mobile status` | Check Host status and detected versions. |
 | `/maestro-mobile status --current` | Diagnose the current desktop connection. |
+| `/maestro-mobile manager-fav` | Manage and favorite workspace directories for mobile session launch. |
 | `/maestro-mobile stop` | Stop the extension-managed Host. |
 | `/maestro-mobile notify` | Configure notification providers and events. |
 

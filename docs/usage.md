@@ -60,6 +60,7 @@ Camera, photo-library and notification permissions support QR pairing, image pro
 | `/maestro-mobile start` | Start the Host in the background; skip startup if it is already running. |
 | `/maestro-mobile status` | Show Host status, port and detected Pi / Flow / CLI versions. |
 | `/maestro-mobile status --current` | Compare the current Pi, Plugin, Broker and Host connection. |
+| `/maestro-mobile manager-fav` | Manage and favorite workspace directories for mobile session launch. |
 | `/maestro-mobile qr` | Show the QR code, short code and candidate addresses. |
 | `/maestro-mobile stop` | Stop the extension-managed Host. |
 | `/maestro-mobile notify` | Configure notification providers and events. |
