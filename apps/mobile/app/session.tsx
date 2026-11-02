@@ -1300,44 +1300,47 @@ export default function SessionScreen() {
               </TouchableOpacity>
             ) : (
               <>
-                {/* 1. 模型（放在思考等级之前，替代头部 Badge 的模型入口） */}
-                <TouchableOpacity
-                  style={styles.floatingToolBtn}
-                  onPress={openModelPicker}
-                  accessibilityRole="button"
-                  accessibilityLabel={t.selectModel}
-                  hitSlop={{ top: 8, bottom: 8, left: 8, right: 6 }}
-                >
-                  <LineIcon name="bolt" size={15} color={theme.accent} />
-                  <Text style={[styles.floatingToolText, { color: theme.text }]} numberOfLines={1}>{displayModelName}</Text>
-                </TouchableOpacity>
-
-                <View style={[styles.pillDivider, { backgroundColor: theme.border }]} />
-
-                {/* 2. 思考等级 */}
-                <TouchableOpacity
-                  style={styles.floatingToolBtn}
-                  onPress={() => setActionSheetType("think")}
-                  accessibilityRole="button"
-                  accessibilityLabel={t.labelThinkLevel}
-                  hitSlop={{ top: 8, bottom: 8, left: 8, right: 6 }}
-                >
-                  <LineIcon name="academicCap" size={15} color={theme.accent} />
-                  <Text style={[styles.floatingToolText, { color: theme.text }]}>{thinkLevel}</Text>
-                </TouchableOpacity>
-
-                <View style={[styles.pillDivider, { backgroundColor: theme.border }]} />
-
-                {/* 3. 计划模式 */}
+                {/* 1. 计划模式（排在第一位，无图标） */}
                 <TouchableOpacity
                   style={styles.floatingToolBtn}
                   onPress={() => setActionSheetType("plan")}
                   accessibilityRole="button"
                   accessibilityLabel={t.labelPlanMode}
+                  hitSlop={{ top: 8, bottom: 8, left: 8, right: 6 }}
+                >
+                  <Text style={[styles.floatingToolText, { color: theme.text }]} numberOfLines={1}>{planMode}</Text>
+                </TouchableOpacity>
+
+                <View style={[styles.pillDivider, { backgroundColor: theme.border }]} />
+
+                {/* 2. 模型（带闪电图标） */}
+                <TouchableOpacity
+                  style={styles.floatingToolBtn}
+                  onPress={openModelPicker}
+                  accessibilityRole="button"
+                  accessibilityLabel={t.selectModel}
                   hitSlop={{ top: 8, bottom: 8, left: 6, right: 6 }}
                 >
-                  <LineIcon name="planClipboard" size={15} color={theme.accent} />
-                  <Text style={[styles.floatingToolText, { color: theme.text }]} numberOfLines={1}>{planMode}</Text>
+                  <View style={styles.floatingToolIconWrap}>
+                    <LineIcon name="bolt" size={14} color={theme.accent} />
+                  </View>
+                  <Text style={[styles.floatingToolText, { color: theme.text }]} numberOfLines={1}>{displayModelName}</Text>
+                </TouchableOpacity>
+
+                <View style={[styles.pillDivider, { backgroundColor: theme.border }]} />
+
+                {/* 3. 思考等级（带学士帽图标） */}
+                <TouchableOpacity
+                  style={styles.floatingToolBtn}
+                  onPress={() => setActionSheetType("think")}
+                  accessibilityRole="button"
+                  accessibilityLabel={t.labelThinkLevel}
+                  hitSlop={{ top: 8, bottom: 8, left: 6, right: 6 }}
+                >
+                  <View style={styles.floatingToolIconWrap}>
+                    <LineIcon name="academicCap" size={14} color={theme.accent} />
+                  </View>
+                  <Text style={[styles.floatingToolText, { color: theme.text }]}>{thinkLevel}</Text>
                 </TouchableOpacity>
 
                 <View style={[styles.pillDivider, { backgroundColor: theme.border }]} />
@@ -2290,31 +2293,39 @@ function makeStyles(theme: ReturnType<typeof useTheme>["theme"]) {
       borderBottomLeftRadius: 0,
       borderWidth: 1,
       borderLeftWidth: 0,
-      paddingLeft: 4,
-      paddingRight: 4,
+      paddingLeft: 6,
+      paddingRight: 6,
       paddingVertical: 2.5,
       shadowColor: "#000",
       shadowOffset: { width: 0, height: 3 },
       shadowOpacity: 0.2,
       shadowRadius: 6,
       elevation: 5,
-      gap: 1,
     },
     floatingToolBtn: {
       flexDirection: "row",
       alignItems: "center",
-      gap: 3,
-      paddingHorizontal: 5,
+      paddingHorizontal: 7,
       paddingVertical: 3.5,
       borderRadius: 12,
+    },
+    floatingToolIconWrap: {
+      width: 16,
+      height: 16,
+      alignItems: "center",
+      justifyContent: "center",
+      marginRight: 4,
     },
     floatingToolBtnOnlyIcon: {
-      paddingHorizontal: 4,
-      paddingVertical: 3.5,
+      width: 24,
+      height: 24,
+      alignItems: "center",
+      justifyContent: "center",
       borderRadius: 12,
+      marginLeft: 2,
     },
     floatingToolText: { fontSize: 11, fontFamily: "monospace", fontWeight: "700" },
-    pillDivider: { width: 1, height: 11, opacity: 0.4 },
+    pillDivider: { width: 1, height: 12, opacity: 0.4 },
     modelApplyBtn: { paddingHorizontal: 12, paddingVertical: 5, borderRadius: 14 },
     modelApplyBtnText: { color: "#fff", fontSize: 11, fontWeight: "700" },
     modelSearchRow: {

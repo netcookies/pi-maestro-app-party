@@ -454,20 +454,20 @@ export function ChatComposer({ actions, sending, isStreaming = false, onAbort, s
               },
             ]}
           >
+            <TouchableOpacity onPress={() => invokeDetailAction(actions.openPlanPicker)} style={styles.fsToolBtn}>
+              <LineIcon name="plan" size={18} color={theme.muted} />
+              <Text style={[styles.toolLabel, { color: theme.muted }]}>Plan</Text>
+            </TouchableOpacity>
             <TouchableOpacity
               onPress={() => invokeDetailAction(actions.openModelPicker)}
               style={styles.fsToolBtn}
             >
-              <LineIcon name="brain" size={18} color={theme.muted} />
+              <LineIcon name="bolt" size={18} color={theme.muted} />
               <Text style={[styles.toolLabel, { color: theme.muted }]}>Model</Text>
             </TouchableOpacity>
             <TouchableOpacity onPress={() => invokeDetailAction(actions.openThinkingPicker)} style={styles.fsToolBtn}>
-              <LineIcon name="bolt" size={18} color={theme.muted} />
+              <LineIcon name="academicCap" size={18} color={theme.muted} />
               <Text style={[styles.toolLabel, { color: theme.muted }]}>Think</Text>
-            </TouchableOpacity>
-            <TouchableOpacity onPress={() => invokeDetailAction(actions.openPlanPicker)} style={styles.fsToolBtn}>
-              <LineIcon name="plan" size={18} color={theme.muted} />
-              <Text style={[styles.toolLabel, { color: theme.muted }]}>Plan</Text>
             </TouchableOpacity>
             {actions.openCompactPicker ? (
               <TouchableOpacity onPress={() => invokeDetailAction(actions.openCompactPicker!)} style={styles.fsToolBtn}>
