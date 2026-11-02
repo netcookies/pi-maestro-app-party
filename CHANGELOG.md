@@ -2,6 +2,12 @@
 
 本文件记录 Maestro Mobile 的显著变更。格式基于 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)。
 
+## [0.19.5] — 2026-11-02
+
+### 样式
+
+- FTB 间距收紧、换装闪电与学士帽图标并透传回显模型名
+
 ## [0.19.4] — 2026-11-02
 
 ### 样式
