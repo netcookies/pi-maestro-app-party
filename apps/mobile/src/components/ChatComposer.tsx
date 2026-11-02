@@ -325,8 +325,6 @@ export function ChatComposer({ actions, sending, isStreaming = false, onAbort, s
                 styles.sendButton,
                 {
                   backgroundColor: theme.cardBg,
-                  borderColor: theme.border,
-                  borderWidth: 1,
                   shadowColor: theme.accent,
                   shadowOpacity: 0.25,
                   shadowRadius: 5,
@@ -346,9 +344,9 @@ export function ChatComposer({ actions, sending, isStreaming = false, onAbort, s
               <Animated.View
                 style={{
                   position: "absolute",
-                  width: 28,
-                  height: 28,
-                  borderRadius: 14,
+                  width: 36,
+                  height: 36,
+                  borderRadius: 18,
                   borderWidth: 2,
                   borderColor: theme.accent,
                   borderTopColor: "transparent",
@@ -492,8 +490,6 @@ export function ChatComposer({ actions, sending, isStreaming = false, onAbort, s
                   styles.sendButton,
                   {
                     backgroundColor: theme.cardBg,
-                    borderColor: theme.border,
-                    borderWidth: 1,
                     opacity: onAbort ?? actions.abort ? 1 : 0.45,
                   },
                 ]}
@@ -509,9 +505,9 @@ export function ChatComposer({ actions, sending, isStreaming = false, onAbort, s
                 <Animated.View
                   style={{
                     position: "absolute",
-                    width: 28,
-                    height: 28,
-                    borderRadius: 14,
+                    width: 36,
+                    height: 36,
+                    borderRadius: 18,
                     borderWidth: 2,
                     borderColor: theme.accent,
                     borderTopColor: "transparent",
