@@ -17,7 +17,7 @@
  */
 import { open } from "node:fs/promises";
 import type { TimelineItem, JsonValue } from "@maestro-mobile/shared";
-import { classifyCustomMessage } from "./timeline-notice.js";
+import { classifyCustomMessage, isSystemContinuationPrompt } from "./timeline-notice.js";
 import { imageBlocksFromContent, materializeImages } from "./image-cache.js";
 import { normalizeHostError } from "./host-error.js";
 
@@ -255,6 +255,15 @@ function parseMessageLineItems(
 
   const text = extractText(msg.content);
   if (role === "user") {
+    if (isSystemContinuationPrompt(text)) {
+      return [{
+        id: `replay-continuation-${index}`,
+        kind: "notice",
+        noticeKind: "system",
+        text,
+        createdAt,
+      }];
+    }
     const imagePaths = materializeImages(imageBlocksFromContent(msg.content));
     if (!text && imagePaths.length === 0) return [];
     return [{

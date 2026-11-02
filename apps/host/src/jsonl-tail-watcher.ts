@@ -11,7 +11,7 @@
 import { stat, open } from "node:fs/promises";
 import type { FileHandle } from "node:fs/promises";
 import type { TimelineItem } from "@maestro-mobile/shared";
-import { classifyCustomMessage } from "./timeline-notice.js";
+import { classifyCustomMessage, isSystemContinuationPrompt } from "./timeline-notice.js";
 import { imageBlocksFromContent, materializeImages } from "./image-cache.js";
 
 export interface JsonlTailWatcherOptions {
@@ -289,15 +289,25 @@ export class JsonlTailWatcher {
 
     if (role === "user") {
       const content = extractText(msg.content);
-      const imageBlocks = imageBlocksFromContent(msg.content);
-      const imagePaths = materializeImages(imageBlocks);
-      items.push({
-        id: `tail-user-${++this.seq}`,
-        kind: "user",
-        text: imagePaths.length > 0 && !content ? `[🖼 ${imagePaths.length} 张图片]` : content,
-        createdAt,
-        ...(imagePaths.length > 0 ? { images: imagePaths } : {}),
-      });
+      if (isSystemContinuationPrompt(content)) {
+        items.push({
+          id: `tail-continuation-${++this.seq}`,
+          kind: "notice",
+          noticeKind: "system",
+          text: content,
+          createdAt,
+        });
+      } else {
+        const imageBlocks = imageBlocksFromContent(msg.content);
+        const imagePaths = materializeImages(imageBlocks);
+        items.push({
+          id: `tail-user-${++this.seq}`,
+          kind: "user",
+          text: imagePaths.length > 0 && !content ? `[🖼 ${imagePaths.length} 张图片]` : content,
+          createdAt,
+          ...(imagePaths.length > 0 ? { images: imagePaths } : {}),
+        });
+      }
     } else if (role === "assistant" || role === "system") {
       const content = extractText(msg.content);
       if (content) {

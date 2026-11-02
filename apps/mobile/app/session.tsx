@@ -28,6 +28,7 @@ import { SessionErrorBlock } from "../src/components/SessionErrorBlock";
 import { ChatMarkdown } from "../src/components/chat/ChatMarkdown";
 import { splitImageSegments } from "../src/image-paths";
 import { collectImagePaths } from "../src/tool-images";
+import { isSystemContinuationPrompt } from "../src/notice";
 import { ChatComposer } from "../src/components/ChatComposer";
 import { pickImagesFromLibrary } from "../src/image-picker";
 import { useSessionDraft, draftScopeKey } from "../src/drafts";
@@ -906,9 +907,10 @@ export default function SessionScreen() {
       );
     }
     const timelineItem = item.item;
-    // 系统通告（peer / teammate / background / loop / system）：居中浅色行，不占用左右气泡
-    if (timelineItem.kind === "notice") {
-      return <NoticeRow item={timelineItem} theme={theme} t={t} />;
+    // 系统通告（peer / teammate / background / loop / system）：靠左卡片，不占用左右气泡
+    if (timelineItem.kind === "notice" || (timelineItem.kind === "user" && isSystemContinuationPrompt(timelineItem.text))) {
+      const noticeItem = timelineItem.kind === "notice" ? timelineItem : { ...timelineItem, kind: "notice" as const, noticeKind: "system" };
+      return <NoticeRow item={noticeItem} theme={theme} t={t} />;
     }
     const isUser = timelineItem.kind === "user";
     const isTool = timelineItem.kind === "tool";

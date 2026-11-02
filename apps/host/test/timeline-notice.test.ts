@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { classifyCustomMessage } from "../src/timeline-notice.js";
+import { classifyCustomMessage, isSystemContinuationPrompt } from "../src/timeline-notice.js";
 
 describe("classifyCustomMessage", () => {
   it("classifies peer messages with priority to details.body and strips duplicate direction prefix", () => {
@@ -116,6 +116,11 @@ describe("classifyCustomMessage", () => {
       noticeKind: "system",
       text: "Continue the interrupted task from the compacted session checkpoint. Do not wait for another user request.\n\n[maestro-recovery-delivery:33168ea1db5ffa423d543ad3]",
     });
+
+    expect(isSystemContinuationPrompt("Continue the active goal: keep going until the acceptance criteria pass.")).toBe(true);
+    expect(isSystemContinuationPrompt("Continue the interrupted task from the compacted session checkpoint. Do not wait for another user request.\n\n[maestro-recovery-delivery:33168ea1db5ffa423d543ad3]")).toBe(true);
+    expect(isSystemContinuationPrompt("hello user message")).toBe(false);
+    expect(isSystemContinuationPrompt("")).toBe(false);
   });
 
   it("keeps unrelated unknown custom messages as user messages", () => {
