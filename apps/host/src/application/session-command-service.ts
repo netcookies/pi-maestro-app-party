@@ -3,7 +3,7 @@ import { normalizeHostError } from "../host-error.js";
 import { IdempotencyLedger } from "../control/idempotency-ledger.js";
 import type { SessionDirectory, SessionTargetIdentity } from "../control/SessionDirectory.js";
 
-export type SessionCommandKind = "prompt" | "steer" | "follow_up" | "abort" | "set_model" | "set_thinking";
+export type SessionCommandKind = "prompt" | "steer" | "follow_up" | "abort" | "set_model" | "set_thinking" | "goal_control";
 
 
 export interface SessionCommand {
@@ -14,6 +14,7 @@ export interface SessionCommand {
   modelId?: string;
   provider?: string;
   level?: string;
+  goalAction?: "pause" | "resume";
   images?: unknown[];
 }
 

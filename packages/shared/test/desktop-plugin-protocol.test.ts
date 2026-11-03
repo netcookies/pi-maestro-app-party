@@ -222,7 +222,7 @@ describe("Desktop Plugin IPC protocol", () => {
     const record = {
       target,
       sessionFile: "/sessions/session-1.jsonl",
-      capabilities: ["prompt", "abort", "set_thinking", "list_models", "list_skills"],
+      capabilities: ["prompt", "abort", "set_thinking", "goal_control", "list_models", "list_skills"],
       thinkingLevel: "medium",
       runtimeStatus: "idle" as const,
       summary: { runtimeStatus: "idle" as const, messageCount: 2 },
@@ -297,7 +297,7 @@ describe("Desktop Plugin IPC protocol", () => {
         operation: { type: "abort" },
       },
     })).toBe(true);
-    for (const operation of [{ type: "list_models" as const }, { type: "list_skills" as const }]) {
+    for (const operation of [{ type: "list_models" as const }, { type: "list_skills" as const }, { type: "goal_control" as const, action: "pause" as const }, { type: "goal_control" as const, action: "resume" as const }]) {
       expect(isDesktopHostToBrokerFrame({
         type: "desktop_broker_command",
         request: {
@@ -314,8 +314,19 @@ describe("Desktop Plugin IPC protocol", () => {
       type: "desktop_broker_command",
       request: {
         type: "desktop_plugin_request",
-        requestId: "request-1",
-        commandId: "command-1",
+        requestId: "bad-goal",
+        commandId: "bad-goal",
+        deadlineAt: Date.now() + 1000,
+        target,
+        operation: { type: "goal_control", action: "clear" },
+      },
+    })).toBe(false);
+    expect(isDesktopHostToBrokerFrame({
+      type: "desktop_broker_command",
+      request: {
+        type: "desktop_plugin_request",
+        requestId: "request-stale-target",
+        commandId: "command-stale-target",
         deadlineAt: Date.now() + 1000,
         target: { ...target, processGeneration: "" },
         operation: { type: "abort" },

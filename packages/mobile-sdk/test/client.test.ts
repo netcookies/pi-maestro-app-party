@@ -6,7 +6,7 @@ import {
   type WebSocketLike,
 } from "../src/client.js";
 
-import { isSessionPresentation } from "../src/protocol/index.js";
+import { isSessionPresentation, isClientCommand } from "../src/protocol/index.js";
 
 class FakeSocket implements WebSocketLike {
   readyState = 0;
@@ -26,6 +26,18 @@ describe("SessionPresentation contract", () => {
   const presentation = { role: "session", visibility: "session_list", revision: 1,
     control: { mode: "readonly", canPrompt: false, canSteer: false, canFollowUp: false,
       canAbort: false, canAnswerAsk: false, canPlan: false } };
+  it("accepts optional Goal control capability and rejects malformed values", () => {
+    expect(isSessionPresentation({ ...presentation, control: { ...presentation.control, canGoalControl: true } })).toBe(true);
+    expect(isSessionPresentation({ ...presentation, control: { ...presentation.control, canGoalControl: "yes" } })).toBe(false);
+  });
+
+  it("accepts only exact pause/resume Goal commands", () => {
+    const command = { id: "goal-1", type: "goal_control", sessionId: "s1", target: { sessionId: "s1", endpointId: "desktop", normalizedCwd: "/work", processGeneration: "g1" }, action: "pause" };
+    expect(isClientCommand(command)).toBe(true);
+    expect(isClientCommand({ ...command, action: "clear" })).toBe(false);
+    expect(isClientCommand({ ...command, target: undefined })).toBe(false);
+  });
+
   it("accepts canonical control and rejects obsolete modes or incomplete fields", () => {
     expect(isSessionPresentation(presentation)).toBe(true);
     expect(isSessionPresentation({ ...presentation, revision: -1 })).toBe(false);

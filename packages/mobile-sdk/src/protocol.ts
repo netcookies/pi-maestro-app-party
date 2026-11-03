@@ -107,6 +107,7 @@ export interface SessionControl {
   canAbort: boolean;
   canAnswerAsk: boolean;
   canPlan: boolean;
+  canGoalControl?: boolean;
 }
 
 /** Server-owned UI placement and control projection, orthogonal to runtimeStatus. */
@@ -817,6 +818,7 @@ export type ClientCommandPayload =
   | { type: "test_notification"; providerId?: string }
   | ({ type: "set_model"; modelId: string; provider?: string } & TargetedSessionCommand)
   | ({ type: "set_thinking"; level: string } & TargetedSessionCommand)
+  | ({ type: "goal_control"; action: "pause" | "resume" } & TargetedSessionCommand)
   | ({ type: "compact"; customInstructions?: string } & TargetedSessionCommand)
   | ({ type: "rename_session"; name: string } & TargetedSessionCommand)
   /** Deprecated compatibility envelope: Host never closes a session through this command. */
@@ -912,6 +914,7 @@ export function isSessionPresentation(value: unknown): value is SessionPresentat
     && typeof control.canPrompt === "boolean" && typeof control.canSteer === "boolean"
     && typeof control.canFollowUp === "boolean" && typeof control.canAbort === "boolean"
     && typeof control.canAnswerAsk === "boolean" && typeof control.canPlan === "boolean"
+    && (control.canGoalControl === undefined || typeof control.canGoalControl === "boolean")
     && (value.monitorWindowCount === undefined || isNonNegativeInteger(value.monitorWindowCount));
 }
 
@@ -1072,6 +1075,7 @@ export function isClientCommand(value: unknown): value is ClientCommand {
     case "list_skills":
     case "set_model":
     case "set_thinking":
+    case "goal_control":
     case "compact":
     case "rename_session":
     case "close_session":
@@ -1081,6 +1085,7 @@ export function isClientCommand(value: unknown): value is ClientCommand {
       return isString(value.sessionId)
         && (value.type !== "set_model" || (isString(value.modelId) && optionalString(value.provider)))
         && (value.type !== "set_thinking" || isString(value.level))
+        && (value.type !== "goal_control" || value.action === "pause" || value.action === "resume")
         && (value.type !== "rename_session" || isString(value.name))
         && (value.type !== "compact" || optionalString(value.customInstructions));
     case "update_maestro_settings":

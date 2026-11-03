@@ -170,6 +170,29 @@ describe("DesktopFlowAskAdapter", () => {
 });
 
 describe("DesktopPiSessionAdapter", () => {
+  it("routes only the fixed Goal pause/resume commands through the Pi command expander", async () => {
+    const calls: string[] = [];
+    const adapter = new DesktopPiSessionAdapter({
+      prompt: async () => {},
+      steer: async () => {},
+      followUp: async () => {},
+      goalControl: async (action) => { calls.push(action); },
+      abort: () => {},
+      getAllTools: () => [],
+    }, target);
+    await expect(adapter.execute(request({ type: "goal_control", action: "pause" }))).resolves.toMatchObject({ status: "accepted" });
+    await expect(adapter.execute(request({ type: "goal_control", action: "resume" }))).resolves.toMatchObject({ status: "accepted" });
+    expect(calls).toEqual(["pause", "resume"]);
+    expect(adapter.getCapabilities()).toContain("goal_control");
+  });
+
+  it("does not advertise Goal control when the Flow command bridge is unavailable", () => {
+    const adapter = new DesktopPiSessionAdapter({
+      prompt: async () => {}, steer: async () => {}, followUp: async () => {}, abort: () => {}, getAllTools: () => [],
+    }, target);
+    expect(adapter.getCapabilities()).not.toContain("goal_control");
+  });
+
   it("calls the injected same-process abort and cancels pending ask", async () => {
     let aborts = 0;
     const ask = new DesktopFlowAskAdapter({ toolNames: ["ask-user-question"], responseDirectory: "/tmp" });

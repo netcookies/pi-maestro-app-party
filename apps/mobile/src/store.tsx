@@ -69,6 +69,7 @@ export interface HostStoreValue {
   loadSessionHistory(sessionId: string, targetKey?: string, options?: { signal?: AbortSignal }): Promise<void>;
   selectSessionTarget(sessionId: string | null, targetKey?: string): void;
   loadMoreHistory(sessionId: string, targetKey: string, count?: number): Promise<{ items: TimelineItem[]; hasMore: boolean; totalEntries: number }>;
+  controlGoal(sessionId: string, targetKey: string, action: "pause" | "resume"): Promise<unknown>;
   searchHistory(sessionId: string, keyword: string, maxResults?: number, previewLength?: number): Promise<{ matches: { index: number; text: string; kind: string }[]; totalEntries: number }>;
   listModels(sessionId: string): Promise<{ id: string; provider: string; name: string; reasoning: boolean; vision: boolean }[]>;
   listSkills(sessionId: string): Promise<{ name: string; description?: string }[]>;
@@ -679,6 +680,14 @@ export function HostStoreProvider({ children }: { children: React.ReactNode }) {
     return r;
   }, [getClient, dispatch, targetForSession]);
 
+  const controlGoal = useCallback(async (sessionId: string, targetKey: string, action: "pause" | "resume") => {
+    const target = targetForSession(sessionId, targetKey);
+    if (!target || target.endpointId === "history") {
+      throw new Error(`Live desktop target is required for Goal ${action}`);
+    }
+    return getClient().sendCommand({ type: "goal_control", sessionId, target, action });
+  }, [getClient, targetForSession]);
+
   const searchHistory = useCallback(async (sessionId: string, keyword: string, maxResults?: number, previewLength?: number) => {
     const result = await getClient().sendCommand({ type: "search_history", sessionId, ...targetOptions(sessionId), keyword, maxResults, previewLength });
     return result as { matches: { index: number; text: string; kind: string }[]; totalEntries: number };
@@ -792,6 +801,7 @@ export function HostStoreProvider({ children }: { children: React.ReactNode }) {
       loadSessionHistory,
       selectSessionTarget,
       loadMoreHistory,
+      controlGoal,
       searchHistory,
       listModels,
       listSkills,
@@ -826,7 +836,7 @@ export function HostStoreProvider({ children }: { children: React.ReactNode }) {
       supportsHerdrSettings,
       supportsHerdrSessionClose,
     }),
-    [state, connectionState, hostUrl, token, connect, disconnect, activate, listHostSessions, refreshMaestroState, refreshMonitor, refreshExecutionProjections, loadSessionHistory, selectSessionTarget, loadMoreHistory, searchHistory, listModels, listSkills, getMaestroSettings, updateMaestroSettings, fetchSessionUsage, setModel, setThinking, sendPrompt, sendSteer, followUp, sendAbort, getNotificationConfig, testNotification, answerDialog, cancelDialog, respondPlan, cancelPlan, supportsRefine, refineState, refineTarget, sendRefineAction, clearError, getHerdrStatus, getHerdrSettings, updateHerdrSettings, closeHerdrSession, closeAllHerdrSessions, launchPiSession],
+    [state, connectionState, hostUrl, token, connect, disconnect, activate, listHostSessions, refreshMaestroState, refreshMonitor, refreshExecutionProjections, loadSessionHistory, selectSessionTarget, loadMoreHistory, controlGoal, searchHistory, listModels, listSkills, getMaestroSettings, updateMaestroSettings, fetchSessionUsage, setModel, setThinking, sendPrompt, sendSteer, followUp, sendAbort, getNotificationConfig, testNotification, answerDialog, cancelDialog, respondPlan, cancelPlan, supportsRefine, refineState, refineTarget, sendRefineAction, clearError, getHerdrStatus, getHerdrSettings, updateHerdrSettings, closeHerdrSession, closeAllHerdrSessions, launchPiSession],
   );
 
   return <HostStoreContext.Provider value={value}>{children}</HostStoreContext.Provider>;

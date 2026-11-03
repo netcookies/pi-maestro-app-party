@@ -37,6 +37,10 @@ function isImage(value: unknown): value is Image {
 }
 
 function desktopOperation(command: SessionCommand): DesktopPluginOperation | { error: string } {
+  if (command.kind === "goal_control") {
+    if (command.goalAction !== "pause" && command.goalAction !== "resume") return { error: "goal_action_required" };
+    return { type: "goal_control", action: command.goalAction };
+  }
   if (command.kind === "set_model") {
     if (typeof command.modelId !== "string" || command.modelId.length === 0) return { error: "model_required" };
     return { type: "set_model", modelId: command.modelId, ...(command.provider ? { provider: command.provider } : {}) };

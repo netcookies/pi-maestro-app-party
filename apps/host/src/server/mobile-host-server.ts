@@ -63,6 +63,7 @@ const ROLLOUT_MUTATING_COMMANDS = new Set([
   "update_maestro_settings",
   "set_model",
   "set_thinking",
+  "goal_control",
   "compact",
   "rename_session",
   "close_session",
@@ -1026,6 +1027,14 @@ export class MobileHostServer {
           const target = this.targetForCommand(command);
           if (!target) { this.sendUnavailable(client, command, "target_unavailable"); break; }
           const result = await this.controller.application.command({ requestId: this.scopedRequestId(client, command, target), target, kind: "set_thinking", level: command.level });
+          this.sendApplicationResult(client, command, result);
+          break;
+        }
+        case "goal_control": {
+          if (!client.capabilities.includes("session_control")) { this.sendUnavailable(client, command, "capability_mismatch"); break; }
+          if (!isSessionTargetIdentity(command.target)) { this.sendUnavailable(client, command, "target_unavailable"); break; }
+          const target = command.target;
+          const result = await this.controller.application.command({ requestId: this.scopedRequestId(client, command, target), target, kind: "goal_control", goalAction: command.action });
           this.sendApplicationResult(client, command, result);
           break;
         }

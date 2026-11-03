@@ -12,7 +12,7 @@ import { HostController } from "../src/host-controller.js";
 import { MaestroStateReader } from "../src/maestro-state.js";
 
 /** 最小假 Pi API/ctx：只保真 extension 实际使用的成员，避免用宽泛 mock 掩盖真实调用。 */
-function fakePi(options: { models: { provider: string; id: string; name: string }[]; availableModels?: { provider: string; id: string; name: string }[]; skills?: { name: string; description?: string }[]; model?: unknown; configuredAuth?: boolean; entries?: unknown[] }) {
+function fakePi(options: { models: { provider: string; id: string; name: string }[]; availableModels?: { provider: string; id: string; name: string }[]; skills?: { name: string; description?: string }[]; goalCommand?: boolean; model?: unknown; configuredAuth?: boolean; entries?: unknown[] }) {
   let sessionEntries = options.entries ?? [];
   const handlers = new Map<string, ((event: unknown, ctx: unknown) => unknown)[]>();
 
@@ -22,7 +22,7 @@ function fakePi(options: { models: { provider: string; id: string; name: string 
   const setThinkingCalls: string[] = [];
   let thinkingLevel = "medium";
   let sessionId = "tui-session";
-  const sent: { content: unknown; options?: { deliverAs?: string } }[] = [];
+  const sent: { content: unknown; options?: { deliverAs?: string; expandPromptTemplates?: boolean } }[] = [];
   const pi = {
     registerCommand: (name: string, command: { handler: (args: string, ctx: unknown) => unknown }) => registeredCommands.set(name, command),
     registerMessageRenderer: () => undefined,
@@ -41,11 +41,18 @@ function fakePi(options: { models: { provider: string; id: string; name: string 
     on(event: string, handler: (event: unknown, ctx: unknown) => unknown) {
       handlers.set(event, [...(handlers.get(event) ?? []), handler]);
     },
-    sendUserMessage(content: unknown, sendOptions?: { deliverAs?: string }) {
+    sendUserMessage(content: unknown, sendOptions?: { deliverAs?: string; expandPromptTemplates?: boolean }) {
       sent.push({ content, options: sendOptions });
+      if (sendOptions?.expandPromptTemplates === true) {
+        const action = content === "/goal stop" ? "paused" : "active";
+        sessionEntries = [...sessionEntries, { type: "custom", customType: "goal-state", data: { version: 1, goal: { id: "goal-1", text: "Test goal", status: action } } }];
+      }
     },
     getAllTools: () => [],
-    getCommands: () => (options.skills ?? []).map((skill) => ({ name: `skill:${skill.name}`, description: skill.description, source: "skill" })),
+    getCommands: () => [
+      ...(options.goalCommand ? [{ name: "goal", description: "Manage Goal", source: "extension" }] : []),
+      ...(options.skills ?? []).map((skill) => ({ name: `skill:${skill.name}`, description: skill.description, source: "skill" })),
+    ],
     setModel: async (model: unknown) => {
       setModelCalls.push(model);
       return true;
@@ -122,14 +129,16 @@ describe("Desktop Plugin extension (TUI side)", () => {
     const received: DesktopPluginModel[] = [];
     const thinkingLevels: string[] = [];
     const runtimeStatuses: DesktopPluginRuntimeStatus[] = [];
+    const executionSummaries: DesktopPluginExecutionSummary[] = [];
     server = new DesktopPluginIpcServer({
       socketPath: join(dir, "plugin.sock"),
       secret: "test-secret",
       registry,
-      supportedEvents: ["model_select", "thinking_level_select", "runtime_status"],
+      supportedEvents: ["model_select", "thinking_level_select", "runtime_status", "execution_summary"],
       onModelSelect: (_target, event) => { received.push(event.model); },
       onThinkingLevelSelect: (_target, event) => { thinkingLevels.push(event.level); },
       onRuntimeStatus: (_target, event) => { runtimeStatuses.push(event.runtimeStatus); },
+      onExecutionSummary: (_target, event) => { executionSummaries.push(event.summary); },
     });
     await server.start();
 
@@ -138,6 +147,8 @@ describe("Desktop Plugin extension (TUI side)", () => {
       availableModels: [],
       model: { provider: "provider-b", id: "shared-id", name: "Model B", reasoning: false, input: ["text", "image"] },
       skills: [{ name: "review", description: "Review changes" }],
+      goalCommand: true,
+      entries: [{ type: "custom", customType: "goal-state", data: { version: 1, goal: { id: "goal-1", text: "Test goal", status: "active" } } }],
     });
     const extension = createDesktopPluginExtension({ socketPath: join(dir, "plugin.sock"), secret: "test-secret" });
     extension(fake.pi as never);
@@ -182,6 +193,15 @@ describe("Desktop Plugin extension (TUI side)", () => {
     expect(thinkingResult).toMatchObject({ status: "accepted" });
     expect(fake.setThinkingCalls).toEqual(["high"]);
     await waitFor(() => thinkingLevels.at(-1) === "high");
+
+    const goalResult = await gateway.execute({ requestId: "ext-goal-pause", target: target as DesktopPluginTarget, kind: "goal_control", goalAction: "pause" });
+    expect(goalResult).toMatchObject({ status: "accepted" });
+    await waitFor(() => executionSummaries.at(-1)?.goal?.status === "paused");
+    expect(fake.sent.at(-1)).toEqual({ content: "/goal stop", options: { expandPromptTemplates: true } });
+    const resumeResult = await gateway.execute({ requestId: "ext-goal-resume", target: target as DesktopPluginTarget, kind: "goal_control", goalAction: "resume" });
+    expect(resumeResult).toMatchObject({ status: "accepted" });
+    await waitFor(() => executionSummaries.at(-1)?.goal?.status === "active");
+    expect(fake.sent.at(-1)).toEqual({ content: "/goal resume", options: { expandPromptTemplates: true } });
 
     // 未知模型必须失败而非静默
     const missing = await gateway.execute({ requestId: "ext-missing", target: target as DesktopPluginTarget, kind: "set_model", provider: "provider-z", modelId: "nope" });

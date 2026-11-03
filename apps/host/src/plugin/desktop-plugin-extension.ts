@@ -920,6 +920,25 @@ export function createDesktopPluginExtension(options: DesktopPluginExtensionOpti
           assertDeliverable();
           pi.sendUserMessage(message, { deliverAs: "followUp" });
         },
+        ...(pi.getCommands().some((command) => command.name.replace(/^\//, "") === "goal") ? {
+          goalControl: async (action: "pause" | "resume") => {
+            const currentGoal = goalSnapshotFromSessionEntries(sessionEntriesOf(ctx));
+            const expectedCurrent = action === "pause" ? "active" : "paused";
+            const expectedNext = action === "pause" ? "paused" : "active";
+            if (!currentGoal?.id || currentGoal.status !== expectedCurrent) throw new Error("goal_state_changed");
+            pi.sendUserMessage(`/goal ${action === "pause" ? "stop" : "resume"}`, { expandPromptTemplates: true });
+            const deadline = Date.now() + 1500;
+            while (Date.now() < deadline) {
+              const nextGoal = goalSnapshotFromSessionEntries(sessionEntriesOf(ctx));
+              if (nextGoal?.id === currentGoal.id && nextGoal.status === expectedNext) {
+                publishExecutionSummary();
+                return;
+              }
+              await new Promise((resolve) => setTimeout(resolve, 25));
+            }
+            throw new Error("goal_control_confirmation_timeout");
+          },
+        } : {}),
         setModel: async (provider: string | undefined, modelId: string) => {
           const model = provider
             ? ctx.modelRegistry.find(provider, modelId)

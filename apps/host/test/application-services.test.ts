@@ -61,6 +61,21 @@ describe("SessionCommandService", () => {
     expect(results.map((result) => result.result)).toEqual(["first", "second"]);
   });
 
+  it("requires explicit goal_control capability on the exact live Desktop target", async () => {
+    const directory = new SessionDirectory();
+    const target: SessionTargetIdentity = { sessionId: "goal-session", endpointId: "desktop", normalizedCwd: "/work/app", processGeneration: "generation-1" };
+    const gateway = { execute: vi.fn(async () => ({ requestId: "goal", operation: "goal_control", status: "accepted" as const, revision: 1 })) };
+    const service = new SessionCommandService(directory, gateway);
+
+    directory.registerDesktopTarget(target, ["prompt"]);
+    await expect(service.execute({ requestId: "denied", target, kind: "goal_control", goalAction: "pause" })).resolves.toMatchObject({ status: "unknown", error: { code: "target_unavailable" } });
+    expect(gateway.execute).not.toHaveBeenCalled();
+
+    directory.registerDesktopTarget(target, ["goal_control"]);
+    await expect(service.execute({ requestId: "allowed", target, kind: "goal_control", goalAction: "pause" })).resolves.toMatchObject({ status: "accepted" });
+    expect(gateway.execute).toHaveBeenCalledTimes(1);
+  });
+
   it("returns unknown for an unavailable exact target and a missing Desktop gateway", async () => {
     const directory = new SessionDirectory();
     const target: SessionTargetIdentity = { sessionId: "same", endpointId: "desktop", normalizedCwd: "/work/app", processGeneration: "generation" };

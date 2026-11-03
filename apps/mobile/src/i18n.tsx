@@ -337,6 +337,8 @@ export interface I18nDictionary {
   executionRunning: string;
   executionDone: string;
   executionGoal: string;
+  executionGoalPause: string;
+  executionGoalResume: string;
   executionGoalPaused: string;
   executionGoalEmpty: string;
   executionGoalBudget: string;
@@ -699,6 +701,8 @@ export const DICTIONARIES: Record<Language, I18nDictionary> = {
     executionRunning: "运行中",
     executionDone: "已完成",
     executionGoal: "目标",
+    executionGoalPause: "暂停",
+    executionGoalResume: "恢复",
     executionGoalPaused: "·暂停",
     executionGoalEmpty: "暂无目标",
     executionGoalBudget: "Token 预算",
@@ -1075,6 +1079,8 @@ export const DICTIONARIES: Record<Language, I18nDictionary> = {
     executionRunning: "running",
     executionDone: "done",
     executionGoal: "Goal",
+    executionGoalPause: "Pause",
+    executionGoalResume: "Resume",
     executionGoalPaused: "·paused",
     executionGoalEmpty: "No goal",
     executionGoalBudget: "Token budget",

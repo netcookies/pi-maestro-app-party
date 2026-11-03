@@ -6,6 +6,7 @@ export interface DesktopPiSessionApi {
   prompt(message: string, images?: unknown[]): Promise<void>;
   steer(message: string): Promise<void>;
   followUp(message: string): Promise<void>;
+  goalControl?(action: "pause" | "resume"): Promise<void>;
   abort(): Promise<void> | void;
   getAllTools(): readonly { name?: string }[];
   setModel(provider: string | undefined, modelId: string): Promise<boolean>;
@@ -58,6 +59,7 @@ export class DesktopPiSessionAdapter {
     this.ask = ask;
     this.capabilities = [
       "prompt", "steer", "follow_up", "abort", "set_model", "set_thinking",
+      ...(api.goalControl ? ["goal_control" as const] : []),
       ...(api.listModels ? ["list_models" as const] : []),
       ...(api.listSkills ? ["list_skills" as const] : []),
       ...(ask.supported ? ["ask-user-question" as const] : []),
@@ -113,6 +115,11 @@ export class DesktopPiSessionAdapter {
       }
       if (operation === "follow_up") {
         await this.api.followUp(request.operation.message);
+        return { type: "desktop_plugin_result", requestId: request.requestId, operation, status: "accepted" };
+      }
+      if (operation === "goal_control") {
+        if (!this.api.goalControl) throw new Error("goal_control_unavailable");
+        await this.api.goalControl(request.operation.action);
         return { type: "desktop_plugin_result", requestId: request.requestId, operation, status: "accepted" };
       }
       if (operation === "list_models") {

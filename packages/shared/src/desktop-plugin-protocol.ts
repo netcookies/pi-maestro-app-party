@@ -22,6 +22,7 @@ export type DesktopPluginCapability =
   | "abort"
   | "set_model"
   | "set_thinking"
+  | "goal_control"
   | "list_models"
   | "list_skills"
   | "ask-user-question"
@@ -250,6 +251,7 @@ export type DesktopPluginOperation =
   | { type: "abort" }
   | { type: "set_model"; provider?: string; modelId: string }
   | { type: "set_thinking"; level: string }
+  | { type: "goal_control"; action: "pause" | "resume" }
   | { type: "list_models" }
   | { type: "list_skills" };
 
@@ -782,6 +784,7 @@ function isDesktopPluginOperation(value: unknown): value is DesktopPluginOperati
       && (value.provider === undefined || (typeof value.provider === "string" && value.provider.length > 0));
   }
   if (value.type === "set_thinking") return typeof value.level === "string" && value.level.length > 0;
+  if (value.type === "goal_control") return value.action === "pause" || value.action === "resume";
   if (value.type === "list_models" || value.type === "list_skills") return true;
   return (value.type === "prompt" || value.type === "steer" || value.type === "follow_up")
     && typeof value.message === "string";

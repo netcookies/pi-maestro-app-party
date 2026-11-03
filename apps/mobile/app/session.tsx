@@ -88,7 +88,7 @@ function modelNameOf(value: unknown): string | undefined {
 export default function SessionScreen() {
   const { id, targetKey, from, model: paramModel } = useLocalSearchParams<{ id: string; targetKey?: string; from?: string; model?: string }>();
   const router = useRouter();
-  const { state, hostUrl, sendPrompt, followUp, sendAbort, answerDialog, cancelDialog, respondPlan, cancelPlan, supportsRefine, refineState, refineTarget, sendRefineAction, selectSessionTarget, loadSessionHistory, loadMoreHistory, searchHistory, setThinking, listSkills, listModels, isConnected, connectionState, lastError, clearError: dispatchLocalError, getHerdrSettings, getHerdrStatus, launchPiSession, closeHerdrSession, supportsHerdrSessionClose } = useHost();
+  const { state, hostUrl, sendPrompt, followUp, sendAbort, controlGoal, answerDialog, cancelDialog, respondPlan, cancelPlan, supportsRefine, refineState, refineTarget, sendRefineAction, selectSessionTarget, loadSessionHistory, loadMoreHistory, searchHistory, setThinking, listSkills, listModels, isConnected, connectionState, lastError, clearError: dispatchLocalError, getHerdrSettings, getHerdrStatus, launchPiSession, closeHerdrSession, supportsHerdrSessionClose } = useHost();
   const { theme } = useTheme();
   const { t } = useI18n();
   const cfg = getConfig();
@@ -116,6 +116,9 @@ export default function SessionScreen() {
     listFallback?.model;
 
   const [floatingToolbarCollapsed, setFloatingToolbarCollapsed] = useState(false);
+  const [executionOperationError, setExecutionOperationError] = useState<string | null>(null);
+  const [goalControlPending, setGoalControlPending] = useState(false);
+  const goalControlPendingRef = useRef(false);
   const [executionDetailsOpen, setExecutionDetailsOpen] = useState(false);
   const [closeConfirmOpen, setCloseConfirmOpen] = useState(false);
   const [closeMessage, setCloseMessage] = useState<string | null>(null);
@@ -1646,6 +1649,39 @@ export default function SessionScreen() {
                     </View>
                   </View>
                 </View>
+                {control?.mode === "desktop_plugin" && control.canGoalControl === true && executionGoal && selectedTargetKey && (executionGoal.status === "active" || executionGoal.status === "paused") ? (
+                  <TouchableOpacity
+                    accessibilityRole="button"
+                    accessibilityLabel={executionGoal.status === "active" ? t.executionGoalPause : t.executionGoalResume}
+                    disabled={!isConnected || goalControlPending}
+                    accessibilityState={{ disabled: !isConnected || goalControlPending, busy: goalControlPending }}
+                    onPress={() => {
+                      if (goalControlPendingRef.current) return;
+                      goalControlPendingRef.current = true;
+                      setGoalControlPending(true);
+                      setExecutionOperationError(null);
+                      void controlGoal(id!, selectedTargetKey, executionGoal.status === "active" ? "pause" : "resume")
+                        .catch((error) => {
+                          setExecutionOperationError(error instanceof Error ? error.message : String(error));
+                        })
+                        .finally(() => {
+                          goalControlPendingRef.current = false;
+                          setGoalControlPending(false);
+                        });
+                    }}
+                    style={[styles.goalControlButton, { borderColor: theme.border, opacity: isConnected && !goalControlPending ? 1 : 0.5 }]}
+                  >
+                    {goalControlPending
+                      ? <ActivityIndicator size="small" color={theme.text} />
+                      : <LineIcon name={executionGoal.status === "active" ? "pause" : "play"} size={15} color={theme.text} />}
+                    <Text style={[styles.goalControlText, { color: theme.text }]}>
+                      {executionGoal.status === "active" ? t.executionGoalPause : t.executionGoalResume}
+                    </Text>
+                  </TouchableOpacity>
+                ) : null}
+                {executionOperationError ? (
+                  <Text accessibilityRole="alert" style={[styles.sheetDesc, { color: theme.error }]}>{executionOperationError}</Text>
+                ) : null}
                 {typeof executionGoal.timeUsedSeconds === "number" ? (
                   <View style={[styles.goalMetaRow, { marginLeft: 24 }]}>
                     <Text style={[styles.goalMetaLabel, { color: theme.muted }]}>{t.executionGoalElapsed}</Text>
@@ -2080,6 +2116,8 @@ function makeStyles(theme: ReturnType<typeof useTheme>["theme"]) {
     todoBarFill: { width: "100%", minHeight: 2, borderRadius: 2 },
     todoBarLabel: { fontSize: 9, lineHeight: 12 },
     goalMetaRow: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", gap: 8 },
+    goalControlButton: { minHeight: 38, alignSelf: "flex-start", flexDirection: "row", alignItems: "center", gap: 7, borderWidth: StyleSheet.hairlineWidth, borderRadius: 6, paddingHorizontal: 12, marginLeft: 24 },
+    goalControlText: { fontSize: MIUIX_TYPE.footnote1, fontWeight: "600" },
     goalMetaLabel: { fontSize: 11, lineHeight: 15 },
     goalBudgetTrack: { height: 6, borderRadius: 3, overflow: "hidden" },
     goalBudgetFill: { height: 6, borderRadius: 3 },

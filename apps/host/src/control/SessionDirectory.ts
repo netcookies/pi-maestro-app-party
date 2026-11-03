@@ -4,7 +4,7 @@ import type { DesktopPluginCapability, DesktopPluginModel, DesktopPluginRuntimeS
 
 export type { SessionTargetIdentity } from "@maestro-mobile/shared";
 
-export type SessionControlCapability = "prompt" | "steer" | "follow_up" | "abort" | "set_model" | "set_thinking" | "ask" | "plan";
+export type SessionControlCapability = "prompt" | "steer" | "follow_up" | "abort" | "set_model" | "set_thinking" | "goal_control" | "ask" | "plan";
 
 export interface SessionDirectoryTarget {
   identity: SessionTargetIdentity;
@@ -55,6 +55,7 @@ function presentationForTarget(
       canAbort: available.has("abort"),
       canAnswerAsk: available.has("ask"),
       canPlan: available.has("plan"),
+      ...(available.has("goal_control") ? { canGoalControl: true } : {}),
     },
     revision,
   };
@@ -75,7 +76,7 @@ export class SessionDirectory {
   ): SessionTargetIdentity {
     const controlCapabilities: SessionControlCapability[] = [];
     for (const capability of capabilities) {
-      if (capability === "prompt" || capability === "steer" || capability === "follow_up" || capability === "abort" || capability === "set_model" || capability === "set_thinking") {
+      if (capability === "prompt" || capability === "steer" || capability === "follow_up" || capability === "abort" || capability === "set_model" || capability === "set_thinking" || capability === "goal_control") {
         controlCapabilities.push(capability);
       } else if (capability === "ask-user-question") {
         controlCapabilities.push("ask");

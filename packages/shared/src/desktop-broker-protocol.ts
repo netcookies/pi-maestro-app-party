@@ -371,6 +371,7 @@ function isDesktopPluginOperation(value: unknown): boolean {
   if (value.type === "set_model") return typeof value.modelId === "string" && value.modelId.length > 0
     && (value.provider === undefined || (typeof value.provider === "string" && value.provider.length > 0));
   if (value.type === "set_thinking") return typeof value.level === "string" && value.level.length > 0;
+  if (value.type === "goal_control") return value.action === "pause" || value.action === "resume";
   if (value.type === "list_models" || value.type === "list_skills") return true;
   return (value.type === "prompt" || value.type === "steer" || value.type === "follow_up") && typeof value.message === "string";
 }
@@ -401,7 +402,7 @@ function isDesktopBrokerError(value: unknown): value is DesktopBrokerError {
 }
 
 function isDesktopPluginCapabilityArray(value: unknown): value is DesktopPluginCapability[] {
-  return Array.isArray(value) && value.every((item) => item === "prompt" || item === "steer" || item === "follow_up" || item === "abort" || item === "set_model" || item === "set_thinking" || item === "list_models" || item === "list_skills" || item === "ask-user-question" || item === "plan");
+  return Array.isArray(value) && value.every((item) => item === "prompt" || item === "steer" || item === "follow_up" || item === "abort" || item === "set_model" || item === "set_thinking" || item === "goal_control" || item === "list_models" || item === "list_skills" || item === "ask-user-question" || item === "plan");
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
