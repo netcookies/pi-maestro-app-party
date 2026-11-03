@@ -385,7 +385,13 @@ export interface SessionLoopSummary {
 export interface SessionExecutionSummary {
   target: SessionTargetIdentity;
   revision: number;
+  /**
+   * Bounded Todo window. Producers cap this list, so it must never be treated as
+   * the complete set: counts come from `todoCounts` when a producer sends it.
+   */
   todos: MonitorTodoSummary[];
+  /** Aggregate over the complete Todo set, independent of the `todos` window cap. */
+  todoCounts?: ExecutionTodoCounts;
   goal?: SessionGoalSummary;
   loop?: SessionLoopSummary[];
   teammate: {
@@ -399,6 +405,11 @@ export interface SessionExecutionSummary {
     ownerId?: string;
   };
   backgroundJobs: BackgroundJobSummary[];
+}
+
+export interface ExecutionTodoCounts {
+  done: number;
+  total: number;
 }
 
 /** Teammate/Monitor 合同：workspace owner 运行时状态（pi-maestro-teammate 持久化） */
@@ -1262,7 +1273,14 @@ function isSessionExecutionSummary(value: unknown): value is SessionExecutionSum
   // unrelated producer bug cannot suppress the whole execution summary.
   dropInvalidOptional(value, "goal", isSessionGoalSummary);
   dropInvalidOptional(value, "loop", (candidate) => Array.isArray(candidate) && candidate.every(isSessionLoopSummary));
+  dropInvalidOptional(value, "todoCounts", isExecutionTodoCounts);
   return true;
+}
+
+function isExecutionTodoCounts(value: unknown): boolean {
+  if (!isRecord(value)) return false;
+  const { done, total } = value;
+  return isNonNegativeSafeInteger(done) && isNonNegativeSafeInteger(total) && done <= total;
 }
 
 function dropInvalidOptional(

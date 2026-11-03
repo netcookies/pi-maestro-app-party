@@ -69,6 +69,20 @@ describe("execution-presentation", () => {
     expect(counts.background).toEqual({ active: 1, done: 1, total: 2 });
   });
 
+  it("prefers producer todo counts over the truncated todo window", () => {
+    // The protocol caps `todos`; a session with 63 Todos reports a 32-item window
+    // whose first entries are all completed, which used to render as 32/32.
+    const truncated: SessionExecutionSummary = {
+      ...sampleSummary,
+      todos: [
+        { id: "1", subject: "a", status: "completed", updatedAt: 1 },
+        { id: "2", subject: "b", status: "completed", updatedAt: 2 },
+      ],
+      todoCounts: { done: 60, total: 63 },
+    };
+    expect(executionSectionCounts(truncated).todo).toMatchObject({ done: 60, total: 63 });
+  });
+
   it("detects live work when any section has active items", () => {
     const counts = executionSectionCounts(sampleSummary);
     expect(hasActiveExecution(counts)).toBe(true);

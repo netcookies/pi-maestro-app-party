@@ -16,6 +16,8 @@ export function selectExecutionSummaryForSession(state: AppState, exactTargetKey
 }
 
 export function executionTodoCounts(summary: SessionExecutionSummary) {
+  // `todos` is a bounded window; a producer that reports the complete set wins.
+  if (summary.todoCounts) return { done: summary.todoCounts.done, total: summary.todoCounts.total };
   const done = summary.todos.filter((todo) => ["completed", "done"].includes(todo.status.toLowerCase())).length;
   return { done, total: summary.todos.length };
 }

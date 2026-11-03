@@ -131,12 +131,14 @@ export function executionSectionCounts(
   const jobStatuses = summary.backgroundJobs.map((item) => item.status);
   const goal = summary.goal;
   const loops = summary.loop ?? [];
+  const todoDone = summary.todoCounts?.done ?? todoStatuses.filter((status) => executionTone("todo", status) === "success").length;
+  const todoTotal = summary.todoCounts?.total ?? todoStatuses.length;
 
   return {
     todo: {
       active: todoStatuses.filter((status) => executionTone("todo", status) === "warning").length,
-      done: todoStatuses.filter((status) => executionTone("todo", status) === "success").length,
-      total: todoStatuses.length,
+      done: todoDone,
+      total: todoTotal,
     },
     teammate: {
       active: summary.teammate.running,

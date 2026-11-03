@@ -252,11 +252,13 @@ export function deriveDashboardMetrics(input: DashboardInput, now: Date = new Da
   const sessions = input.sessions ?? [];
   const activeSessionsToday = sessions.filter((session) => isSameLocalDay(new Date(session.updatedAt), now)).length;
   const totalSessions = sessions.length;
+  // `todos` is a bounded window per session, so aggregate counts come from the producer.
   const completedTasks = input.executionSummaries
-    ? input.executionSummaries.reduce((total, summary) => total + summary.todos.filter((todo) => ["completed", "done"].includes(todo.status.toLowerCase())).length, 0)
+    ? input.executionSummaries.reduce((total, summary) => total + (summary.todoCounts?.done
+      ?? summary.todos.filter((todo) => ["completed", "done"].includes(todo.status.toLowerCase())).length), 0)
     : null;
   const totalTasks = input.executionSummaries
-    ? input.executionSummaries.reduce((total, summary) => total + summary.todos.length, 0)
+    ? input.executionSummaries.reduce((total, summary) => total + (summary.todoCounts?.total ?? summary.todos.length), 0)
     : null;
 
   const waitingAsk = input.pendingAsks.length;

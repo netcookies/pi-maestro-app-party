@@ -99,3 +99,19 @@ describe("MonitorTodoSummary optional extras", () => {
     ]);
   });
 });
+
+describe("SessionExecutionSummary todo counts", () => {
+  it("keeps well-formed aggregate counts", () => {
+    const event = executionEvent({ todos: [], todoCounts: { done: 60, total: 63 } });
+    expect(isHostEvent(event)).toBe(true);
+    expect((event.summary as Record<string, unknown>).todoCounts).toEqual({ done: 60, total: 63 });
+  });
+
+  it("drops only invalid aggregate counts", () => {
+    for (const todoCounts of [{ done: -1, total: 3 }, { done: 4, total: 3 }, { done: 1 }, { done: "1", total: "2" }, []]) {
+      const event = executionEvent({ todos: [], todoCounts });
+      expect(isHostEvent(event)).toBe(true);
+      expect("todoCounts" in (event.summary as Record<string, unknown>)).toBe(false);
+    }
+  });
+});

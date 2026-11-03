@@ -787,8 +787,14 @@ function isDesktopPluginOperation(value: unknown): value is DesktopPluginOperati
     && typeof value.message === "string";
 }
 
-export function isDesktopPluginModel(value: unknown): value is DesktopPluginModel {
-  return isRecord(value)
+function isOptionalExecutionTodoCounts(value: unknown): boolean {
+  if (value === undefined) return true;
+  if (!isRecord(value)) return false;
+  const { done, total } = value;
+  return nonNegativeInteger(done) && nonNegativeInteger(total) && done <= total;
+}
+
+export function isDesktopPluginModel(value: unknown): value is DesktopPluginModel {  return isRecord(value)
     && stringFields(value, "provider", "id", "name")
     && typeof value.reasoning === "boolean"
     && typeof value.vision === "boolean";
@@ -798,6 +804,7 @@ export function isDesktopPluginExecutionSummary(value: unknown): value is Deskto
   if (!isRecord(value) || !nonNegativeInteger(value.revision)
     || !Array.isArray(value.todos) || value.todos.length > DESKTOP_PLUGIN_MAX_EXECUTION_TODOS
     || !value.todos.every(isBoundedExecutionTodo)
+    || !isOptionalExecutionTodoCounts(value.todoCounts)
     || !isRecord(value.teammate)
     || !nonNegativeInteger(value.teammate.running)
     || !nonNegativeInteger(value.teammate.total)

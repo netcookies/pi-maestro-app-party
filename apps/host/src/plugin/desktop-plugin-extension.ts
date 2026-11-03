@@ -5,7 +5,7 @@ import { randomUUID } from "node:crypto";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import type { ImageContent, Model, TextContent } from "@earendil-works/pi-ai";
 import type { BackgroundJobSummary, DesktopPluginEvent, DesktopPluginExecutionSummary, DesktopPluginModel, DesktopPluginRuntimeStatus, DesktopPluginSessionSummary, DesktopPluginTarget, DesktopAskRequest, DesktopPlanResponse, JsonValue, MonitorTodoSummary, SessionGoalSummary, SessionLoopSummary, TeammateAgentState } from "@maestro-mobile/shared";
-import { DESKTOP_PEER_FEATURE, DESKTOP_PLAN_REFINE_FEATURE } from "@maestro-mobile/shared";
+import { DESKTOP_PEER_FEATURE, DESKTOP_PLAN_REFINE_FEATURE, DESKTOP_PLUGIN_MAX_EXECUTION_TODOS } from "@maestro-mobile/shared";
 import { registerDesktopPeerCommand } from "./desktop-peer-extension.js";
 import { DesktopPluginIpcClient } from "./desktop-plugin-ipc.js";
 import {
@@ -164,6 +164,31 @@ function todoContentProjection(entries: readonly unknown[]): Map<string, TodoCon
   return contents;
 }
 
+interface TodoSnapshot {
+  todos: MonitorTodoSummary[];
+  counts: { done: number; total: number };
+}
+
+function isTodoDone(status: string): boolean {
+  const normalized = status.toLowerCase();
+  return normalized === "completed" || normalized === "done";
+}
+
+/**
+ * The protocol caps the Todo window, so unfinished work is ordered first and the
+ * aggregate counts are taken over the complete set. Deriving counts from the
+ * truncated list reported fully-complete sessions while work was still open.
+ */
+function boundedTodoSnapshot(all: readonly MonitorTodoSummary[]): TodoSnapshot {
+  const done = all.filter((todo) => isTodoDone(todo.status)).length;
+  const unfinished = all.filter((todo) => !isTodoDone(todo.status));
+  const completed = all.filter((todo) => isTodoDone(todo.status));
+  return {
+    todos: [...unfinished, ...completed].slice(0, DESKTOP_PLUGIN_MAX_EXECUTION_TODOS),
+    counts: { done, total: all.length },
+  };
+}
+
 function todoSnapshotFromSessionEntries(entries: readonly unknown[]): MonitorTodoSummary[] | undefined {
   let entry: Record<string, unknown> | undefined;
   for (let index = entries.length - 1; index >= 0; index -= 1) {
@@ -203,7 +228,6 @@ function todoSnapshotFromSessionEntries(entries: readonly unknown[]): MonitorTod
       ...(content?.description ? { description: content.description } : {}),
       durationMs: nonNegativeInteger(value.activeDurationMs) ?? 0,
     });
-    if (todos.length >= 32) break;
   }
   return todos;
 }
@@ -304,15 +328,16 @@ function loopSnapshotFromSessionEntries(entries: readonly unknown[]): SessionLoo
   return loops;
 }
 
-function flowTodoSnapshot(entries?: readonly unknown[]): MonitorTodoSummary[] | undefined {
+function flowTodoSnapshot(entries?: readonly unknown[]): TodoSnapshot | undefined {
   if (entries) {
     const sessionSnapshot = todoSnapshotFromSessionEntries(entries);
-    if (sessionSnapshot === undefined || sessionSnapshot.length > 0) return sessionSnapshot;
+    if (sessionSnapshot === undefined) return undefined;
+    if (sessionSnapshot.length > 0) return boundedTodoSnapshot(sessionSnapshot);
   }
   const registry = (globalThis as Record<symbol, unknown>)[Symbol.for("pi-maestro.workspace-projection-providers.v1")];
-  if (!(registry instanceof Map)) return entries ? [] : undefined;
+  if (!(registry instanceof Map)) return entries ? { todos: [], counts: { done: 0, total: 0 } } : undefined;
   const provider = registry.get("todo");
-  if (!isRecord(provider) || typeof provider.snapshot !== "function") return entries ? [] : undefined;
+  if (!isRecord(provider) || typeof provider.snapshot !== "function") return entries ? { todos: [], counts: { done: 0, total: 0 } } : undefined;
   try {
     const items = provider.snapshot();
     if (!Array.isArray(items)) return undefined;
@@ -344,13 +369,11 @@ function flowTodoSnapshot(entries?: readonly unknown[]): MonitorTodoSummary[] | 
         ...(description ? { description } : {}),
         ...(durationMs !== undefined ? { durationMs } : {}),
       });
-      if (todos.length >= 32) break;
     }
-    return todos;
+    return boundedTodoSnapshot(todos);
   } catch {
     return undefined;
   }
-  return entries ? [] : undefined;
 }
 
 function timestampIso(value: unknown): string | undefined {
@@ -989,15 +1012,16 @@ export function createDesktopPluginExtension(options: DesktopPluginExtensionOpti
     const currentExecutionSummary = (): DesktopPluginExecutionSummary | undefined => {
       reconcileExecutionTeammateProjection();
       const entries = executionTodoEntries?.();
-      const todos = flowTodoSnapshot(entries);
+      const todoSnapshot = flowTodoSnapshot(entries);
       const goal = entries ? goalSnapshotFromSessionEntries(entries) : undefined;
       const loops = entries ? loopSnapshotFromSessionEntries(entries) : undefined;
       // A missing Todo projection must not hide otherwise valid Goal/Loop projections.
-      if (!todos && !goal && !(loops && loops.length > 0)) return undefined;
+      if (!todoSnapshot && !goal && !(loops && loops.length > 0)) return undefined;
       const agents = [...executionAgents.values()].slice(0, 64);
       return {
         revision: executionRevision,
-        todos: todos ?? [],
+        todos: todoSnapshot?.todos ?? [],
+        ...(todoSnapshot ? { todoCounts: todoSnapshot.counts } : {}),
         ...(goal ? { goal } : {}),
         ...(loops && loops.length > 0 ? { loop: loops } : {}),
         teammate: {
@@ -1013,7 +1037,7 @@ export function createDesktopPluginExtension(options: DesktopPluginExtensionOpti
       if (!executionSessionId || !client) return;
       const next = currentExecutionSummary();
       if (!next) return;
-      const fingerprint = JSON.stringify({ todos: next.todos, goal: next.goal, loop: next.loop, teammate: next.teammate, backgroundJobs: next.backgroundJobs });
+      const fingerprint = JSON.stringify({ todos: next.todos, todoCounts: next.todoCounts, goal: next.goal, loop: next.loop, teammate: next.teammate, backgroundJobs: next.backgroundJobs });
       if (fingerprint === executionFingerprint && executionRevision > 0) return;
       executionFingerprint = fingerprint;
       executionRevision += 1;

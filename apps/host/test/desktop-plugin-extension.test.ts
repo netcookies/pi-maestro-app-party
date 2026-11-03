@@ -432,8 +432,34 @@ describe("Desktop Plugin extension (TUI side)", () => {
     expect(registry.list()[0]?.executionSummary?.todos).toEqual([{ id: "todo-root", subject: "Root task", status: "pending", updatedAt: 10, assigneeLabel: "root", durationMs: 0 }]);
   });
 
-  it("folds every todo-content entry into summary and active duration", async () => {
-    const dir = await mkdtemp(join(tmpdir(), "maestro-ext-todo-content-"));
+  it("reports complete Todo counts and keeps unfinished items inside the capped window", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "maestro-ext-todo-counts-"));
+    const registry = new DesktopPluginRegistry();
+    server = new DesktopPluginIpcServer({
+      socketPath: join(dir, "plugin.sock"),
+      secret: "test-secret",
+      registry,
+      supportedEvents: ["execution_summary"],
+    });
+    await server.start();
+    // 40 completed Todos inserted before 3 unfinished ones: the 32-item protocol
+    // window used to expose only completed items and report 32/32.
+    const tasks: Record<string, unknown> = {};
+    for (let index = 0; index < 40; index += 1) {
+      tasks[`done-${index}`] = { id: `done-${index}`, subject: `Done ${index}`, status: "completed", updatedAt: index };
+    }
+    tasks["open-1"] = { id: "open-1", subject: "Still pending", status: "pending", updatedAt: 100 };
+    tasks["open-2"] = { id: "open-2", subject: "Still blocked", status: "blocked", updatedAt: 101 };
+    const fake = fakePi({ models: [], entries: [{ type: "custom", customType: "todo-state", data: { version: 8, tasks } }] });
+    createDesktopPluginExtension({ socketPath: join(dir, "plugin.sock"), secret: "test-secret" })(fake.pi as never);
+    fake.emit("session_start", { type: "session_start", reason: "startup" });
+    await waitFor(() => registry.list()[0]?.executionSummary?.todos.length === 32);
+    const summary = registry.list()[0]?.executionSummary;
+    expect(summary?.todoCounts).toEqual({ done: 40, total: 42 });
+    expect(summary?.todos.slice(0, 2).map((todo) => todo.id)).toEqual(["open-1", "open-2"]);
+  });
+
+  it("folds every todo-content entry into summary and active duration", async () => {    const dir = await mkdtemp(join(tmpdir(), "maestro-ext-todo-content-"));
     const registry = new DesktopPluginRegistry();
     server = new DesktopPluginIpcServer({ socketPath: join(dir, "plugin.sock"), secret: "test-secret", registry, supportedEvents: ["execution_summary"] });
     await server.start();
@@ -461,10 +487,11 @@ describe("Desktop Plugin extension (TUI side)", () => {
     createDesktopPluginExtension({ socketPath: join(dir, "plugin.sock"), secret: "test-secret" })(fake.pi as never);
     fake.emit("session_start", { type: "session_start", reason: "startup" });
     await waitFor(() => registry.list()[0]?.executionSummary?.todos.length === 3);
+    // Unfinished Todos are ordered first so the protocol window always exposes work still to do.
     expect(registry.list()[0].executionSummary?.todos).toEqual([
+      { id: "c", subject: "Task C", status: "pending", updatedAt: 30, durationMs: 0 },
       { id: "a", subject: "Task A", status: "completed", updatedAt: 20, completedAt: 20, summary: "done and verified", description: "first description", durationMs: 90000 },
       { id: "b", subject: "Task B", status: "completed", updatedAt: 10, completedAt: 10, summary: "shipped", description: "second description", durationMs: 30000 },
-      { id: "c", subject: "Task C", status: "pending", updatedAt: 30, durationMs: 0 },
     ]);
 
     // An unrelated session with the same entry count and lastId must never adopt the cached content.
