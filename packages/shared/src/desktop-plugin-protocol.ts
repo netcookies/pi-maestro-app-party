@@ -794,7 +794,8 @@ function isOptionalExecutionTodoCounts(value: unknown): boolean {
   return nonNegativeInteger(done) && nonNegativeInteger(total) && done <= total;
 }
 
-export function isDesktopPluginModel(value: unknown): value is DesktopPluginModel {  return isRecord(value)
+export function isDesktopPluginModel(value: unknown): value is DesktopPluginModel {
+  return isRecord(value)
     && stringFields(value, "provider", "id", "name")
     && typeof value.reasoning === "boolean"
     && typeof value.vision === "boolean";
@@ -804,7 +805,6 @@ export function isDesktopPluginExecutionSummary(value: unknown): value is Deskto
   if (!isRecord(value) || !nonNegativeInteger(value.revision)
     || !Array.isArray(value.todos) || value.todos.length > DESKTOP_PLUGIN_MAX_EXECUTION_TODOS
     || !value.todos.every(isBoundedExecutionTodo)
-    || !isOptionalExecutionTodoCounts(value.todoCounts)
     || !isRecord(value.teammate)
     || !nonNegativeInteger(value.teammate.running)
     || !nonNegativeInteger(value.teammate.total)
@@ -817,6 +817,9 @@ export function isDesktopPluginExecutionSummary(value: unknown): value is Deskto
   if (value.workspace !== undefined && (!isRecord(value.workspace)
     || ![value.workspace.label, value.workspace.workspaceId, value.workspace.ownerId].every((item) => item === undefined || isBoundedText(item))
     || ![value.workspace.label, value.workspace.workspaceId, value.workspace.ownerId].some((item) => typeof item === "string"))) return false;
+  // Optional aggregate: a malformed value loses only this field so it cannot
+  // suppress Todos, Goal, Loop, teammates and background jobs.
+  if (!isOptionalExecutionTodoCounts(value.todoCounts)) delete value.todoCounts;
   return true;
 }
 

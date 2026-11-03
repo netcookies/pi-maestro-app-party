@@ -3,6 +3,7 @@ import {
   DESKTOP_PLAN_REFINE_FEATURE,
   DESKTOP_PLUGIN_PROTOCOL_VERSION,
   isDesktopPluginClientFrame,
+  isDesktopPluginExecutionSummary,
   isDesktopPluginServerFrame,
   isDesktopPlanRefineAction,
   isDesktopPlanRefineSnapshot,
@@ -432,5 +433,28 @@ describe("Desktop Plugin IPC protocol", () => {
       target,
       operation: { type: "set_model", provider: "provider-a", modelId: "" },
     })).toBe(false);
+  });
+});
+
+describe("desktop plugin execution summary aggregate Todo counts", () => {
+  const summary = () => ({
+    revision: 3,
+    todos: [{ id: "1", subject: "Task", status: "completed", updatedAt: 1 }],
+    teammate: { running: 0, total: 0, agents: [] },
+    backgroundJobs: [],
+  });
+
+  it("keeps a well-formed aggregate", () => {
+    const value = { ...summary(), todoCounts: { done: 60, total: 63 } };
+    expect(isDesktopPluginExecutionSummary(value)).toBe(true);
+    expect(value.todoCounts).toEqual({ done: 60, total: 63 });
+  });
+
+  it("drops only the malformed aggregate instead of rejecting the summary", () => {
+    for (const todoCounts of [{ done: 4, total: 3 }, { done: -1, total: 3 }, { total: 2 }, "x"]) {
+      const value: Record<string, unknown> = { ...summary(), todoCounts };
+      expect(isDesktopPluginExecutionSummary(value)).toBe(true);
+      expect("todoCounts" in value).toBe(false);
+    }
   });
 });
