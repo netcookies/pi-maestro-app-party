@@ -6,6 +6,10 @@ export interface OpenedSession {
   model?: string;
 }
 
+export function sessionTargetKeyForRoute(routeTargetKey: string | undefined, activeTargetKey: string | undefined): string | undefined {
+  return routeTargetKey ?? activeTargetKey;
+}
+
 /** Opening a session only selects the exact server-issued target; it performs no Host lifecycle operation. */
 export function selectSessionTarget(session: HostSessionSummary): OpenedSession {
   if (!session.target || !isSessionTargetIdentity(session.target)

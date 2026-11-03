@@ -59,6 +59,7 @@ import { SpringBottomSheet } from "../src/components/SpringBottomSheet";
 import { buildTimelineRows, type TimelineRow } from "../src/timeline-rows";
 import { ToolCallGroup } from "../src/components/ToolCallGroup";
 import { isSessionDetailHydrated } from "../src/session-detail-state";
+import { sessionTargetKeyForRoute } from "../src/session-navigation";
 
 // Android 需显式开启 LayoutAnimation（模块加载时一次性开启，置于组件外）
 if (Platform.OS === "android" && UIManager.setLayoutAnimationEnabledExperimental) {
@@ -92,8 +93,9 @@ export default function SessionScreen() {
   const { t } = useI18n();
   const cfg = getConfig();
   const insets = useSafeAreaInsets();
-  const routeTargetIsCurrent = Boolean(targetKey && state.targetedSessions.has(targetKey));
-  const selectedTargetKey = routeTargetIsCurrent ? targetKey : state.activeSessionTargets.get(id ?? "");
+  const selectedTargetKey = sessionTargetKeyForRoute(targetKey, state.activeSessionTargets.get(id ?? ""));
+  const selectedTargetKeyRef = useRef(selectedTargetKey);
+  selectedTargetKeyRef.current = selectedTargetKey;
   const targetProjectionReady = Boolean(selectedTargetKey && state.targetedSessions.has(selectedTargetKey));
   const fallbackSession = id ? state.sessions.get(id) : undefined;
   const targetedFallback = id
@@ -881,12 +883,14 @@ export default function SessionScreen() {
   };
 
   const handleLoadMore = async () => {
-    if (loadingMore || !hasMore || !id) return;
+    if (loadingMore || !hasMore || !id || !selectedTargetKey) return;
     if (Date.now() < loadCooldownUntil.current) return; // 冷却中跳过
     loadCooldownUntil.current = Date.now() + cfg.loadCooldownMs;
     setLoadingMore(true);
     try {
-      const r = await loadMoreHistory(id, cfg.historyPageSize);
+      const targetKeyForRequest = selectedTargetKey;
+      const r = await loadMoreHistory(id, targetKeyForRequest, cfg.historyPageSize);
+      if (targetKeyForRequest !== selectedTargetKeyRef.current) return;
       setHasMore(r.hasMore);
       // 仅当确实返回了新 items 才 arm 锚点恢复
       // （loading 指示器高度变化也会触发 onContentSizeChange，必须排除）
@@ -1576,9 +1580,9 @@ export default function SessionScreen() {
                 <LineIcon name="x" size={16} color={theme.muted} />
               </TouchableOpacity>
             </View>
-            <Text style={[styles.sheetDesc, { color: isConnected ? theme.muted : theme.warning }]}>
-              {isConnected ? `Revision ${executionSummary.revision}` : t.executionOffline}
-            </Text>
+            {!isConnected ? (
+              <Text style={[styles.sheetDesc, { color: theme.warning }]}>{t.executionOffline}</Text>
+            ) : null}
 
             {/* Section switcher: each header chip opens its own section here. */}
             <View style={styles.executionSegments}>

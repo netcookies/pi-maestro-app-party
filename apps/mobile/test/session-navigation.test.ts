@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { sessionTargetKey, type HostSessionSummary } from "@maestro-mobile/shared";
-import { routeForOpenedSession, selectSessionTarget } from "../src/session-navigation.js";
+import { routeForOpenedSession, selectSessionTarget, sessionTargetKeyForRoute } from "../src/session-navigation.js";
 
 function historyRow(overrides: Partial<HostSessionSummary> = {}): HostSessionSummary {
   return {
@@ -19,6 +19,11 @@ function historyRow(overrides: Partial<HostSessionSummary> = {}): HostSessionSum
 }
 
 describe("history session navigation", () => {
+  it("keeps the route's exact target while its projection is still loading", () => {
+    expect(sessionTargetKeyForRoute("route-target", "another-active-target")).toBe("route-target");
+    expect(sessionTargetKeyForRoute(undefined, "active-target")).toBe("active-target");
+  });
+
   it("uses the exact target already published in a history row", () => {
     const target = {
       sessionId: "history-1",

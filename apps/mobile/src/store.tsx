@@ -68,7 +68,7 @@ export interface HostStoreValue {
   refreshExecutionProjections(): Promise<ExecutionProjection[]>;
   loadSessionHistory(sessionId: string, targetKey?: string, options?: { signal?: AbortSignal }): Promise<void>;
   selectSessionTarget(sessionId: string | null, targetKey?: string): void;
-  loadMoreHistory(sessionId: string, count?: number): Promise<{ items: TimelineItem[]; hasMore: boolean; totalEntries: number }>;
+  loadMoreHistory(sessionId: string, targetKey: string, count?: number): Promise<{ items: TimelineItem[]; hasMore: boolean; totalEntries: number }>;
   searchHistory(sessionId: string, keyword: string, maxResults?: number, previewLength?: number): Promise<{ matches: { index: number; text: string; kind: string }[]; totalEntries: number }>;
   listModels(sessionId: string): Promise<{ id: string; provider: string; name: string; reasoning: boolean; vision: boolean }[]>;
   listSkills(sessionId: string): Promise<{ name: string; description?: string }[]>;
@@ -668,13 +668,13 @@ export function HostStoreProvider({ children }: { children: React.ReactNode }) {
     recoveryRef.current?.setActiveTarget(sessionId ? targetForSession(sessionId, targetKey) ?? null : null);
   }, [targetForSession]);
 
-  const loadMoreHistory = useCallback(async (sessionId: string, count?: number): Promise<{ items: TimelineItem[]; hasMore: boolean; totalEntries: number }> => {
-    const target = targetForSession(sessionId);
-    if (!target) throw new Error(`Exact session target is required for ${sessionId}`);
+  const loadMoreHistory = useCallback(async (sessionId: string, targetKey: string, count?: number): Promise<{ items: TimelineItem[]; hasMore: boolean; totalEntries: number }> => {
+    const target = targetForSession(sessionId, targetKey);
+    if (!target) throw new Error(`Exact session target is required for ${sessionId} (${targetKey})`);
     const result = await getClient().sendCommand({ type: "load_more_history", sessionId, target, count });
     const r = result as { items: TimelineItem[]; hasMore: boolean; totalEntries: number };
     if (r.items?.length > 0) {
-      dispatch({ type: "__history_prepend", sessionId, items: r.items, seq: 0, ...(target ? { target } : {}) });
+      dispatch({ type: "__history_prepend", sessionId, items: r.items, seq: 0, target });
     }
     return r;
   }, [getClient, dispatch, targetForSession]);
