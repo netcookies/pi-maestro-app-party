@@ -2,6 +2,13 @@
 
 本文件记录 Maestro Mobile 的显著变更。格式基于 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)。
 
+## [0.19.7] — 2026-11-03
+
+### 修复
+
+- 非法 todoCounts 仅降级该字段，不再整份摘要失效
+- Todo 完成计数以完整集合为准，修正截断窗口误报 32/32
+
 ## [0.19.6] — 2026-11-02
 
 ### 样式
