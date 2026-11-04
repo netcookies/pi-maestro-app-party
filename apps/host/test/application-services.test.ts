@@ -1,4 +1,8 @@
 import { describe, expect, it, vi } from "vitest";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { join } from "node:path";
+import { tmpdir } from "node:os";
+import { randomUUID } from "node:crypto";
 import { SessionDirectory, type SessionTargetIdentity } from "../src/control/SessionDirectory.js";
 import { SessionCommandService } from "../src/application/session-command-service.js";
 import { SessionQueryService } from "../src/application/session-query-service.js";
@@ -577,6 +581,43 @@ describe("SessionQueryService", () => {
     expect(page2.sessions).toHaveLength(1);
     expect(page2.sessions[0]?.target?.endpointId).not.toBe(page1.sessions[0]?.target?.endpointId);
     expect(page2.hasMore).toBe(false);
+  });
+
+  it.each([false, true])("loads history pages before the visible tail (snapshotFirst=%s)", async (snapshotFirst) => {
+    const directory = new SessionDirectory();
+    const temporaryDirectory = await mkdtemp(join(tmpdir(), "session-query-history-"));
+    try {
+      const sessionFile = join(temporaryDirectory, "session.jsonl");
+      const messages = Array.from({ length: 250 }, (_, index) => JSON.stringify({
+        type: "message",
+        message: { role: "user", content: `message-${index}`, timestamp: 1_760_000_000_000 + index },
+      }));
+      await writeFile(sessionFile, `${messages.join("\n")}\n`);
+
+      const target: SessionTargetIdentity = {
+        sessionId: "history-pagination",
+        endpointId: "history",
+        normalizedCwd: "/work/app",
+        processGeneration: "persisted",
+      };
+      directory.registerHistoryTarget(target, sessionFile);
+      const service = new SessionQueryService({ listSessions: async () => [] }, directory);
+      if (snapshotFirst) await service.snapshot(target);
+
+      const first = await service.history(target, 80);
+      expect(first.value?.items.map((item) => item.text)).toEqual(
+        Array.from({ length: 80 }, (_, index) => `message-${index + 90}`),
+      );
+      expect(first.value?.hasMore).toBe(true);
+
+      const second = await service.history(target, 80);
+      expect(second.value?.items.map((item) => item.text)).toEqual(
+        Array.from({ length: 80 }, (_, index) => `message-${index + 10}`),
+      );
+      expect(second.value?.hasMore).toBe(true);
+    } finally {
+      await rm(temporaryDirectory, { recursive: true, force: true });
+    }
   });
 
   it("serves snapshots and usage only through an exact Desktop target", async () => {

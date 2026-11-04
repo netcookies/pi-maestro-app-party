@@ -155,7 +155,7 @@ function summaryForTarget(
 }
 
 export class SessionQueryService {
-  private readonly desktopHistory = new Map<string, { cursor: number; totalEntries: number }>();
+  private readonly desktopHistory = new Map<string, { endEntryExclusive: number }>();
 
   constructor(
     private readonly source: SessionListSource,
@@ -311,7 +311,9 @@ export class SessionQueryService {
       const page = await replayTailFromJsonl(entry.sessionFile, 80);
       timeline = page.items;
       hasMoreHistory = page.hasMore;
-      this.desktopHistory.set(targetIdentityKey(entry.identity), { cursor: page.cursor, totalEntries: page.totalEntries });
+      this.desktopHistory.set(targetIdentityKey(entry.identity), {
+        endEntryExclusive: page.totalEntries - page.cursor,
+      });
     }
     return {
       ok: true,
@@ -342,10 +344,18 @@ export class SessionQueryService {
     const entry = this.directory.resolve(target);
     if (!entry) return { ok: false, status: "unknown", error: { code: "target_unavailable" }, revision: this.directory.revision };
     if (!entry.sessionFile) return { ok: true, value: { items: [], hasMore: false, totalEntries: 0, historyAvailable: false }, revision: this.directory.revision };
+    const sessionFile = entry.sessionFile;
     const key = targetIdentityKey(entry.identity);
-    const cursor = this.desktopHistory.get(key)?.cursor ?? (await replayTailFromJsonl(entry.sessionFile, 80)).cursor;
-    const page = await replayPageBeforeJsonl(entry.sessionFile, cursor, count ?? 100);
-    this.desktopHistory.set(key, { cursor: page.cursor, totalEntries: page.totalEntries });
+    const cachedEndEntryExclusive = this.desktopHistory.get(key)?.endEntryExclusive;
+    let endEntryExclusive: number;
+    if (cachedEndEntryExclusive !== undefined) {
+      endEntryExclusive = cachedEndEntryExclusive;
+    } else {
+      const tail = await replayTailFromJsonl(sessionFile, 80);
+      endEntryExclusive = tail.totalEntries - tail.cursor;
+    }
+    const page = await replayPageBeforeJsonl(sessionFile, endEntryExclusive, count ?? 100);
+    this.desktopHistory.set(key, { endEntryExclusive: page.cursor });
     return { ok: true, value: { items: page.items, hasMore: page.hasMore, totalEntries: page.totalEntries, historyAvailable: true }, revision: this.directory.revision };
   }
 
