@@ -32,6 +32,7 @@ import { isSystemContinuationPrompt } from "../src/notice";
 import { ChatComposer } from "../src/components/ChatComposer";
 import { pickImagesFromLibrary } from "../src/image-picker";
 import { useSessionDraft, draftScopeKey } from "../src/drafts";
+import { isFollowUpOutcomeUnknown } from "../src/follow-up-delivery";
 import { selectExecutionSummaryForSession, executionTodoCounts } from "../src/session-execution";
 import {
   EXECUTION_SECTION_ORDER,
@@ -96,6 +97,9 @@ export default function SessionScreen() {
   const selectedTargetKey = sessionTargetKeyForRoute(targetKey, state.activeSessionTargets.get(id ?? ""));
   const selectedTargetKeyRef = useRef(selectedTargetKey);
   selectedTargetKeyRef.current = selectedTargetKey;
+  const followUpNoticeTargetKey = id && selectedTargetKey ? JSON.stringify([id, selectedTargetKey]) : undefined;
+  const followUpNoticeTargetKeyRef = useRef(followUpNoticeTargetKey);
+  followUpNoticeTargetKeyRef.current = followUpNoticeTargetKey;
   const targetProjectionReady = Boolean(selectedTargetKey && state.targetedSessions.has(selectedTargetKey));
   const fallbackSession = id ? state.sessions.get(id) : undefined;
   const targetedFallback = id
@@ -316,6 +320,9 @@ export default function SessionScreen() {
   if (selectedTargetKey || targetKey) draftTargetKeyRef.current = selectedTargetKey ?? targetKey!;
   const draftScope = useMemo(() => draftScopeKey(hostUrl, id ?? "", draftTargetKeyRef.current), [hostUrl, id, selectedTargetKey, targetKey]);
   const [draftError, setDraftError] = useState<string | null>(null);
+  const [followUpNotice, setFollowUpNotice] = useState<{ targetKey: string; status: "pending" | "accepted" | "unknown" } | null>(null);
+  const followUpNoticeTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const followUpNoticeGeneration = useRef(0);
   const draft = useSessionDraft(draftScope, (error) => setDraftError(error instanceof Error ? error.message : String(error)));
   const [sending, setSending] = useState(false);
   const [historyState, setHistoryState] = useState<"idle" | "loading" | "loaded" | "error">("idle");
@@ -423,6 +430,18 @@ export default function SessionScreen() {
     targetProjectionReady,
     hasTimelineSnapshot: Boolean(selectedTargetKey && state.targetedTimelines.has(selectedTargetKey)),
   });
+
+  useEffect(() => {
+    followUpNoticeGeneration.current += 1;
+    if (followUpNoticeTimer.current) clearTimeout(followUpNoticeTimer.current);
+    followUpNoticeTimer.current = null;
+    setFollowUpNotice(null);
+    return () => {
+      followUpNoticeGeneration.current += 1;
+      if (followUpNoticeTimer.current) clearTimeout(followUpNoticeTimer.current);
+      followUpNoticeTimer.current = null;
+    };
+  }, [id, selectedTargetKey]);
 
   useEffect(() => {
     selectSessionTarget(id ?? null, selectedTargetKey);
@@ -1389,6 +1408,21 @@ export default function SessionScreen() {
         onLayout={(e) => setComposerHeight(e.nativeEvent.layout.height)}
         style={{ backgroundColor: theme.headerBg, paddingBottom: Math.max(insets.bottom > 0 ? 4 : 8, 4) }}
       >
+      {followUpNotice && followUpNotice.targetKey === followUpNoticeTargetKey ? (
+        <View
+          accessibilityLiveRegion="polite"
+          style={{ flexDirection: "row", alignItems: "center", gap: 8, paddingHorizontal: 20, paddingBottom: 6 }}
+        >
+          {followUpNotice.status === "pending" ? (
+            <ActivityIndicator size="small" color={theme.accent} />
+          ) : followUpNotice.status === "accepted" ? (
+            <LineIcon name="check" size={14} color={theme.success} />
+          ) : null}
+          <Text style={[styles.toolError, { color: followUpNotice.status === "pending" ? theme.muted : followUpNotice.status === "accepted" ? theme.success : theme.warning }]} numberOfLines={2}>
+            {followUpNotice.status === "pending" ? t.followUpSubmitting : followUpNotice.status === "accepted" ? t.followUpQueued : t.followUpUnknown}
+          </Text>
+        </View>
+      ) : null}
       {/* 投递失败必须可见：消息未送达时不能只保留草稿而不告知用户 */}
       {draftError ? (
         <TouchableOpacity
@@ -1466,6 +1500,7 @@ export default function SessionScreen() {
         </View>
       </Modal>
       <ChatComposer
+        key={followUpNoticeTargetKey ?? "follow-up-unresolved"}
         actions={{
           send: async (text, imgs) => {
             if (!id) return;
@@ -1484,9 +1519,30 @@ export default function SessionScreen() {
             }
           },
           followUp: canFollowUp ? async (text) => {
-            if (!id) return;
+            if (!id || !selectedTargetKey || !followUpNoticeTargetKey) return "stale" as const;
             if (!isConnected) throw new Error("未连接到主机");
-            await followUp(id, text);
+            const noticeTargetKey = followUpNoticeTargetKey;
+            const noticeGeneration = ++followUpNoticeGeneration.current;
+            if (followUpNoticeTimer.current) clearTimeout(followUpNoticeTimer.current);
+            followUpNoticeTimer.current = null;
+            setFollowUpNotice({ targetKey: noticeTargetKey, status: "pending" });
+            try {
+              await followUp(id, text);
+              if (followUpNoticeTargetKeyRef.current !== noticeTargetKey || followUpNoticeGeneration.current !== noticeGeneration) return "stale" as const;
+              setFollowUpNotice({ targetKey: noticeTargetKey, status: "accepted" });
+              followUpNoticeTimer.current = setTimeout(() => {
+                followUpNoticeTimer.current = null;
+                if (followUpNoticeGeneration.current === noticeGeneration) setFollowUpNotice((current) => current?.targetKey === noticeTargetKey ? null : current);
+              }, 2500);
+            } catch (error) {
+              if (followUpNoticeTargetKeyRef.current !== noticeTargetKey || followUpNoticeGeneration.current !== noticeGeneration) return "stale" as const;
+              if (isFollowUpOutcomeUnknown(error)) {
+                setFollowUpNotice({ targetKey: noticeTargetKey, status: "unknown" });
+                return "unknown" as const;
+              }
+              setFollowUpNotice(null);
+              throw error;
+            }
           } : undefined,
           listSkills: async () => (id ? listSkills(id) : []),
           pickImage: async () => {

@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   CommandConnectionLostError,
+  CommandOutcomeUnknownError,
   CommandFailedError,
   createMobileClient,
   type WebSocketLike,
@@ -112,6 +113,22 @@ describe("MobileClient", () => {
     socket.receive({ type: "command_result", in_reply_to: id, ok: true });
     socket.receive({ type: "command_result", in_reply_to: id, ok: true, status: "observed", revision: 2, result: "valid" });
     await expect(command).resolves.toBe("valid");
+    client.dispose();
+  });
+
+  it.each(["suspend", "close", "dispose"] as const)("reports unknown outcomes for pending commands when %s closes the client", async (method) => {
+    const socket = new FakeSocket();
+    const client = createMobileClient({ url: "ws://host/ws", wsFactory: () => socket });
+    client.connect();
+    socket.open();
+    socket.receive({ type: "protocol_ready", protocolVersion: 2, hostVersion: "1.0.0", capabilities: [], revision: 1 });
+
+    const pending = client.sendCommand({ type: "ping" });
+    expect(JSON.parse(socket.sent[1])).toMatchObject({ type: "ping" });
+    client[method]();
+
+    await expect(pending).rejects.toBeInstanceOf(CommandOutcomeUnknownError);
+    await expect(pending).rejects.toMatchObject({ commandType: "ping", reason: "client_closed", code: "outcome_unknown" });
     client.dispose();
   });
 

@@ -16,11 +16,12 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useTheme } from "../theme";
 import { useI18n } from "../i18n";
 import { LineIcon } from "./LineIcon";
+import { isUnknownFollowUpDraft, shouldClearFollowUpDraft } from "../follow-up-delivery";
 import { hapticImpactMedium } from "../utils/haptics";
 
 export interface ComposerActions {
   send(text: string, images?: { data: string; mime: string }[]): Promise<void>;
-  followUp?(message: string): Promise<void>;
+  followUp?(message: string): Promise<"unknown" | "stale" | void>;
   abort?(): Promise<void> | void;
   listSkills?(): Promise<{ name: string; description?: string }[]>;
   pickImage?(): Promise<{ data: string; mime: string } | null>;
@@ -57,9 +58,13 @@ export function ChatComposer({ actions, sending, isStreaming = false, onAbort, s
   const { t } = useI18n();
   const insets = useSafeAreaInsets();
   const [text, setText] = useState(controlledText ?? "");
+  const [followUpUnknownDraft, setFollowUpUnknownDraft] = useState<string | null>(null);
   const textValue = controlledText ?? text;
+  const textValueRef = useRef(textValue);
+  textValueRef.current = textValue;
   const updateText = (value: string) => {
     if (controlledText === undefined) setText(value);
+    if (followUpUnknownDraft !== null && value.trim() !== followUpUnknownDraft) setFollowUpUnknownDraft(null);
     onTextChange?.(value);
   };
   const [images, setImages] = useState<{ data: string; mime: string }[]>([]);
@@ -160,15 +165,24 @@ export function ChatComposer({ actions, sending, isStreaming = false, onAbort, s
     .filter((skill) => typeof skill.name === "string" && skill.name.toLowerCase().includes(skillQuery.toLowerCase()));
 
   const [followUpSending, setFollowUpSending] = useState(false);
+  const followUpDraftBlocked = isUnknownFollowUpDraft(textValue, followUpUnknownDraft);
   const handleFollowUp = async () => {
     const message = textValue.trim();
-    if (!message || !actions.followUp || followUpSending) return;
+    if (!message || !actions.followUp || followUpSending || isUnknownFollowUpDraft(message, followUpUnknownDraft)) return;
     void hapticImpactMedium();
     setFollowUpSending(true);
     try {
-      await actions.followUp(message);
-      if (controlledText === undefined) setText("");
-      onTextChange?.("");
+      const result = await actions.followUp(message);
+      if (result === "stale") return;
+      if (result === "unknown") {
+        if (textValueRef.current.trim() === message) setFollowUpUnknownDraft(message);
+        return;
+      }
+      setFollowUpUnknownDraft(null);
+      if (shouldClearFollowUpDraft(message, textValueRef.current, result)) {
+        if (controlledText === undefined) setText("");
+        onTextChange?.("");
+      }
     } catch (error) {
       Alert.alert(t.followUp, error instanceof Error ? error.message : t.followUpFailed);
     } finally {
@@ -309,12 +323,12 @@ export function ChatComposer({ actions, sending, isStreaming = false, onAbort, s
           <View style={styles.streamingActions}>
             {actions.followUp ? (
               <TouchableOpacity
-                style={[styles.sendButton, { backgroundColor: theme.accent, opacity: textValue.trim() && !followUpSending && !disabled ? 1 : 0.45 }]}
+                style={[styles.sendButton, { backgroundColor: theme.accent, opacity: textValue.trim() && !followUpSending && !followUpDraftBlocked && !disabled ? 1 : 0.45 }]}
                 hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
                 accessibilityRole="button"
                 accessibilityLabel={t.followUp}
-                accessibilityState={{ disabled: !textValue.trim() || followUpSending || disabled, busy: followUpSending }}
-                disabled={!textValue.trim() || followUpSending || disabled}
+                accessibilityState={{ disabled: !textValue.trim() || followUpSending || followUpDraftBlocked || disabled, busy: followUpSending }}
+                disabled={!textValue.trim() || followUpSending || followUpDraftBlocked || disabled}
                 onPress={() => { void handleFollowUp(); }}
               >
                 <LineIcon name="send" size={16} color="#fff" strokeWidth={2.2} />

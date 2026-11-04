@@ -73,11 +73,24 @@ export function calculateBackoffDelay(
   return backoff * (0.5 + random() * 0.5);
 }
 
-export class CommandConnectionLostError extends Error {
-  readonly code = "connection_lost";
+export type CommandOutcomeUnknownReason = "connection_lost" | "client_closed";
+
+export class CommandOutcomeUnknownError extends Error {
+  readonly code: string = "outcome_unknown";
+
+  constructor(readonly commandType: string, readonly reason: CommandOutcomeUnknownReason) {
+    super(reason === "connection_lost"
+      ? `Connection lost before response (${commandType})`
+      : `HostClient closed while waiting for ${commandType}`);
+    this.name = "CommandOutcomeUnknownError";
+  }
+}
+
+export class CommandConnectionLostError extends CommandOutcomeUnknownError {
+  override readonly code = "connection_lost";
 
   constructor(commandType: string) {
-    super(`Connection lost before response (${commandType})`);
+    super(commandType, "connection_lost");
     this.name = "CommandConnectionLostError";
   }
 }
@@ -482,7 +495,9 @@ export class MobileClient {
     this.pendingCommands.clear();
     const errors = pending.map((cmd) => reason === "connection_lost"
       ? new CommandConnectionLostError(cmd.commandType)
-      : new Error(reason === "closed" ? "HostClient closed" : "Not connected"));
+      : reason === "closed"
+        ? new CommandOutcomeUnknownError(cmd.commandType, "client_closed")
+        : new Error("Not connected"));
     for (let i = 0; i < pending.length; i++) pending[i].reject(errors[i]);
     if (reason === "connection_lost") {
       this.emitError(pending.length > 1

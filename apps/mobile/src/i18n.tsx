@@ -249,6 +249,9 @@ export interface I18nDictionary {
   abortCapability: string;
   followUp: string;
   followUpFailed: string;
+  followUpSubmitting: string;
+  followUpQueued: string;
+  followUpUnknown: string;
   executionRowExpand: string;
   executionRowCollapse: string;
   toolbarExpand: string;
@@ -628,6 +631,9 @@ export const DICTIONARIES: Record<Language, I18nDictionary> = {
     stopRunning: "停止运行",
     followUp: "后续发送",
     followUpFailed: "后续消息发送失败",
+    followUpSubmitting: "正在提交到后台…",
+    followUpQueued: "后续消息已提交到后台队列",
+    followUpUnknown: "提交状态未知，请检查消息列表后再决定是否重发",
     executionRowExpand: "展开执行状态",
     executionRowCollapse: "折叠执行状态",
     toolbarExpand: "展开悬浮状态栏",
@@ -1006,6 +1012,9 @@ export const DICTIONARIES: Record<Language, I18nDictionary> = {
     stopRunning: "Stop running",
     followUp: "Follow-up",
     followUpFailed: "Failed to queue follow-up",
+    followUpSubmitting: "Submitting to the background…",
+    followUpQueued: "Follow-up queued in the background",
+    followUpUnknown: "Submission status unknown. Check the timeline before resending.",
     executionRowExpand: "Expand execution status",
     executionRowCollapse: "Collapse execution status",
     toolbarExpand: "Expand floating toolbar",

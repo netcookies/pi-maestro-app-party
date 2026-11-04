@@ -22,5 +22,11 @@ describe("I18n", () => {
     expect(DICTIONARIES.zh.toolCalls(3)).toBe("工具调用 3 次");
     expect(DICTIONARIES.en.toolCalls(3)).toBe("3 Tool Calls");
     expect(DICTIONARIES.en.toolCalls(1)).toBe("1 Tool Call");
+    expect(DICTIONARIES.zh.followUpSubmitting).toBe("正在提交到后台…");
+    expect(DICTIONARIES.zh.followUpQueued).toBe("后续消息已提交到后台队列");
+    expect(DICTIONARIES.zh.followUpUnknown).toBe("提交状态未知，请检查消息列表后再决定是否重发");
+    expect(DICTIONARIES.en.followUpSubmitting).toBe("Submitting to the background…");
+    expect(DICTIONARIES.en.followUpQueued).toBe("Follow-up queued in the background");
+    expect(DICTIONARIES.en.followUpUnknown).toBe("Submission status unknown. Check the timeline before resending.");
   });
 });

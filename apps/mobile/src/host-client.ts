@@ -7,6 +7,7 @@ export {
   MobileClient,
   calculateBackoffDelay,
   CommandConnectionLostError,
+  CommandOutcomeUnknownError,
   ProtocolNotReadyError,
   WS_OPEN,
 } from "@maestro-mobile/mobile-sdk";
