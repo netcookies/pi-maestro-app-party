@@ -106,6 +106,7 @@ export function PlanSurface({
   const [expanded, setExpanded] = useState<MarkdownExpandRequest | null>(null);
   // 最小化：弹窗收成右侧悬浮按钮，便于先阅读会话正文再裁决
   const [minimized, setMinimized] = useState(false);
+  const [surfaceDismissed, setSurfaceDismissed] = useState(false);
 
   // Native Review & Refine state
   const [nativeRefineOpen, setNativeRefineOpen] = useState(initialRefineOpen ?? false);
@@ -125,6 +126,7 @@ export function PlanSurface({
   React.useEffect(() => {
     setExpanded(null);
     setSubmitting(false);
+    setSurfaceDismissed(false);
     setNativeRefineOpen(initialRefineOpen ?? false);
     setRefineUnavailableNotice(false);
     setLegacyRefiningNotice(false);
@@ -310,6 +312,7 @@ export function PlanSurface({
     if (!latestTurn?.turnId) return;
     void dispatchRefineAction({ action: "apply", turnId: latestTurn.turnId });
     setNativeRefineOpen(false);
+    setSurfaceDismissed(true);
   };
 
   const handleDiscardResult = (): void => {
@@ -334,7 +337,7 @@ export function PlanSurface({
   }
 
   return (
-    <Modal transparent={!expanded} animationType="fade" visible onRequestClose={() => {
+    <Modal transparent={!expanded} animationType="fade" visible={!surfaceDismissed} onRequestClose={() => {
       if (expanded) setExpanded(null);
       else if (nativeRefineOpen) closeNativeRefine();
       else if (!submitting) onCancel(request, target);

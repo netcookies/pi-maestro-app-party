@@ -223,6 +223,77 @@ describe("mounted Plan Markdown integration", () => {
     expect(renderer.root.findAll((node) => node.type === "Text" && textContent(node).includes(t.planActionRefine))).toHaveLength(1);
   });
 
+  it("closes the Plan Modal after applying a result and reopens it for a revised revision", async () => {
+    const onCancel = vi.fn();
+    const onResponse = vi.fn();
+    const onRefineAction = vi.fn(async () => undefined);
+    const refineState = {
+      kind: "live" as const,
+      snapshot: {
+        type: "plan_refine_snapshot" as const,
+        sequence: 1,
+        highWaterSequence: 1,
+        refineSessionId: "refine-1",
+        planRequestId: request.requestId,
+        operationId: 1,
+        revision: request.revision,
+        status: "ready" as const,
+        markdown,
+        turns: [{
+          turnId: "turn-1",
+          role: "reviewer" as const,
+          model: "provider/model",
+          modelLabel: "Model",
+          userInput: "",
+          output: "Revised plan suggestion",
+          appliesAs: "draft" as const,
+          createdAt: "2026-01-01T00:00:00.000Z",
+        }],
+        currentRole: "reviewer" as const,
+        currentModel: "provider/model",
+        modelOptions: [],
+        availableActions: ["apply", "discard", "cancel"] as const,
+      },
+      turns: [{
+        turnId: "turn-1",
+        role: "reviewer",
+        model: "provider/model",
+        modelLabel: "Model",
+        userInput: "",
+        output: "Revised plan suggestion",
+        appliesAs: "draft",
+        createdAt: "2026-01-01T00:00:00.000Z",
+      }],
+      expectedSequence: 2,
+      actionResults: new Map(),
+    };
+    const props = {
+      request: { ...request, availableActions: ["refine"] },
+      target,
+      onCancel,
+      onResponse,
+      supportsRefine: true,
+      refineState,
+      refineTarget: target,
+      onRefineAction,
+    };
+    const renderer = await mount(<PlanSurface {...props} />);
+    await press(renderer.root, t.planActionRefine);
+    await press(renderer.root, t.planRefineApply);
+    expect(host(renderer.root, "Modal").props.visible).toBe(false);
+    expect(onRefineAction).toHaveBeenCalledWith(
+      expect.objectContaining({ action: expect.objectContaining({ action: "apply", turnId: "turn-1" }) }),
+      target,
+    );
+    expect(onCancel).not.toHaveBeenCalled();
+
+    const revisedRequest = { ...props.request, revision: request.revision + 1, markdown: "# Revised plan" };
+    await act(async () => {
+      renderer.update(<Providers><PlanSurface {...props} request={revisedRequest} /></Providers>);
+    });
+    expect(host(renderer.root, "Modal").props.visible).toBe(true);
+  });
+
   it("expands through the real fence button in one Modal and restores preview on close/back", async () => {
     const onCancel = vi.fn();
     const onResponse = vi.fn();
