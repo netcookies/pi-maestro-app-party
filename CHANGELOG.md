@@ -2,6 +2,12 @@
 
 本文件记录 Maestro Mobile 的显著变更。格式基于 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)。
 
+## [0.20.3] — 2026-11-04
+
+### 修复
+
+- 修正会话历史分页游标
+
 ## [0.20.2] — 2026-11-04
 
 ### 修复
