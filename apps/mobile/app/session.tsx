@@ -59,7 +59,7 @@ import {
 import { SpringBottomSheet } from "../src/components/SpringBottomSheet";
 import { buildTimelineRows, type TimelineRow } from "../src/timeline-rows";
 import { ToolCallGroup } from "../src/components/ToolCallGroup";
-import { isSessionDetailHydrated } from "../src/session-detail-state";
+import { isSessionDetailHydrated, shouldFollowBottomAfterViewportResize } from "../src/session-detail-state";
 import { sessionTargetKeyForRoute } from "../src/session-navigation";
 
 // Android 需显式开启 LayoutAnimation（模块加载时一次性开启，置于组件外）
@@ -1257,8 +1257,15 @@ export default function SessionScreen() {
         contentContainerStyle={styles.listContent}
         onLayout={(e) => {
           const h = e.nativeEvent.layout.height;
+          const previousHeight = viewportHeight.current;
+          const wasAtBottom = stickToBottom.current;
           viewportHeight.current = h;
-          if (!programmaticScrollActive.current) updateFabState(lastScrollY.current, lastContentHeight.current, h);
+          if (programmaticScrollActive.current) return;
+          if (shouldFollowBottomAfterViewportResize(previousHeight, h, wasAtBottom)) {
+            scrollToBottom(false);
+            return;
+          }
+          updateFabState(lastScrollY.current, lastContentHeight.current, h);
         }}
         onContentSizeChange={(w, h) => {
           lastContentHeight.current = h;
@@ -1291,10 +1298,18 @@ export default function SessionScreen() {
           const y = e.nativeEvent.contentOffset.y;
           const contentH = e.nativeEvent.contentSize.height;
           const viewH = e.nativeEvent.layoutMeasurement.height;
+          const previousHeight = viewportHeight.current;
+          const wasAtBottom = stickToBottom.current;
           lastScrollY.current = y;
           contentHeightBefore.current = contentH;
           viewportHeight.current = viewH;
-          if (!programmaticScrollActive.current) updateFabState(y, contentH, viewH);
+          if (!programmaticScrollActive.current) {
+            if (shouldFollowBottomAfterViewportResize(previousHeight, viewH, wasAtBottom)) {
+              scrollToBottom(false);
+              return;
+            }
+            updateFabState(y, contentH, viewH);
+          }
 
           // 顶部懒加载：接近顶部且有更多时拉取更早历史（带冷却防连环）
           if (!programmaticScrollActive.current && y < cfg.loadMoreThreshold && hasMore && !loadingMore && Date.now() >= loadCooldownUntil.current) {

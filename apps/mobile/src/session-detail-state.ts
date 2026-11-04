@@ -1,3 +1,11 @@
+export function shouldFollowBottomAfterViewportResize(
+  previousHeight: number,
+  nextHeight: number,
+  wasAtBottom: boolean,
+): boolean {
+  return wasAtBottom && previousHeight > 0 && nextHeight < previousHeight;
+}
+
 export interface SessionDetailHydrationInput {
   targetKey?: string;
   targetProjectionReady: boolean;
