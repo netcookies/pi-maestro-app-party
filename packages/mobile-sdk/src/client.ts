@@ -81,7 +81,7 @@ export class CommandOutcomeUnknownError extends Error {
   constructor(readonly commandType: string, readonly reason: CommandOutcomeUnknownReason) {
     super(reason === "connection_lost"
       ? `Connection lost before response (${commandType})`
-      : `HostClient closed while waiting for ${commandType}`);
+      : "HostClient closed");
     this.name = "CommandOutcomeUnknownError";
   }
 }
