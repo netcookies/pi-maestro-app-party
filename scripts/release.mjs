@@ -36,7 +36,7 @@ function bumpVersion(v, kind) {
   if (kind === "major") return `${x + 1}.0.0`;
   if (kind === "minor") return `${x}.${y + 1}.0`;
   if (kind === "beta") {
-    const prerelease = current.match(/-beta\.(\d+)$/);
+    const prerelease = v.match(/-beta\.(\d+)$/);
     return prerelease ? `${x}.${y}.${z}-beta.${Number(prerelease[1]) + 1}` : `${x}.${y}.${z + 1}-beta.1`;
   }
   return `${x}.${y}.${z + 1}`;
