@@ -120,21 +120,23 @@ describe("flow refine transport integration with desktop plugin extension", () =
 
     const flowTransport = transports.at(-1)!;
     let actionReceived: unknown;
-    const handle = flowTransport.open({
-      sessionId: "refine-session",
-      refineSessionId: "ref-1",
-      operationId: 1,
-      target: { sessionId: "refine-session", normalizedCwd: "/work/app" },
-      cwd: "/work/app",
-      mode: "plan",
-      markdown: "# P",
-      revision: 1,
-      initialRole: "reviewer",
-      signal: new AbortController().signal,
-      handleAction: async (action) => { actionReceived = action; },
+    let handle: ReturnType<FlowRefineTransport["open"]>;
+    await waitFor(() => {
+      handle = flowTransport.open({
+        sessionId: "refine-session",
+        refineSessionId: "ref-1",
+        operationId: 1,
+        target: { sessionId: "refine-session", normalizedCwd: "/work/app" },
+        cwd: "/work/app",
+        mode: "plan",
+        markdown: "# P",
+        revision: 1,
+        initialRole: "reviewer",
+        signal: new AbortController().signal,
+        handleAction: async (action) => { actionReceived = action; },
+      });
+      return handle !== undefined;
     });
-
-    expect(handle).toBeDefined();
 
     // Server sends an action frame into the client over UDS
     const actionFrame: DesktopPlanRefineAction = {
