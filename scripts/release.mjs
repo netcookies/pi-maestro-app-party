@@ -32,7 +32,7 @@ function die(msg) {
 }
 
 function bumpVersion(v, kind) {
-  const [x, y, z] = v.split(".").map(Number);
+  const [x, y, z] = v.split("-")[0].split(".").map(Number);
   if (kind === "major") return `${x + 1}.0.0`;
   if (kind === "minor") return `${x}.${y + 1}.0`;
   if (kind === "beta") {
