@@ -42,9 +42,11 @@ if (!target) {
 }
 
 function parseSemver(v) {
-  const match = v.match(/^(\d+)\.(\d+)\.(\d+)(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$/);
-  if (!match) throw new Error(`非法版本号: ${v}`);
-  return match.slice(1, 4).map(Number);
+  const parts = v.split(".").map((x) => parseInt(x, 10));
+  if (parts.length !== 3 || parts.some(isNaN)) {
+    throw new Error(`非法版本号: ${v}`);
+  }
+  return parts;
 }
 
 function bumpSemver(current, kind) {

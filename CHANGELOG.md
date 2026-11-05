@@ -2,15 +2,7 @@
 
 本文件记录 Maestro Mobile 的显著变更。格式基于 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)。
 
-## [0.20.6-beta.2] — 2026-11-05
-
-### 修复
-
-- parse beta version core
-- increment beta prerelease serial
-- support prerelease Android versions
-
-## [0.20.6-beta.1] — 2026-11-05
+## [0.20.6] — 2026-11-05
 
 ### 新增
 
