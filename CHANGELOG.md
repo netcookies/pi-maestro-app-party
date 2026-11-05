@@ -2,6 +2,12 @@
 
 本文件记录 Maestro Mobile 的显著变更。格式基于 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)。
 
+## [0.20.5] — 2026-11-05
+
+### 测试
+
+- wait for refine capability negotiation
+
 ## [0.20.4] — 2026-11-04
 
 ### 修复
