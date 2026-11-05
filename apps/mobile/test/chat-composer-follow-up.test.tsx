@@ -50,21 +50,35 @@ globalThis.IS_REACT_ACT_ENVIRONMENT = true;
 
 const renderers: TestRenderer.ReactTestRenderer[] = [];
 
-function Harness({ followUp }: { followUp: NonNullable<ComposerActions["followUp"]> }) {
-  const [text, setText] = useState("draft message");
+function Harness({
+  followUp,
+  isStreaming = true,
+  initialText = "draft message",
+  disabled = false,
+}: {
+  followUp: NonNullable<ComposerActions["followUp"]>;
+  isStreaming?: boolean;
+  initialText?: string;
+  disabled?: boolean;
+}) {
+  const [text, setText] = useState(initialText);
   const actions: ComposerActions = {
     send: async () => undefined,
     followUp,
+    abort: () => undefined,
     openModelPicker: () => undefined,
     openThinkingPicker: () => undefined,
     openPlanPicker: () => undefined,
   };
-  return <ChatComposer actions={actions} isStreaming text={text} onTextChange={setText} />;
+  return <ChatComposer actions={actions} isStreaming={isStreaming} text={text} onTextChange={setText} disabled={disabled} />;
 }
 
-async function mount(followUp: NonNullable<ComposerActions["followUp"]>): Promise<TestRenderer.ReactTestRenderer> {
+async function mount(
+  followUp: NonNullable<ComposerActions["followUp"]>,
+  props: { isStreaming?: boolean; initialText?: string; disabled?: boolean } = {},
+): Promise<TestRenderer.ReactTestRenderer> {
   let renderer: TestRenderer.ReactTestRenderer | undefined;
-  await act(async () => { renderer = TestRenderer.create(<Harness followUp={followUp} />); });
+  await act(async () => { renderer = TestRenderer.create(<Harness followUp={followUp} {...props} />); });
   if (!renderer) throw new Error("Renderer did not mount");
   renderers.push(renderer);
   return renderer;
@@ -74,9 +88,18 @@ function composerInput(renderer: TestRenderer.ReactTestRenderer) {
   return renderer.root.findAllByType("TextInput" as never)[0];
 }
 
-function followUpButton(renderer: TestRenderer.ReactTestRenderer) {
+function mainActionButtons(renderer: TestRenderer.ReactTestRenderer) {
   return renderer.root.findAllByType("TouchableOpacity" as never)
-    .find((node) => node.props.accessibilityLabel === "Follow-up")!;
+    .filter((node) => {
+      if (!["Follow-up", "Stop", "Send"].includes(node.props.accessibilityLabel)) return false;
+      let parent = node.parent;
+      while (parent && parent.type !== "Modal") parent = parent.parent;
+      return !parent || parent.props.visible !== false;
+    });
+}
+
+function followUpButton(renderer: TestRenderer.ReactTestRenderer) {
+  return mainActionButtons(renderer).find((node) => node.props.accessibilityLabel === "Follow-up")!;
 }
 
 afterEach(async () => {
@@ -84,6 +107,39 @@ afterEach(async () => {
 });
 
 describe("ChatComposer Follow-up draft outcomes", () => {
+  it("uses one action position for send, follow-up, and stop according to run state and draft", async () => {
+    const renderer = await mount(async () => undefined);
+    expect(mainActionButtons(renderer)).toHaveLength(1);
+    expect(mainActionButtons(renderer)[0].props.accessibilityLabel).toBe("Follow-up");
+
+    await act(async () => { composerInput(renderer).props.onChangeText(""); });
+    expect(mainActionButtons(renderer)).toHaveLength(1);
+    expect(mainActionButtons(renderer)[0].props.accessibilityLabel).toBe("Stop");
+
+    await act(async () => {
+      renderer.update(<Harness followUp={async () => undefined} isStreaming={false} initialText="draft message" />);
+    });
+    expect(mainActionButtons(renderer)).toHaveLength(1);
+    expect(mainActionButtons(renderer)[0].props.accessibilityLabel).toBe("Send");
+  });
+
+  it("disables and dims Follow-up when the composer becomes read-only", async () => {
+    const renderer = await mount(async () => undefined);
+    await act(async () => { composerInput(renderer).props.onFocus(); });
+    const expandButton = renderer.root.findAllByType("TouchableOpacity" as never)
+      .find((node) => node.props.accessibilityLabel === "Expand")!;
+    await act(async () => { expandButton.props.onPress(); });
+    const modal = renderer.root.findAllByType("Modal" as never).find((node) => node.props.visible === true)!;
+    const fullscreenFollowUp = () => modal.findAllByType("TouchableOpacity" as never)
+      .find((node) => node.props.accessibilityLabel === "Follow-up")!;
+    await act(async () => {
+      renderer.update(<Harness followUp={async () => undefined} disabled />);
+    });
+    expect(fullscreenFollowUp().props.disabled).toBe(true);
+    expect(fullscreenFollowUp().props.accessibilityState.disabled).toBe(true);
+    expect(fullscreenFollowUp().props.style[1].opacity).toBe(0.45);
+  });
+
   it("preserves the draft when a response belongs to a stale target", async () => {
     const renderer = await mount(async () => "stale");
     await act(async () => { followUpButton(renderer).props.onPress(); });

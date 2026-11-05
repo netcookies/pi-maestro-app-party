@@ -66,6 +66,7 @@ jobs:
             V="$(node -p "require('./apps/host/package.json').version")"
           fi
           echo "version=$V" >> "$GITHUB_OUTPUT"
+          if [[ "$V" == *-* ]]; then echo "dist_tag=beta" >> "$GITHUB_OUTPUT"; else echo "dist_tag=latest" >> "$GITHUB_OUTPUT"; fi
           echo "Building maestro-mobile v$V"
 
       - name: Bump all version files
@@ -83,9 +84,10 @@ jobs:
           npm install -g npm@11
           npm --version
           if npm view "pi-maestro-mobile@${{ steps.ver.outputs.version }}" version >/dev/null 2>&1; then
-            echo "pi-maestro-mobile@${{ steps.ver.outputs.version }} 已发布，跳过重复 publish"
+            echo "pi-maestro-mobile@${{ steps.ver.outputs.version }} 已发布，确保 dist-tag 正确"
+            npm dist-tag add "pi-maestro-mobile@${{ steps.ver.outputs.version }}" "${{ steps.ver.outputs.dist_tag }}"
           else
-            npm publish --provenance --access public
+            npm publish --provenance --access public --tag "${{ steps.ver.outputs.dist_tag }}"
           fi
 
       # ── Android：签名 release APK（混淆 + 资源收缩已默认启用）──
@@ -135,15 +137,19 @@ jobs:
         run: |
           TAG="v$VERSION"
           NOTES="$(node scripts/release-notes.mjs "$VERSION")"
+          RELEASE_ARGS=()
+          if [[ "$VERSION" == *-* ]]; then RELEASE_ARGS+=(--prerelease); fi
           if gh release view "$TAG" >/dev/null 2>&1; then
             echo "Release $TAG 已存在，更新正文并补传产物"
             gh release edit "$TAG" \
               --title "Maestro Mobile v$VERSION" \
-              --notes "$NOTES"
+              --notes "$NOTES" \
+              "${RELEASE_ARGS[@]}"
           else
             gh release create "$TAG" \
               --title "Maestro Mobile v$VERSION" \
-              --notes "$NOTES"
+              --notes "$NOTES" \
+              "${RELEASE_ARGS[@]}"
           fi
           gh release upload "$TAG" \
             "maestro-mobile-$VERSION.apk" \

@@ -3,7 +3,7 @@
  * Maestro Mobile 发布脚本
  *
  * 用法:
- *   node scripts/release.mjs patch|minor|major [--yes]   递进版本并发布
+ *   node scripts/release.mjs patch|minor|major|beta [--yes]   递进版本并发布
  *   node scripts/release.mjs --changelog-only            只从 commit 重新生成 CHANGELOG 的 Unreleased 段
  *
  * 流程:
@@ -21,7 +21,7 @@ const ROOT = new URL("..", import.meta.url).pathname;
 const args = process.argv.slice(2);
 const yes = args.includes("--yes");
 const changelogOnly = args.includes("--changelog-only");
-const bump = args.find((a) => ["patch", "minor", "major"].includes(a));
+const bump = args.find((a) => ["patch", "minor", "major", "beta"].includes(a));
 
 const sh = (cmd) => execSync(cmd, { cwd: ROOT, encoding: "utf8" }).trim();
 const run = (cmd) => spawnSync("bash", ["-c", cmd], { cwd: ROOT, stdio: "inherit" });
@@ -35,6 +35,7 @@ function bumpVersion(v, kind) {
   const [x, y, z] = v.split(".").map(Number);
   if (kind === "major") return `${x + 1}.0.0`;
   if (kind === "minor") return `${x}.${y + 1}.0`;
+  if (kind === "beta") return `${x}.${y}.${z + 1}-beta.1`;
   return `${x}.${y}.${z + 1}`;
 }
 
@@ -49,7 +50,7 @@ if (changelogOnly) {
   process.exit(0);
 }
 
-if (!bump) die("用法: node scripts/release.mjs patch|minor|major [--yes]");
+if (!bump) die("用法: node scripts/release.mjs patch|minor|major|beta [--yes]");
 
 // 1. 前置检查
 const branch = sh("git rev-parse --abbrev-ref HEAD");

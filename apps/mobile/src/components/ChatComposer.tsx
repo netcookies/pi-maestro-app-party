@@ -191,6 +191,8 @@ export function ChatComposer({ actions, sending, isStreaming = false, onAbort, s
   };
 
   const canSend = (textValue.trim().length > 0 || images.length > 0) && !sending;
+  const followUpMode = isStreaming && Boolean(textValue.trim() && actions.followUp);
+  const stopMode = isStreaming && !followUpMode;
 
   // 发送失败时恢复草稿；actions.send 在 session 侧已 catch 不一定 reject，这里防御性兜底
   const handleSend = async () => {
@@ -318,58 +320,54 @@ export function ChatComposer({ actions, sending, isStreaming = false, onAbort, s
             </TouchableOpacity>
           )}
         </View>
-        {/* 运行中：停止按钮（旋转进度环 + 中间方块）；空闲中：发送按钮（纸飞机） */}
-        {isStreaming ? (
-          <View style={styles.streamingActions}>
-            {actions.followUp ? (
-              <TouchableOpacity
-                style={[styles.sendButton, { backgroundColor: theme.accent, opacity: textValue.trim() && !followUpSending && !followUpDraftBlocked && !disabled ? 1 : 0.45 }]}
-                hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
-                accessibilityRole="button"
-                accessibilityLabel={t.followUp}
-                accessibilityState={{ disabled: !textValue.trim() || followUpSending || followUpDraftBlocked || disabled, busy: followUpSending }}
-                disabled={!textValue.trim() || followUpSending || followUpDraftBlocked || disabled}
-                onPress={() => { void handleFollowUp(); }}
-              >
-                <LineIcon name="send" size={16} color="#fff" strokeWidth={2.2} />
-              </TouchableOpacity>
-            ) : null}
-            <TouchableOpacity
-              style={[
-                styles.sendButton,
-                {
-                  backgroundColor: theme.cardBg,
-                  shadowColor: theme.accent,
-                  shadowOpacity: 0.25,
-                  shadowRadius: 5,
-                  elevation: 3,
-                  opacity: onAbort ?? actions.abort ? 1 : 0.45,
-                },
-              ]}
-              hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
-              accessibilityRole="button"
-              accessibilityLabel={t.stopRunning}
-              disabled={!(onAbort ?? actions.abort)}
-              onPress={() => {
-                void hapticImpactMedium();
-                onAbort?.() ?? actions.abort?.();
+        {followUpMode ? (
+          <TouchableOpacity
+            style={[styles.sendButton, { backgroundColor: theme.accent, opacity: !followUpSending && !followUpDraftBlocked && !disabled ? 1 : 0.45 }]}
+            hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+            accessibilityRole="button"
+            accessibilityLabel={t.followUp}
+            accessibilityState={{ disabled: followUpSending || followUpDraftBlocked || disabled, busy: followUpSending }}
+            disabled={followUpSending || followUpDraftBlocked || disabled}
+            onPress={() => { void handleFollowUp(); }}
+          >
+            <LineIcon name="send" size={16} color="#fff" strokeWidth={2.2} />
+          </TouchableOpacity>
+        ) : stopMode ? (
+          <TouchableOpacity
+            style={[
+              styles.sendButton,
+              {
+                backgroundColor: theme.cardBg,
+                shadowColor: theme.accent,
+                shadowOpacity: 0.25,
+                shadowRadius: 5,
+                elevation: 3,
+                opacity: onAbort ?? actions.abort ? 1 : 0.45,
+              },
+            ]}
+            hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+            accessibilityRole="button"
+            accessibilityLabel={t.stopRunning}
+            disabled={!(onAbort ?? actions.abort)}
+            onPress={() => {
+              void hapticImpactMedium();
+              onAbort?.() ?? actions.abort?.();
+            }}
+          >
+            <Animated.View
+              style={{
+                position: "absolute",
+                width: 36,
+                height: 36,
+                borderRadius: 18,
+                borderWidth: 2,
+                borderColor: theme.accent,
+                borderTopColor: "transparent",
+                transform: [{ rotate: spinAnim.interpolate({ inputRange: [0, 1], outputRange: ["0deg", "360deg"] }) }],
               }}
-            >
-              <Animated.View
-                style={{
-                  position: "absolute",
-                  width: 36,
-                  height: 36,
-                  borderRadius: 18,
-                  borderWidth: 2,
-                  borderColor: theme.accent,
-                  borderTopColor: "transparent",
-                  transform: [{ rotate: spinAnim.interpolate({ inputRange: [0, 1], outputRange: ["0deg", "360deg"] }) }],
-                }}
-              />
-              <View style={{ width: 10, height: 10, borderRadius: 2, backgroundColor: theme.accent }} />
-            </TouchableOpacity>
-          </View>
+            />
+            <View style={{ width: 10, height: 10, borderRadius: 2, backgroundColor: theme.accent }} />
+          </TouchableOpacity>
         ) : (
           <TouchableOpacity
             style={[
@@ -498,7 +496,19 @@ export function ChatComposer({ actions, sending, isStreaming = false, onAbort, s
               <Text style={[styles.toolLabel, { color: theme.muted }]}>Image</Text>
             </TouchableOpacity>
             <View style={styles.fsSpacer} />
-            {isStreaming ? (
+            {followUpMode ? (
+              <TouchableOpacity
+                style={[styles.sendButton, { backgroundColor: theme.accent, opacity: !followUpSending && !followUpDraftBlocked && !disabled ? 1 : 0.45 }]}
+                hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                accessibilityRole="button"
+                accessibilityLabel={t.followUp}
+                accessibilityState={{ disabled: followUpSending || followUpDraftBlocked || disabled, busy: followUpSending }}
+                disabled={followUpSending || followUpDraftBlocked || disabled}
+                onPress={() => { void handleFollowUp(); }}
+              >
+                <LineIcon name="send" size={16} color="#fff" strokeWidth={2.2} />
+              </TouchableOpacity>
+            ) : stopMode ? (
               <TouchableOpacity
                 style={[
                   styles.sendButton,
@@ -509,7 +519,7 @@ export function ChatComposer({ actions, sending, isStreaming = false, onAbort, s
                 ]}
                 hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
                 accessibilityRole="button"
-                accessibilityLabel="停止运行"
+                accessibilityLabel={t.stopRunning}
                 disabled={!(onAbort ?? actions.abort)}
                 onPress={() => {
                   void hapticImpactMedium();
@@ -525,24 +535,10 @@ export function ChatComposer({ actions, sending, isStreaming = false, onAbort, s
                     borderWidth: 2,
                     borderColor: theme.accent,
                     borderTopColor: "transparent",
-                    transform: [
-                      {
-                        rotate: spinAnim.interpolate({
-                          inputRange: [0, 1],
-                          outputRange: ["0deg", "360deg"],
-                        }),
-                      },
-                    ],
+                    transform: [{ rotate: spinAnim.interpolate({ inputRange: [0, 1], outputRange: ["0deg", "360deg"] }) }],
                   }}
                 />
-                <View
-                  style={{
-                    width: 10,
-                    height: 10,
-                    borderRadius: 2,
-                    backgroundColor: theme.accent,
-                  }}
-                />
+                <View style={{ width: 10, height: 10, borderRadius: 2, backgroundColor: theme.accent }} />
               </TouchableOpacity>
             ) : (
               <TouchableOpacity
@@ -559,7 +555,7 @@ export function ChatComposer({ actions, sending, isStreaming = false, onAbort, s
                 ]}
                 hitSlop={{ top: 4, bottom: 4, left: 4, right: 4 }}
                 accessibilityRole="button"
-                accessibilityLabel="发送消息"
+                accessibilityLabel={t.sendMessage}
                 accessibilityState={{ disabled: !canSend || sending, busy: sending }}
                 onPress={() => { setFullscreenEdit(false); void handleSend(); }}
                 disabled={!canSend || sending}
@@ -778,7 +774,6 @@ const styles = StyleSheet.create({
     maxHeight: 480,
   },
   input: { flex: 1, borderRadius: 8, paddingHorizontal: 12, paddingRight: 42, paddingVertical: 10, borderWidth: 1, fontSize: 15, maxHeight: 120 },
-  streamingActions: { flexDirection: "row", alignItems: "center", gap: 6 },
   sendButton: {
     width: 36,
     height: 36,
