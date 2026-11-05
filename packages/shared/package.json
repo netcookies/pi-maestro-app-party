@@ -1,6 +1,6 @@
 {
   "name": "@maestro-mobile/shared",
-  "version": "0.20.6-beta.1",
+  "version": "0.20.6-beta.2",
   "private": true,
   "type": "module",
   "main": "./dist/index.js",
