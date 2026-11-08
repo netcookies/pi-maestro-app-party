@@ -1,6 +1,7 @@
 import React, { useState } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import TestRenderer, { act } from "react-test-renderer";
+import { Animated } from "react-native";
 import type { ComposerActions } from "../src/components/ChatComposer";
 
 vi.mock("react-native", () => {
@@ -13,7 +14,7 @@ vi.mock("react-native", () => {
   return {
     ActivityIndicator: "ActivityIndicator",
     Alert: { alert: vi.fn() },
-    Animated: { Value: AnimatedValue, View: "AnimatedView", loop: animation, sequence: animation, timing: animation },
+    Animated: { Value: AnimatedValue, View: "AnimatedView", loop: vi.fn(animation), sequence: animation, timing: vi.fn(animation) },
     AccessibilityInfo: { isReduceMotionEnabled: async () => true, addEventListener: () => ({ remove: vi.fn() }) },
     Easing: { linear: vi.fn() },
     FlatList: "FlatList",
@@ -104,6 +105,7 @@ function followUpButton(renderer: TestRenderer.ReactTestRenderer) {
 
 afterEach(async () => {
   await act(async () => { renderers.splice(0).forEach((renderer) => renderer.unmount()); });
+  vi.clearAllMocks();
 });
 
 describe("ChatComposer Follow-up draft outcomes", () => {
@@ -121,6 +123,29 @@ describe("ChatComposer Follow-up draft outcomes", () => {
     });
     expect(mainActionButtons(renderer)).toHaveLength(1);
     expect(mainActionButtons(renderer)[0].props.accessibilityLabel).toBe("Send");
+  });
+
+  it("restarts independent stop rings after follow-up drafts are cleared and stops them when hidden", async () => {
+    const followUp = async () => undefined;
+    const renderer = await mount(followUp);
+    expect(Animated.loop).not.toHaveBeenCalled();
+
+    await act(async () => { composerInput(renderer).props.onChangeText(""); });
+    const firstLoops = vi.mocked(Animated.loop).mock.results.map((result) => result.value);
+    // Modal mock 同时挂载普通与全屏工具栏，两处圆环各自拥有动画。
+    expect(firstLoops).toHaveLength(2);
+    firstLoops.forEach((loop) => expect(loop.start).toHaveBeenCalledOnce());
+    const firstValues = vi.mocked(Animated.timing).mock.calls.map(([value]) => value);
+    expect(new Set(firstValues).size).toBe(2);
+
+    await act(async () => { composerInput(renderer).props.onChangeText("follow-up draft"); });
+    firstLoops.forEach((loop) => expect(loop.stop).toHaveBeenCalledOnce());
+    await act(async () => { composerInput(renderer).props.onChangeText(""); });
+    const nextLoops = vi.mocked(Animated.loop).mock.results.slice(2).map((result) => result.value);
+    expect(nextLoops).toHaveLength(2);
+    nextLoops.forEach((loop) => expect(loop.start).toHaveBeenCalledOnce());
+    await act(async () => { renderer.update(<Harness followUp={followUp} isStreaming={false} />); });
+    nextLoops.forEach((loop) => expect(loop.stop).toHaveBeenCalledOnce());
   });
 
   it("disables and dims Follow-up when the composer becomes read-only", async () => {

@@ -51,6 +51,37 @@ interface Props {
   onTextChange?: (text: string) => void;
 }
 
+function SpinningStopRing({ color }: { color: string }) {
+  const spinAnim = useRef(new Animated.Value(0)).current;
+  useEffect(() => {
+    const loop = Animated.loop(
+      Animated.timing(spinAnim, {
+        toValue: 1,
+        duration: 1100,
+        easing: Easing.linear,
+        useNativeDriver: true,
+      }),
+    );
+    loop.start();
+    return () => loop.stop();
+  }, [spinAnim]);
+
+  return (
+    <Animated.View
+      style={{
+        position: "absolute",
+        width: 36,
+        height: 36,
+        borderRadius: 18,
+        borderWidth: 2,
+        borderColor: color,
+        borderTopColor: "transparent",
+        transform: [{ rotate: spinAnim.interpolate({ inputRange: [0, 1], outputRange: ["0deg", "360deg"] }) }],
+      }}
+    />
+  );
+}
+
 const EMPTY_SKILLS: (string | { name: string; description?: string })[] = [];
 
 export function ChatComposer({ actions, sending, isStreaming = false, onAbort, skills = EMPTY_SKILLS, placeholder, disabled = false, text: controlledText, onTextChange }: Props) {
@@ -82,25 +113,6 @@ export function ChatComposer({ actions, sending, isStreaming = false, onAbort, s
     const hide = Keyboard.addListener("keyboardDidHide", () => setKeyboardVisible(false));
     return () => { show.remove(); hide.remove(); };
   }, []);
-
-  // 运行态 Spinning 进度环无限旋转动画
-  const spinAnim = useRef(new Animated.Value(0)).current;
-  useEffect(() => {
-    if (!isStreaming) {
-      spinAnim.setValue(0);
-      return;
-    }
-    const loop = Animated.loop(
-      Animated.timing(spinAnim, {
-        toValue: 1,
-        duration: 1100,
-        easing: Easing.linear,
-        useNativeDriver: true,
-      }),
-    );
-    loop.start();
-    return () => loop.stop();
-  }, [isStreaming, spinAnim]);
 
   // reduce-motion：系统开启时动画直接置终值，不播动画
   const [reduceMotion, setReduceMotion] = useState(false);
@@ -354,18 +366,7 @@ export function ChatComposer({ actions, sending, isStreaming = false, onAbort, s
               onAbort?.() ?? actions.abort?.();
             }}
           >
-            <Animated.View
-              style={{
-                position: "absolute",
-                width: 36,
-                height: 36,
-                borderRadius: 18,
-                borderWidth: 2,
-                borderColor: theme.accent,
-                borderTopColor: "transparent",
-                transform: [{ rotate: spinAnim.interpolate({ inputRange: [0, 1], outputRange: ["0deg", "360deg"] }) }],
-              }}
-            />
+            <SpinningStopRing color={theme.accent} />
             <View style={{ width: 10, height: 10, borderRadius: 2, backgroundColor: theme.accent }} />
           </TouchableOpacity>
         ) : (
@@ -526,18 +527,7 @@ export function ChatComposer({ actions, sending, isStreaming = false, onAbort, s
                   onAbort?.() ?? actions.abort?.();
                 }}
               >
-                <Animated.View
-                  style={{
-                    position: "absolute",
-                    width: 36,
-                    height: 36,
-                    borderRadius: 18,
-                    borderWidth: 2,
-                    borderColor: theme.accent,
-                    borderTopColor: "transparent",
-                    transform: [{ rotate: spinAnim.interpolate({ inputRange: [0, 1], outputRange: ["0deg", "360deg"] }) }],
-                  }}
-                />
+                <SpinningStopRing color={theme.accent} />
                 <View style={{ width: 10, height: 10, borderRadius: 2, backgroundColor: theme.accent }} />
               </TouchableOpacity>
             ) : (
