@@ -742,7 +742,7 @@ export function createDesktopPluginExtension(options: DesktopPluginExtensionOpti
             onDisconnected: () => {
               if (client !== candidate) return;
               client = undefined;
-              peerCommand.clear();
+              peerCommand.clear({ preserveQueuedRequests: true });
               for (const pending of pendingAskRequests.values()) {
                 pending.sentGeneration = undefined;
               }

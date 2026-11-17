@@ -23,12 +23,13 @@ function fakePi(options: { models: { provider: string; id: string; name: string 
   let thinkingLevel = "medium";
   let sessionId = "tui-session";
   const sent: { content: unknown; options?: { deliverAs?: string; expandPromptTemplates?: boolean } }[] = [];
+  const customMessages: { customType: string; content: unknown; details?: unknown }[] = [];
   const pi = {
     registerCommand: (name: string, command: { handler: (args: string, ctx: unknown) => unknown }) => registeredCommands.set(name, command),
     registerMessageRenderer: () => undefined,
     registerTool: () => undefined,
     registeredCommands,
-    sendMessage: () => undefined,
+    sendMessage: (message: { customType: string; content: unknown; details?: unknown }) => { customMessages.push(message); },
     events: {
       on(event: string, handler: (payload: unknown) => void) {
         eventHandlers.set(event, [...(eventHandlers.get(event) ?? []), handler]);
@@ -98,6 +99,7 @@ function fakePi(options: { models: { provider: string; id: string; name: string 
     setModelCalls,
     setThinkingCalls,
     sent,
+    customMessages,
     emit,
     emitAsync,
     handlers,
@@ -776,6 +778,46 @@ describe("Desktop Plugin extension (TUI side)", () => {
     expect(restarted.registry.hasCapability(target as DesktopPluginTarget, "set_model")).toBe(true);
     if (previousProviders === undefined) delete globals[providerKey];
     else globals[providerKey] = previousProviders;
+  });
+
+  it("keeps active and queued peer requests blocked after the IPC socket disconnects", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "maestro-ext-peer-disconnect-"));
+    const socketPath = join(dir, "plugin.sock");
+    const registry = new DesktopPluginRegistry();
+    server = new DesktopPluginIpcServer({
+      socketPath, secret: "test-secret", registry,
+      onPeerRequest: (_source, request, reply) => reply({ type: "desktop_peer_result", requestId: request.requestId, status: "listed", peers: [] }),
+    });
+    await server.start();
+    const fake = fakePi({ models: [] });
+    createDesktopPluginExtension({ socketPath, secret: "test-secret" })(fake.pi as never);
+    fake.emit("session_start", { type: "session_start", reason: "startup" });
+    try {
+      await waitFor(() => registry.list().length > 0);
+      const registration = registry.list()[0]!;
+      const source = { ...registration.target, sessionId: "unremembered-disconnect-source", endpointId: "source-endpoint" };
+      for (const deliveryId of ["active-peer", "queued-peer"]) {
+        const receipt = await registration.transport.deliverPeerMessage!({
+          type: "desktop_peer_delivery", requestId: `request-${deliveryId}`, deliveryId,
+          source, target: registration.target, deadlineAt: Date.now() + 30_000, message: "requires local approval",
+        }, new AbortController().signal);
+        expect(receipt).toBe("accepted");
+      }
+      fake.emit("message_start", { type: "message_start", message: { role: "custom", ...fake.customMessages[0] } });
+      await server.close();
+      server = undefined;
+      await waitFor(() => getDesktopPluginRuntimeRecord()?.pluginBroker === "disconnected");
+      const gate = fake.handlers.get("tool_call")?.[0];
+      expect(gate).toBeDefined();
+      const context = { ui: { confirm: async () => true } };
+      expect(await gate!({ toolName: "read", toolCallId: "active-after-disconnect", input: {} }, context)).toMatchObject({ block: true });
+      fake.emit("agent_end", { type: "agent_end", messages: [] });
+      fake.emit("agent_settled", { type: "agent_settled" });
+      fake.emit("message_start", { type: "message_start", message: { role: "custom", ...fake.customMessages[1] } });
+      expect(await gate!({ toolName: "read", toolCallId: "queued-after-disconnect", input: {} }, context)).toMatchObject({ block: true });
+    } finally {
+      await fake.emitAsync("session_shutdown", { type: "session_shutdown" });
+    }
   });
 
   it("always asks Pi to queue prompt as steer so streaming never drops it", async () => {

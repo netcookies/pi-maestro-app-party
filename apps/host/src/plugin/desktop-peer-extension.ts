@@ -17,7 +17,11 @@ export function registerDesktopPeerCommand(
 ) {
   const inbox = new Map<string, { delivery: DesktopPeerDelivery; timer: ReturnType<typeof setTimeout>; generation: number }>();
   const consumedDeliveryIds = new Set<string>();
-  let peerTurnGate: { deliveryId: string; generation: number; delegated: boolean; allowedToolCallId?: string; approvalInFlight: boolean; blocked: boolean } | undefined;
+  type PeerRequest = { delivery: DesktopPeerDelivery; generation: number; delegated?: boolean; queued: boolean; active: boolean; blocked: boolean };
+  const peerRequests = new Map<string, PeerRequest>();
+  let invalidPeerMessage = false;
+  let gateRevision = 0;
+  let pendingApproval: object | undefined;
   let gateHandlersRegistered = false;
   const delegationDirectory = options.delegationDirectory ?? join(homedir(), ".pi", "maestro-mobile", "peer-delegations");
   let generation = 0;
@@ -37,12 +41,21 @@ export function registerDesktopPeerCommand(
   };
   const setDelegation = async (sessionId: string, allowed: boolean): Promise<void> => {
     const path = delegationPath(sessionId);
-    if (!allowed) { await unlink(path).catch((error: NodeJS.ErrnoException) => { if (error.code !== "ENOENT") throw error; }); return; }
-    await mkdir(delegationDirectory, { recursive: true, mode: 0o700 });
-    const temporary = `${path}.tmp-${process.pid}-${randomUUID()}`;
-    await writeFile(temporary, `${JSON.stringify({ sessionId, createdAt: new Date().toISOString() })}\n`, { encoding: "utf8", mode: 0o600 });
-    await chmod(temporary, 0o600);
-    await rename(temporary, path);
+    if (!allowed) {
+      await unlink(path).catch((error: NodeJS.ErrnoException) => { if (error.code !== "ENOENT") throw error; });
+    } else {
+      await mkdir(delegationDirectory, { recursive: true, mode: 0o700 });
+      const temporary = `${path}.tmp-${process.pid}-${randomUUID()}`;
+      await writeFile(temporary, `${JSON.stringify({ sessionId, createdAt: new Date().toISOString() })}\n`, { encoding: "utf8", mode: 0o600 });
+      await chmod(temporary, 0o600);
+      await rename(temporary, path);
+    }
+    for (const request of peerRequests.values()) {
+      if (request.generation !== generation || request.delivery.source.sessionId !== sessionId) continue;
+      request.delegated = allowed;
+      if (allowed) request.blocked = false;
+      gateRevision += 1;
+    }
   };
   const formatCwd = (cwd: string): string => {
     const parts = cwd.split(/[\\/]+/).filter(Boolean);
@@ -150,43 +163,69 @@ export function registerDesktopPeerCommand(
     details: { status: isError ? "error" : "ok" },
     ...(isError ? { isError: true } : {}),
   });
+  const consumeDelivery = (deliveryId: string): void => {
+    const pending = inbox.get(deliveryId);
+    if (pending) clearTimeout(pending.timer);
+    inbox.delete(deliveryId);
+    consumedDeliveryIds.add(deliveryId);
+  };
   const gateToolCall = async (event: { toolName: string; toolCallId: string; input: unknown }, ctx: { ui: { confirm?: (title: string, message: string) => Promise<boolean> } }) => {
     if (event.toolName === "ask-user-question") return;
-    const pending = [...inbox.values()];
-    const gate = peerTurnGate;
-    if (!gate) return;
-    if (gate.blocked || gate.approvalInFlight || (gate.allowedToolCallId && gate.allowedToolCallId !== event.toolCallId)) return { block: true, reason: "Peer request is already settled; this tool call is not approved for the exact request." };
-    if (pending.length !== 1 || pending[0]!.delivery.deliveryId !== gate.deliveryId || pending[0]!.generation !== gate.generation) {
-      gate.blocked = true;
-      return { block: true, reason: "Peer approval is ambiguous or stale; no tool call is authorized." };
-    }
-    const entry = pending[0]!;
-    if (gate.delegated) {
-      // 已在委托记录中记住的 peer：本会话内后续转发自动放行，无需重复人工确认
-      clearTimeout(entry.timer);
-      inbox.delete(entry.delivery.deliveryId);
-      consumedDeliveryIds.add(entry.delivery.deliveryId);
-      gate.allowedToolCallId = event.toolCallId;
+    if (invalidPeerMessage) return { block: true, reason: "Peer approval is ambiguous or stale; no tool call is authorized." };
+    const requests = [...peerRequests.values()].filter((request) => request.active);
+    if (!requests.length) return;
+    if (pendingApproval || requests.some((request) => request.blocked)) return { block: true, reason: "Peer request is already settled; this tool call is not approved for the exact request." };
+    const unapproved = requests.filter((request) => !request.delegated);
+    if (!unapproved.length) {
+      for (const request of requests) consumeDelivery(request.delivery.deliveryId);
       return;
     }
-    // 未记住的 peer：同步置位，防并发重入
-    gate.approvalInFlight = true;
-    const approvalMessage = `Local approval is required for this exact peer request and tool call.\nPeer: ${entry.delivery.source.sessionId} / ${entry.delivery.source.endpointId} / ${entry.delivery.source.normalizedCwd} / ${entry.delivery.source.processGeneration}\nRequest: ${entry.delivery.message}\nTool call: ${event.toolName}\nInput: ${JSON.stringify(event.input)}`;
+    const revision = gateRevision;
+    const approval = {};
+    pendingApproval = approval;
+    const requestIds = unapproved.map((request) => request.delivery.deliveryId).join(", ");
+    const requestDetails = unapproved.map(({ delivery }) => `Delivery: ${delivery.deliveryId}\nPeer: ${delivery.source.sessionId} / ${delivery.source.endpointId} / ${delivery.source.normalizedCwd} / ${delivery.source.processGeneration}\nRequest: ${delivery.message}`).join("\n\n");
+    const approvalMessage = `Local approval is required for these exact peer requests and tool call.\n${requestDetails}\nTool call: ${event.toolName} (${event.toolCallId})\nInput: ${JSON.stringify(event.input)}`;
     let approved = false;
-    try { approved = typeof ctx.ui.confirm === "function" ? await ctx.ui.confirm(`Peer request ${entry.delivery.deliveryId}`, approvalMessage) : false; } catch { approved = false; }
-    gate.approvalInFlight = false;
-    clearTimeout(entry.timer);
-    inbox.delete(entry.delivery.deliveryId);
-    consumedDeliveryIds.add(entry.delivery.deliveryId);
-    if (!approved) { gate.blocked = true; return { block: true, reason: `Local approval denied for peer request ${entry.delivery.deliveryId}.` }; }
-    gate.allowedToolCallId = event.toolCallId;
+    try { approved = typeof ctx.ui.confirm === "function" ? await ctx.ui.confirm(`Peer request ${requestIds}`, approvalMessage) : false; } catch { approved = false; }
+    if (pendingApproval === approval) pendingApproval = undefined;
+    if (revision !== gateRevision) return { block: true, reason: "Peer approval is ambiguous or stale; no tool call is authorized." };
+    for (const request of requests) consumeDelivery(request.delivery.deliveryId);
+    if (!approved) {
+      for (const request of unapproved) request.blocked = true;
+      return { block: true, reason: `Local approval denied for peer request ${requestIds}.` };
+    }
   };
   const enableGateHandlers = (): void => {
     if (gateHandlersRegistered) return;
     gateHandlersRegistered = true;
     pi.on("tool_call", gateToolCall as never);
-    pi.on("turn_end", () => { peerTurnGate = undefined; });
-    pi.on("agent_end", () => { peerTurnGate = undefined; });
+    pi.on("message_start", (event) => {
+      const message = event.message;
+      if (message.role !== "custom" || message.customType !== "mb-peer") return;
+      const details = message.details as { direction?: unknown; deliveryId?: unknown; generation?: unknown } | undefined;
+      if (details?.direction !== "in") return;
+      const request = typeof details.deliveryId === "string" ? peerRequests.get(details.deliveryId) : undefined;
+      if (!request || request.generation !== details.generation) {
+        invalidPeerMessage = true;
+        gateRevision += 1;
+        return;
+      }
+      if (request.generation !== generation) request.blocked = true;
+      request.active = true;
+      gateRevision += 1;
+    });
+    // agent_end 之后仍可能自动重试；只在整个请求停止续轮后释放已消费消息。
+    pi.on("agent_settled", () => {
+      for (const [deliveryId, request] of peerRequests) {
+        if (!request.active) continue;
+        consumeDelivery(deliveryId);
+        peerRequests.delete(deliveryId);
+      }
+      invalidPeerMessage = false;
+      gateRevision += 1;
+      pendingApproval = undefined;
+    });
   };
 
   pi.registerTool({
@@ -402,32 +441,46 @@ export function registerDesktopPeerCommand(
   });
 
   return {
-    async receive(delivery: DesktopPeerDelivery): Promise<void> {
-      if (inbox.size >= DESKTOP_PEER_MAX_PEERS || inbox.has(delivery.deliveryId) || consumedDeliveryIds.has(delivery.deliveryId) || delivery.deadlineAt <= Date.now()) return Promise.reject(new Error("inbox_unavailable"));
+    async receive(incoming: DesktopPeerDelivery): Promise<void> {
+      const delivery = { ...incoming, source: { ...incoming.source }, target: { ...incoming.target } };
+      if (inbox.size >= DESKTOP_PEER_MAX_PEERS || peerRequests.size >= DESKTOP_PEER_MAX_PEERS || inbox.has(delivery.deliveryId) || peerRequests.has(delivery.deliveryId) || consumedDeliveryIds.has(delivery.deliveryId) || delivery.deadlineAt <= Date.now()) return Promise.reject(new Error("inbox_unavailable"));
       const generationAtReceive = generation;
       const timer = setTimeout(() => inbox.delete(delivery.deliveryId), Math.max(1, delivery.deadlineAt - Date.now()));
       inbox.set(delivery.deliveryId, { delivery, timer, generation: generationAtReceive });
+      const request: PeerRequest = { delivery, generation: generationAtReceive, queued: false, active: false, blocked: false };
+      peerRequests.set(delivery.deliveryId, request);
       try {
         enableGateHandlers();
         const delegatedSessionIds = await readDelegations();
-        const delegated = delegatedSessionIds.includes(delivery.source.sessionId);
-        if (!peerTurnGate) peerTurnGate = { deliveryId: delivery.deliveryId, generation: generationAtReceive, delegated, approvalInFlight: false, blocked: false };
-        else peerTurnGate.delegated = delegated;
+        if (generationAtReceive !== generation || peerRequests.get(delivery.deliveryId) !== request) return;
+        request.delegated ??= delegatedSessionIds.includes(delivery.source.sessionId);
+        const delegated = request.delegated;
         const content = `${peerMessage("in", delivery.source, delivery.message)}\n\n${delegated
           ? "该 peer 在本会话内已被记住并授权，后续协作动作已自动放行。"
           : "这是尚未记住的 peer/session。在执行任何实际动作前，必须先调用 ask-user-question 询问本机用户获得明确授权（选项：同意本次执行、授权本会话、拒绝）。若用户选择「授权本会话」，请调用 mb-peer tool（action=remember，target=" + delivery.source.sessionId + "），后续请求将自动放行。"}\n回复可调用 mb-peer tool：action=send，target=${delivery.source.sessionId}。`;
-        pi.sendMessage({ customType: "mb-peer", content, display: true, details: { direction: "in", peer: delivery.source, body: delivery.message } }, { triggerTurn: true, deliverAs: "steer" });
-      } catch { /* The queued delivery remains available through /mb-peer inbox. */ }
+        request.queued = true;
+        pi.sendMessage({ customType: "mb-peer", content, display: true, details: { direction: "in", peer: delivery.source, body: delivery.message, deliveryId: delivery.deliveryId, generation: generationAtReceive } }, { triggerTurn: true, deliverAs: "steer" });
+      } catch {
+        if (request.active) request.blocked = true;
+        else if (peerRequests.get(delivery.deliveryId) === request) peerRequests.delete(delivery.deliveryId);
+        // 未入队的消息仍可通过 /mb-peer inbox 查看。
+      }
       return Promise.resolve();
     },
-    clear(): void {
+    clear({ preserveQueuedRequests = false }: { preserveQueuedRequests?: boolean } = {}): void {
       generation += 1;
       for (const pending of inbox.values()) {
         clearTimeout(pending.timer);
         consumedDeliveryIds.add(pending.delivery.deliveryId);
       }
       inbox.clear();
-      peerTurnGate = undefined;
+      for (const [deliveryId, request] of peerRequests) {
+        if (preserveQueuedRequests && request.queued) request.blocked = true;
+        else peerRequests.delete(deliveryId);
+      }
+      if (!preserveQueuedRequests) invalidPeerMessage = false;
+      gateRevision += 1;
+      pendingApproval = undefined;
     },
   };
 }
