@@ -48,7 +48,26 @@ function setup(result: (request: DesktopPeerRequest) => DesktopPeerResult | Prom
   const notify = vi.fn();
   const run = async (command: string, confirm?: (title: string, message: string) => Promise<boolean>, select?: (title: string, options: string[]) => Promise<string | undefined>) =>
     handler(command, { ui: { notify, confirm, select } });
-  return { run, requests, messages, messageOptions, tools, notify, peerCommand, emit, startMessage,
+  type ApprovalInput = { questions: { question: string; header: string; multiSelect: boolean; options: { label: string; description: string }[] }[] };
+  const approvalInput = (index = 0): ApprovalInput => {
+    const content = (messages[index] as TestMessage).content as string;
+    const marker = "参数须与下列内容一致：";
+    const start = content.indexOf(marker) + marker.length;
+    return JSON.parse(content.slice(start, content.indexOf("。同意本次执行仅授权", start))) as ApprovalInput;
+  };
+  const asks = new Map<string, ApprovalInput>();
+  const beginAsk = async (id: string, input = approvalInput()) => {
+    asks.set(id, input);
+    await toolCallGate!({ toolName: "ask-user-question", toolCallId: id, input }, { ui: {} });
+  };
+  const finishAsk = (id: string, selected = "同意本次执行", details?: unknown, isError = false) => {
+    const input = asks.get(id)!;
+    return emit("tool_result", {
+      toolName: "ask-user-question", toolCallId: id, input, isError, content: [],
+      details: details ?? { answers: input.questions.map((question) => ({ question: question.question, header: question.header, selected: [selected] })) },
+    });
+  };
+  return { run, requests, messages, messageOptions, tools, notify, peerCommand, emit, startMessage, approvalInput, beginAsk, finishAsk,
     setAutoStartMessages: (enabled: boolean) => { autoStartMessages = enabled; },
     gateToolCall: (event: ToolCall, confirm?: (title: string, message: string) => Promise<boolean>) => toolCallGate!(event, { ui: { confirm } }),
     complete: (prefix: string) => complete(prefix),
@@ -302,42 +321,53 @@ describe("desktop peer request lifecycle", () => {
     const known = delivery("remembered", target, 1_000);
     for (const message of unknownFirst ? [unknown, known] : [known, unknown]) await state.peerCommand.receive(message);
     await vi.advanceTimersByTimeAsync(1_001);
-    const confirm = vi.fn(async (_title: string, _message: string) => false);
-    expect(await state.gateToolCall(call("mixed"), confirm)).toMatchObject({ block: true });
-    expect(confirm).toHaveBeenCalledOnce();
-    expect(confirm.mock.calls[0]).toEqual([
-      "Peer request unknown",
-      expect.stringContaining(`Peer: ${unknownPeer.sessionId}`),
-    ]);
+    const confirm = vi.fn(async () => true);
+    const result = await state.gateToolCall(call("mixed"), confirm);
+    expect(result).toMatchObject({ block: true, reason: expect.stringContaining(`Peer: ${unknownPeer.sessionId}`) });
+    expect(result?.reason).not.toContain("request body remembered");
+    expect(confirm).not.toHaveBeenCalled();
   });
 
   it("binds concurrent delivery authorization to each original source", async () => {
     await remember();
     await Promise.all([state.peerCommand.receive(delivery("unknown-concurrent", unknownPeer)), state.peerCommand.receive(delivery("known-concurrent"))]);
-    const confirm = vi.fn(async (_title: string, _message: string) => false);
-    expect(await state.gateToolCall(call("concurrent-sources"), confirm)).toMatchObject({ block: true });
-    expect(confirm.mock.calls[0]?.[0]).toBe("Peer request unknown-concurrent");
+    const result = await state.gateToolCall(call("concurrent-sources"));
+    expect(result).toMatchObject({ block: true, reason: expect.stringContaining("Delivery: unknown-concurrent") });
+    expect(result?.reason).not.toContain("request body known-concurrent");
   });
 
-  it("requires explicit approval for every unknown tool call", async () => {
+  it("routes an unapproved peer through Ask instead of native confirmations on write and bash", async () => {
+    await state.peerCommand.receive({ ...delivery("status-receipt", unknownPeer), message: "Staging 本次仅回执，尚未执行部署。" });
+    const confirm = vi.fn(async () => true);
+    for (const event of [
+      { toolName: "write", toolCallId: "receipt-write", input: { path: "/tmp/review-receipt.json" } },
+      { toolName: "bash", toolCallId: "receipt-upload", input: { command: "scp review-receipt.json cn2:/backup/" } },
+    ]) {
+      expect(await state.gateToolCall(event, confirm)).toMatchObject({ block: true, reason: expect.stringContaining("ask-user-question") });
+    }
+    expect(confirm).not.toHaveBeenCalled();
+  });
+
+  it("authorizes one delivery through a real Ask answer across write, bash and continuations", async () => {
     vi.useFakeTimers();
     await state.peerCommand.receive(delivery("unknown-tools", unknownPeer));
     await vi.advanceTimersByTimeAsync(30_001);
-    const confirm = vi.fn(async (_title: string, _message: string) => true);
-    expect(await state.gateToolCall(call("approved-one"), confirm)).toBeUndefined();
+    await state.beginAsk("approval");
+    expect(await state.gateToolCall(call("before-answer"))).toMatchObject({ block: true });
+    state.finishAsk("approval");
+    expect(await state.gateToolCall({ toolName: "write", toolCallId: "receipt-write", input: { path: "review-receipt.json" } })).toBeUndefined();
     state.emit("turn_end");
     state.emit("agent_end");
-    expect(await state.gateToolCall(call("approved-two"), confirm)).toBeUndefined();
-    expect(confirm).toHaveBeenCalledTimes(2);
-    expect(confirm.mock.calls[0]?.[1]).toContain("approved-one");
-    expect(confirm.mock.calls[0]?.[1]).toContain('"path":"approved-one.ts"');
-    expect(confirm.mock.calls[1]?.[1]).toContain("approved-two");
-    expect(await state.gateToolCall(call("not-approved"))).toMatchObject({ block: true });
+    expect(await state.gateToolCall({ toolName: "bash", toolCallId: "receipt-upload", input: { command: "scp review-receipt.json cn2:/backup/" } })).toBeUndefined();
+    await state.peerCommand.receive(delivery("new-request", unknownPeer));
+    expect(await state.gateToolCall(call("new-unapproved"))).toMatchObject({ block: true, reason: expect.stringContaining("Delivery: new-request") });
   });
 
   it("keeps a denial across continuations and releases it only after final settlement", async () => {
     await state.peerCommand.receive(delivery("denied", unknownPeer));
-    expect(await state.gateToolCall(call("denied"), async () => false)).toMatchObject({ block: true });
+    await state.beginAsk("deny");
+    state.finishAsk("deny", "拒绝");
+    expect(await state.gateToolCall(call("denied"))).toMatchObject({ block: true });
     state.emit("turn_end");
     state.emit("agent_end");
     const confirm = vi.fn(async () => true);
@@ -349,14 +379,20 @@ describe("desktop peer request lifecycle", () => {
     await expect(state.peerCommand.receive(delivery("denied", unknownPeer))).rejects.toThrow("inbox_unavailable");
   });
 
-  it("shows all unknown requests when approving a tool shared by a queued batch", async () => {
+  it("requires separate answers for every delivery in a queued batch", async () => {
     await state.peerCommand.receive(delivery("unknown-one", unknownPeer));
     await state.peerCommand.receive(delivery("unknown-two", { ...unknownPeer, sessionId: "another-unknown" }));
-    const confirm = vi.fn(async (_title: string, _message: string) => true);
-    expect(await state.gateToolCall(call("batch-tool"), confirm)).toBeUndefined();
-    expect(confirm.mock.calls[0]?.[1]).toContain("request body unknown-one");
-    expect(confirm.mock.calls[0]?.[1]).toContain("request body unknown-two");
-    expect(await state.gateToolCall(call("next-unapproved-tool"))).toMatchObject({ block: true });
+    const result = await state.gateToolCall(call("batch-tool"));
+    expect(result?.reason).toContain("request body unknown-one");
+    expect(result?.reason).toContain("request body unknown-two");
+    await state.beginAsk("first", state.approvalInput(0));
+    state.finishAsk("first");
+    const remaining = await state.gateToolCall(call("second-unapproved"));
+    expect(remaining).toMatchObject({ block: true, reason: expect.stringContaining("request body unknown-two") });
+    expect(remaining?.reason).not.toContain("request body unknown-one");
+    await state.beginAsk("second", state.approvalInput(1));
+    state.finishAsk("second");
+    expect(await state.gateToolCall(call("approved-batch"))).toBeUndefined();
   });
 
   it("activates queued messages only when consumed and retains them across an older settlement", async () => {
@@ -389,14 +425,11 @@ describe("desktop peer request lifecycle", () => {
     expect(await state.gateToolCall(call("after-delayed-enqueue"))).toMatchObject({ block: true });
   });
 
-  it("rejects an approval completed after disconnect and keeps its queued request blocked", async () => {
+  it("rejects an Ask answer completed after disconnect and keeps its queued request blocked", async () => {
     await state.peerCommand.receive(delivery("disconnect-approval", unknownPeer));
-    let resolveApproval!: (approved: boolean) => void;
-    const approval = new Promise<boolean>((resolve) => { resolveApproval = resolve; });
-    const pending = state.gateToolCall(call("disconnect-first"), async () => approval);
+    await state.beginAsk("disconnect-ask");
     state.disconnect();
-    resolveApproval(true);
-    expect(await pending).toMatchObject({ block: true, reason: expect.stringContaining("stale") });
+    state.finishAsk("disconnect-ask");
     expect(await state.gateToolCall(call("disconnect-second"), async () => true)).toMatchObject({ block: true });
   });
 
@@ -409,18 +442,120 @@ describe("desktop peer request lifecycle", () => {
     expect(await state.gateToolCall(call("stale-queued"), async () => true)).toMatchObject({ block: true });
   });
 
-  it("invalidates an in-flight approval when another request enters the context", async () => {
+  it("invalidates an in-flight Ask when another request enters the context", async () => {
     await state.peerCommand.receive(delivery("original", unknownPeer));
-    let resolveApproval!: (approved: boolean) => void;
-    const approval = new Promise<boolean>((resolve) => { resolveApproval = resolve; });
-    const pending = state.gateToolCall(call("original-call"), async () => approval);
+    await state.beginAsk("original-ask");
     await state.peerCommand.receive(delivery("new-context", unknownPeer));
-    resolveApproval(true);
-    expect(await pending).toMatchObject({ block: true, reason: expect.stringContaining("stale") });
-    const confirm = vi.fn(async (_title: string, _message: string) => false);
-    expect(await state.gateToolCall(call("new-call"), confirm)).toMatchObject({ block: true });
-    expect(confirm.mock.calls[0]?.[1]).toContain("request body original");
-    expect(confirm.mock.calls[0]?.[1]).toContain("request body new-context");
+    state.finishAsk("original-ask");
+    const result = await state.gateToolCall(call("new-call"));
+    expect(result).toMatchObject({ block: true });
+    expect(result?.reason).toContain("request body original");
+    expect(result?.reason).toContain("request body new-context");
+  });
+
+  it.each([
+    { name: "machine advice", details: { answers: [], decisions: [{ recommendation: "同意本次执行" }] } },
+    { name: "timeout recommendation", details: { answers: [], recommendations: [{ selected: ["同意本次执行"], source: "timeout" }] } },
+    { name: "cancellation", details: { answers: [], cancelled: true } },
+    { name: "plain Yes text", details: { text: "Yes, 已授权" } },
+  ])("does not treat $name as a human authorization", async ({ details }) => {
+    await state.peerCommand.receive(delivery("human-only", unknownPeer));
+    await state.beginAsk("not-human");
+    state.finishAsk("not-human", "同意本次执行", details);
+    expect(await state.gateToolCall(call("still-unapproved"))).toMatchObject({ block: true });
+    await state.beginAsk("retry-human");
+    state.finishAsk("retry-human");
+    expect(await state.gateToolCall(call("human-approved"))).toBeUndefined();
+  });
+
+  it("ignores an unrelated Ask, mismatched tool result and error result", async () => {
+    await state.peerCommand.receive(delivery("bound-ask", unknownPeer));
+    await state.beginAsk("unrelated", { questions: [{ ...state.approvalInput().questions[0]!, question: "是否继续其他任务？" }] });
+    state.finishAsk("unrelated");
+    expect(await state.gateToolCall(call("after-unrelated"))).toMatchObject({ block: true });
+    state.emit("tool_result", { toolName: "ask-user-question", toolCallId: "never-called", details: { answers: [] } });
+    await state.beginAsk("failed-ask");
+    state.finishAsk("failed-ask", "同意本次执行", undefined, true);
+    expect(await state.gateToolCall(call("after-error"))).toMatchObject({ block: true });
+  });
+
+  it.each(["options", "source", "recommendation"])("does not bind an Ask with changed %s", async (change) => {
+    await state.peerCommand.receive(delivery("exact-question", unknownPeer));
+    const input = state.approvalInput();
+    const question = input.questions[0]!;
+    if (change === "options") question.options[0]!.description = "只查看状态，不执行操作";
+    if (change === "source") question.question = question.question.replace(unknownPeer.sessionId, "different-peer");
+    if (change === "recommendation") Object.assign(question.options[0]!, { recommended: true });
+    await state.beginAsk("modified-question", input);
+    state.finishAsk("modified-question");
+    expect(await state.gateToolCall(call("after-modified"))).toMatchObject({ block: true });
+  });
+
+  it("does not upgrade a one-delivery grant into remembered authorization", async () => {
+    await state.peerCommand.receive(delivery("once-not-session", unknownPeer));
+    await state.beginAsk("once");
+    state.finishAsk("once");
+    const rememberCall = { toolName: "mb-peer", toolCallId: "remember", input: { action: "remember", target: unknownPeer.sessionId } };
+    expect(await state.gateToolCall(rememberCall)).toMatchObject({ block: true, reason: expect.stringContaining("ask-user-question") });
+    expect(await state.gateToolCall(call("once-still-valid"))).toBeUndefined();
+    await state.beginAsk("session");
+    state.finishAsk("session", "授权本会话");
+    expect(await state.gateToolCall(rememberCall)).toBeUndefined();
+    expect(await state.gateToolCall({ ...rememberCall, input: { action: "remember", target: unknownPeer.sessionId.slice(0, 8) } })).toMatchObject({ block: true });
+    expect(await state.gateToolCall({ ...rememberCall, input: { action: "remember", target: target.sessionId } })).toMatchObject({ block: true });
+    await state.tools.get("mb-peer")!.execute("remember", rememberCall.input);
+    await state.peerCommand.receive(delivery("new-remembered-delivery", unknownPeer));
+    expect(await state.gateToolCall(call("remembered-next"))).toBeUndefined();
+  });
+
+  it("revokes an existing one-delivery grant when a human denial includes supplementary details", async () => {
+    await state.peerCommand.receive(delivery("revoke-once", unknownPeer));
+    await state.beginAsk("once-grant");
+    state.finishAsk("once-grant");
+    expect(await state.gateToolCall(call("before-revocation"))).toBeUndefined();
+    await state.beginAsk("deny-upgrade");
+    const question = state.approvalInput().questions[0]!;
+    state.finishAsk("deny-upgrade", "拒绝", {
+      answers: [{ question: question.question, header: question.header, selected: ["拒绝"], details: { "拒绝": "不要执行，请停止。" } }],
+    });
+    expect(await state.gateToolCall(call("after-revocation"))).toMatchObject({ block: true });
+    expect(await state.gateToolCall({ toolName: "mb-peer", toolCallId: "remember-denied", input: { action: "remember", target: unknownPeer.sessionId } })).toMatchObject({ block: true });
+  });
+
+  it.each(["cancel", "constrained approval"])("suspends the previous grant when an upgrade Ask ends with %s", async (outcome) => {
+    await state.peerCommand.receive(delivery("suspend-once", unknownPeer));
+    await state.beginAsk("initial-grant");
+    state.finishAsk("initial-grant");
+    await state.beginAsk("upgrade");
+    expect(await state.gateToolCall(call("while-reconsidering"))).toMatchObject({ block: true });
+    const question = state.approvalInput().questions[0]!;
+    state.finishAsk("upgrade", "授权本会话", outcome === "cancel" ? { answers: [], cancelled: true } : {
+      answers: [{ question: question.question, header: question.header, selected: ["授权本会话"], details: { "授权本会话": "只允许读取文件。" } }],
+    });
+    expect(await state.gateToolCall(call("after-upgrade"))).toMatchObject({ block: true });
+  });
+
+  it.each(["clear", "settled"])("discards late Ask answers after %s", async (boundary) => {
+    await state.peerCommand.receive(delivery("old-delivery", unknownPeer));
+    await state.beginAsk("old-ask");
+    if (boundary === "clear") state.peerCommand.clear();
+    else state.emit("agent_settled");
+    await state.peerCommand.receive(delivery("new-delivery", unknownPeer));
+    state.finishAsk("old-ask");
+    expect(await state.gateToolCall(call("new-unapproved"))).toMatchObject({ block: true, reason: expect.stringContaining("Delivery: new-delivery") });
+  });
+
+  it("binds batch answers by question identity and rejects reversed answers", async () => {
+    await state.peerCommand.receive(delivery("batch-one", unknownPeer));
+    await state.peerCommand.receive(delivery("batch-two", { ...unknownPeer, sessionId: "other-peer" }));
+    const input = { questions: [...state.approvalInput(0).questions, ...state.approvalInput(1).questions] };
+    await state.beginAsk("batch-reversed", input);
+    const answers = input.questions.map((question) => ({ question: question.question, header: question.header, selected: ["同意本次执行"] }));
+    state.finishAsk("batch-reversed", "同意本次执行", { answers: [...answers].reverse() });
+    expect(await state.gateToolCall(call("not-cross-authorized"))).toMatchObject({ block: true });
+    await state.beginAsk("batch-correct", input);
+    state.finishAsk("batch-correct");
+    expect(await state.gateToolCall(call("both-approved"))).toBeUndefined();
   });
 
   it("applies explicit remember and forget only to the matching source", async () => {
@@ -441,11 +576,11 @@ describe("desktop peer request lifecycle", () => {
     incoming.source.sessionId = target.sessionId;
     incoming.message = "changed after receive";
     await receiving;
-    const confirm = vi.fn(async (_title: string, _message: string) => false);
-    expect(await state.gateToolCall(call("immutable"), confirm)).toMatchObject({ block: true });
-    expect(confirm.mock.calls[0]?.[1]).toContain(unknownPeer.sessionId);
-    expect(confirm.mock.calls[0]?.[1]).toContain("request body immutable");
-    expect(confirm.mock.calls[0]?.[1]).not.toContain("changed after receive");
+    const result = await state.gateToolCall(call("immutable"));
+    expect(result).toMatchObject({ block: true });
+    expect(result?.reason).toContain(unknownPeer.sessionId);
+    expect(result?.reason).toContain("request body immutable");
+    expect(result?.reason).not.toContain("changed after receive");
   });
 
   it("fails closed when an inbound message has no matching local binding", async () => {
@@ -550,51 +685,38 @@ describe("desktop peer TUI authorization", () => {
     expect(state.messages[0]).toMatchObject({ content: expect.not.stringContaining("/mb-peer send") });
   });
 
-  it("blocks tools at dispatch until the exact pending peer request and tool call are approved", async () => {
-    const state = setup((request) => request.type === "desktop_peer_list"
-      ? { type: "desktop_peer_result", requestId: request.requestId, status: "listed", peers: [] }
-      : { type: "desktop_peer_result", requestId: request.requestId, status: "accepted", deliveryId: "delivery" });
-    const delivery: DesktopPeerDelivery = {
+  it("blocks tools until the exact pending delivery receives a matching human Ask answer", async () => {
+    const state = setup((request) => ({ type: "desktop_peer_result", requestId: request.requestId, status: "listed", peers: [] }));
+    await state.peerCommand.receive({
       type: "desktop_peer_delivery", requestId: "request", deliveryId: "delivery-exact",
       source: target, target, deadlineAt: Date.now() + 5_000, message: "run the requested validation",
-    };
-    await state.peerCommand.receive(delivery);
-
-    let confirmation = "";
-    const denied = await state.gateToolCall({ toolName: "bash", toolCallId: "validation-call", input: { command: "npm test" } }, async (title, message) => {
-      confirmation = `${title}\n${message}`;
-      return false;
     });
-    expect(confirmation).toContain("delivery-exact");
-    expect(confirmation).toContain("run the requested validation");
-    expect(confirmation).toContain('"command":"npm test"');
-    expect(denied).toMatchObject({ block: true });
-
-    state.peerCommand.clear();
-    await state.peerCommand.receive({ ...delivery, deliveryId: "delivery-approved" });
-    const allowed = await state.gateToolCall({ toolName: "bash", toolCallId: "approved-call", input: { command: "npm test" } }, async () => true);
-    expect(allowed).toBeUndefined();
-    const replay = await state.gateToolCall({ toolName: "bash", toolCallId: "unapproved-followup", input: { command: "npm test again" } });
-    expect(replay).toMatchObject({ block: true });
+    const event = { toolName: "bash", toolCallId: "validation-call", input: { command: "npm test" } };
+    const result = await state.gateToolCall(event);
+    expect(result).toMatchObject({ block: true, reason: expect.stringContaining("delivery-exact") });
+    expect(result?.reason).toContain("run the requested validation");
+    await state.beginAsk("approval-exact");
+    state.finishAsk("approval-exact");
+    expect(await state.gateToolCall(event)).toBeUndefined();
     state.peerCommand.clear();
   });
 
-  it("serializes concurrent peer tool approvals and allows only the claimed call", async () => {
-    const state = setup((request) => request.type === "desktop_peer_list"
-      ? { type: "desktop_peer_result", requestId: request.requestId, status: "listed", peers: [] }
-      : { type: "desktop_peer_result", requestId: request.requestId, status: "accepted", deliveryId: "delivery" });
+  it("does not authorize parallel tools before a pending Ask has a human answer", async () => {
+    const state = setup((request) => ({ type: "desktop_peer_result", requestId: request.requestId, status: "listed", peers: [] }));
     await state.peerCommand.receive({
       type: "desktop_peer_delivery", requestId: "request-concurrent", deliveryId: "delivery-concurrent",
-      source: target, target, deadlineAt: Date.now() + 5_000, message: "one tool only",
+      source: target, target, deadlineAt: Date.now() + 5_000, message: "validate the release",
     });
-    let resolveConfirm!: (approved: boolean) => void;
-    const confirmation = new Promise<boolean>((resolve) => { resolveConfirm = resolve; });
-    const first = state.gateToolCall({ toolName: "bash", toolCallId: "concurrent-first", input: { command: "one" } }, async () => confirmation);
-    await Promise.resolve();
-    const second = await state.gateToolCall({ toolName: "write", toolCallId: "concurrent-second", input: { path: "x" } }, async () => true);
-    expect(second).toMatchObject({ block: true });
-    resolveConfirm(true);
-    expect(await first).toBeUndefined();
+    await state.beginAsk("pending-ask");
+    const events = [
+      { toolName: "bash", toolCallId: "concurrent-first", input: { command: "one" } },
+      { toolName: "write", toolCallId: "concurrent-second", input: { path: "x" } },
+    ];
+    expect(await Promise.all(events.map((event) => state.gateToolCall(event)))).toEqual([
+      expect.objectContaining({ block: true }), expect.objectContaining({ block: true }),
+    ]);
+    state.finishAsk("pending-ask");
+    expect(await state.gateToolCall(events[0]!)).toBeUndefined();
     state.peerCommand.clear();
   });
 
