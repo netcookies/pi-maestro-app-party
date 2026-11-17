@@ -2,6 +2,12 @@
 
 本文件记录 Maestro Mobile 的显著变更。格式基于 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)。
 
+## [0.20.8] — 2026-11-17
+
+### 修复
+
+- preserve request authorization across agent lifecycle
+
 ## [0.20.7] — 2026-11-08
 
 ### 修复
